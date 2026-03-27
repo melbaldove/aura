@@ -1,0 +1,53 @@
+import aura/types
+import gleam/json
+import gleeunit/should
+
+pub fn event_to_json_test() {
+  let event =
+    types.Event(
+      ts: "2026-03-25T14:30:00+08:00",
+      workstream: "cm2",
+      event_type: "pr_merged",
+      ref: "CICS-967",
+      summary: "Fixed ACK receipt format",
+    )
+
+  event
+  |> types.event_to_json
+  |> json.to_string
+  |> should.equal(
+    "{\"ts\":\"2026-03-25T14:30:00+08:00\",\"workstream\":\"cm2\",\"type\":\"pr_merged\",\"ref\":\"CICS-967\",\"summary\":\"Fixed ACK receipt format\"}",
+  )
+}
+
+pub fn anchor_to_json_test() {
+  let anchor =
+    types.Anchor(
+      ts: "2026-03-25T14:30:00+08:00",
+      anchor_type: "decision",
+      workstream: "cm2",
+      content: "Chose separate ACK format for RETURN files",
+      context: "CICS-967",
+    )
+
+  anchor
+  |> types.anchor_to_json
+  |> json.to_string
+  |> should.equal(
+    "{\"ts\":\"2026-03-25T14:30:00+08:00\",\"type\":\"decision\",\"anchor\":true,\"workstream\":\"cm2\",\"content\":\"Chose separate ACK format for RETURN files\",\"context\":\"CICS-967\"}",
+  )
+}
+
+pub fn urgency_level_test() {
+  types.Urgent
+  |> types.urgency_to_string
+  |> should.equal("urgent")
+
+  types.Normal
+  |> types.urgency_to_string
+  |> should.equal("normal")
+
+  types.Low
+  |> types.urgency_to_string
+  |> should.equal("low")
+}
