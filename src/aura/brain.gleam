@@ -4,6 +4,7 @@ import aura/discord/rest
 import aura/env
 import aura/llm
 import aura/memory
+import aura/workstream
 import gleam/io
 import gleam/list
 import gleam/otp/actor
@@ -24,6 +25,14 @@ pub type RouteDecision {
   NeedsClassification
 }
 
+pub type WorkstreamActor {
+  WorkstreamActor(
+    name: String,
+    channel_id: String,
+    subject: process.Subject(workstream.WorkstreamMessage),
+  )
+}
+
 pub type BrainMessage {
   HandleMessage(discord.IncomingMessage)
   UpdateWorkstreams(List(WorkstreamInfo))
@@ -36,6 +45,7 @@ pub type BrainState {
     workspace_base: String,
     workstreams: List(WorkstreamInfo),
     soul: String,
+    registry: List(WorkstreamActor),
   )
 }
 
@@ -128,6 +138,7 @@ pub fn start(
   config: config.GlobalConfig,
   workspace_base: String,
   workstreams: List(WorkstreamInfo),
+  registry: List(WorkstreamActor),
 ) -> Result(process.Subject(BrainMessage), String) {
   // Read SOUL.md
   let soul_path = workspace_base <> "/SOUL.md"
@@ -149,6 +160,7 @@ pub fn start(
       workspace_base: workspace_base,
       workstreams: workstreams,
       soul: soul,
+      registry: registry,
     )
 
   actor.new(state)
@@ -166,14 +178,79 @@ fn handle_message(
 ) -> actor.Next(BrainState, BrainMessage) {
   case message {
     HandleMessage(msg) -> {
-      // Phase 3: handle all messages directly with LLM regardless of route
-      // Phase 4 will forward DirectRoute messages to workstream actors
-      handle_with_llm(state, msg)
-      actor.continue(state)
+      case route_message(msg.channel_id, state.workstreams) {
+        DirectRoute(name) -> {
+          // Spawn a process to avoid blocking the brain actor
+          let state_ref = state
+          process.spawn(fn() {
+            handle_routed_message(state_ref, name, msg)
+          })
+          actor.continue(state)
+        }
+        NeedsClassification -> {
+          // Handle directly with brain's LLM (for #aura channel)
+          let state_ref = state
+          process.spawn(fn() {
+            handle_with_llm(state_ref, msg)
+          })
+          actor.continue(state)
+        }
+      }
     }
     UpdateWorkstreams(ws) -> {
       io.println("[brain] Updated workstreams: " <> string.inspect(list.length(ws)) <> " entries")
       actor.continue(BrainState(..state, workstreams: ws))
+    }
+  }
+}
+
+fn handle_routed_message(
+  state: BrainState,
+  workstream_name: String,
+  msg: discord.IncomingMessage,
+) -> Nil {
+  case list.find(state.registry, fn(e) { e.name == workstream_name }) {
+    Ok(entry) -> {
+      // Create a subject for receiving the response
+      let reply_subject = process.new_subject()
+
+      // Send task to workstream
+      process.send(
+        entry.subject,
+        workstream.HandleTask(message: msg, reply_to: reply_subject),
+      )
+
+      // Wait for response (with 60s timeout)
+      case process.receive(from: reply_subject, within: 60_000) {
+        Ok(response) -> {
+          case response {
+            workstream.WorkstreamResponse(_, channel_id, content) ->
+              send_discord_response(state.discord_token, channel_id, content)
+            workstream.WorkstreamError(_, channel_id, error) -> {
+              io.println("[brain] Workstream error: " <> error)
+              send_discord_response(
+                state.discord_token,
+                channel_id,
+                "Sorry, I encountered an error.",
+              )
+            }
+          }
+        }
+        Error(Nil) -> {
+          io.println(
+            "[brain] Workstream " <> workstream_name <> " timed out",
+          )
+          send_discord_response(
+            state.discord_token,
+            msg.channel_id,
+            "Request timed out.",
+          )
+        }
+      }
+    }
+    Error(Nil) -> {
+      io.println("[brain] Workstream not found: " <> workstream_name)
+      handle_with_llm(state, msg)
     }
   }
 }

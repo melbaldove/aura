@@ -39,19 +39,8 @@ pub fn main() {
     }
   }
 
-  // List discovered workstreams
-  case workspace.list_workstreams(workspace_base) {
-    Ok(workstreams) -> {
-      case workstreams {
-        [] -> io.println("Workstreams: none")
-        _ -> io.println("Workstreams: " <> string.join(workstreams, ", "))
-      }
-    }
-    Error(_) -> io.println("Workstreams: none")
-  }
-
   // Start supervisor
-  case supervisor.start(cfg, workspace_base, []) {
+  case supervisor.start(cfg, workspace_base) {
     Ok(_pid) -> {
       io.println("Aura running. Press Ctrl+C to stop.")
       sleep_forever()
