@@ -31,7 +31,7 @@ pub type BrainMessage {
 
 pub type BrainState {
   BrainState(
-    config: config.GlobalConfig,
+    discord_token: String,
     llm_config: llm.LlmConfig,
     workspace_base: String,
     workstreams: List(WorkstreamInfo),
@@ -144,7 +144,7 @@ pub fn start(
 
   let state =
     BrainState(
-      config: config,
+      discord_token: config.discord.token,
       llm_config: llm_config,
       workspace_base: workspace_base,
       workstreams: workstreams,
@@ -166,7 +166,6 @@ fn handle_message(
 ) -> actor.Next(BrainState, BrainMessage) {
   case message {
     HandleMessage(msg) -> {
-      let _route = route_message(msg.channel_id, state.workstreams)
       // Phase 3: handle all messages directly with LLM regardless of route
       // Phase 4 will forward DirectRoute messages to workstream actors
       handle_with_llm(state, msg)
@@ -179,36 +178,25 @@ fn handle_message(
   }
 }
 
+fn send_discord_response(token: String, channel_id: String, content: String) -> Nil {
+  case rest.send_message(token, channel_id, content, []) {
+    Ok(_) -> Nil
+    Error(err) -> {
+      io.println("[brain] Failed to send message: " <> err)
+      Nil
+    }
+  }
+}
+
 fn handle_with_llm(state: BrainState, msg: discord.IncomingMessage) -> Nil {
   let prompt = build_system_prompt(state.soul)
-  let messages = [
-    llm.SystemMessage(prompt),
-    llm.UserMessage(msg.content),
-  ]
-
-  let token = state.config.discord.token
-  let channel_id = msg.channel_id
+  let messages = [llm.SystemMessage(prompt), llm.UserMessage(msg.content)]
 
   case llm.chat(state.llm_config, messages) {
-    Ok(response) -> {
-      case rest.send_message(token, channel_id, response, []) {
-        Ok(_) -> Nil
-        Error(err) -> {
-          io.println("[brain] Failed to send response: " <> err)
-          Nil
-        }
-      }
-    }
+    Ok(response) -> send_discord_response(state.discord_token, msg.channel_id, response)
     Error(err) -> {
       io.println("[brain] LLM error: " <> err)
-      let error_msg = "Sorry, I encountered an error processing your message."
-      case rest.send_message(token, channel_id, error_msg, []) {
-        Ok(_) -> Nil
-        Error(send_err) -> {
-          io.println("[brain] Failed to send error message: " <> send_err)
-          Nil
-        }
-      }
+      send_discord_response(state.discord_token, msg.channel_id, "Sorry, I encountered an error processing your message.")
     }
   }
 }
