@@ -18,7 +18,7 @@ pub type IncomingMessage {
   IncomingMessage(
     message_id: String,
     channel_id: String,
-    channel_name: String,
+    channel_name: Option(String),
     guild_id: String,
     author_id: String,
     author_name: String,
@@ -34,7 +34,7 @@ pub type IncomingMessage {
 /// Convert a received Discord message to internal type
 pub fn from_received(
   msg: discord_types.ReceivedMessage,
-  channel_name: String,
+  channel_name: Option(String),
 ) -> IncomingMessage {
   IncomingMessage(
     message_id: msg.id,

@@ -4,6 +4,7 @@ import aura/discord/gateway
 import aura/discord/rest
 import aura/discord/types as discord_types
 import gleam/io
+import gleam/option.{None}
 import gleam/result
 
 /// Default intents: GUILD_MESSAGES + MESSAGE_CONTENT + DIRECT_MESSAGES
@@ -27,7 +28,7 @@ pub fn start(
         case msg.author.bot {
           True -> Nil
           False -> {
-            let incoming = discord.from_received(msg, "unknown")
+            let incoming = discord.from_received(msg, None)
             on_message(incoming)
           }
         }

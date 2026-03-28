@@ -1,3 +1,4 @@
+import aura/env
 import gleam/result
 import gleam/string
 
@@ -8,7 +9,7 @@ pub fn resolve_env_string(value: String) -> Result(String, String) {
         value
         |> string.drop_start(2)
         |> string.drop_end(1)
-      get_env(var_name)
+      env.get_env(var_name)
       |> result.map_error(fn(_) {
         "Environment variable not set: " <> var_name
       })
@@ -16,6 +17,3 @@ pub fn resolve_env_string(value: String) -> Result(String, String) {
     False -> Ok(value)
   }
 }
-
-@external(erlang, "aura_env_ffi", "get_env")
-fn get_env(name: String) -> Result(String, Nil)

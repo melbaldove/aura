@@ -3,9 +3,9 @@ import gleam/dynamic/decode
 import gleam/http
 import gleam/http/request
 import gleam/httpc
+import gleam/int
 import gleam/json
 import gleam/result
-import gleam/string
 import gleam/uri
 
 const base_url = "https://discord.com/api/v10"
@@ -23,12 +23,7 @@ pub fn auth_header(token: String) -> #(String, String) {
 /// GET /gateway/bot — returns the WebSocket gateway URL.
 pub fn get_gateway_url(token: String) -> Result(String, String) {
   let url = api_url("/gateway/bot")
-  use req <- result.try(build_request(url))
-  let #(auth_key, auth_val) = auth_header(token)
-  let req =
-    req
-    |> request.set_header(auth_key, auth_val)
-    |> request.set_method(http.Get)
+  use req <- result.try(authed_request(url, http.Get, token))
   use resp <- result.try(
     httpc.send(req)
     |> result.map_error(fn(_) { "HTTP request failed" }),
@@ -37,10 +32,7 @@ pub fn get_gateway_url(token: String) -> Result(String, String) {
     200 ->
       json.parse(resp.body, decode.at(["url"], decode.string))
       |> result.map_error(fn(_) { "Failed to parse gateway URL from response" })
-    status ->
-      Error(
-        "Unexpected status " <> string.inspect(status) <> " from gateway/bot",
-      )
+    status -> Error(unexpected_status(status, "gateway/bot"))
   }
 }
 
@@ -53,12 +45,9 @@ pub fn send_message(
 ) -> Result(Nil, String) {
   let url = api_url("/channels/" <> channel_id <> "/messages")
   let body = types.create_message_payload(content, embeds) |> json.to_string()
-  use req <- result.try(build_request(url))
-  let #(auth_key, auth_val) = auth_header(token)
+  use req <- result.try(authed_request(url, http.Post, token))
   let req =
     req
-    |> request.set_method(http.Post)
-    |> request.set_header(auth_key, auth_val)
     |> request.set_header("content-type", "application/json")
     |> request.set_body(body)
   use resp <- result.try(
@@ -67,12 +56,7 @@ pub fn send_message(
   )
   case resp.status {
     200 | 201 -> Ok(Nil)
-    status ->
-      Error(
-        "Unexpected status "
-        <> string.inspect(status)
-        <> " when sending message",
-      )
+    status -> Error(unexpected_status(status, "send message"))
   }
 }
 
@@ -89,12 +73,9 @@ pub fn create_thread(
       "/channels/" <> channel_id <> "/messages/" <> message_id <> "/threads",
     )
   let body = json.to_string(json.object([#("name", json.string(name))]))
-  use req <- result.try(build_request(url))
-  let #(auth_key, auth_val) = auth_header(token)
+  use req <- result.try(authed_request(url, http.Post, token))
   let req =
     req
-    |> request.set_method(http.Post)
-    |> request.set_header(auth_key, auth_val)
     |> request.set_header("content-type", "application/json")
     |> request.set_body(body)
   use resp <- result.try(
@@ -105,12 +86,7 @@ pub fn create_thread(
     200 | 201 ->
       json.parse(resp.body, decode.at(["id"], decode.string))
       |> result.map_error(fn(_) { "Failed to parse thread ID from response" })
-    status ->
-      Error(
-        "Unexpected status "
-        <> string.inspect(status)
-        <> " when creating thread",
-      )
+    status -> Error(unexpected_status(status, "create thread"))
   }
 }
 
@@ -125,4 +101,22 @@ fn build_request(url: String) -> Result(request.Request(String), String) {
   )
   request.from_uri(parsed)
   |> result.map_error(fn(_) { "Failed to build request from URL: " <> url })
+}
+
+fn authed_request(
+  url: String,
+  method: http.Method,
+  token: String,
+) -> Result(request.Request(String), String) {
+  use req <- result.try(build_request(url))
+  let #(auth_key, auth_val) = auth_header(token)
+  Ok(
+    req
+    |> request.set_method(method)
+    |> request.set_header(auth_key, auth_val),
+  )
+}
+
+fn unexpected_status(status: Int, context: String) -> String {
+  "Unexpected status " <> int.to_string(status) <> " from " <> context
 }

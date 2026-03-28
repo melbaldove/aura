@@ -1,8 +1,10 @@
 import aura/config
 import aura/discord
+import aura/env
 import aura/supervisor
 import aura/workspace
 import gleam/io
+import gleam/option
 import gleam/result
 import gleam/string
 import simplifile
@@ -51,11 +53,12 @@ pub fn main() {
   }
 
   let on_message = fn(msg: discord.IncomingMessage) {
+    let channel = option.unwrap(msg.channel_name, msg.channel_id)
     io.println(
       "[aura] "
       <> msg.author_name
       <> " in #"
-      <> msg.channel_name
+      <> channel
       <> ": "
       <> msg.content,
     )
@@ -75,10 +78,10 @@ pub fn main() {
 }
 
 fn get_workspace_base() -> String {
-  case get_env("AURA_WORKSPACE") {
+  case env.get_env("AURA_WORKSPACE") {
     Ok(path) -> path
     Error(_) -> {
-      case get_env("HOME") {
+      case env.get_env("HOME") {
         Ok(home) -> home <> "/.aura"
         Error(_) -> ".aura"
       }
@@ -94,9 +97,6 @@ fn load_config(base: String) -> Result(config.GlobalConfig, String) {
   )
   config.parse_global(content)
 }
-
-@external(erlang, "aura_env_ffi", "get_env")
-fn get_env(name: String) -> Result(String, Nil)
 
 @external(erlang, "aura_runtime_ffi", "halt")
 fn halt(code: Int) -> Nil

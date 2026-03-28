@@ -1,11 +1,10 @@
+import aura/test_helpers
 import aura/workspace
-import gleam/int
-import gleam/string
 import gleeunit/should
 import simplifile
 
 pub fn scaffold_workspace_test() {
-  let base = "/tmp/aura-test-workspace-" <> random_suffix()
+  let base = "/tmp/aura-test-workspace-" <> test_helpers.random_suffix()
 
   workspace.scaffold(base)
   |> should.be_ok
@@ -30,7 +29,7 @@ pub fn scaffold_workspace_test() {
 }
 
 pub fn scaffold_workstream_test() {
-  let base = "/tmp/aura-test-ws-" <> random_suffix()
+  let base = "/tmp/aura-test-ws-" <> test_helpers.random_suffix()
   let _ = simplifile.create_directory_all(base <> "/workstreams")
 
   workspace.scaffold_workstream(base, "test-project", "A test workstream", "test-project")
@@ -45,11 +44,3 @@ pub fn scaffold_workstream_test() {
   Nil
 }
 
-fn random_suffix() -> String {
-  erlang_unique_integer()
-  |> int.to_string
-  |> string.replace("-", "")
-}
-
-@external(erlang, "erlang", "unique_integer")
-fn erlang_unique_integer() -> Int

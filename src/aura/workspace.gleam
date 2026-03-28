@@ -51,8 +51,7 @@ timezone = \"UTC\"
 urgent_bypass = true
 
 [acp]
-session_timeout_minutes = 60
-max_concurrent_sessions = 5
+global_max_concurrent = 4
 "
 
 fn workstream_config_toml(name: String, description: String, channel: String) -> String {

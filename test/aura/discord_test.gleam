@@ -24,8 +24,8 @@ pub fn incoming_from_received_test() {
       author: discord_types.User(id: "111", username: "melbs", bot: False),
       content: "hello aura",
     )
-  let incoming = discord.from_received(received, "cm2")
-  incoming.channel_name |> should.equal("cm2")
+  let incoming = discord.from_received(received, option.Some("cm2"))
+  incoming.channel_name |> should.equal(option.Some("cm2"))
   incoming.author_name |> should.equal("melbs")
   incoming.content |> should.equal("hello aura")
   incoming.is_bot |> should.equal(False)
