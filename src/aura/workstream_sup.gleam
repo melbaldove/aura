@@ -1,0 +1,184 @@
+import aura/brain
+import aura/config
+import aura/env
+import aura/llm
+import aura/skill
+import aura/workspace
+import aura/workstream
+import gleam/erlang/process
+import gleam/io
+import gleam/list
+import gleam/result
+import gleam/string
+import simplifile
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+pub type WorkstreamRegistry {
+  WorkstreamRegistry(entries: List(WorkstreamEntry))
+}
+
+pub type WorkstreamEntry {
+  WorkstreamEntry(
+    name: String,
+    channel_id: String,
+    subject: process.Subject(workstream.WorkstreamMessage),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// LLM config resolution (mirrors brain.build_llm_config)
+// ---------------------------------------------------------------------------
+
+fn build_llm_config(model_spec: String) -> Result(llm.LlmConfig, String) {
+  let model = brain.resolve_model_name(model_spec)
+  case string.starts_with(model_spec, "zai/") {
+    True -> {
+      case env.get_env("ZAI_API_KEY") {
+        Ok(key) ->
+          Ok(llm.LlmConfig(
+            base_url: "https://api.z.ai/api/coding/paas/v4",
+            api_key: key,
+            model: model,
+          ))
+        Error(_) -> Error("ZAI_API_KEY environment variable not set")
+      }
+    }
+    False ->
+      case string.starts_with(model_spec, "claude/") {
+        True -> {
+          case env.get_env("ANTHROPIC_API_KEY") {
+            Ok(key) ->
+              Ok(llm.LlmConfig(
+                base_url: "https://api.anthropic.com/v1",
+                api_key: key,
+                model: model,
+              ))
+            Error(_) -> Error("ANTHROPIC_API_KEY environment variable not set")
+          }
+        }
+        False -> Error("Unknown model provider in spec: " <> model_spec)
+      }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public functions
+// ---------------------------------------------------------------------------
+
+/// List workstream dirs, load each config, spawn actors, return registry.
+pub fn start_all(
+  workspace_base: String,
+  global_config: config.GlobalConfig,
+  soul: String,
+  all_skills: List(skill.SkillInfo),
+) -> Result(WorkstreamRegistry, String) {
+  use names <- result.try(workspace.list_workstreams(workspace_base))
+
+  let entries =
+    list.filter_map(names, fn(name) {
+      let config_path =
+        workspace_base <> "/workstreams/" <> name <> "/config.toml"
+
+      case simplifile.read(config_path) {
+        Error(e) -> {
+          io.println(
+            "[workstream_sup] Failed to read config for "
+            <> name
+            <> ": "
+            <> string.inspect(e),
+          )
+          Error(Nil)
+        }
+        Ok(toml_content) -> {
+          case config.parse_workstream(toml_content) {
+            Error(e) -> {
+              io.println(
+                "[workstream_sup] Failed to parse config for "
+                <> name
+                <> ": "
+                <> e,
+              )
+              Error(Nil)
+            }
+            Ok(ws_config) -> {
+              // Resolve model spec: use workstream-specific or fall back to global
+              let model_spec = case string.is_empty(ws_config.model_workstream) {
+                True -> global_config.models.workstream
+                False -> ws_config.model_workstream
+              }
+
+              case build_llm_config(model_spec) {
+                Error(e) -> {
+                  io.println(
+                    "[workstream_sup] Failed to build LLM config for "
+                    <> name
+                    <> ": "
+                    <> e,
+                  )
+                  Error(Nil)
+                }
+                Ok(llm_config) -> {
+                  case
+                    workstream.start(
+                      name,
+                      ws_config,
+                      llm_config,
+                      workspace_base,
+                      soul,
+                      all_skills,
+                    )
+                  {
+                    Error(e) -> {
+                      io.println(
+                        "[workstream_sup] Failed to start actor for "
+                        <> name
+                        <> ": "
+                        <> e,
+                      )
+                      Error(Nil)
+                    }
+                    Ok(subject) -> {
+                      io.println("[workstream_sup] Started workstream: " <> name)
+                      Ok(WorkstreamEntry(
+                        name: name,
+                        channel_id: ws_config.discord_channel,
+                        subject: subject,
+                      ))
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    })
+
+  Ok(WorkstreamRegistry(entries: entries))
+}
+
+/// Look up a workstream entry by name.
+pub fn find_by_name(
+  registry: WorkstreamRegistry,
+  name: String,
+) -> Result(WorkstreamEntry, Nil) {
+  list.find(registry.entries, fn(e) { e.name == name })
+}
+
+/// Look up a workstream entry by channel ID.
+pub fn find_by_channel(
+  registry: WorkstreamRegistry,
+  channel_id: String,
+) -> Result(WorkstreamEntry, Nil) {
+  list.find(registry.entries, fn(e) { e.channel_id == channel_id })
+}
+
+/// Convert registry entries to brain's WorkstreamInfo type.
+pub fn to_brain_info(registry: WorkstreamRegistry) -> List(brain.WorkstreamInfo) {
+  list.map(registry.entries, fn(e) {
+    brain.WorkstreamInfo(name: e.name, channel_id: e.channel_id)
+  })
+}
