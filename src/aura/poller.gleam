@@ -1,8 +1,10 @@
+import aura/brain
 import aura/config
 import aura/discord
 import aura/discord/gateway
 import aura/discord/rest
 import aura/discord/types as discord_types
+import gleam/erlang/process
 import gleam/io
 import gleam/option.{None}
 import gleam/result
@@ -11,10 +13,10 @@ import gleam/result
 const default_intents = 37_376
 
 /// Start the Discord poller.
-/// Fetches gateway URL, connects, and forwards messages via callback.
+/// Fetches gateway URL, connects, and forwards messages to the brain actor.
 pub fn start(
   discord_config: config.DiscordConfig,
-  on_message: fn(discord.IncomingMessage) -> Nil,
+  brain_subject: process.Subject(brain.BrainMessage),
 ) -> Result(Nil, String) {
   let token = discord_config.token
   io.println("[poller] Fetching gateway URL...")
@@ -29,7 +31,7 @@ pub fn start(
           True -> Nil
           False -> {
             let incoming = discord.from_received(msg, None)
-            on_message(incoming)
+            process.send(brain_subject, brain.HandleMessage(incoming))
           }
         }
       }

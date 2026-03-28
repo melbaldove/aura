@@ -1,20 +1,24 @@
+import aura/brain
 import aura/config
-import aura/discord
 import aura/poller
 import gleam/erlang/process
 import gleam/io
 import gleam/otp/static_supervisor
+import gleam/result
 import gleam/string
 
 /// Start the root supervision tree
 pub fn start(
   global_config: config.GlobalConfig,
-  on_message: fn(discord.IncomingMessage) -> Nil,
+  workspace_base: String,
+  workstreams: List(brain.WorkstreamInfo),
 ) -> Result(process.Pid, String) {
+  use brain_subject <- result.try(brain.start(global_config, workspace_base, workstreams))
+
   // Start poller in a linked process (so supervisor crash restarts it)
   let _poller_pid =
     process.spawn(fn() {
-      case poller.start(global_config.discord, on_message) {
+      case poller.start(global_config.discord, brain_subject) {
         Ok(Nil) -> {
           // Keep process alive - gateway runs in stratus actor
           process.sleep_forever()

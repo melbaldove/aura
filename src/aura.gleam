@@ -1,10 +1,8 @@
 import aura/config
-import aura/discord
 import aura/env
 import aura/supervisor
 import aura/workspace
 import gleam/io
-import gleam/option
 import gleam/result
 import gleam/string
 import simplifile
@@ -52,20 +50,8 @@ pub fn main() {
     Error(_) -> io.println("Workstreams: none")
   }
 
-  let on_message = fn(msg: discord.IncomingMessage) {
-    let channel = option.unwrap(msg.channel_name, msg.channel_id)
-    io.println(
-      "[aura] "
-      <> msg.author_name
-      <> " in #"
-      <> channel
-      <> ": "
-      <> msg.content,
-    )
-  }
-
   // Start supervisor
-  case supervisor.start(cfg, on_message) {
+  case supervisor.start(cfg, workspace_base, []) {
     Ok(_pid) -> {
       io.println("Aura running. Press Ctrl+C to stop.")
       sleep_forever()
