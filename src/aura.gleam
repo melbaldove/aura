@@ -1,4 +1,5 @@
 import aura/config
+import aura/discord
 import aura/supervisor
 import aura/workspace
 import gleam/io
@@ -23,16 +24,18 @@ pub fn main() {
   }
 
   // Load and validate config
-  case load_config(workspace_base) {
+  let cfg = case load_config(workspace_base) {
     Ok(cfg) -> {
       io.println("Config loaded.")
       io.println("  Brain model: " <> cfg.models.brain)
       io.println("  Workstream model: " <> cfg.models.workstream)
       io.println("  ACP model: " <> cfg.models.acp)
+      cfg
     }
     Error(e) -> {
       io.println("ERROR: Invalid config: " <> e)
       halt(1)
+      config.default_global()
     }
   }
 
@@ -47,8 +50,19 @@ pub fn main() {
     Error(_) -> io.println("Workstreams: none")
   }
 
+  let on_message = fn(msg: discord.IncomingMessage) {
+    io.println(
+      "[aura] "
+      <> msg.author_name
+      <> " in #"
+      <> msg.channel_name
+      <> ": "
+      <> msg.content,
+    )
+  }
+
   // Start supervisor
-  case supervisor.start() {
+  case supervisor.start(cfg, on_message) {
     Ok(_pid) -> {
       io.println("Aura running. Press Ctrl+C to stop.")
       sleep_forever()
