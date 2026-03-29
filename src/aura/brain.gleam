@@ -1,3 +1,6 @@
+import aura/acp/manager
+import aura/acp/monitor as acp_monitor
+import aura/acp/types as acp_types
 import aura/config
 import aura/discord
 import aura/discord/rest
@@ -32,6 +35,7 @@ pub type BrainMessage {
   UpdateWorkstreams(List(WorkstreamInfo))
   HeartbeatFinding(notification.Finding)
   DeliverDigest
+  AcpEvent(acp_monitor.AcpEvent)
 }
 
 pub type BrainState {
@@ -44,6 +48,7 @@ pub type BrainState {
     registry: List(workstream_sup.WorkstreamEntry),
     notification_queue: notification.NotificationQueue,
     aura_channel_id: String,
+    acp_manager: manager.AcpManager,
   )
 }
 
@@ -93,6 +98,7 @@ pub fn start(
   workspace_base: String,
   workstreams: List(WorkstreamInfo),
   registry: List(workstream_sup.WorkstreamEntry),
+  acp_max_concurrent: Int,
 ) -> Result(process.Subject(BrainMessage), String) {
   // Read SOUL.md
   let soul_path = workspace_base <> "/SOUL.md"
@@ -117,6 +123,7 @@ pub fn start(
       registry: registry,
       notification_queue: notification.new_queue(),
       aura_channel_id: "",
+      acp_manager: manager.new(acp_max_concurrent),
     )
 
   actor.new(state)
@@ -195,15 +202,86 @@ fn handle_message(
         }
       }
     }
+    AcpEvent(event) -> {
+      case event {
+        acp_monitor.AcpStarted(session_name, workstream, task_id) -> {
+          let msg =
+            "**ACP Started** — "
+            <> task_id
+            <> "\n`tmux attach -t "
+            <> session_name
+            <> "`"
+          let channel = resolve_workstream_channel(state, workstream)
+          process.spawn(fn() {
+            send_discord_response(state.discord_token, channel, msg)
+          })
+          actor.continue(state)
+        }
+        acp_monitor.AcpAlert(session_name, workstream, status, summary) -> {
+          let status_str = acp_types.status_to_string(status)
+          let msg =
+            "**ACP Alert** ["
+            <> status_str
+            <> "] — "
+            <> summary
+            <> "\n`tmux attach -t "
+            <> session_name
+            <> "`"
+          let channel = resolve_workstream_channel(state, workstream)
+          process.spawn(fn() {
+            send_discord_response(state.discord_token, channel, msg)
+          })
+          actor.continue(state)
+        }
+        acp_monitor.AcpCompleted(session_name, workstream, report) -> {
+          let outcome = acp_types.outcome_to_string(report.outcome)
+          let msg =
+            "**ACP Complete** [" <> outcome <> "] — " <> report.anchor
+          let channel = resolve_workstream_channel(state, workstream)
+          process.spawn(fn() {
+            send_discord_response(state.discord_token, channel, msg)
+          })
+          let new_manager =
+            manager.unregister(state.acp_manager, session_name)
+          actor.continue(BrainState(..state, acp_manager: new_manager))
+        }
+        acp_monitor.AcpTimedOut(session_name, workstream) -> {
+          let msg =
+            "**ACP Timeout** — Session still alive. `tmux attach -t "
+            <> session_name
+            <> "`"
+          let channel = resolve_workstream_channel(state, workstream)
+          process.spawn(fn() {
+            send_discord_response(state.discord_token, channel, msg)
+          })
+          let new_manager =
+            manager.unregister(state.acp_manager, session_name)
+          actor.continue(BrainState(..state, acp_manager: new_manager))
+        }
+        acp_monitor.AcpFailed(session_name, workstream, error) -> {
+          let msg = "**ACP Failed** — " <> error
+          let channel = resolve_workstream_channel(state, workstream)
+          process.spawn(fn() {
+            send_discord_response(state.discord_token, channel, msg)
+          })
+          let new_manager =
+            manager.unregister(state.acp_manager, session_name)
+          actor.continue(BrainState(..state, acp_manager: new_manager))
+        }
+      }
+    }
+  }
+}
+
+fn resolve_workstream_channel(state: BrainState, workstream: String) -> String {
+  case list.find(state.workstreams, fn(ws) { ws.name == workstream }) {
+    Ok(ws) -> ws.channel_id
+    Error(_) -> state.aura_channel_id
   }
 }
 
 fn resolve_finding_channel(state: BrainState, finding: notification.Finding) -> String {
-  // Try to find the workstream's channel, fall back to #aura
-  case list.find(state.workstreams, fn(ws) { ws.name == finding.workstream }) {
-    Ok(ws) -> ws.channel_id
-    Error(_) -> state.aura_channel_id
-  }
+  resolve_workstream_channel(state, finding.workstream)
 }
 
 fn handle_routed_message(

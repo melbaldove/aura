@@ -51,7 +51,7 @@ pub fn start(
 
   // 4. Start brain with registry
   use brain_subject <- result.try(
-    brain.start(global_config, workspace_base, brain_workstreams, registry.entries),
+    brain.start(global_config, workspace_base, brain_workstreams, registry.entries, global_config.acp_global_max_concurrent),
   )
   io.println("[supervisor] Brain started")
 
