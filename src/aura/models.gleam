@@ -45,6 +45,22 @@ pub fn build_llm_config(model_spec: String) -> Result(llm.LlmConfig, String) {
   }
 }
 
+/// Get the default model spec for a provider
+pub fn default_brain_model(provider: String) -> String {
+  case provider {
+    "zai" -> "zai/glm-5-turbo"
+    _ -> "claude/haiku"
+  }
+}
+
+/// Get the environment variable name for a provider's API key
+pub fn api_key_env_var(provider: String) -> String {
+  case provider {
+    "zai" -> "ZAI_API_KEY"
+    _ -> "ANTHROPIC_API_KEY"
+  }
+}
+
 /// Build LLM config with an explicit API key (for validation during init).
 /// Similar to build_llm_config but uses the provided key instead of reading from env.
 pub fn build_llm_config_with_key(

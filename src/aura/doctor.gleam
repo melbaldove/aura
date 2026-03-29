@@ -22,85 +22,111 @@ pub fn run() -> Nil {
   let _ = dotenv.load(xdg.env_path(paths))
 
   io.println("Dependencies:")
-  let p1 = check("  Erlang/OTP", fn() {
-    case cmd.run("erl", ["-eval", "halt(0)"], 5000) {
-      Ok(#(0, _, _)) -> Ok("installed")
-      _ -> Error("not found")
-    }
-  })
-
-  let p2 = check("  tmux", fn() {
-    case cmd.run("tmux", ["-V"], 5000) {
-      Ok(#(0, stdout, _)) -> Ok(string.trim(stdout))
-      _ -> Error("not found")
-    }
+  let dep_checks = [
+    #("  Erlang/OTP", fn() {
+      case cmd.run("erl", ["-eval", "halt(0)"], 5000) {
+        Ok(#(0, _, _)) -> Ok("installed")
+        _ -> Error("not found")
+      }
+    }),
+    #("  tmux", fn() {
+      case cmd.run("tmux", ["-V"], 5000) {
+        Ok(#(0, stdout, _)) -> Ok(string.trim(stdout))
+        _ -> Error("not found")
+      }
+    }),
+  ]
+  let dep_results = list.map(dep_checks, fn(c) {
+    let #(label, checker) = c
+    check(label, checker)
   })
 
   io.println("")
   io.println("Workspace:")
-  let p3 = check("  Config dir", fn() {
-    case simplifile.is_directory(paths.config) {
-      Ok(True) -> Ok(paths.config)
-      _ -> Error("missing")
-    }
-  })
-
-  let p4 = check("  Data dir", fn() {
-    case simplifile.is_directory(paths.data) {
-      Ok(True) -> Ok(paths.data)
-      _ -> Error("missing")
-    }
-  })
-
-  let p5 = check("  State dir", fn() {
-    case simplifile.is_directory(paths.state) {
-      Ok(True) -> Ok(paths.state)
-      _ -> Error("missing")
-    }
+  let workspace_checks = [
+    #("  Config dir", fn() {
+      case simplifile.is_directory(paths.config) {
+        Ok(True) -> Ok(paths.config)
+        _ -> Error("missing")
+      }
+    }),
+    #("  Data dir", fn() {
+      case simplifile.is_directory(paths.data) {
+        Ok(True) -> Ok(paths.data)
+        _ -> Error("missing")
+      }
+    }),
+    #("  State dir", fn() {
+      case simplifile.is_directory(paths.state) {
+        Ok(True) -> Ok(paths.state)
+        _ -> Error("missing")
+      }
+    }),
+  ]
+  let workspace_results = list.map(workspace_checks, fn(c) {
+    let #(label, checker) = c
+    check(label, checker)
   })
 
   io.println("")
   io.println("Credentials:")
-  let p6 = check("  .env file", fn() {
-    case simplifile.is_file(xdg.env_path(paths)) {
-      Ok(True) -> Ok("exists")
-      _ -> Error("missing")
-    }
-  })
-
-  let p7 = check("  Discord token", fn() {
-    case env.get_env("AURA_DISCORD_TOKEN") {
-      Ok(token) -> {
-        case rest.validate_token(token) {
-          Ok(name) -> Ok("@" <> name)
-          Error(e) -> Error(e)
-        }
+  let cred_checks = [
+    #("  .env file", fn() {
+      case simplifile.is_file(xdg.env_path(paths)) {
+        Ok(True) -> Ok("exists")
+        _ -> Error("missing")
       }
-      Error(_) -> Error("AURA_DISCORD_TOKEN not set")
-    }
+    }),
+    #("  Discord token", fn() {
+      case env.get_env("AURA_DISCORD_TOKEN") {
+        Ok(token) -> {
+          case rest.validate_token(token) {
+            Ok(name) -> Ok("@" <> name)
+            Error(e) -> Error(e)
+          }
+        }
+        Error(_) -> Error("AURA_DISCORD_TOKEN not set")
+      }
+    }),
+  ]
+  let cred_results = list.map(cred_checks, fn(c) {
+    let #(label, checker) = c
+    check(label, checker)
   })
 
   io.println("")
   io.println("Config:")
-  let p8 = check("  config.toml", fn() {
-    case simplifile.read(xdg.config_path(paths, "config.toml")) {
-      Ok(content) -> {
-        case config.parse_global(content) {
-          Ok(_) -> Ok("valid")
-          Error(e) -> Error(e)
+  let config_checks = [
+    #("  config.toml", fn() {
+      case simplifile.read(xdg.config_path(paths, "config.toml")) {
+        Ok(content) -> {
+          case config.parse_global(content) {
+            Ok(_) -> Ok("valid")
+            Error(e) -> Error(e)
+          }
         }
+        Error(_) -> Error("missing or unreadable")
       }
-      Error(_) -> Error("missing or unreadable")
-    }
+    }),
+  ]
+  let config_results = list.map(config_checks, fn(c) {
+    let #(label, checker) = c
+    check(label, checker)
   })
 
   io.println("")
   io.println("Identity:")
-  let p9 = check("  SOUL.md", fn() {
-    case simplifile.is_file(xdg.soul_path(paths)) {
-      Ok(True) -> Ok("exists")
-      _ -> Error("missing")
-    }
+  let identity_checks = [
+    #("  SOUL.md", fn() {
+      case simplifile.is_file(xdg.soul_path(paths)) {
+        Ok(True) -> Ok("exists")
+        _ -> Error("missing")
+      }
+    }),
+  ]
+  let identity_results = list.map(identity_checks, fn(c) {
+    let #(label, checker) = c
+    check(label, checker)
   })
 
   io.println("")
@@ -114,7 +140,15 @@ pub fn run() -> Nil {
   })
 
   io.println("")
-  let all_pass = list.all([p1, p2, p3, p4, p5, p6, p7, p8, p9], fn(p) { p })
+  let results =
+    list.flatten([
+      dep_results,
+      workspace_results,
+      cred_results,
+      config_results,
+      identity_results,
+    ])
+  let all_pass = list.all(results, fn(p) { p })
   case all_pass {
     True -> io.println("All checks passed.")
     False -> io.println("Some checks failed. Run 'aura start' to set up.")

@@ -160,10 +160,7 @@ fn prompt_llm_key() -> Result(#(String, String), String) {
     1 -> "zai"
     _ -> "claude"
   }
-  let default_model = case provider {
-    "zai" -> "zai/glm-5-turbo"
-    _ -> "claude/claude-sonnet-4-20250514"
-  }
+  let default_model = models.default_brain_model(provider)
   prompt_llm_key_loop(provider, default_model)
 }
 
@@ -171,10 +168,7 @@ fn prompt_llm_key_loop(
   provider: String,
   default_model: String,
 ) -> Result(#(String, String), String) {
-  let key_name = case provider {
-    "zai" -> "ZAI_API_KEY"
-    _ -> "ANTHROPIC_API_KEY"
-  }
+  let key_name = models.api_key_env_var(provider)
   use api_key <- result.try(prompt.ask_secret(key_name))
   use config <- result.try(models.build_llm_config_with_key(
     default_model,
@@ -206,10 +200,7 @@ fn write_env_file(
   api_key: String,
 ) -> Result(Nil, String) {
   let env_path = xdg.env_path(paths)
-  let key_var = case provider {
-    "zai" -> "ZAI_API_KEY"
-    _ -> "ANTHROPIC_API_KEY"
-  }
+  let key_var = models.api_key_env_var(provider)
   let content =
     "DISCORD_BOT_TOKEN=" <> token <> "\n" <> key_var <> "=" <> api_key <> "\n"
 
@@ -246,10 +237,7 @@ fn generate_config(
   guild_id: String,
   timezone: String,
 ) -> Result(Nil, String) {
-  let model = case provider {
-    "zai" -> "zai/glm-5-turbo"
-    _ -> "claude/claude-sonnet-4-20250514"
-  }
+  let model = models.default_brain_model(provider)
   let config_content =
     string.join(
       [
