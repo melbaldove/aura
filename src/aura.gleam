@@ -1,4 +1,5 @@
 import aura/config
+import aura/doctor
 import aura/dotenv
 import aura/init
 import aura/supervisor
@@ -12,7 +13,7 @@ pub fn main() {
   let args = get_args()
   case args {
     ["doctor"] -> {
-      io.println("aura doctor — not yet implemented")
+      doctor.run()
       halt(0)
     }
     _ -> run_start()
