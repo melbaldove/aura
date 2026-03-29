@@ -1,10 +1,8 @@
-import aura/cmd
 import aura/discord/rest
 import aura/llm
 import aura/models
 import aura/prompt
 import aura/xdg
-import gleam/int
 import gleam/io
 import gleam/list
 import gleam/result
@@ -39,32 +37,31 @@ pub fn run(paths: xdg.Paths) -> Result(Nil, String) {
 fn check_dependencies() -> Result(Nil, String) {
   io.println("Checking dependencies...")
 
-  use _ <- result.try(check_dep("erl", ["--version"]))
-  use _ <- result.try(check_dep("tmux", ["-V"]))
+  // Erlang is implicit — we're running inside the BEAM
+  io.println("  Erlang/OTP ✓ (running)")
+
+  // Check tmux via `which tmux` since spawn_executable needs PATH lookup
+  use _ <- result.try(check_dep_which("tmux"))
 
   io.println("")
   Ok(Nil)
 }
 
-fn check_dep(program: String, args: List(String)) -> Result(Nil, String) {
-  case cmd.run(program, args, 5000) {
-    Ok(#(0, _, _)) -> {
-      io.println("  " <> program <> " found")
+fn check_dep_which(program: String) -> Result(Nil, String) {
+  // Use os:find_executable which searches PATH
+  case find_executable(program) {
+    Ok(path) -> {
+      io.println("  " <> program <> " ✓ (" <> path <> ")")
       Ok(Nil)
-    }
-    Ok(#(code, _, _)) -> {
-      Error(
-        program
-        <> " exited with code "
-        <> int.to_string(code)
-        <> ". Please install it.",
-      )
     }
     Error(_) -> {
       Error(program <> " not found. Please install it.")
     }
   }
 }
+
+@external(erlang, "aura_init_ffi", "find_executable")
+fn find_executable(name: String) -> Result(String, Nil)
 
 // ---------------------------------------------------------------------------
 // Directory creation
