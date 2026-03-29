@@ -37,17 +37,3 @@ pub fn anchor_to_json_test() {
     "{\"ts\":\"2026-03-25T14:30:00+08:00\",\"type\":\"decision\",\"anchor\":true,\"workstream\":\"cm2\",\"content\":\"Chose separate ACK format for RETURN files\",\"context\":\"CICS-967\"}",
   )
 }
-
-pub fn urgency_level_test() {
-  types.Urgent
-  |> types.urgency_to_string
-  |> should.equal("urgent")
-
-  types.Normal
-  |> types.urgency_to_string
-  |> should.equal("normal")
-
-  types.Low
-  |> types.urgency_to_string
-  |> should.equal("low")
-}

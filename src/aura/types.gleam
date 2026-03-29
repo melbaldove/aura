@@ -22,13 +22,6 @@ pub type Anchor {
   )
 }
 
-/// Urgency level for heartbeat findings
-pub type Urgency {
-  Urgent
-  Normal
-  Low
-}
-
 /// ACP session outcome
 pub type AcpOutcome {
   Clean
@@ -68,14 +61,6 @@ pub fn anchor_to_json(anchor: Anchor) -> json.Json {
     #("content", json.string(anchor.content)),
     #("context", json.string(anchor.context)),
   ])
-}
-
-pub fn urgency_to_string(urgency: Urgency) -> String {
-  case urgency {
-    Urgent -> "urgent"
-    Normal -> "normal"
-    Low -> "low"
-  }
 }
 
 pub fn outcome_to_string(outcome: AcpOutcome) -> String {

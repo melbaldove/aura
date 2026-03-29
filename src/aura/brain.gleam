@@ -81,12 +81,6 @@ pub fn build_routing_prompt(
   <> "\n\nRespond with just the workstream name, or \"none\" if it doesn't match any."
 }
 
-/// Parse model spec "zai/glm-5-turbo" -> model name "glm-5-turbo"
-/// Delegates to models.resolve_model_name.
-pub fn resolve_model_name(model_spec: String) -> String {
-  models.resolve_model_name(model_spec)
-}
-
 // ---------------------------------------------------------------------------
 // Actor
 // ---------------------------------------------------------------------------
@@ -143,17 +137,15 @@ fn handle_message(
       case route_message(msg.channel_id, state.workstreams) {
         DirectRoute(name) -> {
           // Spawn a process to avoid blocking the brain actor
-          let state_ref = state
           process.spawn(fn() {
-            handle_routed_message(state_ref, name, msg)
+            handle_routed_message(state, name, msg)
           })
           actor.continue(state)
         }
         NeedsClassification -> {
           // Handle directly with brain's LLM (for #aura channel)
-          let state_ref = state
           process.spawn(fn() {
-            handle_with_llm(state_ref, msg)
+            handle_with_llm(state, msg)
           })
           actor.continue(state)
         }

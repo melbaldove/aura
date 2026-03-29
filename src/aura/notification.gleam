@@ -33,7 +33,7 @@ pub fn new_queue() -> NotificationQueue {
 
 /// Add a finding to the queue.
 pub fn enqueue(queue: NotificationQueue, finding: Finding) -> NotificationQueue {
-  NotificationQueue(items: list.append(queue.items, [finding]))
+  NotificationQueue(items: [finding, ..queue.items])
 }
 
 /// Return the number of items in the queue.
@@ -43,7 +43,7 @@ pub fn queue_size(queue: NotificationQueue) -> Int {
 
 /// Return all items and reset the queue to empty.
 pub fn drain(queue: NotificationQueue) -> #(List(Finding), NotificationQueue) {
-  #(queue.items, new_queue())
+  #(list.reverse(queue.items), new_queue())
 }
 
 // ---------------------------------------------------------------------------
