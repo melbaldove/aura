@@ -37,6 +37,7 @@ pub type BrainMessage {
   HeartbeatFinding(notification.Finding)
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
+  PostWelcome(channel_id: String)
 }
 
 pub type BrainState {
@@ -73,6 +74,15 @@ pub fn build_system_prompt(soul_content: String) -> String {
   "You are responding in a Discord server. Stay in character.\n\n"
   <> soul_content
   <> "\n\nKeep responses concise and direct. Use Discord markdown where appropriate."
+  <> "\n\nYou can create workstreams when users ask. To create a workstream, respond with a structured command block:\n"
+  <> "```aura-command\n"
+  <> "CREATE_WORKSTREAM\n"
+  <> "name: <slug-name>\n"
+  <> "description: <description>\n"
+  <> "cwd: <repo-path-or-empty>\n"
+  <> "tools: <comma-separated-or-empty>\n"
+  <> "```\n"
+  <> "Follow this with a confirmation message for the user."
 }
 
 /// Build a routing classification prompt (for #aura messages)
@@ -201,6 +211,18 @@ fn handle_message(
           }
           actor.continue(BrainState(..state, notification_queue: new_queue))
         }
+      }
+    }
+    PostWelcome(channel_id) -> {
+      case list.is_empty(state.workstreams) {
+        True -> {
+          let msg = "Aura is online. No workstreams configured yet. Tell me about your first project and I'll set one up."
+          process.spawn(fn() {
+            send_discord_response(state.discord_token, channel_id, msg)
+          })
+          actor.continue(BrainState(..state, aura_channel_id: channel_id))
+        }
+        False -> actor.continue(BrainState(..state, aura_channel_id: channel_id))
       }
     }
     AcpEvent(event) -> {
