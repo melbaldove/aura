@@ -59,6 +59,8 @@ pub type MonitorState {
 
 const check_interval_ms = 15_000
 
+const max_output_size = 50_000
+
 const report_marker = "---AURA-REPORT---"
 
 const report_instructions = "Before exiting, output exactly this format as your final message:\n\n---AURA-REPORT---\nOUTCOME: clean | partial | failed\nFILES_CHANGED: [list of files]\nDECISIONS: [key decisions and why]\nTESTS: [pass/fail summary]\nBLOCKERS: [unresolved items]\nANCHOR: [one sentence worth remembering long-term]\n---END-REPORT---"
@@ -211,7 +213,7 @@ fn handle_session_alive(
                 Error(_) -> {
                   // Marker found but parse failed, keep monitoring
                   schedule_next(state.self_subject)
-                  actor.continue(MonitorState(..state, last_output: output))
+                  actor.continue(MonitorState(..state, last_output: cap_output(output)))
                 }
               }
             }
@@ -253,7 +255,7 @@ fn check_timeout_and_continue(
     }
     False -> {
       schedule_next(state.self_subject)
-      actor.continue(MonitorState(..state, last_output: output))
+      actor.continue(MonitorState(..state, last_output: cap_output(output)))
     }
   }
 }
@@ -309,6 +311,18 @@ fn parse_status(response: String) -> types.SessionStatus {
     "BLOCKED" -> types.Blocked
     "DANGEROUS" -> types.Dangerous
     _ -> types.Running
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn cap_output(output: String) -> String {
+  case string.length(output) > max_output_size {
+    True ->
+      string.slice(output, string.length(output) - max_output_size, max_output_size)
+    False -> output
   }
 }
 

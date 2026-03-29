@@ -1,16 +1,10 @@
+import aura/cmd
 import gleam/int
 import gleam/string
 
 pub type Command {
   Command(program: String, args: List(String))
 }
-
-@external(erlang, "aura_skill_ffi", "run_command")
-fn run_command_ffi(
-  program: String,
-  args: List(String),
-  timeout_ms: Int,
-) -> Result(#(Int, String, String), String)
 
 // --- Pure functions ---
 
@@ -51,7 +45,7 @@ fn shell_quote_inner(s: String) -> String {
 // --- Effectful functions ---
 
 pub fn run(command: Command) -> Result(String, String) {
-  case run_command_ffi(command.program, command.args, 10_000) {
+  case cmd.run(command.program, command.args, 10_000) {
     Error(reason) -> Error(reason)
     Ok(#(0, stdout, _stderr)) -> Ok(stdout)
     Ok(#(code, _stdout, stderr)) ->
@@ -61,7 +55,7 @@ pub fn run(command: Command) -> Result(String, String) {
 
 pub fn session_exists(session_name: String) -> Bool {
   let cmd = build_has_session_command(session_name)
-  case run_command_ffi(cmd.program, cmd.args, 10_000) {
+  case cmd.run(cmd.program, cmd.args, 10_000) {
     Ok(#(0, _, _)) -> True
     _ -> False
   }

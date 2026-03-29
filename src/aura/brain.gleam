@@ -237,40 +237,36 @@ fn handle_message(
           let outcome = acp_types.outcome_to_string(report.outcome)
           let msg =
             "**ACP Complete** [" <> outcome <> "] — " <> report.anchor
-          let channel = resolve_workstream_channel(state, workstream)
-          process.spawn(fn() {
-            send_discord_response(state.discord_token, channel, msg)
-          })
-          let new_manager =
-            manager.unregister(state.acp_manager, session_name)
-          actor.continue(BrainState(..state, acp_manager: new_manager))
+          handle_acp_completion(state, session_name, workstream, msg)
         }
         acp_monitor.AcpTimedOut(session_name, workstream) -> {
           let msg =
             "**ACP Timeout** — Session still alive. `tmux attach -t "
             <> session_name
             <> "`"
-          let channel = resolve_workstream_channel(state, workstream)
-          process.spawn(fn() {
-            send_discord_response(state.discord_token, channel, msg)
-          })
-          let new_manager =
-            manager.unregister(state.acp_manager, session_name)
-          actor.continue(BrainState(..state, acp_manager: new_manager))
+          handle_acp_completion(state, session_name, workstream, msg)
         }
         acp_monitor.AcpFailed(session_name, workstream, error) -> {
           let msg = "**ACP Failed** — " <> error
-          let channel = resolve_workstream_channel(state, workstream)
-          process.spawn(fn() {
-            send_discord_response(state.discord_token, channel, msg)
-          })
-          let new_manager =
-            manager.unregister(state.acp_manager, session_name)
-          actor.continue(BrainState(..state, acp_manager: new_manager))
+          handle_acp_completion(state, session_name, workstream, msg)
         }
       }
     }
   }
+}
+
+fn handle_acp_completion(
+  state: BrainState,
+  session_name: String,
+  workstream: String,
+  msg: String,
+) -> actor.Next(BrainState, BrainMessage) {
+  let channel = resolve_workstream_channel(state, workstream)
+  process.spawn(fn() {
+    send_discord_response(state.discord_token, channel, msg)
+  })
+  let new_manager = manager.unregister(state.acp_manager, session_name)
+  actor.continue(BrainState(..state, acp_manager: new_manager))
 }
 
 fn resolve_workstream_channel(state: BrainState, workstream: String) -> String {

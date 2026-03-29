@@ -22,26 +22,6 @@ pub type Anchor {
   )
 }
 
-/// ACP session outcome
-pub type AcpOutcome {
-  Clean
-  Partial
-  Failed
-  Unknown
-}
-
-/// ACP structured exit report
-pub type AcpReport {
-  AcpReport(
-    outcome: AcpOutcome,
-    files_changed: List(String),
-    decisions: String,
-    tests: String,
-    blockers: String,
-    anchor: String,
-  )
-}
-
 pub fn event_to_json(event: Event) -> json.Json {
   json.object([
     #("ts", json.string(event.ts)),
@@ -63,11 +43,3 @@ pub fn anchor_to_json(anchor: Anchor) -> json.Json {
   ])
 }
 
-pub fn outcome_to_string(outcome: AcpOutcome) -> String {
-  case outcome {
-    Clean -> "clean"
-    Partial -> "partial"
-    Failed -> "failed"
-    Unknown -> "unknown"
-  }
-}

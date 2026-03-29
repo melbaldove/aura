@@ -1,3 +1,4 @@
+import aura/cmd
 import gleam/list
 import gleam/result
 import gleam/string
@@ -10,13 +11,6 @@ pub type SkillInfo {
 pub type SkillResult {
   SkillResult(exit_code: Int, stdout: String, stderr: String)
 }
-
-@external(erlang, "aura_skill_ffi", "run_command")
-fn run_command_ffi(
-  command: String,
-  args: List(String),
-  timeout_ms: Int,
-) -> Result(#(Int, String, String), String)
 
 /// Scan {base}/skills/ for directories containing SKILL.md.
 /// For each, extract the first non-heading non-empty line as description.
@@ -74,7 +68,7 @@ pub fn invoke(
   timeout_ms: Int,
 ) -> Result(SkillResult, String) {
   use entrypoint <- result.try(find_entrypoint(skill_info.path))
-  use result <- result.try(run_command_ffi(entrypoint, args, timeout_ms))
+  use result <- result.try(cmd.run(entrypoint, args, timeout_ms))
   let #(exit_code, stdout, stderr) = result
   Ok(SkillResult(exit_code: exit_code, stdout: stdout, stderr: stderr))
 }
