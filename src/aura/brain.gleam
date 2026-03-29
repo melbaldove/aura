@@ -4,6 +4,7 @@ import aura/discord/rest
 import aura/llm
 import aura/memory
 import aura/models
+import aura/notification
 import aura/workstream
 import aura/workstream_sup
 import gleam/io
@@ -29,6 +30,8 @@ pub type RouteDecision {
 pub type BrainMessage {
   HandleMessage(discord.IncomingMessage)
   UpdateWorkstreams(List(WorkstreamInfo))
+  HeartbeatFinding(notification.Finding)
+  DeliverDigest
 }
 
 pub type BrainState {
@@ -39,6 +42,8 @@ pub type BrainState {
     workstreams: List(WorkstreamInfo),
     soul: String,
     registry: List(workstream_sup.WorkstreamEntry),
+    notification_queue: notification.NotificationQueue,
+    aura_channel_id: String,
   )
 }
 
@@ -116,6 +121,8 @@ pub fn start(
       workstreams: workstreams,
       soul: soul,
       registry: registry,
+      notification_queue: notification.new_queue(),
+      aura_channel_id: "",
     )
 
   actor.new(state)
@@ -156,6 +163,54 @@ fn handle_message(
       io.println("[brain] Updated workstreams: " <> string.inspect(list.length(ws)) <> " entries")
       actor.continue(BrainState(..state, workstreams: ws))
     }
+    HeartbeatFinding(finding) -> {
+      case notification.is_urgent(finding) {
+        True -> {
+          // Post urgent findings immediately
+          let channel = resolve_finding_channel(state, finding)
+          process.spawn(fn() {
+            send_discord_response(state.discord_token, channel, "**URGENT** [" <> finding.source <> "] " <> finding.summary)
+          })
+          actor.continue(state)
+        }
+        False -> {
+          // Queue for digest
+          let new_queue = notification.enqueue(state.notification_queue, finding)
+          actor.continue(BrainState(..state, notification_queue: new_queue))
+        }
+      }
+    }
+    DeliverDigest -> {
+      let #(findings, new_queue) = notification.drain(state.notification_queue)
+      case findings {
+        [] -> actor.continue(BrainState(..state, notification_queue: new_queue))
+        _ -> {
+          let digest = notification.format_digest(findings)
+          let channel = state.aura_channel_id
+          case channel {
+            "" -> {
+              io.println("[brain] No #aura channel configured for digest delivery")
+              Nil
+            }
+            _ -> {
+              process.spawn(fn() {
+                send_discord_response(state.discord_token, channel, digest)
+              })
+              Nil
+            }
+          }
+          actor.continue(BrainState(..state, notification_queue: new_queue))
+        }
+      }
+    }
+  }
+}
+
+fn resolve_finding_channel(state: BrainState, finding: notification.Finding) -> String {
+  // Try to find the workstream's channel, fall back to #aura
+  case list.find(state.workstreams, fn(ws) { ws.name == finding.workstream }) {
+    Ok(ws) -> ws.channel_id
+    Error(_) -> state.aura_channel_id
   }
 }
 

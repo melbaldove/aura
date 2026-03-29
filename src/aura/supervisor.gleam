@@ -1,6 +1,8 @@
 import aura/brain
 import aura/config
+import aura/heartbeat_sup
 import aura/memory
+import aura/notification
 import aura/poller
 import aura/skill
 import aura/workstream_sup
@@ -53,7 +55,19 @@ pub fn start(
   )
   io.println("[supervisor] Brain started")
 
-  // 5. Start poller
+  // 5. Start heartbeat checks
+  let on_finding = fn(finding: notification.Finding) {
+    process.send(brain_subject, brain.HeartbeatFinding(finding))
+  }
+
+  let _started_checks = heartbeat_sup.start_all(
+    heartbeat_sup.default_checks(),
+    all_skills,
+    on_finding,
+  )
+  io.println("[supervisor] Heartbeat checks started")
+
+  // 6. Start poller
   let _poller_pid =
     process.spawn(fn() {
       case poller.start(global_config.discord, brain_subject) {
@@ -66,7 +80,7 @@ pub fn start(
     })
   io.println("[supervisor] Poller started")
 
-  // 6. Start OTP supervisor
+  // 7. Start OTP supervisor
   let result =
     static_supervisor.new(static_supervisor.OneForOne)
     |> static_supervisor.restart_tolerance(intensity: 3, period: 5)
