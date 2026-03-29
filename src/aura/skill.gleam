@@ -15,6 +15,7 @@ pub type SkillResult {
 fn run_command_ffi(
   command: String,
   args: List(String),
+  timeout_ms: Int,
 ) -> Result(#(Int, String, String), String)
 
 /// Scan {base}/skills/ for directories containing SKILL.md.
@@ -72,9 +73,8 @@ pub fn invoke(
   args: List(String),
   timeout_ms: Int,
 ) -> Result(SkillResult, String) {
-  let _ = timeout_ms
   use entrypoint <- result.try(find_entrypoint(skill_info.path))
-  use result <- result.try(run_command_ffi(entrypoint, args))
+  use result <- result.try(run_command_ffi(entrypoint, args, timeout_ms))
   let #(exit_code, stdout, stderr) = result
   Ok(SkillResult(exit_code: exit_code, stdout: stdout, stderr: stderr))
 }

@@ -1,7 +1,5 @@
-import aura/brain
 import aura/config
-import aura/env
-import aura/llm
+import aura/models
 import aura/skill
 import aura/workspace
 import aura/workstream
@@ -26,42 +24,6 @@ pub type WorkstreamEntry {
     channel_id: String,
     subject: process.Subject(workstream.WorkstreamMessage),
   )
-}
-
-// ---------------------------------------------------------------------------
-// LLM config resolution (mirrors brain.build_llm_config)
-// ---------------------------------------------------------------------------
-
-fn build_llm_config(model_spec: String) -> Result(llm.LlmConfig, String) {
-  let model = brain.resolve_model_name(model_spec)
-  case string.starts_with(model_spec, "zai/") {
-    True -> {
-      case env.get_env("ZAI_API_KEY") {
-        Ok(key) ->
-          Ok(llm.LlmConfig(
-            base_url: "https://api.z.ai/api/coding/paas/v4",
-            api_key: key,
-            model: model,
-          ))
-        Error(_) -> Error("ZAI_API_KEY environment variable not set")
-      }
-    }
-    False ->
-      case string.starts_with(model_spec, "claude/") {
-        True -> {
-          case env.get_env("ANTHROPIC_API_KEY") {
-            Ok(key) ->
-              Ok(llm.LlmConfig(
-                base_url: "https://api.anthropic.com/v1",
-                api_key: key,
-                model: model,
-              ))
-            Error(_) -> Error("ANTHROPIC_API_KEY environment variable not set")
-          }
-        }
-        False -> Error("Unknown model provider in spec: " <> model_spec)
-      }
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +72,7 @@ pub fn start_all(
                 False -> ws_config.model_workstream
               }
 
-              case build_llm_config(model_spec) {
+              case models.build_llm_config(model_spec) {
                 Error(e) -> {
                   io.println(
                     "[workstream_sup] Failed to build LLM config for "
@@ -176,9 +138,3 @@ pub fn find_by_channel(
   list.find(registry.entries, fn(e) { e.channel_id == channel_id })
 }
 
-/// Convert registry entries to brain's WorkstreamInfo type.
-pub fn to_brain_info(registry: WorkstreamRegistry) -> List(brain.WorkstreamInfo) {
-  list.map(registry.entries, fn(e) {
-    brain.WorkstreamInfo(name: e.name, channel_id: e.channel_id)
-  })
-}

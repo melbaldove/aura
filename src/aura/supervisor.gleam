@@ -38,14 +38,10 @@ pub fn start(
   use registry <- result.try(
     workstream_sup.start_all(workspace_base, global_config, soul, all_skills),
   )
-  let brain_workstreams = workstream_sup.to_brain_info(registry)
-  let brain_actors = list.map(registry.entries, fn(e) {
-    brain.WorkstreamActor(
-      name: e.name,
-      channel_id: e.channel_id,
-      subject: e.subject,
-    )
-  })
+  let brain_workstreams =
+    list.map(registry.entries, fn(e) {
+      brain.WorkstreamInfo(name: e.name, channel_id: e.channel_id)
+    })
   io.println(
     "[supervisor] Workstreams: "
     <> string.join(list.map(brain_workstreams, fn(ws) { ws.name }), ", "),
@@ -53,7 +49,7 @@ pub fn start(
 
   // 4. Start brain with registry
   use brain_subject <- result.try(
-    brain.start(global_config, workspace_base, brain_workstreams, brain_actors),
+    brain.start(global_config, workspace_base, brain_workstreams, registry.entries),
   )
   io.println("[supervisor] Brain started")
 

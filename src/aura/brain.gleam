@@ -1,10 +1,11 @@
 import aura/config
 import aura/discord
 import aura/discord/rest
-import aura/env
 import aura/llm
 import aura/memory
+import aura/models
 import aura/workstream
+import aura/workstream_sup
 import gleam/io
 import gleam/list
 import gleam/otp/actor
@@ -25,14 +26,6 @@ pub type RouteDecision {
   NeedsClassification
 }
 
-pub type WorkstreamActor {
-  WorkstreamActor(
-    name: String,
-    channel_id: String,
-    subject: process.Subject(workstream.WorkstreamMessage),
-  )
-}
-
 pub type BrainMessage {
   HandleMessage(discord.IncomingMessage)
   UpdateWorkstreams(List(WorkstreamInfo))
@@ -45,7 +38,7 @@ pub type BrainState {
     workspace_base: String,
     workstreams: List(WorkstreamInfo),
     soul: String,
-    registry: List(WorkstreamActor),
+    registry: List(workstream_sup.WorkstreamEntry),
   )
 }
 
@@ -84,47 +77,9 @@ pub fn build_routing_prompt(
 }
 
 /// Parse model spec "zai/glm-5-turbo" -> model name "glm-5-turbo"
+/// Delegates to models.resolve_model_name.
 pub fn resolve_model_name(model_spec: String) -> String {
-  case string.split(model_spec, "/") {
-    [_prefix, name] -> name
-    _ -> model_spec
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Config resolution
-// ---------------------------------------------------------------------------
-
-fn build_llm_config(model_spec: String) -> Result(llm.LlmConfig, String) {
-  let model = resolve_model_name(model_spec)
-  case string.starts_with(model_spec, "zai/") {
-    True -> {
-      case env.get_env("ZAI_API_KEY") {
-        Ok(key) ->
-          Ok(llm.LlmConfig(
-            base_url: "https://api.z.ai/api/coding/paas/v4",
-            api_key: key,
-            model: model,
-          ))
-        Error(_) -> Error("ZAI_API_KEY environment variable not set")
-      }
-    }
-    False ->
-      case string.starts_with(model_spec, "claude/") {
-        True -> {
-          case env.get_env("ANTHROPIC_API_KEY") {
-            Ok(key) ->
-              Ok(llm.LlmConfig(
-                base_url: "https://api.anthropic.com/v1",
-                api_key: key,
-                model: model,
-              ))
-            Error(_) -> Error("ANTHROPIC_API_KEY environment variable not set")
-          }
-        }
-        False -> Error("Unknown model provider in spec: " <> model_spec)
-      }
-  }
+  models.resolve_model_name(model_spec)
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +93,7 @@ pub fn start(
   config: config.GlobalConfig,
   workspace_base: String,
   workstreams: List(WorkstreamInfo),
-  registry: List(WorkstreamActor),
+  registry: List(workstream_sup.WorkstreamEntry),
 ) -> Result(process.Subject(BrainMessage), String) {
   // Read SOUL.md
   let soul_path = workspace_base <> "/SOUL.md"
@@ -151,7 +106,7 @@ pub fn start(
   }
 
   // Build LLM config from brain model spec
-  use llm_config <- result.try(build_llm_config(config.models.brain))
+  use llm_config <- result.try(models.build_llm_config(config.models.brain))
 
   let state =
     BrainState(

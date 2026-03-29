@@ -1,4 +1,5 @@
 import aura/brain
+import aura/models
 import gleam/string
 import gleeunit/should
 
@@ -53,16 +54,16 @@ pub fn build_routing_prompt_test() {
 }
 
 pub fn resolve_model_name_test() {
-  brain.resolve_model_name("zai/glm-5-turbo")
+  models.resolve_model_name("zai/glm-5-turbo")
   |> should.equal("glm-5-turbo")
 }
 
 pub fn resolve_model_name_no_prefix_test() {
-  brain.resolve_model_name("glm-5-turbo")
+  models.resolve_model_name("glm-5-turbo")
   |> should.equal("glm-5-turbo")
 }
 
 pub fn resolve_model_name_claude_test() {
-  brain.resolve_model_name("claude/sonnet")
+  models.resolve_model_name("claude/sonnet")
   |> should.equal("sonnet")
 }
