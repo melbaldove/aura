@@ -90,6 +90,47 @@ pub fn create_thread(
   }
 }
 
+/// Validate a Discord bot token by calling GET /users/@me
+/// Returns the bot's username on success.
+pub fn validate_token(token: String) -> Result(String, String) {
+  let url = api_url("/users/@me")
+  use req <- result.try(authed_request(url, http.Get, token))
+  use resp <- result.try(
+    httpc.send(req)
+    |> result.map_error(fn(_) { "HTTP request failed" }),
+  )
+  case resp.status {
+    200 ->
+      json.parse(resp.body, decode.at(["username"], decode.string))
+      |> result.map_error(fn(_) { "Failed to parse username from response" })
+    status -> Error(unexpected_status(status, "users/@me"))
+  }
+}
+
+/// List guilds the bot is in.
+/// Returns list of (id, name) tuples.
+pub fn list_guilds(token: String) -> Result(List(#(String, String)), String) {
+  let url = api_url("/users/@me/guilds")
+  use req <- result.try(authed_request(url, http.Get, token))
+  use resp <- result.try(
+    httpc.send(req)
+    |> result.map_error(fn(_) { "HTTP request failed" }),
+  )
+  case resp.status {
+    200 -> {
+      let guild_decoder =
+        decode.list({
+          use id <- decode.field("id", decode.string)
+          use name <- decode.field("name", decode.string)
+          decode.success(#(id, name))
+        })
+      json.parse(resp.body, guild_decoder)
+      |> result.map_error(fn(_) { "Failed to parse guilds from response" })
+    }
+    status -> Error(unexpected_status(status, "users/@me/guilds"))
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

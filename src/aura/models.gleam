@@ -1,5 +1,6 @@
 import aura/env
 import aura/llm
+import gleam/result
 import gleam/string
 
 /// Resolve a model spec like "zai/glm-5-turbo" -> model name "glm-5-turbo"
@@ -42,4 +43,22 @@ pub fn build_llm_config(model_spec: String) -> Result(llm.LlmConfig, String) {
         False -> Error("Unknown model provider in spec: " <> model_spec)
       }
   }
+}
+
+/// Build LLM config with an explicit API key (for validation during init).
+/// Similar to build_llm_config but uses the provided key instead of reading from env.
+pub fn build_llm_config_with_key(
+  model_spec: String,
+  api_key: String,
+) -> Result(llm.LlmConfig, String) {
+  let model = resolve_model_name(model_spec)
+  use base_url <- result.try(case string.starts_with(model_spec, "zai/") {
+    True -> Ok("https://api.z.ai/api/coding/paas/v4")
+    False ->
+      case string.starts_with(model_spec, "claude/") {
+        True -> Ok("https://api.anthropic.com/v1")
+        False -> Error("Unknown model provider in spec: " <> model_spec)
+      }
+  })
+  Ok(llm.LlmConfig(base_url: base_url, api_key: api_key, model: model))
 }
