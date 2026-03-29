@@ -22,30 +22,30 @@ pub fn append_jsonl(path: String, json_value: json.Json) -> Result(Nil, String) 
   })
 }
 
-/// Append an event to base/events.jsonl
-pub fn append_event(base: String, event: types.Event) -> Result(Nil, String) {
-  let path = base <> "/events.jsonl"
+/// Append an event to data_dir/events.jsonl
+pub fn append_event(data_dir: String, event: types.Event) -> Result(Nil, String) {
+  let path = data_dir <> "/events.jsonl"
   append_jsonl(path, types.event_to_json(event))
 }
 
-/// Append an anchor to base/workstreams/<ws>/anchors.jsonl
+/// Append an anchor to data_dir/workstreams/<ws>/anchors.jsonl
 pub fn append_anchor(
-  base: String,
+  data_dir: String,
   workstream: String,
   anchor: types.Anchor,
 ) -> Result(Nil, String) {
-  let path = base <> "/workstreams/" <> workstream <> "/anchors.jsonl"
+  let path = data_dir <> "/workstreams/" <> workstream <> "/anchors.jsonl"
   append_jsonl(path, types.anchor_to_json(anchor))
 }
 
 /// Append a JSON value to the daily log for a workstream
 pub fn append_log(
-  base: String,
+  data_dir: String,
   workstream: String,
   date: String,
   json_value: json.Json,
 ) -> Result(Nil, String) {
-  let dir = base <> "/workstreams/" <> workstream <> "/logs"
+  let dir = data_dir <> "/workstreams/" <> workstream <> "/logs"
   let path = dir <> "/" <> date <> ".jsonl"
   use _ <- result.try(
     simplifile.create_directory_all(dir)
@@ -58,11 +58,11 @@ pub fn append_log(
 
 /// Read the last N anchors from the workstream's anchors.jsonl
 pub fn read_anchors(
-  base: String,
+  data_dir: String,
   workstream: String,
   limit: Int,
 ) -> Result(List(String), String) {
-  let path = base <> "/workstreams/" <> workstream <> "/anchors.jsonl"
+  let path = data_dir <> "/workstreams/" <> workstream <> "/anchors.jsonl"
   use content <- result.try(read_file(path))
   let lines =
     content
@@ -78,11 +78,11 @@ pub fn read_anchors(
 
 /// Read a daily log for a workstream. Returns "" if missing.
 pub fn read_daily_log(
-  base: String,
+  data_dir: String,
   workstream: String,
   date: String,
 ) -> Result(String, String) {
-  let path = base <> "/workstreams/" <> workstream <> "/logs/" <> date <> ".jsonl"
+  let path = data_dir <> "/workstreams/" <> workstream <> "/logs/" <> date <> ".jsonl"
   case simplifile.read(path) {
     Ok(content) -> Ok(content)
     Error(_) -> Ok("")
@@ -91,12 +91,12 @@ pub fn read_daily_log(
 
 /// Read a weekly summary for a workstream. Returns "" if missing.
 pub fn read_summary(
-  base: String,
+  data_dir: String,
   workstream: String,
   week: String,
 ) -> Result(String, String) {
   let path =
-    base <> "/workstreams/" <> workstream <> "/summaries/" <> week <> ".md"
+    data_dir <> "/workstreams/" <> workstream <> "/summaries/" <> week <> ".md"
   case simplifile.read(path) {
     Ok(content) -> Ok(content)
     Error(_) -> Ok("")
@@ -105,12 +105,12 @@ pub fn read_summary(
 
 /// Write a weekly summary for a workstream
 pub fn write_summary(
-  base: String,
+  data_dir: String,
   workstream: String,
   week: String,
   content: String,
 ) -> Result(Nil, String) {
-  let dir = base <> "/workstreams/" <> workstream <> "/summaries"
+  let dir = data_dir <> "/workstreams/" <> workstream <> "/summaries"
   let path = dir <> "/" <> week <> ".md"
   use _ <- result.try(
     simplifile.create_directory_all(dir)

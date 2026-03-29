@@ -49,7 +49,7 @@ pub type WorkstreamState {
     name: String,
     config: config.WorkstreamConfig,
     llm_config: llm.LlmConfig,
-    workspace_base: String,
+    data_dir: String,
     soul: String,
     skills: List(skill.SkillInfo),
   )
@@ -118,7 +118,7 @@ pub fn start(
   name: String,
   ws_config: config.WorkstreamConfig,
   llm_config: llm.LlmConfig,
-  workspace_base: String,
+  data_dir: String,
   soul: String,
   skills: List(skill.SkillInfo),
 ) -> Result(process.Subject(WorkstreamMessage), String) {
@@ -129,7 +129,7 @@ pub fn start(
       name: name,
       config: ws_config,
       llm_config: llm_config,
-      workspace_base: workspace_base,
+      data_dir: data_dir,
       soul: soul,
       skills: allowed_skills,
     )
@@ -163,13 +163,13 @@ fn handle_task(
   let date = today_date_string()
 
   // Load context
-  let anchors = case memory.read_anchors(state.workspace_base, state.name, 20) {
+  let anchors = case memory.read_anchors(state.data_dir, state.name, 20) {
     Ok(a) -> a
     Error(_) -> []
   }
 
   let todays_log =
-    case memory.read_daily_log(state.workspace_base, state.name, date) {
+    case memory.read_daily_log(state.data_dir, state.name, date) {
       Ok(log) -> log
       Error(_) -> ""
     }
@@ -203,7 +203,7 @@ fn handle_task(
           #("content", json.string(msg.content)),
           #("response", json.string(response)),
         ])
-      case memory.append_log(state.workspace_base, state.name, date, log_entry) {
+      case memory.append_log(state.data_dir, state.name, date, log_entry) {
         Ok(_) -> Nil
         Error(err) -> {
           io.println(

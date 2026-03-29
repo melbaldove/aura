@@ -23,7 +23,7 @@ pub fn discover_skills_test() {
   let _ =
     simplifile.write(base <> "/skills/google/google.sh", "#!/bin/bash\necho done")
 
-  let skills = skill.discover(base) |> should.be_ok
+  let skills = skill.discover(base <> "/skills") |> should.be_ok
   list.length(skills) |> should.equal(2)
 
   let _ = simplifile.delete_all([base])
@@ -33,7 +33,7 @@ pub fn discover_skills_test() {
 pub fn discover_skills_empty_test() {
   let base = "/tmp/aura-skill-empty-" <> test_helpers.random_suffix()
   let _ = simplifile.create_directory_all(base <> "/skills")
-  let skills = skill.discover(base) |> should.be_ok
+  let skills = skill.discover(base <> "/skills") |> should.be_ok
   list.length(skills) |> should.equal(0)
   let _ = simplifile.delete_all([base])
   Nil

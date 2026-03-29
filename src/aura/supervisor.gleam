@@ -6,6 +6,7 @@ import aura/notification
 import aura/poller
 import aura/skill
 import aura/workstream_sup
+import aura/xdg
 import gleam/erlang/process
 import gleam/int
 import gleam/io
@@ -17,16 +18,16 @@ import gleam/string
 /// Start the root supervision tree
 pub fn start(
   global_config: config.GlobalConfig,
-  workspace_base: String,
+  paths: xdg.Paths,
 ) -> Result(process.Pid, String) {
   // 1. Load SOUL.md
-  let soul = case memory.read_file(workspace_base <> "/SOUL.md") {
+  let soul = case memory.read_file(xdg.soul_path(paths)) {
     Ok(content) -> content
     Error(_) -> "You are Aura, a helpful AI assistant."
   }
 
   // 2. Discover skills
-  let all_skills = case skill.discover(workspace_base) {
+  let all_skills = case skill.discover(xdg.skills_dir(paths)) {
     Ok(skills) -> skills
     Error(_) -> []
   }
@@ -38,7 +39,7 @@ pub fn start(
 
   // 3. Start workstream actors
   use registry <- result.try(
-    workstream_sup.start_all(workspace_base, global_config, soul, all_skills),
+    workstream_sup.start_all(paths, global_config, soul, all_skills),
   )
   let brain_workstreams =
     list.map(registry.entries, fn(e) {
@@ -51,7 +52,7 @@ pub fn start(
 
   // 4. Start brain with registry
   use brain_subject <- result.try(
-    brain.start(global_config, workspace_base, brain_workstreams, registry.entries, global_config.acp_global_max_concurrent),
+    brain.start(global_config, paths, brain_workstreams, registry.entries, global_config.acp_global_max_concurrent),
   )
   io.println("[supervisor] Brain started")
 

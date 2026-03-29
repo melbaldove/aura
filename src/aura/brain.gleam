@@ -10,6 +10,7 @@ import aura/models
 import aura/notification
 import aura/workstream
 import aura/workstream_sup
+import aura/xdg
 import gleam/io
 import gleam/list
 import gleam/otp/actor
@@ -42,7 +43,7 @@ pub type BrainState {
   BrainState(
     discord_token: String,
     llm_config: llm.LlmConfig,
-    workspace_base: String,
+    paths: xdg.Paths,
     workstreams: List(WorkstreamInfo),
     soul: String,
     registry: List(workstream_sup.WorkstreamEntry),
@@ -95,17 +96,17 @@ const default_soul = "You are Aura, a helpful AI assistant. Be direct and concis
 /// Start the brain actor
 pub fn start(
   config: config.GlobalConfig,
-  workspace_base: String,
+  paths: xdg.Paths,
   workstreams: List(WorkstreamInfo),
   registry: List(workstream_sup.WorkstreamEntry),
   acp_max_concurrent: Int,
 ) -> Result(process.Subject(BrainMessage), String) {
   // Read SOUL.md
-  let soul_path = workspace_base <> "/SOUL.md"
-  let soul = case memory.read_file(soul_path) {
+  let soul_file = xdg.soul_path(paths)
+  let soul = case memory.read_file(soul_file) {
     Ok(content) -> content
     Error(_) -> {
-      io.println("[brain] SOUL.md not found at " <> soul_path <> ", using default")
+      io.println("[brain] SOUL.md not found at " <> soul_file <> ", using default")
       default_soul
     }
   }
@@ -117,7 +118,7 @@ pub fn start(
     BrainState(
       discord_token: config.discord.token,
       llm_config: llm_config,
-      workspace_base: workspace_base,
+      paths: paths,
       workstreams: workstreams,
       soul: soul,
       registry: registry,

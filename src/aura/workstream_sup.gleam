@@ -3,6 +3,7 @@ import aura/models
 import aura/skill
 import aura/workspace
 import aura/workstream
+import aura/xdg
 import gleam/erlang/process
 import gleam/io
 import gleam/list
@@ -32,17 +33,17 @@ pub type WorkstreamEntry {
 
 /// List workstream dirs, load each config, spawn actors, return registry.
 pub fn start_all(
-  workspace_base: String,
+  paths: xdg.Paths,
   global_config: config.GlobalConfig,
   soul: String,
   all_skills: List(skill.SkillInfo),
 ) -> Result(WorkstreamRegistry, String) {
-  use names <- result.try(workspace.list_workstreams(workspace_base))
+  use names <- result.try(workspace.list_workstreams(paths))
 
   let entries =
     list.filter_map(names, fn(name) {
       let config_path =
-        workspace_base <> "/workstreams/" <> name <> "/config.toml"
+        xdg.workstream_config_path(paths, name)
 
       case simplifile.read(config_path) {
         Error(e) -> {
@@ -88,7 +89,7 @@ pub fn start_all(
                       name,
                       ws_config,
                       llm_config,
-                      workspace_base,
+                      paths.data,
                       soul,
                       all_skills,
                     )

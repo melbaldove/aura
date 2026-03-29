@@ -12,10 +12,9 @@ pub type SkillResult {
   SkillResult(exit_code: Int, stdout: String, stderr: String)
 }
 
-/// Scan {base}/skills/ for directories containing SKILL.md.
+/// Scan the given skills directory for directories containing SKILL.md.
 /// For each, extract the first non-heading non-empty line as description.
-pub fn discover(workspace_base: String) -> Result(List(SkillInfo), String) {
-  let skills_dir = workspace_base <> "/skills"
+pub fn discover(skills_dir: String) -> Result(List(SkillInfo), String) {
   use entries <- result.try(
     simplifile.read_directory(skills_dir)
     |> result.map_error(fn(e) {

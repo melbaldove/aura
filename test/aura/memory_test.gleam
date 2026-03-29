@@ -2,13 +2,28 @@ import aura/memory
 import aura/test_helpers
 import aura/types
 import aura/workspace
+import aura/xdg
 import gleam/string
 import gleeunit/should
 import simplifile
 
+fn temp_paths(suffix: String) -> xdg.Paths {
+  let base = "/tmp/aura-mem-" <> suffix
+  xdg.Paths(
+    config: base <> "/config",
+    data: base <> "/data",
+    state: base <> "/state",
+  )
+}
+
+fn cleanup_paths(paths: xdg.Paths) -> Nil {
+  let _ = simplifile.delete_all([paths.config, paths.data, paths.state])
+  Nil
+}
+
 pub fn append_event_test() {
-  let base = "/tmp/aura-mem-test-" <> test_helpers.random_suffix()
-  workspace.scaffold(base) |> should.be_ok
+  let paths = temp_paths("event-" <> test_helpers.random_suffix())
+  workspace.scaffold(paths) |> should.be_ok
 
   let event =
     types.Event(
@@ -19,22 +34,21 @@ pub fn append_event_test() {
       summary: "Fixed ACK receipt format",
     )
 
-  memory.append_event(base, event) |> should.be_ok
+  memory.append_event(paths.data, event) |> should.be_ok
 
-  let content = simplifile.read(base <> "/events.jsonl") |> should.be_ok
+  let content = simplifile.read(paths.data <> "/events.jsonl") |> should.be_ok
   content
   |> string.contains("CICS-967")
   |> should.be_true
 
   // Cleanup
-  let _ = simplifile.delete_all([base])
-  Nil
+  cleanup_paths(paths)
 }
 
 pub fn append_anchor_test() {
-  let base = "/tmp/aura-anchor-test-" <> test_helpers.random_suffix()
-  workspace.scaffold(base) |> should.be_ok
-  workspace.scaffold_workstream(base, "cm2", "test", "cm2") |> should.be_ok
+  let paths = temp_paths("anchor-" <> test_helpers.random_suffix())
+  workspace.scaffold(paths) |> should.be_ok
+  workspace.scaffold_workstream(paths, "cm2", "test", "cm2") |> should.be_ok
 
   let anchor =
     types.Anchor(
@@ -45,31 +59,28 @@ pub fn append_anchor_test() {
       context: "TEST-001",
     )
 
-  memory.append_anchor(base, "cm2", anchor) |> should.be_ok
+  memory.append_anchor(paths.data, "cm2", anchor) |> should.be_ok
 
   let content =
-    simplifile.read(base <> "/workstreams/cm2/anchors.jsonl")
+    simplifile.read(paths.data <> "/workstreams/cm2/anchors.jsonl")
     |> should.be_ok
   content
   |> string.contains("Test decision")
   |> should.be_true
 
   // Cleanup
-  let _ = simplifile.delete_all([base])
-  Nil
+  cleanup_paths(paths)
 }
 
 pub fn read_identity_files_test() {
-  let base = "/tmp/aura-identity-test-" <> test_helpers.random_suffix()
-  workspace.scaffold(base) |> should.be_ok
+  let paths = temp_paths("identity-" <> test_helpers.random_suffix())
+  workspace.scaffold(paths) |> should.be_ok
 
-  let soul = memory.read_file(base <> "/SOUL.md") |> should.be_ok
+  let soul = memory.read_file(paths.config <> "/SOUL.md") |> should.be_ok
   soul
   |> string.contains("SOUL.md")
   |> should.be_true
 
   // Cleanup
-  let _ = simplifile.delete_all([base])
-  Nil
+  cleanup_paths(paths)
 }
-

@@ -1,3 +1,4 @@
+import aura/xdg
 import gleam/list
 import gleam/result
 import gleam/string
@@ -87,44 +88,64 @@ fn create_dir(path: String) -> Result(Nil, String) {
   })
 }
 
-pub fn scaffold(base: String) -> Result(Nil, String) {
-  use _ <- result.try(create_dir(base))
-  use _ <- result.try(create_dir(base <> "/workstreams"))
-  use _ <- result.try(create_dir(base <> "/skills"))
-  use _ <- result.try(create_dir(base <> "/acp"))
-  use _ <- result.try(create_dir(base <> "/acp/sessions"))
-  use _ <- result.try(create_dir(base <> "/acp/completed"))
-  use _ <- result.try(write_if_missing(base <> "/SOUL.md", soul_md))
-  use _ <- result.try(write_if_missing(base <> "/META.md", meta_md))
-  use _ <- result.try(write_if_missing(base <> "/USER.md", user_md))
-  use _ <- result.try(write_if_missing(base <> "/MEMORY.md", memory_md))
-  use _ <- result.try(write_if_missing(base <> "/config.toml", config_toml))
-  use _ <- result.try(write_if_missing(base <> "/events.jsonl", ""))
+pub fn scaffold(paths: xdg.Paths) -> Result(Nil, String) {
+  // Config directories and files
+  use _ <- result.try(create_dir(paths.config))
+  use _ <- result.try(create_dir(paths.config <> "/workstreams"))
+
+  // Data directories and files
+  use _ <- result.try(create_dir(paths.data))
+  use _ <- result.try(create_dir(paths.data <> "/skills"))
+  use _ <- result.try(create_dir(paths.data <> "/acp"))
+  use _ <- result.try(create_dir(paths.data <> "/acp/sessions"))
+  use _ <- result.try(create_dir(paths.data <> "/acp/completed"))
+
+  // State directories
+  use _ <- result.try(create_dir(paths.state))
+
+  // Config files
+  use _ <- result.try(write_if_missing(paths.config <> "/SOUL.md", soul_md))
+  use _ <- result.try(write_if_missing(paths.config <> "/META.md", meta_md))
+  use _ <- result.try(write_if_missing(paths.config <> "/USER.md", user_md))
+  use _ <- result.try(write_if_missing(paths.config <> "/config.toml", config_toml))
+
+  // State files
+  use _ <- result.try(write_if_missing(paths.state <> "/MEMORY.md", memory_md))
+
+  // Data files
+  use _ <- result.try(write_if_missing(paths.data <> "/events.jsonl", ""))
+
   Ok(Nil)
 }
 
 pub fn scaffold_workstream(
-  base: String,
+  paths: xdg.Paths,
   name: String,
   description: String,
   channel: String,
 ) -> Result(Nil, String) {
-  let ws_path = base <> "/workstreams/" <> name
-  use _ <- result.try(create_dir(ws_path))
-  use _ <- result.try(create_dir(ws_path <> "/logs"))
-  use _ <- result.try(create_dir(ws_path <> "/summaries"))
+  // Config dir for workstream
+  let ws_config_dir = paths.config <> "/workstreams/" <> name
+  use _ <- result.try(create_dir(ws_config_dir))
   use _ <- result.try(
     write_if_missing(
-      ws_path <> "/config.toml",
+      ws_config_dir <> "/config.toml",
       workstream_config_toml(name, description, channel),
     ),
   )
-  use _ <- result.try(write_if_missing(ws_path <> "/anchors.jsonl", ""))
+
+  // Data dir for workstream
+  let ws_data_dir = paths.data <> "/workstreams/" <> name
+  use _ <- result.try(create_dir(ws_data_dir))
+  use _ <- result.try(create_dir(ws_data_dir <> "/logs"))
+  use _ <- result.try(create_dir(ws_data_dir <> "/summaries"))
+  use _ <- result.try(write_if_missing(ws_data_dir <> "/anchors.jsonl", ""))
+
   Ok(Nil)
 }
 
-pub fn list_workstreams(base: String) -> Result(List(String), String) {
-  let ws_dir = base <> "/workstreams"
+pub fn list_workstreams(paths: xdg.Paths) -> Result(List(String), String) {
+  let ws_dir = paths.config <> "/workstreams"
   use entries <- result.try(
     simplifile.read_directory(ws_dir)
     |> result.map_error(fn(e) {

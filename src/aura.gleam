@@ -1,74 +1,78 @@
 import aura/config
-import aura/env
+import aura/dotenv
+import aura/init
 import aura/supervisor
-import aura/workspace
+import aura/xdg
 import gleam/io
 import gleam/result
 import gleam/string
 import simplifile
 
 pub fn main() {
-  io.println("Aura v0.1.0 starting...")
-
-  // Determine workspace path (default ~/.aura)
-  let workspace_base = get_workspace_base()
-  io.println("Workspace: " <> workspace_base)
-
-  // Scaffold workspace if needed
-  case workspace.scaffold(workspace_base) {
-    Ok(Nil) -> io.println("Workspace ready.")
-    Error(e) -> {
-      io.println("ERROR: Failed to scaffold workspace: " <> e)
-      halt(1)
+  let args = get_args()
+  case args {
+    ["doctor"] -> {
+      io.println("aura doctor — not yet implemented")
+      halt(0)
     }
+    _ -> run_start()
+  }
+}
+
+fn run_start() {
+  io.println("Aura v0.1.0")
+  let paths = xdg.resolve()
+
+  // First-run detection
+  case xdg.workspace_exists(paths) {
+    False -> {
+      case init.run(paths) {
+        Ok(Nil) -> Nil
+        Error(e) -> {
+          io.println("Setup failed: " <> e)
+          halt(1)
+        }
+      }
+    }
+    True -> Nil
   }
 
-  // Load and validate config
-  let cfg = case load_config(workspace_base) {
-    Ok(cfg) -> {
-      io.println("Config loaded.")
-      io.println("  Brain model: " <> cfg.models.brain)
-      io.println("  Workstream model: " <> cfg.models.workstream)
-      io.println("  ACP model: " <> cfg.models.acp)
-      cfg
-    }
+  // Load .env
+  case dotenv.load(xdg.env_path(paths)) {
+    Ok(Nil) -> Nil
+    Error(_) -> Nil
+  }
+
+  // Load config
+  let cfg = case load_config(paths) {
+    Ok(cfg) -> cfg
     Error(e) -> {
-      io.println("ERROR: Invalid config: " <> e)
+      io.println("ERROR: " <> e)
       halt(1)
       config.default_global()
     }
   }
 
-  // Start supervisor
-  case supervisor.start(cfg, workspace_base) {
+  // Start
+  case supervisor.start(cfg, paths) {
     Ok(_pid) -> {
       io.println("Aura running. Press Ctrl+C to stop.")
       sleep_forever()
     }
     Error(e) -> {
-      io.println("ERROR: Failed to start: " <> e)
+      io.println("ERROR: " <> e)
       halt(1)
     }
   }
 }
 
-fn get_workspace_base() -> String {
-  case env.get_env("AURA_WORKSPACE") {
-    Ok(path) -> path
-    Error(_) -> {
-      case env.get_env("HOME") {
-        Ok(home) -> home <> "/.aura"
-        Error(_) -> ".aura"
-      }
-    }
-  }
-}
-
-fn load_config(base: String) -> Result(config.GlobalConfig, String) {
-  let config_path = base <> "/config.toml"
+fn load_config(paths: xdg.Paths) -> Result(config.GlobalConfig, String) {
+  let path = xdg.config_path(paths, "config.toml")
   use content <- result.try(
-    simplifile.read(config_path)
-    |> result.map_error(fn(e) { "Cannot read config.toml: " <> string.inspect(e) }),
+    simplifile.read(path)
+    |> result.map_error(fn(e) {
+      "Cannot read config.toml: " <> string.inspect(e)
+    }),
   )
   config.parse_global(content)
 }
@@ -78,3 +82,6 @@ fn halt(code: Int) -> Nil
 
 @external(erlang, "aura_runtime_ffi", "sleep_forever")
 fn sleep_forever() -> Nil
+
+@external(erlang, "init", "get_plain_arguments")
+fn get_args() -> List(String)
