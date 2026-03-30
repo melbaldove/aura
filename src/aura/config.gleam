@@ -197,19 +197,17 @@ pub fn parse_workstream(toml_string: String) -> Result(WorkstreamConfig, String)
     |> result.map_error(fn(_) { "Missing discord.channel" }),
   )
 
-  use model_workstream <- result.try(
+  let model_workstream =
     tom.get_string(doc, ["model", "workstream"])
-    |> result.map_error(fn(_) { "Missing model.workstream" }),
-  )
+    |> result.unwrap("")
 
-  use acp_timeout <- result.try(
+  let acp_timeout =
     tom.get_int(doc, ["acp", "timeout"])
-    |> result.map_error(fn(_) { "Missing acp.timeout" }),
-  )
-  use acp_max_concurrent <- result.try(
+    |> result.unwrap(1800)
+
+  let acp_max_concurrent =
     tom.get_int(doc, ["acp", "max_concurrent"])
-    |> result.map_error(fn(_) { "Missing acp.max_concurrent" }),
-  )
+    |> result.unwrap(2)
 
   Ok(WorkstreamConfig(
     name: name,
