@@ -98,20 +98,16 @@ pub fn start(
   )
   io.println("[supervisor] Heartbeat checks started")
 
-  // 6. Start poller
+  // 6. Start poller with auto-restart
+  let discord_config = global_config.discord
   let _poller_pid =
-    process.spawn(fn() {
-      case poller.start(global_config.discord, brain_subject) {
-        Ok(Nil) -> process.sleep_forever()
-        Error(e) -> {
-          io.println("[supervisor] Poller failed: " <> e)
-          panic as "poller start failed"
-        }
-      }
+    process.spawn_unlinked(fn() {
+      poller_loop(discord_config, brain_subject, 0)
     })
   io.println("[supervisor] Poller started")
 
   // 7. Start OTP supervisor
+  // (poller_loop is defined below)
   let result =
     static_supervisor.new(static_supervisor.OneForOne)
     |> static_supervisor.restart_tolerance(intensity: 3, period: 5)
@@ -123,5 +119,34 @@ pub fn start(
       Ok(started.pid)
     }
     Error(e) -> Error("Failed to start supervisor: " <> string.inspect(e))
+  }
+}
+
+/// Poller loop with auto-restart and backoff
+fn poller_loop(
+  discord_config: config.DiscordConfig,
+  brain_subject: process.Subject(brain.BrainMessage),
+  retry_count: Int,
+) -> Nil {
+  io.println("[poller-loop] Starting poller (attempt " <> int.to_string(retry_count + 1) <> ")")
+  case poller.start(discord_config, brain_subject) {
+    Ok(Nil) -> {
+      // Poller returned Ok, meaning gateway disconnected gracefully
+      io.println("[poller-loop] Poller exited, restarting in 5s...")
+      process.sleep(5000)
+      poller_loop(discord_config, brain_subject, 0)
+    }
+    Error(e) -> {
+      // Poller failed to start — backoff
+      let delay = case retry_count {
+        0 -> 1000
+        1 -> 5000
+        2 -> 15000
+        _ -> 30000
+      }
+      io.println("[poller-loop] Poller error: " <> e <> ", retrying in " <> int.to_string(delay) <> "ms")
+      process.sleep(delay)
+      poller_loop(discord_config, brain_subject, retry_count + 1)
+    }
   }
 }

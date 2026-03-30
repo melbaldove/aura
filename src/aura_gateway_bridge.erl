@@ -4,7 +4,7 @@
 %% Spawn a bridge process that receives raw WS messages from the FFI
 %% and sends typed GatewayMessage values to the Gleam actor subject.
 spawn_bridge(Subject) ->
-    spawn_link(fun() -> bridge_loop(Subject) end).
+    spawn(fun() -> bridge_loop(Subject) end).
 
 bridge_loop(Subject) ->
     receive

@@ -145,13 +145,18 @@ fn handle_message(
       handle_text(state, text)
     }
     WsClosed -> {
+      io.println("[gateway] WsClosed received — connection will be restarted by supervisor")
       state.on_event(types.Reconnect)
       actor.stop_abnormal("WebSocket closed")
     }
     WsError(err) -> {
+      io.println("[gateway] WsError: " <> err)
       actor.stop_abnormal("WebSocket error: " <> err)
     }
-    SendHeartbeat -> handle_heartbeat(state)
+    SendHeartbeat -> {
+      io.println("[gateway] SendHeartbeat received")
+      handle_heartbeat(state)
+    }
   }
 }
 

@@ -8,7 +8,7 @@
 %% The relay process sends {ws_text, Binary} | ws_closed | {ws_error, Binary}
 %% messages to the CallbackPid.
 connect(Host, Path, CallbackPid) ->
-    spawn_link(fun() ->
+    spawn(fun() ->
         try
             ws_loop(Host, Path, CallbackPid)
         catch
