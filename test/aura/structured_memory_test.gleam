@@ -24,7 +24,7 @@ pub fn add_memory_test() {
   let assert Ok(content2) = simplifile.read(path)
   should.equal(
     content2,
-    "User prefers concise responses\n---\nTimezone is Asia/Manila\n",
+    "User prefers concise responses\n§\nTimezone is Asia/Manila\n",
   )
 
   let _ = simplifile.delete(dir)
@@ -35,13 +35,13 @@ pub fn remove_memory_test() {
   let _ = simplifile.create_directory_all(dir)
   let path = dir <> "/MEMORY.md"
   let _ =
-    simplifile.write(path, "First entry\n---\nSecond entry\n---\nThird entry\n")
+    simplifile.write(path, "First entry\n§\nSecond entry\n§\nThird entry\n")
 
   let result = structured_memory.remove(path, "Second entry")
   should.be_ok(result)
 
   let assert Ok(content) = simplifile.read(path)
-  should.equal(content, "First entry\n---\nThird entry\n")
+  should.equal(content, "First entry\n§\nThird entry\n")
 
   let _ = simplifile.delete(dir)
 }
@@ -50,13 +50,13 @@ pub fn replace_memory_test() {
   let dir = "/tmp/aura-mem-test3"
   let _ = simplifile.create_directory_all(dir)
   let path = dir <> "/MEMORY.md"
-  let _ = simplifile.write(path, "Old fact about user\n---\nAnother fact\n")
+  let _ = simplifile.write(path, "Old fact about user\n§\nAnother fact\n")
 
   let result = structured_memory.replace(path, "Old fact", "Updated fact about user")
   should.be_ok(result)
 
   let assert Ok(content) = simplifile.read(path)
-  should.equal(content, "Updated fact about user\n---\nAnother fact\n")
+  should.equal(content, "Updated fact about user\n§\nAnother fact\n")
 
   let _ = simplifile.delete(dir)
 }
@@ -85,7 +85,7 @@ pub fn read_entries_test() {
   let _ = simplifile.create_directory_all(dir)
   let path = dir <> "/MEMORY.md"
   let _ =
-    simplifile.write(path, "Entry one\n---\nEntry two\n---\nEntry three\n")
+    simplifile.write(path, "Entry one\n§\nEntry two\n§\nEntry three\n")
 
   let result = structured_memory.read_entries(path)
   should.be_ok(result)

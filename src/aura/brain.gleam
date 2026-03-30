@@ -127,12 +127,13 @@ pub fn build_system_prompt(
   <> "\n- Be efficient: 1-2 tool calls max per response. Do NOT recursively explore directories."
   <> "\n- If you already know the answer from the system context above, respond directly without tools."
   <> "\n- For workstream creation, use the propose tool to request approval."
-  <> "\n\nLearning rules:"
-  <> "\n- After completing a complex multi-step task, save it as a skill with create_skill."
-  <> "\n- Before creating a skill, check list_skills to avoid duplicates."
-  <> "\n- Use the memory tool to save: user corrections, preferences, environment facts, recurring patterns."
-  <> "\n- Do NOT save to memory: task progress, temporary info, things already in conversation history."
-  <> "\n- When a user corrects you or says 'remember this', save it immediately."
+  <> "\n\nMemory guidance:"
+  <> "\nYou have persistent memory across sessions. Save durable facts using the memory tool: user preferences, environment details, tool quirks, and stable conventions. Memory is injected into every turn, so keep it compact and focused on facts that will still matter later."
+  <> "\nPrioritize what reduces future user steering — the most valuable memory is one that prevents the user from having to correct or remind you again."
+  <> "\nDo NOT save: task progress, session outcomes, completed-work logs, temporary TODO state, trivial info, or easily re-discovered facts."
+  <> "\n\nSkills guidance:"
+  <> "\nAfter completing a complex task (3+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with create_skill so you can reuse it next time."
+  <> "\nWhen using a skill and finding it outdated, incomplete, or wrong, update it immediately with create_skill — don't wait to be asked."
 }
 
 /// Build a routing classification prompt (for #aura messages)
@@ -789,14 +790,14 @@ fn built_in_tools() -> List(llm.ToolDefinition) {
       llm.ToolParam(name: "thread_id", param_type: "string", description: "The thread/channel ID to read", required: True),
       llm.ToolParam(name: "limit", param_type: "string", description: "Max messages to fetch (default 20)", required: False),
     ]),
-    llm.ToolDefinition(name: "create_skill", description: "Create a new skill from experience. Use after completing a complex multi-step task that you'd want to repeat. The content should be a SKILL.md markdown file with instructions for how to perform the task.", parameters: [
-      llm.ToolParam(name: "name", param_type: "string", description: "Skill name (lowercase, hyphens, e.g. 'deploy-to-prod')", required: True),
+    llm.ToolDefinition(name: "create_skill", description: "Manage skills — your procedural memory. Create reusable approaches for recurring task types. Save as SKILL.md with title, description, and step-by-step instructions. Use after complex tasks (3+ tool calls), tricky error fixes, or discovering non-trivial workflows.", parameters: [
+      llm.ToolParam(name: "name", param_type: "string", description: "Skill name (lowercase, hyphens, underscores, e.g. 'deploy-to-prod'). Max 64 chars.", required: True),
       llm.ToolParam(name: "content", param_type: "string", description: "Full SKILL.md content with title, description, and step-by-step instructions", required: True),
     ]),
-    llm.ToolDefinition(name: "list_skills", description: "List all available skills with descriptions. Use to check what skills exist before creating a new one or when deciding which skill to run.", parameters: []),
-    llm.ToolDefinition(name: "memory", description: "Manage persistent memory. Use to save important facts, user preferences, corrections, and environment details that should persist across conversations. Do NOT save task progress, temporary info, or things already in conversation history.", parameters: [
+    llm.ToolDefinition(name: "list_skills", description: "List all available skills with descriptions. Check before creating a new skill to avoid duplicates, or when deciding which skill to run.", parameters: []),
+    llm.ToolDefinition(name: "memory", description: "Save durable information to persistent memory that survives across sessions. Memory is injected into future turns, so keep it compact and focused on facts that will still matter later. Save when: user corrects you or says 'remember this', user shares preferences/habits/personal details, you discover environment facts (OS, tools, project structure), you learn conventions or quirks. Priority: user preferences and corrections > environment facts > procedural knowledge. Do NOT save: task progress, session outcomes, completed-work logs, temporary TODO state, trivial or easily re-discovered facts.", parameters: [
       llm.ToolParam(name: "action", param_type: "string", description: "One of: add, replace, remove, read", required: True),
-      llm.ToolParam(name: "target", param_type: "string", description: "One of: memory, user", required: True),
+      llm.ToolParam(name: "target", param_type: "string", description: "'user' (who the user is: name, role, preferences, communication style) or 'memory' (agent notes: environment facts, project conventions, tool quirks, lessons learned)", required: True),
       llm.ToolParam(name: "content", param_type: "string", description: "Entry text (for add/replace)", required: False),
       llm.ToolParam(name: "old_text", param_type: "string", description: "Substring to match (for replace/remove)", required: False),
     ]),
