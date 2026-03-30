@@ -153,15 +153,28 @@ fn handle_message(
 ) -> actor.Next(WorkstreamState, WorkstreamMessage) {
   case message {
     HandleTask(msg, reply_to) -> {
-      let response = process_task(state, msg)
+      // Hydrate from disk before processing (for LLM history context)
+      let #(hydrated, _) = conversation.get_or_load(state.conversations, msg.channel_id, state.data_dir)
+      let hydrated_state = WorkstreamState(..state, conversations: hydrated)
+      let response = process_task(hydrated_state, msg)
       process.send(reply_to, response)
       let response_text = case response {
         WorkstreamResponse(_, _, content) -> content
         WorkstreamError(_, _, error) -> error
       }
-      let new_convos = conversation.append(state.conversations, msg.channel_id, msg.content, response_text)
-      let _ = conversation.save(new_convos, msg.channel_id, state.data_dir)
-      actor.continue(WorkstreamState(..state, conversations: new_convos))
+      let new_convos = conversation.append(hydrated, msg.channel_id, msg.content, response_text)
+
+      // Compress if buffer exceeds 50% of context window
+      let final_convos = case conversation.needs_compression(new_convos, msg.channel_id, 200_000) {
+        True -> {
+          io.println("[workstream:" <> state.name <> "] Compressing conversation for " <> msg.channel_id)
+          conversation.compress_buffer(new_convos, msg.channel_id, state.llm_config)
+        }
+        False -> new_convos
+      }
+
+      let _ = conversation.save(final_convos, msg.channel_id, state.data_dir)
+      actor.continue(WorkstreamState(..state, conversations: final_convos))
     }
   }
 }

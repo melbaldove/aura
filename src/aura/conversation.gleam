@@ -1,8 +1,11 @@
+import aura/compressor
 import aura/llm
 import gleam/dict
 import gleam/dynamic/decode
+import gleam/io
 import gleam/json
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import simplifile
@@ -26,8 +29,27 @@ pub fn get_history(buffers: Buffers, channel_id: String) -> List(llm.Message) {
   dict.get(buffers, channel_id) |> result.unwrap([])
 }
 
+/// Get history for a channel, loading from disk if not in memory.
+/// Returns updated buffers (with loaded data cached) and the history.
+pub fn get_or_load(
+  buffers: Buffers,
+  channel_id: String,
+  data_dir: String,
+) -> #(Buffers, List(llm.Message)) {
+  case get_history(buffers, channel_id) {
+    [] -> {
+      case load(channel_id, data_dir) {
+        Ok([]) -> #(buffers, [])
+        Ok(loaded) -> #(dict.insert(buffers, channel_id, loaded), loaded)
+        Error(_) -> #(buffers, [])
+      }
+    }
+    existing -> #(buffers, existing)
+  }
+}
+
 /// Append user + assistant messages to the channel buffer.
-/// Caps at 20 pairs (40 messages), dropping oldest when over cap.
+/// No hard cap — compression is triggered separately.
 pub fn append(
   buffers: Buffers,
   channel_id: String,
@@ -40,12 +62,87 @@ pub fn append(
       llm.UserMessage(user_msg),
       llm.AssistantMessage(assistant_msg),
     ])
-  let length = list.length(new_history)
-  let capped = case length > 40 {
-    True -> list.drop(new_history, length - 40)
-    False -> new_history
+  dict.insert(buffers, channel_id, new_history)
+}
+
+/// Check if a buffer needs compression.
+/// Triggers at 50% of context window (Hermes default).
+/// Uses chars/4 heuristic for token estimation.
+pub fn needs_compression(
+  buffers: Buffers,
+  channel_id: String,
+  context_window: Int,
+) -> Bool {
+  let history = get_history(buffers, channel_id)
+  let tokens = compressor.estimate_messages_tokens(history)
+  tokens > context_window / 2
+}
+
+/// Extract the existing compaction summary from a buffer, if any.
+fn get_existing_summary(history: List(llm.Message)) -> Option(String) {
+  case history {
+    [llm.SystemMessage(content), ..] -> {
+      case string.starts_with(content, "[CONTEXT COMPACTION]") {
+        True -> {
+          let prefix = "[CONTEXT COMPACTION] Earlier turns in this conversation were compacted to save context space. The summary below captures the key context:\n\n"
+          Some(string.drop_start(content, string.length(prefix)))
+        }
+        False -> None
+      }
+    }
+    _ -> None
   }
-  dict.insert(buffers, channel_id, capped)
+}
+
+/// Compress old messages and return updated buffer.
+/// Protects first 3 messages (head) and last ~20 messages (tail).
+/// Compresses the middle into a structured summary via LLM.
+pub fn compress_buffer(
+  buffers: Buffers,
+  channel_id: String,
+  llm_config: llm.LlmConfig,
+) -> Buffers {
+  let history = get_history(buffers, channel_id)
+  let total = list.length(history)
+  let protect_tail = 20
+
+  case total > protect_tail + 3 {
+    False -> buffers
+    True -> {
+      // Head: first 3 messages (system prompt + initial exchange)
+      // But if first message is a compaction summary, protect first 1
+      let head_count = case get_existing_summary(history) {
+        Some(_) -> 1
+        None -> 3
+      }
+      let _head = list.take(history, head_count)
+      let tail = list.drop(history, total - protect_tail)
+      let middle = list.drop(history, head_count) |> list.take(total - head_count - protect_tail)
+
+      let existing = get_existing_summary(history)
+
+      // Strip the compaction message from middle if present
+      let messages_to_compress = case existing {
+        Some(_) -> middle
+        None -> middle
+      }
+
+      case compressor.compress(llm_config, messages_to_compress, existing) {
+        Ok(summary_text) -> {
+          io.println("[conversation] Compressed " <> string.inspect(list.length(middle)) <> " messages into summary")
+          let summary_msg = llm.SystemMessage(summary_text)
+          let new_history = [summary_msg, ..tail]
+          dict.insert(buffers, channel_id, new_history)
+        }
+        Error(e) -> {
+          // Compression failed — fall back to hard drop (keep last 40)
+          io.println("[conversation] Compression failed: " <> e <> ", falling back to hard drop")
+          let capped = list.drop(history, total - 40)
+          dict.insert(buffers, channel_id, capped)
+        }
+      }
+    }
+  }
 }
 
 /// Serialize a Message to a JSON object with role and content.
