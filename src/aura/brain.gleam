@@ -2,6 +2,7 @@ import aura/acp/manager
 import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
 import aura/config
+import aura/conversation
 import aura/discord
 import aura/discord/rest
 import aura/llm
@@ -20,6 +21,7 @@ import gleam/int
 import gleam/io
 import gleam/json
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/erlang/process
 import gleam/result
@@ -45,6 +47,7 @@ pub type BrainMessage {
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
   PostWelcome(channel_id: String)
+  StoreExchange(channel_id: String, user_msg: String, assistant_msg: String)
 }
 
 pub type BrainState {
@@ -61,6 +64,8 @@ pub type BrainState {
     acp_manager: manager.AcpManager,
     validation_rules: List(validator.Rule),
     skill_infos: List(skill.SkillInfo),
+    conversations: conversation.Buffers,
+    self_subject: Option(process.Subject(BrainMessage)),
   )
 }
 
@@ -149,7 +154,7 @@ pub fn start(
   // Build LLM config from brain model spec
   use llm_config <- result.try(models.build_llm_config(config.models.brain))
 
-  let state =
+  let base_state =
     BrainState(
       discord_token: config.discord.token,
       llm_config: llm_config,
@@ -163,9 +168,14 @@ pub fn start(
       acp_manager: manager.new(acp_max_concurrent),
       validation_rules: validation_rules,
       skill_infos: skill_infos,
+      conversations: conversation.new(),
+      self_subject: None,
     )
 
-  actor.new(state)
+  actor.new_with_initialiser(10_000, fn(self_subject) {
+    let state = BrainState(..base_state, self_subject: Some(self_subject), conversations: conversation.new())
+    Ok(actor.initialised(state) |> actor.returning(self_subject))
+  })
   |> actor.on_message(handle_message)
   |> actor.start
   |> result.map(fn(started) { started.data })
@@ -192,8 +202,9 @@ fn handle_message(
         NeedsClassification -> {
           io.println("[brain] Route: NeedsClassification")
           // Handle directly with brain's LLM (for #aura channel)
-          process.spawn(fn() {
-            handle_with_llm(state, msg)
+          let subj = state.self_subject
+          process.spawn_unlinked(fn() {
+            handle_with_llm(state, msg, subj)
           })
           actor.continue(state)
         }
@@ -305,6 +316,11 @@ fn handle_message(
         }
       }
     }
+    StoreExchange(channel_id, user_msg, assistant_msg) -> {
+      let new_convos = conversation.append(state.conversations, channel_id, user_msg, assistant_msg)
+      let _ = conversation.save(new_convos, channel_id, state.paths.data)
+      actor.continue(BrainState(..state, conversations: new_convos))
+    }
   }
 }
 
@@ -380,7 +396,7 @@ fn handle_routed_message(
     }
     Error(Nil) -> {
       io.println("[brain] Workstream not found: " <> workstream_name)
-      handle_with_llm(state, msg)
+      handle_with_llm(state, msg, state.self_subject)
     }
   }
 }
@@ -420,7 +436,11 @@ fn send_discord_response(token: String, channel_id: String, content: String) -> 
   }
 }
 
-fn handle_with_llm(state: BrainState, msg: discord.IncomingMessage) -> Nil {
+fn handle_with_llm(
+  state: BrainState,
+  msg: discord.IncomingMessage,
+  brain_subject_opt: Option(process.Subject(BrainMessage)),
+) -> Nil {
   io.println("[brain] Processing message from " <> msg.author_name <> " in channel " <> msg.channel_id)
 
   // Start a typing indicator loop that refreshes every 8 seconds
@@ -428,56 +448,58 @@ fn handle_with_llm(state: BrainState, msg: discord.IncomingMessage) -> Nil {
 
   let ws_names = list.map(state.workstreams, fn(ws) { ws.name })
   let system_prompt = build_system_prompt(state.soul, ws_names, state.skill_names)
-  let initial_messages = [
-    llm.SystemMessage(system_prompt),
-    llm.UserMessage(msg.content),
-  ]
 
-  // Send "Thinking..." placeholder
-  let placeholder_id = case rest.send_message(state.discord_token, msg.channel_id, "Thinking...", []) {
-    Ok(id) -> id
-    Error(_) -> ""
-  }
+  // Load conversation history for this channel
+  let history = conversation.get_history(state.conversations, msg.channel_id)
+  let initial_messages = list.flatten([
+    [llm.SystemMessage(system_prompt)],
+    history,
+    [llm.UserMessage(msg.content)],
+  ])
 
-  let result = tool_loop(state, msg.channel_id, placeholder_id, "", initial_messages, 0)
+  let result = tool_loop_progressive(state, msg.channel_id, initial_messages, [], "", 0)
 
   // Stop typing indicator before sending response
   stop_typing_loop(typing_stop)
 
+  let token = state.discord_token
+  let channel_id = msg.channel_id
+
   case result {
-    Ok(response_text) -> {
-      // Edit the placeholder with the final response
-      case placeholder_id {
-        "" -> send_discord_response(state.discord_token, msg.channel_id, response_text)
-        id -> {
-          case rest.edit_message(state.discord_token, msg.channel_id, id, response_text) {
-            Ok(_) -> Nil
-            Error(_) -> send_discord_response(state.discord_token, msg.channel_id, response_text)
-          }
+    Ok(#(response_text, traces, msg_id)) -> {
+      let full = conversation.format_full_message(traces, response_text)
+      case msg_id {
+        "" -> {
+          let _ = rest.send_message(token, channel_id, full, [])
+          Nil
         }
-      }
-    }
-    Error(err) -> {
-      io.println("[brain] Tool loop error: " <> err)
-      case placeholder_id {
-        "" -> send_discord_response(state.discord_token, msg.channel_id, "Sorry, I encountered an error.")
         id -> {
-          let _ = rest.edit_message(state.discord_token, msg.channel_id, id, "Sorry, I encountered an error.")
+          let _ = rest.edit_message(token, channel_id, id, full)
           Nil
         }
       }
+      // Store exchange in conversation history
+      case brain_subject_opt {
+        Some(subj) -> process.send(subj, StoreExchange(channel_id, msg.content, response_text))
+        None -> Nil
+      }
+    }
+    Error(err) -> {
+      io.println("[brain] Error: " <> err)
+      let _ = rest.send_message(token, channel_id, "Sorry, I encountered an error.", [])
+      Nil
     }
   }
 }
 
-fn tool_loop(
+fn tool_loop_progressive(
   state: BrainState,
   channel_id: String,
-  placeholder_id: String,
-  thread_id: String,
   messages: List(llm.Message),
+  traces: List(conversation.ToolTrace),
+  message_id: String,
   iteration: Int,
-) -> Result(String, String) {
+) -> Result(#(String, List(conversation.ToolTrace), String), String) {
   case iteration >= 20 {
     True -> Error("Tool loop exceeded maximum iterations")
     False -> {
@@ -485,45 +507,49 @@ fn tool_loop(
         Ok(response) -> {
           case response.tool_calls {
             [] -> {
-              // No tool calls — return the text response
-              Ok(response.content)
+              // No tool calls — return the text response with accumulated traces
+              Ok(#(response.content, traces, message_id))
             }
             calls -> {
               // Execute tool calls and continue the loop
               io.println("[brain] " <> int.to_string(list.length(calls)) <> " tool call(s)")
 
-              // Create thread on first tool iteration (only if placeholder exists)
-              let new_thread_id = case thread_id {
-                "" -> case placeholder_id != "" {
-                  True -> {
-                    case rest.create_thread(state.discord_token, channel_id, placeholder_id, "Tool trace") {
-                      Ok(tid) -> tid
-                      Error(_) -> ""
-                    }
-                  }
-                  False -> ""
-                }
-                existing -> existing
-              }
-
-              let tool_results = list.map(calls, fn(call) {
+              // Execute each tool and build traces + result messages
+              let #(new_traces, tool_results) = list.fold(calls, #(traces, []), fn(acc, call) {
+                let #(acc_traces, acc_results) = acc
                 io.println("[brain] Tool: " <> call.name)
                 let result = execute_tool(state, call)
                 let result_preview = string.slice(result, 0, 100)
                 io.println("[brain] Result: " <> result_preview)
 
-                // Post tool trace to thread
-                case new_thread_id {
-                  "" -> Nil
-                  tid -> {
-                    let trace_msg = format_tool_trace(call, result)
-                    let _ = rest.send_message(state.discord_token, tid, trace_msg, [])
-                    Nil
+                let is_error = string.starts_with(result, "Error")
+                let trace = conversation.ToolTrace(
+                  name: call.name,
+                  args: format_tool_args(call.arguments),
+                  result: result,
+                  is_error: is_error,
+                )
+                let updated_traces = list.append(acc_traces, [trace])
+                let updated_results = list.append(acc_results, [llm.ToolResultMessage(call.id, result)])
+                #(updated_traces, updated_results)
+              })
+
+              // Format current traces for progressive display
+              let progress_text = conversation.format_traces(new_traces) <> "\n\n*Thinking...*"
+
+              // Send or edit message with current trace progress
+              let new_message_id = case message_id {
+                "" -> {
+                  case rest.send_message(state.discord_token, channel_id, progress_text, []) {
+                    Ok(id) -> id
+                    Error(_) -> ""
                   }
                 }
-
-                llm.ToolResultMessage(call.id, result)
-              })
+                existing -> {
+                  let _ = rest.edit_message(state.discord_token, channel_id, existing, progress_text)
+                  existing
+                }
+              }
 
               // Build new messages: original + assistant response + tool results
               let new_messages = list.append(messages, [
@@ -531,7 +557,7 @@ fn tool_loop(
                 ..tool_results
               ])
 
-              tool_loop(state, channel_id, placeholder_id, new_thread_id, new_messages, iteration + 1)
+              tool_loop_progressive(state, channel_id, new_messages, new_traces, new_message_id, iteration + 1)
             }
           }
         }
@@ -601,25 +627,6 @@ fn format_tool_args(json_str: String) -> String {
   args
   |> list.map(fn(pair) { pair.1 })
   |> string.join(", ")
-}
-
-/// Format a tool call as a compact single-line trace for Discord
-fn format_tool_trace(call: llm.ToolCall, result: String) -> String {
-  let is_error = string.starts_with(result, "Error")
-  let icon = case is_error {
-    True -> "\u{274C}"
-    False -> "\u{2705}"
-  }
-  let args_preview = string.slice(format_tool_args(call.arguments), 0, 40)
-  // Collapse result to single line: replace newlines with commas, truncate
-  let result_oneline = result
-    |> string.replace("\n", ", ")
-    |> string.replace("\r", "")
-  let result_short = case string.length(result_oneline) > 50 {
-    True -> string.slice(result_oneline, 0, 47) <> "..."
-    False -> result_oneline
-  }
-  icon <> " `" <> call.name <> "(" <> args_preview <> ")`\n> " <> result_short
 }
 
 fn get_arg(args: List(#(String, String)), key: String) -> String {
