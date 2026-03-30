@@ -1,6 +1,7 @@
 import aura/discord/types
 import gleam/dynamic/decode
 import gleam/erlang/process
+import gleam/io
 import gleam/json
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -158,6 +159,7 @@ fn handle_message(
 fn handle_heartbeat(
   state: GatewayState,
 ) -> actor.Next(GatewayState, GatewayMessage) {
+  io.println("[gateway] Sending heartbeat (seq: " <> string.inspect(state.sequence) <> ")")
   let payload =
     types.heartbeat_payload(state.sequence)
     |> json.to_string
@@ -168,8 +170,14 @@ fn handle_heartbeat(
 
 fn schedule_heartbeat(state: GatewayState) -> Nil {
   case state.heartbeat_interval, state.self_subject {
-    Some(interval), Some(subject) -> schedule_heartbeat_ffi(interval, subject)
-    _, _ -> Nil
+    Some(interval), Some(subject) -> {
+      io.println("[gateway] Scheduling next heartbeat in " <> string.inspect(interval) <> "ms")
+      schedule_heartbeat_ffi(interval, subject)
+    }
+    _, _ -> {
+      io.println("[gateway] WARNING: Cannot schedule heartbeat (interval or subject missing)")
+      Nil
+    }
   }
 }
 
@@ -233,6 +241,7 @@ fn handle_opcode(
     }
     10 -> handle_hello(state, raw_text)
     11 -> {
+      io.println("[gateway] Heartbeat ACK received")
       state.on_event(types.HeartbeatAck)
       actor.continue(state)
     }

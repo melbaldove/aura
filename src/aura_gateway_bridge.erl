@@ -37,5 +37,6 @@ ws_send(WsPid, Text) ->
 %% Schedule a heartbeat by sending SendHeartbeat to a Subject after interval
 schedule_heartbeat(IntervalMs, Subject) ->
     {subject, Pid, Tag} = Subject,
+    io:format("[gateway-bridge] Scheduling heartbeat: interval=~pms pid=~p tag=~p~n", [IntervalMs, Pid, Tag]),
     erlang:send_after(IntervalMs, Pid, {Tag, send_heartbeat}),
     nil.
