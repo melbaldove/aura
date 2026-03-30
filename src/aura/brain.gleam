@@ -10,6 +10,7 @@ import aura/memory
 import aura/models
 import aura/notification
 import aura/skill
+import aura/structured_memory
 import aura/tools
 import aura/validator
 import aura/workstream
@@ -53,6 +54,7 @@ pub type BrainMessage {
 pub type BrainState {
   BrainState(
     discord_token: String,
+    guild_id: String,
     llm_config: llm.LlmConfig,
     paths: xdg.Paths,
     workstreams: List(WorkstreamInfo),
@@ -64,6 +66,7 @@ pub type BrainState {
     acp_manager: manager.AcpManager,
     validation_rules: List(validator.Rule),
     skill_infos: List(skill.SkillInfo),
+    skills_dir: String,
     conversations: conversation.Buffers,
     self_subject: Option(process.Subject(BrainMessage)),
   )
@@ -89,6 +92,8 @@ pub fn build_system_prompt(
   soul_content: String,
   workstream_names: List(String),
   skill_names: List(String),
+  memory_content: String,
+  user_content: String,
 ) -> String {
   let ws_section = case workstream_names {
     [] -> "\n\nNo workstreams configured yet."
@@ -100,16 +105,34 @@ pub fn build_system_prompt(
     names -> "\nInstalled skills: " <> string.join(names, ", ")
   }
 
+  let memory_section = case memory_content {
+    "" -> ""
+    content -> "\n\n## Memory\n" <> content
+  }
+
+  let user_section = case user_content {
+    "" -> ""
+    content -> "\n\n## User Profile\n" <> content
+  }
+
   "You are responding in a Discord server. Stay in character.\n\n"
   <> soul_content
   <> "\n\nKeep responses concise and direct. Use Discord markdown where appropriate."
   <> ws_section
   <> skills_section
+  <> memory_section
+  <> user_section
   <> "\n\nTool usage rules:"
   <> "\n- Use tools only when needed to answer the question. Most questions can be answered from context."
   <> "\n- Be efficient: 1-2 tool calls max per response. Do NOT recursively explore directories."
   <> "\n- If you already know the answer from the system context above, respond directly without tools."
   <> "\n- For workstream creation, use the propose tool to request approval."
+  <> "\n\nLearning rules:"
+  <> "\n- After completing a complex multi-step task, save it as a skill with create_skill."
+  <> "\n- Before creating a skill, check list_skills to avoid duplicates."
+  <> "\n- Use the memory tool to save: user corrections, preferences, environment facts, recurring patterns."
+  <> "\n- Do NOT save to memory: task progress, temporary info, things already in conversation history."
+  <> "\n- When a user corrects you or says 'remember this', save it immediately."
 }
 
 /// Build a routing classification prompt (for #aura messages)
@@ -157,6 +180,7 @@ pub fn start(
   let base_state =
     BrainState(
       discord_token: config.discord.token,
+      guild_id: config.discord.guild,
       llm_config: llm_config,
       paths: paths,
       workstreams: workstreams,
@@ -168,6 +192,7 @@ pub fn start(
       acp_manager: manager.new(acp_max_concurrent),
       validation_rules: validation_rules,
       skill_infos: skill_infos,
+      skills_dir: xdg.skills_dir(paths),
       conversations: conversation.new(),
       self_subject: None,
     )
@@ -317,7 +342,9 @@ fn handle_message(
       }
     }
     StoreExchange(channel_id, user_msg, assistant_msg) -> {
-      let new_convos = conversation.append(state.conversations, channel_id, user_msg, assistant_msg)
+      // Load from disk if not in memory to avoid overwriting history
+      let #(hydrated, _) = conversation.get_or_load(state.conversations, channel_id, state.paths.data)
+      let new_convos = conversation.append(hydrated, channel_id, user_msg, assistant_msg)
       let _ = conversation.save(new_convos, channel_id, state.paths.data)
       actor.continue(BrainState(..state, conversations: new_convos))
     }
@@ -447,18 +474,18 @@ fn handle_with_llm(
   let typing_stop = start_typing_loop(state.discord_token, msg.channel_id)
 
   let ws_names = list.map(state.workstreams, fn(ws) { ws.name })
-  let system_prompt = build_system_prompt(state.soul, ws_names, state.skill_names)
-
-  // Load conversation history for this channel (with on-demand disk loading)
-  let history = case conversation.get_history(state.conversations, msg.channel_id) {
-    [] -> {
-      case conversation.load(msg.channel_id, state.paths.data) {
-        Ok(loaded) -> loaded
-        Error(_) -> []
-      }
-    }
-    existing -> existing
+  let memory_content = case structured_memory.format_for_display(xdg.memory_path(state.paths)) {
+    Ok(c) -> c
+    Error(_) -> ""
   }
+  let user_content = case structured_memory.format_for_display(xdg.user_path(state.paths)) {
+    Ok(c) -> c
+    Error(_) -> ""
+  }
+  let system_prompt = build_system_prompt(state.soul, ws_names, state.skill_names, memory_content, user_content)
+
+  // Load conversation history (from memory or disk)
+  let #(_, history) = conversation.get_or_load(state.conversations, msg.channel_id, state.paths.data)
   let initial_messages = list.flatten([
     [llm.SystemMessage(system_prompt)],
     history,
@@ -619,6 +646,95 @@ fn execute_tool(state: BrainState, call: llm.ToolCall) -> String {
         Error(e) -> "Error: " <> e
       }
     }
+    "list_threads" -> {
+      case rest.get_active_threads(state.discord_token, state.guild_id) {
+        Ok(threads) -> {
+          case threads {
+            [] -> "No active threads found."
+            _ ->
+              list.map(threads, fn(t) {
+                let #(id, name, parent_id) = t
+                name <> " (id: " <> id <> ", parent: " <> parent_id <> ")"
+              })
+              |> string.join("\n")
+          }
+        }
+        Error(e) -> "Error: " <> e
+      }
+    }
+    "read_thread" -> {
+      let thread_id = get_arg(args, "thread_id")
+      let limit = case int.parse(get_arg(args, "limit")) {
+        Ok(n) -> n
+        Error(_) -> 20
+      }
+      case rest.get_channel_messages(state.discord_token, thread_id, limit) {
+        Ok(messages) -> {
+          case messages {
+            [] -> "No messages in this thread."
+            _ ->
+              list.reverse(messages)
+              |> list.map(fn(m) {
+                let #(author, content) = m
+                author <> ": " <> content
+              })
+              |> string.join("\n")
+          }
+        }
+        Error(e) -> "Error: " <> e
+      }
+    }
+    "create_skill" -> {
+      let name = get_arg(args, "name")
+      let content = get_arg(args, "content")
+      case skill.create(state.skills_dir, name, content) {
+        Ok(_) -> "Skill created: " <> name <> ". Available immediately via list_skills and run_skill."
+        Error(e) -> "Error: " <> e
+      }
+    }
+    "list_skills" -> {
+      case skill.list_with_details(state.skills_dir) {
+        Ok(listing) -> listing
+        Error(e) -> "Error: " <> e
+      }
+    }
+    "memory" -> {
+      let action = get_arg(args, "action")
+      let target = get_arg(args, "target")
+      let content = get_arg(args, "content")
+      let old_text = get_arg(args, "old_text")
+      let path = case target {
+        "user" -> xdg.user_path(state.paths)
+        _ -> xdg.memory_path(state.paths)
+      }
+      case action {
+        "add" -> {
+          case structured_memory.add(path, content) {
+            Ok(_) -> "Memory saved."
+            Error(e) -> "Error: " <> e
+          }
+        }
+        "replace" -> {
+          case structured_memory.replace(path, old_text, content) {
+            Ok(_) -> "Memory updated."
+            Error(e) -> "Error: " <> e
+          }
+        }
+        "remove" -> {
+          case structured_memory.remove(path, old_text) {
+            Ok(_) -> "Memory entry removed."
+            Error(e) -> "Error: " <> e
+          }
+        }
+        "read" -> {
+          case structured_memory.format_for_display(path) {
+            Ok(display) -> display
+            Error(e) -> "Error: " <> e
+          }
+        }
+        _ -> "Error: Unknown action " <> action <> ". Use add, replace, remove, or read."
+      }
+    }
     _ -> "Error: Unknown tool " <> call.name
   }
 }
@@ -667,6 +783,22 @@ fn built_in_tools() -> List(llm.ToolDefinition) {
     llm.ToolDefinition(name: "propose", description: "Propose a change requiring user approval", parameters: [
       llm.ToolParam(name: "description", param_type: "string", description: "What you want to do", required: True),
       llm.ToolParam(name: "details", param_type: "string", description: "Details of the change", required: True),
+    ]),
+    llm.ToolDefinition(name: "list_threads", description: "List all active threads in the Discord server", parameters: []),
+    llm.ToolDefinition(name: "read_thread", description: "Read messages from a Discord thread", parameters: [
+      llm.ToolParam(name: "thread_id", param_type: "string", description: "The thread/channel ID to read", required: True),
+      llm.ToolParam(name: "limit", param_type: "string", description: "Max messages to fetch (default 20)", required: False),
+    ]),
+    llm.ToolDefinition(name: "create_skill", description: "Create a new skill from experience. Use after completing a complex multi-step task that you'd want to repeat. The content should be a SKILL.md markdown file with instructions for how to perform the task.", parameters: [
+      llm.ToolParam(name: "name", param_type: "string", description: "Skill name (lowercase, hyphens, e.g. 'deploy-to-prod')", required: True),
+      llm.ToolParam(name: "content", param_type: "string", description: "Full SKILL.md content with title, description, and step-by-step instructions", required: True),
+    ]),
+    llm.ToolDefinition(name: "list_skills", description: "List all available skills with descriptions. Use to check what skills exist before creating a new one or when deciding which skill to run.", parameters: []),
+    llm.ToolDefinition(name: "memory", description: "Manage persistent memory. Use to save important facts, user preferences, corrections, and environment details that should persist across conversations. Do NOT save task progress, temporary info, or things already in conversation history.", parameters: [
+      llm.ToolParam(name: "action", param_type: "string", description: "One of: add, replace, remove, read", required: True),
+      llm.ToolParam(name: "target", param_type: "string", description: "One of: memory, user", required: True),
+      llm.ToolParam(name: "content", param_type: "string", description: "Entry text (for add/replace)", required: False),
+      llm.ToolParam(name: "old_text", param_type: "string", description: "Substring to match (for replace/remove)", required: False),
     ]),
   ]
 }
