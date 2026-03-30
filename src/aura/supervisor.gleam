@@ -122,22 +122,28 @@ pub fn start(
   }
 }
 
-/// Poller loop with auto-restart and backoff
+/// Poller loop with auto-restart and backoff.
+/// Traps exits so gateway actor crashes are caught instead of propagated.
 fn poller_loop(
   discord_config: config.DiscordConfig,
   brain_subject: process.Subject(brain.BrainMessage),
   retry_count: Int,
 ) -> Nil {
+  // Trap exits so linked gateway actor crash doesn't kill us
+  process.trap_exits(True)
+
   io.println("[poller-loop] Starting poller (attempt " <> int.to_string(retry_count + 1) <> ")")
   case poller.start(discord_config, brain_subject) {
     Ok(Nil) -> {
-      // Poller returned Ok, meaning gateway disconnected gracefully
-      io.println("[poller-loop] Poller exited, restarting in 5s...")
+      // Poller connected — wait for the gateway to die
+      // (we'll receive an exit message since we're trapping exits)
+      io.println("[poller-loop] Gateway connected, monitoring...")
+      wait_for_exit()
+      io.println("[poller-loop] Gateway exited, restarting in 5s...")
       process.sleep(5000)
       poller_loop(discord_config, brain_subject, 0)
     }
     Error(e) -> {
-      // Poller failed to start — backoff
       let delay = case retry_count {
         0 -> 1000
         1 -> 5000
@@ -150,3 +156,6 @@ fn poller_loop(
     }
   }
 }
+
+@external(erlang, "aura_poller_ffi", "wait_for_exit")
+fn wait_for_exit() -> Nil
