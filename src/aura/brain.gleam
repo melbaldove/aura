@@ -449,8 +449,16 @@ fn handle_with_llm(
   let ws_names = list.map(state.workstreams, fn(ws) { ws.name })
   let system_prompt = build_system_prompt(state.soul, ws_names, state.skill_names)
 
-  // Load conversation history for this channel
-  let history = conversation.get_history(state.conversations, msg.channel_id)
+  // Load conversation history for this channel (with on-demand disk loading)
+  let history = case conversation.get_history(state.conversations, msg.channel_id) {
+    [] -> {
+      case conversation.load(msg.channel_id, state.paths.data) {
+        Ok(loaded) -> loaded
+        Error(_) -> []
+      }
+    }
+    existing -> existing
+  }
   let initial_messages = list.flatten([
     [llm.SystemMessage(system_prompt)],
     history,

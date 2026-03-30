@@ -1,4 +1,5 @@
 import aura/config
+import aura/conversation
 import aura/discord
 import aura/llm
 import aura/memory
@@ -7,6 +8,7 @@ import gleam/erlang/process
 import gleam/int
 import gleam/io
 import gleam/json
+import gleam/list
 import gleam/otp/actor
 import gleam/result
 import gleam/string
@@ -52,6 +54,7 @@ pub type WorkstreamState {
     data_dir: String,
     soul: String,
     skills: List(skill.SkillInfo),
+    conversations: conversation.Buffers,
   )
 }
 
@@ -132,6 +135,7 @@ pub fn start(
       data_dir: data_dir,
       soul: soul,
       skills: allowed_skills,
+      conversations: conversation.new(),
     )
 
   actor.new(state)
@@ -149,17 +153,23 @@ fn handle_message(
 ) -> actor.Next(WorkstreamState, WorkstreamMessage) {
   case message {
     HandleTask(msg, reply_to) -> {
-      handle_task(state, msg, reply_to)
-      actor.continue(state)
+      let response = process_task(state, msg)
+      process.send(reply_to, response)
+      let response_text = case response {
+        WorkstreamResponse(_, _, content) -> content
+        WorkstreamError(_, _, error) -> error
+      }
+      let new_convos = conversation.append(state.conversations, msg.channel_id, msg.content, response_text)
+      let _ = conversation.save(new_convos, msg.channel_id, state.data_dir)
+      actor.continue(WorkstreamState(..state, conversations: new_convos))
     }
   }
 }
 
-fn handle_task(
+fn process_task(
   state: WorkstreamState,
   msg: discord.IncomingMessage,
-  reply_to: process.Subject(WorkstreamResponse),
-) -> Nil {
+) -> WorkstreamResponse {
   io.println("[workstream:" <> state.name <> "] Received task from " <> msg.author_name)
   let date = today_date_string()
 
@@ -187,11 +197,15 @@ fn handle_task(
 
   let context_prompt = build_context_prompt(context)
 
-  // Build messages
-  let messages = [
-    llm.SystemMessage(state.soul <> "\n\n" <> context_prompt),
-    llm.UserMessage(msg.content),
-  ]
+  // Load conversation history for this channel
+  let history = conversation.get_history(state.conversations, msg.channel_id)
+
+  // Build messages including history
+  let messages = list.flatten([
+    [llm.SystemMessage(state.soul <> "\n\n" <> context_prompt)],
+    history,
+    [llm.UserMessage(msg.content)],
+  ])
 
   // Call LLM
   case llm.chat(state.llm_config, messages) {
@@ -215,25 +229,18 @@ fn handle_task(
         }
       }
 
-      // Send response
-      process.send(
-        reply_to,
-        WorkstreamResponse(
-          workstream_name: state.name,
-          channel_id: msg.channel_id,
-          content: response,
-        ),
+      WorkstreamResponse(
+        workstream_name: state.name,
+        channel_id: msg.channel_id,
+        content: response,
       )
     }
     Error(err) -> {
       io.println("[workstream:" <> state.name <> "] LLM error: " <> err)
-      process.send(
-        reply_to,
-        WorkstreamError(
-          workstream_name: state.name,
-          channel_id: msg.channel_id,
-          error: err,
-        ),
+      WorkstreamError(
+        workstream_name: state.name,
+        channel_id: msg.channel_id,
+        error: err,
       )
     }
   }
