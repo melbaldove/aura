@@ -516,11 +516,7 @@ fn tool_loop(
                 case new_thread_id {
                   "" -> Nil
                   tid -> {
-                    let icon = case string.starts_with(result, "Error") {
-                      True -> "\u{274C}"
-                      False -> "\u{1F527}"
-                    }
-                    let trace_msg = icon <> " `" <> call.name <> "(" <> string.slice(format_tool_args(call.arguments), 0, 60) <> ")` \u{2192} " <> result_preview
+                    let trace_msg = format_tool_trace(call, result)
                     let _ = rest.send_message(state.discord_token, tid, trace_msg, [])
                     Nil
                   }
@@ -605,6 +601,25 @@ fn format_tool_args(json_str: String) -> String {
   args
   |> list.map(fn(pair) { pair.1 })
   |> string.join(", ")
+}
+
+/// Format a tool call as a compact single-line trace for Discord
+fn format_tool_trace(call: llm.ToolCall, result: String) -> String {
+  let is_error = string.starts_with(result, "Error")
+  let icon = case is_error {
+    True -> "\u{274C}"
+    False -> "\u{2705}"
+  }
+  let args_preview = string.slice(format_tool_args(call.arguments), 0, 40)
+  // Collapse result to single line: replace newlines with commas, truncate
+  let result_oneline = result
+    |> string.replace("\n", ", ")
+    |> string.replace("\r", "")
+  let result_short = case string.length(result_oneline) > 50 {
+    True -> string.slice(result_oneline, 0, 47) <> "..."
+    False -> result_oneline
+  }
+  icon <> " `" <> call.name <> "(" <> args_preview <> ")`\n> " <> result_short
 }
 
 fn get_arg(args: List(#(String, String)), key: String) -> String {
