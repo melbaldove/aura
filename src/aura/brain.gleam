@@ -410,12 +410,8 @@ fn typing_loop(
 }
 
 fn stop_typing_loop(pid: process.Pid) -> Nil {
-  kill_process(pid, process.Normal)
-  Nil
+  process.kill(pid)
 }
-
-@external(erlang, "erlang", "exit")
-fn kill_process(pid: process.Pid, reason: a) -> Bool
 
 fn send_discord_response(token: String, channel_id: String, content: String) -> Nil {
   io.println("[brain] Sending to channel " <> channel_id)
