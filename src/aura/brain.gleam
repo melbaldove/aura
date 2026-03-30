@@ -437,15 +437,39 @@ fn handle_with_llm(state: BrainState, msg: discord.IncomingMessage) -> Nil {
     llm.UserMessage(msg.content),
   ]
 
-  let result = tool_loop(state, msg.channel_id, initial_messages, 0)
+  // Send "Thinking..." placeholder
+  let placeholder_id = case rest.send_message(state.discord_token, msg.channel_id, "Thinking...", []) {
+    Ok(id) -> id
+    Error(_) -> ""
+  }
+
+  let result = tool_loop(state, msg.channel_id, placeholder_id, "", initial_messages, 0)
 
   // Stop typing indicator before sending response
   stop_typing_loop(typing_stop)
+
   case result {
-    Ok(response_text) -> send_discord_response(state.discord_token, msg.channel_id, response_text)
+    Ok(response_text) -> {
+      // Edit the placeholder with the final response
+      case placeholder_id {
+        "" -> send_discord_response(state.discord_token, msg.channel_id, response_text)
+        id -> {
+          case rest.edit_message(state.discord_token, msg.channel_id, id, response_text) {
+            Ok(_) -> Nil
+            Error(_) -> send_discord_response(state.discord_token, msg.channel_id, response_text)
+          }
+        }
+      }
+    }
     Error(err) -> {
       io.println("[brain] Tool loop error: " <> err)
-      send_discord_response(state.discord_token, msg.channel_id, "Sorry, I encountered an error.")
+      case placeholder_id {
+        "" -> send_discord_response(state.discord_token, msg.channel_id, "Sorry, I encountered an error.")
+        id -> {
+          let _ = rest.edit_message(state.discord_token, msg.channel_id, id, "Sorry, I encountered an error.")
+          Nil
+        }
+      }
     }
   }
 }
@@ -453,6 +477,8 @@ fn handle_with_llm(state: BrainState, msg: discord.IncomingMessage) -> Nil {
 fn tool_loop(
   state: BrainState,
   channel_id: String,
+  placeholder_id: String,
+  thread_id: String,
   messages: List(llm.Message),
   iteration: Int,
 ) -> Result(String, String) {
@@ -469,10 +495,41 @@ fn tool_loop(
             calls -> {
               // Execute tool calls and continue the loop
               io.println("[brain] " <> int.to_string(list.length(calls)) <> " tool call(s)")
+
+              // Create thread on first tool iteration (only if placeholder exists)
+              let new_thread_id = case thread_id {
+                "" -> case placeholder_id != "" {
+                  True -> {
+                    case rest.create_thread(state.discord_token, channel_id, placeholder_id, "Tool trace") {
+                      Ok(tid) -> tid
+                      Error(_) -> ""
+                    }
+                  }
+                  False -> ""
+                }
+                existing -> existing
+              }
+
               let tool_results = list.map(calls, fn(call) {
                 io.println("[brain] Tool: " <> call.name)
                 let result = execute_tool(state, call)
-                io.println("[brain] Result: " <> string.slice(result, 0, 100))
+                let result_preview = string.slice(result, 0, 100)
+                io.println("[brain] Result: " <> result_preview)
+
+                // Post tool trace to thread
+                case new_thread_id {
+                  "" -> Nil
+                  tid -> {
+                    let icon = case string.starts_with(result, "Error") {
+                      True -> "\u{274C}"
+                      False -> "\u{1F527}"
+                    }
+                    let trace_msg = icon <> " `" <> call.name <> "(" <> string.slice(format_tool_args(call.arguments), 0, 60) <> ")` \u{2192} " <> result_preview
+                    let _ = rest.send_message(state.discord_token, tid, trace_msg, [])
+                    Nil
+                  }
+                }
+
                 llm.ToolResultMessage(call.id, result)
               })
 
@@ -482,7 +539,7 @@ fn tool_loop(
                 ..tool_results
               ])
 
-              tool_loop(state, channel_id, new_messages, iteration + 1)
+              tool_loop(state, channel_id, placeholder_id, new_thread_id, new_messages, iteration + 1)
             }
           }
         }
@@ -545,6 +602,13 @@ fn parse_tool_args(json_str: String) -> List(#(String, String)) {
     Ok(d) -> dict.to_list(d)
     Error(_) -> []
   }
+}
+
+fn format_tool_args(json_str: String) -> String {
+  let args = parse_tool_args(json_str)
+  args
+  |> list.map(fn(pair) { pair.1 })
+  |> string.join(", ")
 }
 
 fn get_arg(args: List(#(String, String)), key: String) -> String {

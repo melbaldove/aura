@@ -39,12 +39,13 @@ pub fn get_gateway_url(token: String) -> Result(String, String) {
 }
 
 /// POST /channels/{channel_id}/messages — send a message.
+/// Returns the message ID on success.
 pub fn send_message(
   token: String,
   channel_id: String,
   content: String,
   embeds: List(Embed),
-) -> Result(Nil, String) {
+) -> Result(String, String) {
   io.println("[discord] Sending " <> int.to_string(string.length(content)) <> " chars to " <> channel_id)
   let url = api_url("/channels/" <> channel_id <> "/messages")
   let body = types.create_message_payload(content, embeds) |> json.to_string()
@@ -58,10 +59,55 @@ pub fn send_message(
     |> result.map_error(fn(_) { "HTTP request failed" }),
   )
   case resp.status {
-    200 | 201 -> Ok(Nil)
+    200 | 201 -> {
+      // Parse message ID from response
+      case json.parse(resp.body, decode.at(["id"], decode.string)) {
+        Ok(id) -> Ok(id)
+        Error(_) -> Ok("")
+      }
+    }
     status -> {
       io.println("[discord] Error sending to " <> channel_id <> ": status " <> int.to_string(status))
       Error(unexpected_status(status, "send message"))
+    }
+  }
+}
+
+/// PATCH /channels/{channel_id}/messages/{message_id} — edit a message.
+pub fn edit_message(
+  token: String,
+  channel_id: String,
+  message_id: String,
+  content: String,
+) -> Result(Nil, String) {
+  io.println(
+    "[discord] Editing message " <> message_id <> " in " <> channel_id,
+  )
+  let url =
+    api_url("/channels/" <> channel_id <> "/messages/" <> message_id)
+  let body =
+    json.object([#("content", json.string(content))]) |> json.to_string()
+  use req <- result.try(authed_request(url, http.Patch, token))
+  let req =
+    req
+    |> request.set_header("content-type", "application/json")
+    |> request.set_body(body)
+  use resp <- result.try(
+    httpc.configure()
+    |> httpc.timeout(10_000)
+    |> httpc.dispatch(req)
+    |> result.map_error(fn(e) {
+      "HTTP request failed: " <> string.inspect(e)
+    }),
+  )
+  case resp.status {
+    200 -> Ok(Nil)
+    status -> {
+      io.println(
+        "[discord] Error editing message: status "
+        <> int.to_string(status),
+      )
+      Error(unexpected_status(status, "edit message"))
     }
   }
 }

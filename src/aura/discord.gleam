@@ -60,7 +60,7 @@ pub fn send_text(
   token: String,
   channel_id: String,
   content: String,
-) -> Result(Nil, String) {
+) -> Result(String, String) {
   rest.send_message(token, channel_id, content, [])
 }
 
@@ -71,7 +71,7 @@ pub fn send_embed(
   title: String,
   description: String,
   color: Option(Int),
-) -> Result(Nil, String) {
+) -> Result(String, String) {
   let embed =
     discord_types.Embed(
       title: Some(title),
