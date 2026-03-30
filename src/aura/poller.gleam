@@ -9,8 +9,8 @@ import gleam/io
 import gleam/option.{None}
 import gleam/result
 
-/// Default intents: GUILD_MESSAGES + MESSAGE_CONTENT + DIRECT_MESSAGES
-const default_intents = 37_376
+/// GUILDS (1) + GUILD_MESSAGES (512) + DIRECT_MESSAGES (4096) + MESSAGE_CONTENT (32768)
+const default_intents = 37_377
 
 /// Start the Discord poller.
 /// Fetches gateway URL, connects, and forwards messages to the brain actor.

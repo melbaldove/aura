@@ -159,8 +159,10 @@ pub fn chat_with_options(
     |> request.set_header("content-type", "application/json")
     |> request.set_body(body)
   use resp <- result.try(
-    httpc.send(req)
-    |> result.map_error(fn(_) { "HTTP request failed" }),
+    httpc.configure()
+    |> httpc.timeout(60_000)
+    |> httpc.dispatch(req)
+    |> result.map_error(fn(e) { "HTTP request failed: " <> string.inspect(e) }),
   )
   case resp.status {
     200 -> parse_response(resp.body)
@@ -308,8 +310,10 @@ pub fn chat_with_tools(
     |> request.set_header("content-type", "application/json")
     |> request.set_body(body)
   use resp <- result.try(
-    httpc.send(req)
-    |> result.map_error(fn(_) { "HTTP request failed" }),
+    httpc.configure()
+    |> httpc.timeout(60_000)
+    |> httpc.dispatch(req)
+    |> result.map_error(fn(e) { "HTTP request failed: " <> string.inspect(e) }),
   )
   case resp.status {
     200 -> parse_response_with_tools(resp.body)

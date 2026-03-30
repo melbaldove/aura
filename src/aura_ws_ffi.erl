@@ -38,8 +38,7 @@ ws_loop(Host, Path, CallbackPid) ->
                         <<>> -> ok;
                         _ -> process_frames(Extra, Socket, CallbackPid)
                     end,
-                    %% Use {active, once} for backpressure control
-                    ssl:setopts(Socket, [{active, once}]),
+                    ssl:setopts(Socket, [{active, true}]),
                     relay_loop(Socket, CallbackPid, <<>>);
                 {error, Reason} ->
                     CallbackPid ! {ws_error, Reason},
@@ -128,11 +127,15 @@ relay_loop(Socket, CallbackPid, Buffer) ->
             NewBuffer = <<Buffer/binary, Data/binary>>,
             case extract_frames(NewBuffer) of
                 {ok, Frames, Rest} ->
+                    io:format("[ws-ffi] Received ~p bytes, ~p frames, ~p bytes buffered~n",
+                              [byte_size(Data), length(Frames), byte_size(Rest)]),
                     lists:foreach(fun(Frame) ->
                         handle_frame(Frame, Socket, CallbackPid)
                     end, Frames),
-                    %% Re-enable {active, once} after processing
-                    ssl:setopts(Socket, [{active, once}]),
+                    %% Re-enable active mode after processing
+                    %% Using {active, true} because {active, once} doesn't
+                    %% re-trigger on macOS Erlang 28 SSL sockets
+                    ssl:setopts(Socket, [{active, true}]),
                     relay_loop(Socket, CallbackPid, Rest);
                 {error, frame_too_large} ->
                     CallbackPid ! {ws_error, <<"Frame exceeds maximum size">>},

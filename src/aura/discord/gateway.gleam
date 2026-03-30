@@ -140,7 +140,10 @@ fn handle_message(
   message: GatewayMessage,
 ) -> actor.Next(GatewayState, GatewayMessage) {
   case message {
-    WsText(text) -> handle_text(state, text)
+    WsText(text) -> {
+      io.println("[gateway] Frame received: " <> string.slice(text, 0, 80))
+      handle_text(state, text)
+    }
     WsClosed -> {
       state.on_event(types.Reconnect)
       actor.stop_abnormal("WebSocket closed")
