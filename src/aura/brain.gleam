@@ -395,7 +395,7 @@ fn start_typing_loop(
   token: String,
   channel_id: String,
 ) -> process.Pid {
-  process.spawn(fn() {
+  process.spawn_unlinked(fn() {
     typing_loop(token, channel_id)
   })
 }
