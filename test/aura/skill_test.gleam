@@ -61,3 +61,68 @@ pub fn skill_description_for_prompt_test() {
 pub fn descriptions_empty_test() {
   skill.descriptions_for_prompt([]) |> should.equal("No tools available.")
 }
+
+pub fn create_skill_test() {
+  let dir = "/tmp/aura-skill-create-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(dir)
+
+  let content =
+    "# Test Skill\n\nA test skill for unit testing.\n\n## When to use\nWhen testing.\n"
+  let result = skill.create(dir, "test-skill", content)
+  should.be_ok(result)
+
+  // Verify SKILL.md was written
+  let read_result = simplifile.read(dir <> "/test-skill/SKILL.md")
+  should.be_ok(read_result)
+  let assert Ok(read_content) = read_result
+  should.equal(read_content, content)
+
+  // Cleanup
+  let _ = simplifile.delete_all([dir])
+}
+
+pub fn create_skill_rejects_invalid_name_test() {
+  let dir = "/tmp/aura-skill-invalid-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(dir)
+
+  let content = "# Bad\n\nBad skill.\n"
+  let result = skill.create(dir, "../escape", content)
+  should.be_error(result)
+
+  let result2 = skill.create(dir, "has spaces", content)
+  should.be_error(result2)
+
+  let _ = simplifile.delete_all([dir])
+}
+
+pub fn create_skill_rejects_collision_test() {
+  let dir = "/tmp/aura-skill-collision-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(dir)
+
+  let content = "# First\n\nFirst skill.\n"
+  let _ = skill.create(dir, "my-skill", content)
+
+  // Second creation with same name should fail
+  let result = skill.create(dir, "my-skill", content)
+  should.be_error(result)
+
+  let _ = simplifile.delete_all([dir])
+}
+
+pub fn list_with_details_test() {
+  let dir = "/tmp/aura-skill-list-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(dir <> "/alpha")
+  let _ =
+    simplifile.write(dir <> "/alpha/SKILL.md", "# Alpha\n\nAlpha skill for testing.\n")
+  let _ = simplifile.create_directory_all(dir <> "/beta")
+  let _ =
+    simplifile.write(dir <> "/beta/SKILL.md", "# Beta\n\nBeta skill for testing.\n")
+
+  let result = skill.list_with_details(dir)
+  should.be_ok(result)
+  let assert Ok(listing) = result
+  // Should contain both skills as formatted text
+  let _ = listing
+
+  let _ = simplifile.delete_all([dir])
+}

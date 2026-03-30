@@ -101,3 +101,110 @@ fn extract_description(content: String) -> String {
     [] -> ""
   }
 }
+
+/// Validate a skill name: lowercase, numbers, hyphens, underscores only. No path traversal.
+fn validate_name(name: String) -> Result(Nil, String) {
+  case
+    string.contains(name, "..")
+    || string.contains(name, "/")
+    || string.contains(name, " ")
+  {
+    True ->
+      Error(
+        "Invalid skill name: "
+        <> name
+        <> " (no spaces, path separators, or '..' allowed)",
+      )
+    False -> {
+      let valid_chars =
+        string.to_graphemes(name)
+        |> list.all(fn(c) {
+          let cp =
+            string.to_utf_codepoints(c)
+            |> list.first
+          case cp {
+            Ok(p) -> {
+              let code = string.utf_codepoint_to_int(p)
+              // a-z: 97-122, 0-9: 48-57, hyphen: 45, underscore: 95
+              { code >= 97 && code <= 122 }
+              || { code >= 48 && code <= 57 }
+              || code == 45
+              || code == 95
+            }
+            Error(_) -> False
+          }
+        })
+      case valid_chars && !string.is_empty(name) {
+        True -> Ok(Nil)
+        False ->
+          Error(
+            "Invalid skill name: "
+            <> name
+            <> " (use lowercase, numbers, hyphens, underscores)",
+          )
+      }
+    }
+  }
+}
+
+/// Create a new skill. Writes SKILL.md to skills_dir/name/SKILL.md.
+/// Fails if skill already exists or name is invalid.
+pub fn create(
+  skills_dir: String,
+  name: String,
+  content: String,
+) -> Result(Nil, String) {
+  use _ <- result.try(validate_name(name))
+
+  let skill_path = skills_dir <> "/" <> name
+  case simplifile.is_directory(skill_path) {
+    Ok(True) -> Error("Skill already exists: " <> name)
+    _ -> {
+      use _ <- result.try(
+        simplifile.create_directory_all(skill_path)
+        |> result.map_error(fn(e) {
+          "Failed to create skill directory: " <> string.inspect(e)
+        }),
+      )
+      simplifile.write(skill_path <> "/SKILL.md", content)
+      |> result.map_error(fn(e) { "Failed to write SKILL.md: " <> string.inspect(e) })
+    }
+  }
+}
+
+/// Update an existing skill's SKILL.md content.
+pub fn update(
+  skills_dir: String,
+  name: String,
+  content: String,
+) -> Result(Nil, String) {
+  use _ <- result.try(validate_name(name))
+
+  let skill_path = skills_dir <> "/" <> name
+  case simplifile.is_directory(skill_path) {
+    Ok(True) -> {
+      simplifile.write(skill_path <> "/SKILL.md", content)
+      |> result.map_error(fn(e) { "Failed to write SKILL.md: " <> string.inspect(e) })
+    }
+    _ -> Error("Skill not found: " <> name)
+  }
+}
+
+/// List all skills with name and description, formatted for LLM consumption.
+pub fn list_with_details(skills_dir: String) -> Result(String, String) {
+  case discover(skills_dir) {
+    Ok(skills) -> {
+      case skills {
+        [] -> Ok("No skills installed.")
+        _ -> {
+          let lines =
+            list.map(skills, fn(s) {
+              "- **" <> s.name <> "**: " <> s.description
+            })
+          Ok(string.join(lines, "\n"))
+        }
+      }
+    }
+    Error(e) -> Error(e)
+  }
+}
