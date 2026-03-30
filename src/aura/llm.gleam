@@ -160,7 +160,7 @@ pub fn chat_with_options(
     |> request.set_body(body)
   use resp <- result.try(
     httpc.configure()
-    |> httpc.timeout(60_000)
+    |> httpc.timeout(120_000)
     |> httpc.dispatch(req)
     |> result.map_error(fn(e) { "HTTP request failed: " <> string.inspect(e) }),
   )
@@ -311,7 +311,7 @@ pub fn chat_with_tools(
     |> request.set_body(body)
   use resp <- result.try(
     httpc.configure()
-    |> httpc.timeout(60_000)
+    |> httpc.timeout(120_000)
     |> httpc.dispatch(req)
     |> result.map_error(fn(e) { "HTTP request failed: " <> string.inspect(e) }),
   )

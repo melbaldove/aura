@@ -100,15 +100,11 @@ pub fn build_system_prompt(
   <> "\n\nKeep responses concise and direct. Use Discord markdown where appropriate."
   <> ws_section
   <> skills_section
-  <> "\n\nYou can create workstreams when users ask. To create a workstream, respond with a structured command block:\n"
-  <> "```aura-command\n"
-  <> "CREATE_WORKSTREAM\n"
-  <> "name: <slug-name>\n"
-  <> "description: <description>\n"
-  <> "cwd: <repo-path-or-empty>\n"
-  <> "tools: <comma-separated-or-empty>\n"
-  <> "```\n"
-  <> "Follow this with a confirmation message for the user."
+  <> "\n\nTool usage rules:"
+  <> "\n- Use tools only when needed to answer the question. Most questions can be answered from context."
+  <> "\n- Be efficient: 1-2 tool calls max per response. Do NOT recursively explore directories."
+  <> "\n- If you already know the answer from the system context above, respond directly without tools."
+  <> "\n- For workstream creation, use the propose tool to request approval."
 }
 
 /// Build a routing classification prompt (for #aura messages)
@@ -482,7 +478,7 @@ fn tool_loop(
   messages: List(llm.Message),
   iteration: Int,
 ) -> Result(String, String) {
-  case iteration >= 10 {
+  case iteration >= 20 {
     True -> Error("Tool loop exceeded maximum iterations")
     False -> {
       case llm.chat_with_tools(state.llm_config, messages, built_in_tools()) {
