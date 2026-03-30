@@ -9,16 +9,9 @@ get_line(Prompt) ->
     end.
 
 get_password(Prompt) ->
-    io:format("~s", [Prompt]),
-    ok = io:setopts(standard_io, [{echo, false}]),
-    Result = io:get_line(""),
-    ok = io:setopts(standard_io, [{echo, true}]),
-    io:format("~n"),
-    case Result of
-        eof -> {error, <<"eof">>};
-        {error, Reason} -> {error, list_to_binary(io_lib:format("~p", [Reason]))};
-        Data -> {ok, string:trim(unicode:characters_to_binary(Data))}
-    end.
+    %% Note: echo suppression removed — causes crashes under gleam run.
+    %% Credentials are visible during input. Acceptable for local-only use.
+    get_line(Prompt).
 
 set_permissions(Path, Mode) ->
     file:change_mode(binary_to_list(Path), Mode),

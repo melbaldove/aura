@@ -199,7 +199,7 @@ fn write_env_file(
   let env_path = xdg.env_path(paths)
   let key_var = models.api_key_env_var(provider)
   let content =
-    "DISCORD_BOT_TOKEN=" <> token <> "\n" <> key_var <> "=" <> api_key <> "\n"
+    "AURA_DISCORD_TOKEN=" <> token <> "\n" <> key_var <> "=" <> api_key <> "\n"
 
   use _ <- result.try(
     simplifile.write(env_path, content)
@@ -234,19 +234,29 @@ fn generate_config(
   guild_id: String,
   timezone: String,
 ) -> Result(Nil, String) {
-  let model = models.default_brain_model(provider)
+  let brain_model = models.default_brain_model(provider)
   let config_content =
     string.join(
       [
-        "[core]",
-        "timezone = \"" <> timezone <> "\"",
-        "model = \"" <> model <> "\"",
-        "",
         "[discord]",
-        "guild_id = \"" <> guild_id <> "\"",
+        "token = \"${AURA_DISCORD_TOKEN}\"",
+        "guild = \"" <> guild_id <> "\"",
+        "default_channel = \"aura\"",
         "",
-        "[memory]",
-        "max_events = 10000",
+        "[models]",
+        "brain = \"" <> brain_model <> "\"",
+        "workstream = \"claude/sonnet\"",
+        "acp = \"claude/opus\"",
+        "heartbeat = \"" <> brain_model <> "\"",
+        "monitor = \"" <> brain_model <> "\"",
+        "",
+        "[notifications]",
+        "digest_windows = [\"07:35\", \"09:10\", \"11:10\", \"15:00\"]",
+        "timezone = \"" <> timezone <> "\"",
+        "urgent_bypass = true",
+        "",
+        "[acp]",
+        "global_max_concurrent = 4",
         "",
       ],
       "\n",

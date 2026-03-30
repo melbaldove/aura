@@ -41,13 +41,17 @@ pub fn connect(
   gateway_url: String,
   on_event: fn(types.GatewayEvent) -> Nil,
 ) -> Result(process.Pid, String) {
-  let url = gateway_url <> "/?v=10&encoding=json"
+  // Convert wss:// to https:// — stratus expects http(s) and upgrades to WS
+  let url =
+    gateway_url
+    |> string.replace("wss://", "https://")
+    |> string.replace("ws://", "http://")
+  let url = url <> "/?v=10&encoding=json"
 
   let req = case request.to(url) {
     Ok(r) -> r
     Error(_) -> {
-      let assert Ok(r) =
-        request.to("wss://gateway.discord.gg/?v=10&encoding=json")
+      let assert Ok(r) = request.to("https://gateway.discord.gg/?v=10&encoding=json")
       r
     }
   }
