@@ -4,8 +4,10 @@ import gleam/http
 import gleam/http/request
 import gleam/httpc
 import gleam/int
+import gleam/io
 import gleam/json
 import gleam/result
+import gleam/string
 import gleam/uri
 
 const base_url = "https://discord.com/api/v10"
@@ -43,6 +45,7 @@ pub fn send_message(
   content: String,
   embeds: List(Embed),
 ) -> Result(Nil, String) {
+  io.println("[discord] Sending " <> int.to_string(string.length(content)) <> " chars to " <> channel_id)
   let url = api_url("/channels/" <> channel_id <> "/messages")
   let body = types.create_message_payload(content, embeds) |> json.to_string()
   use req <- result.try(authed_request(url, http.Post, token))
@@ -56,7 +59,10 @@ pub fn send_message(
   )
   case resp.status {
     200 | 201 -> Ok(Nil)
-    status -> Error(unexpected_status(status, "send message"))
+    status -> {
+      io.println("[discord] Error sending to " <> channel_id <> ": status " <> int.to_string(status))
+      Error(unexpected_status(status, "send message"))
+    }
   }
 }
 

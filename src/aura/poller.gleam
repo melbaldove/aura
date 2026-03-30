@@ -31,6 +31,7 @@ pub fn start(
           True -> Nil
           False -> {
             let incoming = discord.from_received(msg, None)
+            io.println("[poller] Message from " <> msg.author.username <> " in " <> msg.channel_id)
             process.send(brain_subject, brain.HandleMessage(incoming))
           }
         }

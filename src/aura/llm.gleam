@@ -3,6 +3,7 @@ import gleam/http
 import gleam/http/request
 import gleam/httpc
 import gleam/int
+import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -75,6 +76,7 @@ pub fn chat_with_options(
   temperature: Option(Float),
 ) -> Result(String, String) {
   let url = config.base_url <> "/chat/completions"
+  io.println("[llm] Calling " <> config.model <> " at " <> url)
   let body =
     build_request_body(config.model, messages, temperature) |> json.to_string
   use parsed_uri <- result.try(
@@ -100,12 +102,14 @@ pub fn chat_with_options(
   )
   case resp.status {
     200 -> parse_response(resp.body)
-    status ->
+    status -> {
+      io.println("[llm] Error from " <> config.model <> ": status " <> int.to_string(status))
       Error(
         "Unexpected status "
         <> int.to_string(status)
         <> ": "
         <> string.slice(resp.body, 0, 200),
       )
+    }
   }
 }

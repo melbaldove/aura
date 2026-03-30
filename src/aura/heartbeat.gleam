@@ -109,6 +109,7 @@ fn handle_message(
 // ---------------------------------------------------------------------------
 
 fn run_check(state: CheckState) -> Nil {
+  io.println("[heartbeat:" <> state.config.name <> "] Running check")
   case state.skill_info {
     None -> {
       io.println(
@@ -203,6 +204,8 @@ fn emit_findings(
   urgency: notification.Urgency,
 ) -> Nil {
   list.each(state.config.workstreams, fn(workstream) {
+    let summary = string.slice(output, 0, 50)
+    io.println("[heartbeat:" <> state.config.name <> "] Finding: " <> summary)
     let finding =
       notification.Finding(
         workstream: workstream,

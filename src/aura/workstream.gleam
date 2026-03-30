@@ -160,6 +160,7 @@ fn handle_task(
   msg: discord.IncomingMessage,
   reply_to: process.Subject(WorkstreamResponse),
 ) -> Nil {
+  io.println("[workstream:" <> state.name <> "] Received task from " <> msg.author_name)
   let date = today_date_string()
 
   // Load context
@@ -195,6 +196,7 @@ fn handle_task(
   // Call LLM
   case llm.chat(state.llm_config, messages) {
     Ok(response) -> {
+      io.println("[workstream:" <> state.name <> "] LLM call succeeded")
       // Log the interaction
       let log_entry =
         json.object([

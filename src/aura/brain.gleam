@@ -154,6 +154,7 @@ fn handle_message(
     HandleMessage(msg) -> {
       case route_message(msg.channel_id, state.workstreams) {
         DirectRoute(name) -> {
+          io.println("[brain] Route: DirectRoute(" <> name <> ")")
           // Spawn a process to avoid blocking the brain actor
           process.spawn(fn() {
             handle_routed_message(state, name, msg)
@@ -161,6 +162,7 @@ fn handle_message(
           actor.continue(state)
         }
         NeedsClassification -> {
+          io.println("[brain] Route: NeedsClassification")
           // Handle directly with brain's LLM (for #aura channel)
           process.spawn(fn() {
             handle_with_llm(state, msg)
@@ -356,6 +358,7 @@ fn handle_routed_message(
 }
 
 fn send_discord_response(token: String, channel_id: String, content: String) -> Nil {
+  io.println("[brain] Sending to channel " <> channel_id)
   case rest.send_message(token, channel_id, content, []) {
     Ok(_) -> Nil
     Error(err) -> {
@@ -366,6 +369,8 @@ fn send_discord_response(token: String, channel_id: String, content: String) -> 
 }
 
 fn handle_with_llm(state: BrainState, msg: discord.IncomingMessage) -> Nil {
+  io.println("[brain] Processing message from " <> msg.author_name <> " in channel " <> msg.channel_id <> ": " <> msg.content)
+
   // Show typing indicator while thinking
   let _ = rest.trigger_typing(state.discord_token, msg.channel_id)
 
@@ -373,7 +378,10 @@ fn handle_with_llm(state: BrainState, msg: discord.IncomingMessage) -> Nil {
   let messages = [llm.SystemMessage(prompt), llm.UserMessage(msg.content)]
 
   case llm.chat(state.llm_config, messages) {
-    Ok(response) -> send_discord_response(state.discord_token, msg.channel_id, response)
+    Ok(response) -> {
+      io.println("[brain] LLM response: " <> string.slice(response, 0, 100))
+      send_discord_response(state.discord_token, msg.channel_id, response)
+    }
     Error(err) -> {
       io.println("[brain] LLM error: " <> err)
       send_discord_response(state.discord_token, msg.channel_id, "Sorry, I encountered an error processing your message.")
