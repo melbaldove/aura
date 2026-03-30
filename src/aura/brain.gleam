@@ -390,34 +390,32 @@ fn handle_routed_message(
 }
 
 /// Spawn a process that sends typing indicators every 8 seconds.
-/// Returns a subject that stops the loop when sent any message.
+/// Returns the PID of the typing process. Kill it to stop.
 fn start_typing_loop(
   token: String,
   channel_id: String,
-) -> process.Subject(Nil) {
-  let stop_subject = process.new_subject()
+) -> process.Pid {
   process.spawn(fn() {
-    typing_loop(token, channel_id, stop_subject)
+    typing_loop(token, channel_id)
   })
-  stop_subject
 }
 
 fn typing_loop(
   token: String,
   channel_id: String,
-  stop: process.Subject(Nil),
 ) -> Nil {
   let _ = rest.trigger_typing(token, channel_id)
-  // Wait 8 seconds or until stop signal
-  case process.receive(from: stop, within: 8000) {
-    Ok(_) -> Nil
-    Error(_) -> typing_loop(token, channel_id, stop)
-  }
+  process.sleep(8000)
+  typing_loop(token, channel_id)
 }
 
-fn stop_typing_loop(stop: process.Subject(Nil)) -> Nil {
-  process.send(stop, Nil)
+fn stop_typing_loop(pid: process.Pid) -> Nil {
+  kill_process(pid, process.Normal)
+  Nil
 }
+
+@external(erlang, "erlang", "exit")
+fn kill_process(pid: process.Pid, reason: a) -> Bool
 
 fn send_discord_response(token: String, channel_id: String, content: String) -> Nil {
   io.println("[brain] Sending to channel " <> channel_id)
