@@ -389,6 +389,36 @@ fn handle_routed_message(
   }
 }
 
+/// Spawn a process that sends typing indicators every 8 seconds.
+/// Returns a subject that stops the loop when sent any message.
+fn start_typing_loop(
+  token: String,
+  channel_id: String,
+) -> process.Subject(Nil) {
+  let stop_subject = process.new_subject()
+  process.spawn(fn() {
+    typing_loop(token, channel_id, stop_subject)
+  })
+  stop_subject
+}
+
+fn typing_loop(
+  token: String,
+  channel_id: String,
+  stop: process.Subject(Nil),
+) -> Nil {
+  let _ = rest.trigger_typing(token, channel_id)
+  // Wait 8 seconds or until stop signal
+  case process.receive(from: stop, within: 8000) {
+    Ok(_) -> Nil
+    Error(_) -> typing_loop(token, channel_id, stop)
+  }
+}
+
+fn stop_typing_loop(stop: process.Subject(Nil)) -> Nil {
+  process.send(stop, Nil)
+}
+
 fn send_discord_response(token: String, channel_id: String, content: String) -> Nil {
   io.println("[brain] Sending to channel " <> channel_id)
   case rest.send_message(token, channel_id, content, []) {
@@ -402,7 +432,9 @@ fn send_discord_response(token: String, channel_id: String, content: String) -> 
 
 fn handle_with_llm(state: BrainState, msg: discord.IncomingMessage) -> Nil {
   io.println("[brain] Processing message from " <> msg.author_name <> " in channel " <> msg.channel_id)
-  let _ = rest.trigger_typing(state.discord_token, msg.channel_id)
+
+  // Start a typing indicator loop that refreshes every 8 seconds
+  let typing_stop = start_typing_loop(state.discord_token, msg.channel_id)
 
   let ws_names = list.map(state.workstreams, fn(ws) { ws.name })
   let system_prompt = build_system_prompt(state.soul, ws_names, state.skill_names)
@@ -412,6 +444,9 @@ fn handle_with_llm(state: BrainState, msg: discord.IncomingMessage) -> Nil {
   ]
 
   let result = tool_loop(state, msg.channel_id, initial_messages, 0)
+
+  // Stop typing indicator before sending response
+  stop_typing_loop(typing_stop)
   case result {
     Ok(response_text) -> send_discord_response(state.discord_token, msg.channel_id, response_text)
     Error(err) -> {
@@ -452,9 +487,6 @@ fn tool_loop(
                 llm.AssistantToolCallMessage(response.content, calls),
                 ..tool_results
               ])
-
-              // Keep typing indicator going
-              let _ = rest.trigger_typing(state.discord_token, channel_id)
 
               tool_loop(state, channel_id, new_messages, iteration + 1)
             }
