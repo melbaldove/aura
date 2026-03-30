@@ -24,6 +24,7 @@ pub fn run(paths: xdg.Paths) -> Result(Nil, String) {
   use #(name, timezone) <- result.try(prompt_user_info())
   use _ <- result.try(generate_config(paths, provider, guild_id, timezone))
   use _ <- result.try(generate_identity_files(paths, name, timezone))
+  use _ <- result.try(generate_validations(paths))
 
   io.println("")
   io.println("Setup complete!")
@@ -339,6 +340,57 @@ fn generate_identity_files(
   use _ <- result.try(write_file(xdg.events_path(paths), events_content))
 
   io.println("  Identity files generated")
+  Ok(Nil)
+}
+
+// ---------------------------------------------------------------------------
+// Validation rules
+// ---------------------------------------------------------------------------
+
+fn generate_validations(paths: xdg.Paths) -> Result(Nil, String) {
+  let content =
+    "# Aura Validation Rules
+# These rules are enforced by the runtime on every file write.
+# The agent can propose new rules (tier 3 — requires approval).
+
+[[rules]]
+path = \"SOUL.md\"
+type = \"must_contain\"
+value = \"# SOUL\"
+message = \"SOUL.md must start with # SOUL header\"
+
+[[rules]]
+path = \"*.toml\"
+type = \"valid_toml\"
+message = \"TOML files must parse without errors\"
+
+[[rules]]
+path = \"workstreams/*/anchors.jsonl\"
+type = \"valid_jsonl\"
+message = \"Anchor entries must be valid JSON\"
+
+[[rules]]
+path = \"SOUL.md\"
+type = \"no_patterns\"
+patterns = [\"heartbeat\", \"interval\", \"cron\", \"timeout\", \"config.toml\"]
+message = \"SOUL.md is for personality only, not operational rules\"
+
+[[rules]]
+path = \"SOUL.md\"
+type = \"max_size_kb\"
+value = \"50\"
+message = \"SOUL.md should not exceed 50KB\"
+
+[[rules]]
+path = \"META.md\"
+type = \"must_contain\"
+value = \"# META\"
+message = \"META.md must start with # META header\"
+"
+
+  let path = xdg.config_path(paths, "validations.toml")
+  use _ <- result.try(write_file(path, content))
+  io.println("  Validation rules written")
   Ok(Nil)
 }
 

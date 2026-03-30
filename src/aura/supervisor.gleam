@@ -52,7 +52,7 @@ pub fn start(
   )
 
   // 4. Load validation rules
-  let validation_rules = case memory.read_file(xdg.config_path(paths, "validation.toml")) {
+  let validation_rules = case memory.read_file(xdg.config_path(paths, "validations.toml")) {
     Ok(content) -> {
       case validator.parse_rules(content) {
         Ok(rules) -> {
@@ -66,7 +66,7 @@ pub fn start(
       }
     }
     Error(_) -> {
-      io.println("[supervisor] No validation.toml found, using no validation rules")
+      io.println("[supervisor] No validations.toml found, using no validation rules")
       []
     }
   }
