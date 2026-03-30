@@ -38,8 +38,8 @@ ws_loop(Host, Path, CallbackPid) ->
                         <<>> -> ok;
                         _ -> process_frames(Extra, Socket, CallbackPid)
                     end,
-                    ssl:setopts(Socket, [{active, true}]),
-                    relay_loop(Socket, CallbackPid, <<>>);
+                    %% Use passive recv loop — {active, true} unreliable on macOS SSL
+                    relay_loop_recv(Socket, CallbackPid, <<>>);
                 {error, Reason} ->
                     CallbackPid ! {ws_error, Reason},
                     ssl:close(Socket)
@@ -120,44 +120,47 @@ find_accept_header([Line | Rest], Expected) ->
             find_accept_header(Rest, Expected)
     end.
 
-%% Main relay loop — receives SSL data with {active, once} backpressure
-relay_loop(Socket, CallbackPid, Buffer) ->
+%% Main relay loop — uses passive ssl:recv instead of active mode.
+%% Active mode is unreliable on macOS Erlang 28 SSL sockets.
+%% Uses a short recv timeout (100ms) so we can interleave with
+%% checking for outgoing ws_send messages.
+relay_loop_recv(Socket, CallbackPid, Buffer) ->
+    %% First check for any outgoing messages (non-blocking)
     receive
-        {ssl, Socket, Data} ->
-            NewBuffer = <<Buffer/binary, Data/binary>>,
-            case extract_frames(NewBuffer) of
-                {ok, Frames, Rest} ->
-                    io:format("[ws-ffi] Received ~p bytes, ~p frames, ~p bytes buffered~n",
-                              [byte_size(Data), length(Frames), byte_size(Rest)]),
-                    lists:foreach(fun(Frame) ->
-                        handle_frame(Frame, Socket, CallbackPid)
-                    end, Frames),
-                    %% Re-enable active mode after processing
-                    %% Using {active, true} because {active, once} doesn't
-                    %% re-trigger on macOS Erlang 28 SSL sockets
-                    ssl:setopts(Socket, [{active, true}]),
-                    relay_loop(Socket, CallbackPid, Rest);
-                {error, frame_too_large} ->
-                    CallbackPid ! {ws_error, <<"Frame exceeds maximum size">>},
-                    ssl:close(Socket)
-            end;
-        {ssl_closed, Socket} ->
-            CallbackPid ! ws_closed;
-        {ssl_error, Socket, Reason} ->
-            CallbackPid ! {ws_error, iolist_to_binary(
-                io_lib:format("SSL error: ~p", [Reason]))};
         {ws_send, Data} ->
             Frame = encode_text_frame(Data),
             ssl:send(Socket, Frame),
-            relay_loop(Socket, CallbackPid, Buffer);
+            relay_loop_recv(Socket, CallbackPid, Buffer);
         ws_close ->
-            %% Send a close frame before closing
-            CloseFrame = <<1:1, 0:3, 8:4, 1:1, 2:7,
-                           0:32,  %% mask key (zeros — close frames are small)
-                           3:8, 232:8>>,  %% 1000 = normal closure, masked with zero key
+            CloseFrame = encode_control_frame(8, <<3:8, 232:8>>),
             ssl:send(Socket, CloseFrame),
             ssl:close(Socket),
             CallbackPid ! ws_closed
+    after 0 ->
+        %% No outgoing messages — try to receive data
+        case ssl:recv(Socket, 0, 500) of
+            {ok, Data} ->
+                NewBuffer = <<Buffer/binary, Data/binary>>,
+                case extract_frames(NewBuffer) of
+                    {ok, Frames, Rest} ->
+                        lists:foreach(fun(Frame) ->
+                            handle_frame(Frame, Socket, CallbackPid)
+                        end, Frames),
+                        relay_loop_recv(Socket, CallbackPid, Rest);
+                    {error, frame_too_large} ->
+                        CallbackPid ! {ws_error, <<"Frame exceeds maximum size">>},
+                        ssl:close(Socket)
+                end;
+            {error, timeout} ->
+                %% No data available — loop back to check for outgoing
+                relay_loop_recv(Socket, CallbackPid, Buffer);
+            {error, closed} ->
+                CallbackPid ! ws_closed;
+            {error, Reason} ->
+                CallbackPid ! {ws_error, iolist_to_binary(
+                    io_lib:format("SSL error: ~p", [Reason]))},
+                ssl:close(Socket)
+        end
     end.
 
 %% Handle different frame types
