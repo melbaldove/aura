@@ -158,6 +158,16 @@ fn authed_request(
   )
 }
 
+/// POST /channels/{id}/typing — trigger typing indicator (lasts 10s or until message sent)
+pub fn trigger_typing(token: String, channel_id: String) -> Result(Nil, String) {
+  let url = api_url("/channels/" <> channel_id <> "/typing")
+  use req <- result.try(authed_request(url, http.Post, token))
+  case httpc.send(req) {
+    Ok(_) -> Ok(Nil)
+    Error(_) -> Error("Failed to trigger typing")
+  }
+}
+
 fn unexpected_status(status: Int, context: String) -> String {
   "Unexpected status " <> int.to_string(status) <> " from " <> context
 }

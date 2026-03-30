@@ -310,10 +310,11 @@ fn handle_routed_message(
 ) -> Nil {
   case list.find(state.registry, fn(e) { e.name == workstream_name }) {
     Ok(entry) -> {
-      // Create a subject for receiving the response
+      // Show typing indicator while workstream processes
+      let _ = rest.trigger_typing(state.discord_token, msg.channel_id)
+
       let reply_subject = process.new_subject()
 
-      // Send task to workstream
       process.send(
         entry.subject,
         workstream.HandleTask(message: msg, reply_to: reply_subject),
@@ -365,6 +366,9 @@ fn send_discord_response(token: String, channel_id: String, content: String) -> 
 }
 
 fn handle_with_llm(state: BrainState, msg: discord.IncomingMessage) -> Nil {
+  // Show typing indicator while thinking
+  let _ = rest.trigger_typing(state.discord_token, msg.channel_id)
+
   let prompt = build_system_prompt(state.soul)
   let messages = [llm.SystemMessage(prompt), llm.UserMessage(msg.content)]
 
