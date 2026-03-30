@@ -5,6 +5,7 @@ import aura/memory
 import aura/notification
 import aura/poller
 import aura/skill
+import aura/validator
 import aura/workstream_sup
 import aura/xdg
 import gleam/erlang/process
@@ -50,9 +51,38 @@ pub fn start(
     <> string.join(list.map(brain_workstreams, fn(ws) { ws.name }), ", "),
   )
 
-  // 4. Start brain with registry
+  // 4. Load validation rules
+  let validation_rules = case memory.read_file(xdg.config_path(paths, "validation.toml")) {
+    Ok(content) -> {
+      case validator.parse_rules(content) {
+        Ok(rules) -> {
+          io.println("[supervisor] Loaded " <> int.to_string(list.length(rules)) <> " validation rules")
+          rules
+        }
+        Error(e) -> {
+          io.println("[supervisor] Failed to parse validation rules: " <> e)
+          []
+        }
+      }
+    }
+    Error(_) -> {
+      io.println("[supervisor] No validation.toml found, using no validation rules")
+      []
+    }
+  }
+
+  // 5. Start brain with registry
   use brain_subject <- result.try(
-    brain.start(global_config, paths, brain_workstreams, registry.entries, list.map(all_skills, fn(s) { s.name }), global_config.acp_global_max_concurrent),
+    brain.start(
+      global_config,
+      paths,
+      brain_workstreams,
+      registry.entries,
+      list.map(all_skills, fn(s) { s.name }),
+      global_config.acp_global_max_concurrent,
+      validation_rules,
+      all_skills,
+    ),
   )
   io.println("[supervisor] Brain started")
 

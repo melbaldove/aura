@@ -15,6 +15,7 @@ pub type Message {
   SystemMessage(content: String)
   UserMessage(content: String)
   AssistantMessage(content: String)
+  AssistantToolCallMessage(content: String, tool_calls: List(ToolCall))
   ToolResultMessage(tool_call_id: String, content: String)
 }
 
@@ -41,6 +42,21 @@ pub type LlmConfig {
   LlmConfig(base_url: String, api_key: String, model: String)
 }
 
+/// Encode a ToolCall as a JSON object for the assistant message tool_calls array.
+fn tool_call_to_json(call: ToolCall) -> json.Json {
+  json.object([
+    #("id", json.string(call.id)),
+    #("type", json.string("function")),
+    #(
+      "function",
+      json.object([
+        #("name", json.string(call.name)),
+        #("arguments", json.string(call.arguments)),
+      ]),
+    ),
+  ])
+}
+
 /// Encode a Message as a JSON object with "role" and "content" fields.
 pub fn message_to_json(message: Message) -> json.Json {
   case message {
@@ -50,12 +66,23 @@ pub fn message_to_json(message: Message) -> json.Json {
         #("tool_call_id", json.string(id)),
         #("content", json.string(c)),
       ])
+    AssistantToolCallMessage(c, calls) -> {
+      let base = [
+        #("role", json.string("assistant")),
+        #("tool_calls", json.array(calls, tool_call_to_json)),
+      ]
+      case c {
+        "" -> json.object(base)
+        _ -> json.object([#("content", json.string(c)), ..base])
+      }
+    }
     _ -> {
       let #(role, content) = case message {
         SystemMessage(c) -> #("system", c)
         UserMessage(c) -> #("user", c)
         AssistantMessage(c) -> #("assistant", c)
-        // This case is already handled above but needed for exhaustiveness
+        // These cases are already handled above but needed for exhaustiveness
+        AssistantToolCallMessage(c, _) -> #("assistant", c)
         ToolResultMessage(_, c) -> #("tool", c)
       }
       json.object([

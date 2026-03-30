@@ -8,10 +8,17 @@ import aura/llm
 import aura/memory
 import aura/models
 import aura/notification
+import aura/skill
+import aura/tools
+import aura/validator
 import aura/workstream
 import aura/workstream_sup
 import aura/xdg
+import gleam/dict
+import gleam/dynamic/decode
+import gleam/int
 import gleam/io
+import gleam/json
 import gleam/list
 import gleam/otp/actor
 import gleam/erlang/process
@@ -52,6 +59,8 @@ pub type BrainState {
     notification_queue: notification.NotificationQueue,
     aura_channel_id: String,
     acp_manager: manager.AcpManager,
+    validation_rules: List(validator.Rule),
+    skill_infos: List(skill.SkillInfo),
   )
 }
 
@@ -128,6 +137,8 @@ pub fn start(
   registry: List(workstream_sup.WorkstreamEntry),
   skill_names: List(String),
   acp_max_concurrent: Int,
+  validation_rules: List(validator.Rule),
+  skill_infos: List(skill.SkillInfo),
 ) -> Result(process.Subject(BrainMessage), String) {
   // Read SOUL.md
   let soul_file = xdg.soul_path(paths)
@@ -154,6 +165,8 @@ pub fn start(
       notification_queue: notification.new_queue(),
       aura_channel_id: "",
       acp_manager: manager.new(acp_max_concurrent),
+      validation_rules: validation_rules,
+      skill_infos: skill_infos,
     )
 
   actor.new(state)
@@ -388,23 +401,156 @@ fn send_discord_response(token: String, channel_id: String, content: String) -> 
 }
 
 fn handle_with_llm(state: BrainState, msg: discord.IncomingMessage) -> Nil {
-  io.println("[brain] Processing message from " <> msg.author_name <> " in channel " <> msg.channel_id <> ": " <> msg.content)
-
-  // Show typing indicator while thinking
+  io.println("[brain] Processing message from " <> msg.author_name <> " in channel " <> msg.channel_id)
   let _ = rest.trigger_typing(state.discord_token, msg.channel_id)
 
   let ws_names = list.map(state.workstreams, fn(ws) { ws.name })
-  let prompt = build_system_prompt(state.soul, ws_names, state.skill_names)
-  let messages = [llm.SystemMessage(prompt), llm.UserMessage(msg.content)]
+  let system_prompt = build_system_prompt(state.soul, ws_names, state.skill_names)
+  let initial_messages = [
+    llm.SystemMessage(system_prompt),
+    llm.UserMessage(msg.content),
+  ]
 
-  case llm.chat(state.llm_config, messages) {
-    Ok(response) -> {
-      io.println("[brain] LLM response: " <> string.slice(response, 0, 100))
-      send_discord_response(state.discord_token, msg.channel_id, response)
-    }
+  let result = tool_loop(state, msg.channel_id, initial_messages, 0)
+  case result {
+    Ok(response_text) -> send_discord_response(state.discord_token, msg.channel_id, response_text)
     Error(err) -> {
-      io.println("[brain] LLM error: " <> err)
-      send_discord_response(state.discord_token, msg.channel_id, "Sorry, I encountered an error processing your message.")
+      io.println("[brain] Tool loop error: " <> err)
+      send_discord_response(state.discord_token, msg.channel_id, "Sorry, I encountered an error.")
     }
   }
+}
+
+fn tool_loop(
+  state: BrainState,
+  channel_id: String,
+  messages: List(llm.Message),
+  iteration: Int,
+) -> Result(String, String) {
+  case iteration >= 10 {
+    True -> Error("Tool loop exceeded maximum iterations")
+    False -> {
+      case llm.chat_with_tools(state.llm_config, messages, built_in_tools()) {
+        Ok(response) -> {
+          case response.tool_calls {
+            [] -> {
+              // No tool calls — return the text response
+              Ok(response.content)
+            }
+            calls -> {
+              // Execute tool calls and continue the loop
+              io.println("[brain] " <> int.to_string(list.length(calls)) <> " tool call(s)")
+              let tool_results = list.map(calls, fn(call) {
+                io.println("[brain] Tool: " <> call.name)
+                let result = execute_tool(state, call)
+                io.println("[brain] Result: " <> string.slice(result, 0, 100))
+                llm.ToolResultMessage(call.id, result)
+              })
+
+              // Build new messages: original + assistant response + tool results
+              let new_messages = list.append(messages, [
+                llm.AssistantToolCallMessage(response.content, calls),
+                ..tool_results
+              ])
+
+              // Keep typing indicator going
+              let _ = rest.trigger_typing(state.discord_token, channel_id)
+
+              tool_loop(state, channel_id, new_messages, iteration + 1)
+            }
+          }
+        }
+        Error(err) -> Error(err)
+      }
+    }
+  }
+}
+
+fn execute_tool(state: BrainState, call: llm.ToolCall) -> String {
+  let args = parse_tool_args(call.arguments)
+
+  case call.name {
+    "read_file" -> {
+      case tools.read_file(state.paths.data, get_arg(args, "path")) {
+        Ok(content) -> content
+        Error(e) -> "Error: " <> e
+      }
+    }
+    "write_file" -> {
+      let path = get_arg(args, "path")
+      let content = get_arg(args, "content")
+      case tools.write_file(state.paths.data, path, content, state.validation_rules, False) {
+        Ok(_) -> "File written: " <> path
+        Error(e) -> "Error: " <> e
+      }
+    }
+    "append_file" -> {
+      let path = get_arg(args, "path")
+      let content = get_arg(args, "content")
+      case tools.append_file(state.paths.data, path, content, state.validation_rules, False) {
+        Ok(_) -> "Appended to: " <> path
+        Error(e) -> "Error: " <> e
+      }
+    }
+    "list_directory" -> {
+      case tools.list_directory(state.paths.data, get_arg(args, "path")) {
+        Ok(listing) -> listing
+        Error(e) -> "Error: " <> e
+      }
+    }
+    "run_skill" -> {
+      case tools.run_skill(state.skill_infos, get_arg(args, "name"), get_arg(args, "args")) {
+        Ok(output) -> output
+        Error(e) -> "Error: " <> e
+      }
+    }
+    "propose" -> {
+      case tools.propose(get_arg(args, "description"), get_arg(args, "details")) {
+        Ok(output) -> output
+        Error(e) -> "Error: " <> e
+      }
+    }
+    _ -> "Error: Unknown tool " <> call.name
+  }
+}
+
+fn parse_tool_args(json_str: String) -> List(#(String, String)) {
+  case json.parse(json_str, decode.dict(decode.string, decode.string)) {
+    Ok(d) -> dict.to_list(d)
+    Error(_) -> []
+  }
+}
+
+fn get_arg(args: List(#(String, String)), key: String) -> String {
+  case list.find(args, fn(pair) { pair.0 == key }) {
+    Ok(#(_, value)) -> value
+    Error(_) -> ""
+  }
+}
+
+fn built_in_tools() -> List(llm.ToolDefinition) {
+  [
+    llm.ToolDefinition(name: "read_file", description: "Read a file from the Aura workspace", parameters: [
+      llm.ToolParam(name: "path", param_type: "string", description: "Relative file path", required: True),
+    ]),
+    llm.ToolDefinition(name: "write_file", description: "Write content to a workspace file. Logs, anchors, events, MEMORY.md write immediately. Config and identity files require propose() first.", parameters: [
+      llm.ToolParam(name: "path", param_type: "string", description: "Relative file path", required: True),
+      llm.ToolParam(name: "content", param_type: "string", description: "File content", required: True),
+    ]),
+    llm.ToolDefinition(name: "append_file", description: "Append content to a workspace file. Same rules as write_file.", parameters: [
+      llm.ToolParam(name: "path", param_type: "string", description: "Relative file path", required: True),
+      llm.ToolParam(name: "content", param_type: "string", description: "Content to append", required: True),
+    ]),
+    llm.ToolDefinition(name: "list_directory", description: "List contents of a workspace directory", parameters: [
+      llm.ToolParam(name: "path", param_type: "string", description: "Directory path (use '.' for root)", required: True),
+    ]),
+    llm.ToolDefinition(name: "run_skill", description: "Run an external CLI skill", parameters: [
+      llm.ToolParam(name: "name", param_type: "string", description: "Skill name", required: True),
+      llm.ToolParam(name: "args", param_type: "string", description: "Arguments string", required: True),
+    ]),
+    llm.ToolDefinition(name: "propose", description: "Propose a change requiring user approval", parameters: [
+      llm.ToolParam(name: "description", param_type: "string", description: "What you want to do", required: True),
+      llm.ToolParam(name: "details", param_type: "string", description: "Details of the change", required: True),
+    ]),
+  ]
 }
