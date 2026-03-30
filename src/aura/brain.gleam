@@ -47,6 +47,7 @@ pub type BrainState {
     paths: xdg.Paths,
     workstreams: List(WorkstreamInfo),
     soul: String,
+    skill_names: List(String),
     registry: List(workstream_sup.WorkstreamEntry),
     notification_queue: notification.NotificationQueue,
     aura_channel_id: String,
@@ -70,10 +71,26 @@ pub fn route_message(
 }
 
 /// Build system prompt from SOUL.md content
-pub fn build_system_prompt(soul_content: String) -> String {
+pub fn build_system_prompt(
+  soul_content: String,
+  workstream_names: List(String),
+  skill_names: List(String),
+) -> String {
+  let ws_section = case workstream_names {
+    [] -> "\n\nNo workstreams configured yet."
+    names -> "\n\nActive workstreams: " <> string.join(names, ", ")
+  }
+
+  let skills_section = case skill_names {
+    [] -> "\nNo skills installed."
+    names -> "\nInstalled skills: " <> string.join(names, ", ")
+  }
+
   "You are responding in a Discord server. Stay in character.\n\n"
   <> soul_content
   <> "\n\nKeep responses concise and direct. Use Discord markdown where appropriate."
+  <> ws_section
+  <> skills_section
   <> "\n\nYou can create workstreams when users ask. To create a workstream, respond with a structured command block:\n"
   <> "```aura-command\n"
   <> "CREATE_WORKSTREAM\n"
@@ -109,6 +126,7 @@ pub fn start(
   paths: xdg.Paths,
   workstreams: List(WorkstreamInfo),
   registry: List(workstream_sup.WorkstreamEntry),
+  skill_names: List(String),
   acp_max_concurrent: Int,
 ) -> Result(process.Subject(BrainMessage), String) {
   // Read SOUL.md
@@ -131,6 +149,7 @@ pub fn start(
       paths: paths,
       workstreams: workstreams,
       soul: soul,
+      skill_names: skill_names,
       registry: registry,
       notification_queue: notification.new_queue(),
       aura_channel_id: "",
@@ -374,7 +393,8 @@ fn handle_with_llm(state: BrainState, msg: discord.IncomingMessage) -> Nil {
   // Show typing indicator while thinking
   let _ = rest.trigger_typing(state.discord_token, msg.channel_id)
 
-  let prompt = build_system_prompt(state.soul)
+  let ws_names = list.map(state.workstreams, fn(ws) { ws.name })
+  let prompt = build_system_prompt(state.soul, ws_names, state.skill_names)
   let messages = [llm.SystemMessage(prompt), llm.UserMessage(msg.content)]
 
   case llm.chat(state.llm_config, messages) {

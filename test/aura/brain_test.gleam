@@ -35,14 +35,17 @@ pub fn route_empty_workstreams_test() {
 }
 
 pub fn build_system_prompt_test() {
-  let prompt = brain.build_system_prompt("You are Aura. Direct. Concise.")
+  let prompt = brain.build_system_prompt("You are Aura. Direct. Concise.", ["cm2", "hy"], ["jira", "google"])
   prompt |> string.contains("Aura") |> should.be_true
   prompt |> string.contains("Discord") |> should.be_true
+  prompt |> string.contains("cm2") |> should.be_true
+  prompt |> string.contains("jira") |> should.be_true
 }
 
 pub fn build_system_prompt_includes_soul_content_test() {
-  let prompt = brain.build_system_prompt("Custom personality goes here.")
+  let prompt = brain.build_system_prompt("Custom personality goes here.", [], [])
   prompt |> string.contains("Custom personality goes here.") |> should.be_true
+  prompt |> string.contains("No workstreams") |> should.be_true
 }
 
 pub fn build_routing_prompt_test() {
