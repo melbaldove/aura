@@ -190,6 +190,20 @@ src/
 
 Stored in `~/.config/aura/.env`, sourced by the launchd service plist.
 
+## Architecture Decision Records
+
+Significant architectural decisions are documented in `docs/decisions/`. Each ADR captures context, decision, and consequences.
+
+When making a change that involves choosing between approaches (e.g., "should we use X or Y?"), write an ADR:
+
+1. Create `docs/decisions/NNN-short-title.md` using the template in `docs/decisions/README.md`
+2. Add it to the index in `docs/decisions/README.md`
+3. Commit it with the code change
+
+ADRs are immutable once accepted. If a decision is reversed, write a new ADR that supersedes the old one.
+
+Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression.
+
 ## Known limitations
 
 - Streaming tool call parsing is manual JSON extraction (no JSON parser in Erlang FFI) — works for OpenAI format but fragile for non-standard APIs
