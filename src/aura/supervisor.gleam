@@ -1,6 +1,7 @@
 import aura/brain
 import aura/config
 import aura/db
+import aura/db_migration
 import aura/heartbeat_sup
 import aura/memory
 import aura/notification
@@ -45,6 +46,16 @@ pub fn start(
     |> result.map_error(fn(e) { "Failed to start database: " <> e })
   )
   io.println("[supervisor] Database started")
+
+  // Migrate JSONL files if they exist
+  case db_migration.migrate_jsonl(db_subject, paths.data) {
+    Ok(0) -> io.println("[supervisor] No JSONL files to migrate")
+    Ok(n) ->
+      io.println(
+        "[supervisor] Migrated " <> int.to_string(n) <> " messages from JSONL",
+      )
+    Error(e) -> io.println("[supervisor] JSONL migration error: " <> e)
+  }
 
   // 4. Start workstream actors
   use registry <- result.try(
