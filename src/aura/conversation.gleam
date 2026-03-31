@@ -122,11 +122,8 @@ pub fn needs_compression(
 fn get_existing_summary(history: List(llm.Message)) -> Option(String) {
   case history {
     [llm.SystemMessage(content), ..] -> {
-      case string.starts_with(content, "[CONTEXT COMPACTION]") {
-        True -> {
-          let prefix = "[CONTEXT COMPACTION] Earlier turns in this conversation were compacted to save context space. The summary below captures the key context:\n\n"
-          Some(string.drop_start(content, string.length(prefix)))
-        }
+      case compressor.is_compaction_summary(content) {
+        True -> Some(compressor.strip_summary_prefix(content))
         False -> None
       }
     }
@@ -151,23 +148,15 @@ pub fn compress_buffer(
     True -> {
       // Head: first 3 messages (system prompt + initial exchange)
       // But if first message is a compaction summary, protect first 1
-      let head_count = case get_existing_summary(history) {
+      let existing = get_existing_summary(history)
+      let head_count = case existing {
         Some(_) -> 1
         None -> 3
       }
-      let _head = list.take(history, head_count)
       let tail = list.drop(history, total - protect_tail)
       let middle = list.drop(history, head_count) |> list.take(total - head_count - protect_tail)
 
-      let existing = get_existing_summary(history)
-
-      // Strip the compaction message from middle if present
-      let messages_to_compress = case existing {
-        Some(_) -> middle
-        None -> middle
-      }
-
-      case compressor.compress(llm_config, messages_to_compress, existing) {
+      case compressor.compress(llm_config, middle, existing) {
         Ok(summary_text) -> {
           io.println("[conversation] Compressed " <> string.inspect(list.length(middle)) <> " messages into summary")
           let summary_msg = llm.SystemMessage(summary_text)

@@ -351,11 +351,6 @@ pub fn chat_streaming_with_tools(
 ) -> Nil {
   let url = config.base_url <> "/chat/completions"
   io.println("[llm] Streaming " <> config.model <> " at " <> url <> " (with tools)")
-  let body_json =
-    build_request_body_with_tools(config.model, messages, tools, None)
-  // Add stream:true to the body
-  // Since build_request_body_with_tools returns json.Json, we need to
-  // reconstruct with stream flag
   let base_fields = [
     #("model", json.string(config.model)),
     #("messages", json.array(messages, message_to_json)),

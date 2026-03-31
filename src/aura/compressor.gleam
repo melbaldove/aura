@@ -4,7 +4,20 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 
+/// The prefix prepended to all compaction summaries.
+pub const compaction_tag = "[CONTEXT COMPACTION]"
+
 const summary_prefix = "[CONTEXT COMPACTION] Earlier turns in this conversation were compacted to save context space. The summary below captures the key context:\n\n"
+
+/// Check if a message is a compaction summary.
+pub fn is_compaction_summary(content: String) -> Bool {
+  string.starts_with(content, compaction_tag)
+}
+
+/// Strip the summary prefix, returning just the raw summary body.
+pub fn strip_summary_prefix(content: String) -> String {
+  string.drop_start(content, string.length(summary_prefix))
+}
 
 const chars_per_token = 4
 

@@ -1,4 +1,5 @@
 import aura/db
+import aura/time
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
@@ -82,7 +83,7 @@ fn migrate_one_file(
     |> result.map_error(fn(e) { "Read failed: " <> string.inspect(e) }),
   )
 
-  let now = erlang_system_time_ms()
+  let now = time.now_ms()
   use convo_id <- result.try(
     db.resolve_conversation(db_subject, "discord", channel_id, now),
   )
@@ -125,5 +126,3 @@ fn migrate_one_file(
   Ok(migrated)
 }
 
-@external(erlang, "aura_time_ffi", "system_time_ms")
-fn erlang_system_time_ms() -> Int

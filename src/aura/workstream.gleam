@@ -1,4 +1,5 @@
 import aura/config
+import aura/time
 import aura/conversation
 import aura/db
 import aura/discord
@@ -158,8 +159,8 @@ fn handle_message(
   case message {
     HandleTask(msg, reply_to) -> {
       // Hydrate from DB before processing (for LLM history context)
-      let now_ms = erlang_system_time_ms()
-      let #(hydrated, _, _) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", msg.channel_id, now_ms)
+      let now_ms = time.now_ms()
+      let #(hydrated, convo_id, _) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", msg.channel_id, now_ms)
       let hydrated_state = WorkstreamState(..state, conversations: hydrated)
       let response = process_task(hydrated_state, msg)
       process.send(reply_to, response)
@@ -178,15 +179,8 @@ fn handle_message(
         False -> new_convos
       }
 
-      // Write through to database
-      let now_ms = erlang_system_time_ms()
-      let _ = case db.resolve_conversation(state.db_subject, "discord", msg.channel_id, now_ms) {
-        Ok(convo_id) -> conversation.save_to_db(state.db_subject, convo_id, msg.content, response_text, msg.author_id, msg.author_name, now_ms)
-        Error(e) -> {
-          io.println("[workstream:" <> state.name <> "] DB write failed: " <> e)
-          Ok(Nil)
-        }
-      }
+      // Write through to database (reuse convo_id from hydration — no second resolve)
+      let _ = conversation.save_to_db(state.db_subject, convo_id, msg.content, response_text, msg.author_id, msg.author_name, now_ms)
 
       actor.continue(WorkstreamState(..state, conversations: final_convos))
     }
@@ -273,5 +267,3 @@ fn process_task(
   }
 }
 
-@external(erlang, "aura_time_ffi", "system_time_ms")
-fn erlang_system_time_ms() -> Int

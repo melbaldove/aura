@@ -95,6 +95,7 @@ pub fn start(
     brain.start(
       global_config,
       paths,
+      soul,
       brain_workstreams,
       registry.entries,
       list.map(all_skills, fn(s) { s.name }),

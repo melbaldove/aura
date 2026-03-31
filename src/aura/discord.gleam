@@ -83,12 +83,3 @@ pub fn send_embed(
   rest.send_message(token, channel_id, "", [embed])
 }
 
-/// Create a thread (delegates to rest)
-pub fn create_thread(
-  token: String,
-  channel_id: String,
-  message_id: String,
-  name: String,
-) -> Result(String, String) {
-  rest.create_thread(token, channel_id, message_id, name)
-}

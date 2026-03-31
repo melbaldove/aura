@@ -2,6 +2,7 @@ import aura/acp/manager
 import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
 import aura/config
+import aura/time
 import aura/conversation
 import aura/db
 import aura/discord
@@ -160,6 +161,7 @@ const default_soul = "You are Aura, a helpful AI assistant. Be direct and concis
 pub fn start(
   config: config.GlobalConfig,
   paths: xdg.Paths,
+  soul: String,
   workstreams: List(WorkstreamInfo),
   registry: List(workstream_sup.WorkstreamEntry),
   skill_names: List(String),
@@ -168,16 +170,6 @@ pub fn start(
   skill_infos: List(skill.SkillInfo),
   db_subject: process.Subject(db.DbMessage),
 ) -> Result(process.Subject(BrainMessage), String) {
-  // Read SOUL.md
-  let soul_file = xdg.soul_path(paths)
-  let soul = case memory.read_file(soul_file) {
-    Ok(content) -> content
-    Error(_) -> {
-      io.println("[brain] SOUL.md not found at " <> soul_file <> ", using default")
-      default_soul
-    }
-  }
-
   // Build LLM config from brain model spec
   use llm_config <- result.try(models.build_llm_config(config.models.brain))
 
@@ -348,7 +340,7 @@ fn handle_message(
     }
     StoreExchange(channel_id, user_msg, assistant_msg) -> {
       // Write through to database
-      let now = erlang_system_time_ms()
+      let now = time.now_ms()
       let _ = case db.resolve_conversation(state.db_subject, "discord", channel_id, now) {
         Ok(convo_id) -> conversation.save_to_db(state.db_subject, convo_id, user_msg, assistant_msg, "", "", now)
         Error(e) -> {
@@ -472,6 +464,27 @@ fn typing_loop(
   typing_loop(token, channel_id)
 }
 
+/// Send a new message or edit an existing one. Returns the message ID.
+fn send_or_edit(
+  token: String,
+  channel_id: String,
+  msg_id: String,
+  content: String,
+) -> String {
+  case msg_id {
+    "" -> {
+      case rest.send_message(token, channel_id, content, []) {
+        Ok(id) -> id
+        Error(_) -> ""
+      }
+    }
+    existing -> {
+      let _ = rest.edit_message(token, channel_id, existing, content)
+      existing
+    }
+  }
+}
+
 fn stop_typing_loop(pid: process.Pid) -> Nil {
   process.kill(pid)
 }
@@ -509,7 +522,7 @@ fn handle_with_llm(
   let system_prompt = build_system_prompt(state.soul, ws_names, state.skill_names, memory_content, user_content)
 
   // Load conversation history (from memory or DB)
-  let now_ts = erlang_system_time_ms()
+  let now_ts = time.now_ms()
   let #(_, _, history) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", msg.channel_id, now_ts)
   let initial_messages = list.flatten([
     [llm.SystemMessage(system_prompt)],
@@ -528,16 +541,7 @@ fn handle_with_llm(
   case result {
     Ok(#(response_text, traces, msg_id)) -> {
       let full = conversation.format_full_message(traces, response_text)
-      case msg_id {
-        "" -> {
-          let _ = rest.send_message(token, channel_id, full, [])
-          Nil
-        }
-        id -> {
-          let _ = rest.edit_message(token, channel_id, id, full)
-          Nil
-        }
-      }
+      let _ = send_or_edit(token, channel_id, msg_id, full)
       // Store exchange in conversation history
       case brain_subject_opt {
         Some(subj) -> process.send(subj, StoreExchange(channel_id, msg.content, response_text))
@@ -618,18 +622,7 @@ fn tool_loop_progressive(
               let progress_text = conversation.format_traces(new_traces) <> "\n\n*Thinking...*"
 
               // Send or edit message with current trace progress
-              let new_message_id = case message_id {
-                "" -> {
-                  case rest.send_message(state.discord_token, channel_id, progress_text, []) {
-                    Ok(id) -> id
-                    Error(_) -> ""
-                  }
-                }
-                existing -> {
-                  let _ = rest.edit_message(state.discord_token, channel_id, existing, progress_text)
-                  existing
-                }
-              }
+              let new_message_id = send_or_edit(state.discord_token, channel_id, message_id, progress_text)
 
               // Build new messages: original + assistant response + tool results
               let new_messages = list.append(messages, [
@@ -679,19 +672,7 @@ fn collect_stream_loop(
           let #(new_msg_id, new_edit_len) = case string.length(new_acc) - last_edit_len > 150 {
             True -> {
               let display = conversation.format_full_message(traces, new_acc <> " ...")
-              let mid = case msg_id {
-                "" -> {
-                  case rest.send_message(token, channel_id, display, []) {
-                    Ok(id) -> id
-                    Error(_) -> ""
-                  }
-                }
-                existing -> {
-                  let _ = rest.edit_message(token, channel_id, existing, display)
-                  existing
-                }
-              }
-              #(mid, string.length(new_acc))
+              #(send_or_edit(token, channel_id, msg_id, display), string.length(new_acc))
             }
             False -> #(msg_id, last_edit_len)
           }
@@ -707,18 +688,7 @@ fn collect_stream_loop(
           let final_msg_id = case string.length(content) > 0 && string.length(content) != last_edit_len {
             True -> {
               let display = conversation.format_full_message(traces, content)
-              case msg_id {
-                "" -> {
-                  case rest.send_message(token, channel_id, display, []) {
-                    Ok(id) -> id
-                    Error(_) -> ""
-                  }
-                }
-                existing -> {
-                  let _ = rest.edit_message(token, channel_id, existing, display)
-                  existing
-                }
-              }
+              send_or_edit(token, channel_id, msg_id, display)
             }
             False -> msg_id
           }
@@ -987,8 +957,6 @@ fn built_in_tools() -> List(llm.ToolDefinition) {
   ]
 }
 
-@external(erlang, "aura_time_ffi", "system_time_ms")
-fn erlang_system_time_ms() -> Int
 
 // ---------------------------------------------------------------------------
 // Streaming support

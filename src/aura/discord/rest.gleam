@@ -112,36 +112,6 @@ pub fn edit_message(
   }
 }
 
-/// POST /channels/{channel_id}/messages/{message_id}/threads — create a thread.
-/// Returns the new thread channel ID.
-pub fn create_thread(
-  token: String,
-  channel_id: String,
-  message_id: String,
-  name: String,
-) -> Result(String, String) {
-  let url =
-    api_url(
-      "/channels/" <> channel_id <> "/messages/" <> message_id <> "/threads",
-    )
-  let body = json.to_string(json.object([#("name", json.string(name))]))
-  use req <- result.try(authed_request(url, http.Post, token))
-  let req =
-    req
-    |> request.set_header("content-type", "application/json")
-    |> request.set_body(body)
-  use resp <- result.try(
-    httpc.send(req)
-    |> result.map_error(fn(_) { "HTTP request failed" }),
-  )
-  case resp.status {
-    200 | 201 ->
-      json.parse(resp.body, decode.at(["id"], decode.string))
-      |> result.map_error(fn(_) { "Failed to parse thread ID from response" })
-    status -> Error(unexpected_status(status, "create thread"))
-  }
-}
-
 /// Validate a Discord bot token by calling GET /users/@me
 /// Returns the bot's username on success.
 pub fn validate_token(token: String) -> Result(String, String) {
@@ -208,6 +178,62 @@ fn authed_request(
     |> request.set_method(method)
     |> request.set_header(auth_key, auth_val),
   )
+}
+
+/// GET /guilds/{guild_id}/threads/active — list active threads.
+/// Returns list of (id, name, parent_id) tuples.
+pub fn get_active_threads(
+  token: String,
+  guild_id: String,
+) -> Result(List(#(String, String, String)), String) {
+  let url = api_url("/guilds/" <> guild_id <> "/threads/active")
+  use req <- result.try(authed_request(url, http.Get, token))
+  use resp <- result.try(
+    httpc.send(req)
+    |> result.map_error(fn(_) { "HTTP request failed" }),
+  )
+  case resp.status {
+    200 -> {
+      let thread_decoder =
+        decode.at(["threads"], decode.list({
+          use id <- decode.field("id", decode.string)
+          use name <- decode.field("name", decode.string)
+          use parent_id <- decode.optional_field("parent_id", "", decode.string)
+          decode.success(#(id, name, parent_id))
+        }))
+      json.parse(resp.body, thread_decoder)
+      |> result.map_error(fn(_) { "Failed to parse threads from response" })
+    }
+    status -> Error(unexpected_status(status, "guild threads"))
+  }
+}
+
+/// GET /channels/{channel_id}/messages — fetch recent messages.
+/// Returns list of (author_name, content) tuples, most recent first.
+pub fn get_channel_messages(
+  token: String,
+  channel_id: String,
+  limit: Int,
+) -> Result(List(#(String, String)), String) {
+  let url = api_url("/channels/" <> channel_id <> "/messages?limit=" <> int.to_string(limit))
+  use req <- result.try(authed_request(url, http.Get, token))
+  use resp <- result.try(
+    httpc.send(req)
+    |> result.map_error(fn(_) { "HTTP request failed" }),
+  )
+  case resp.status {
+    200 -> {
+      let msg_decoder =
+        decode.list({
+          use author_name <- decode.subfield(["author", "username"], decode.string)
+          use content <- decode.optional_field("content", "", decode.string)
+          decode.success(#(author_name, content))
+        })
+      json.parse(resp.body, msg_decoder)
+      |> result.map_error(fn(_) { "Failed to parse messages from response" })
+    }
+    status -> Error(unexpected_status(status, "channel messages"))
+  }
 }
 
 /// POST /channels/{id}/typing — trigger typing indicator (lasts 10s or until message sent)
