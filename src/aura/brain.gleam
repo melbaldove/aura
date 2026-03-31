@@ -15,6 +15,7 @@ import aura/skill
 import aura/structured_memory
 import aura/tools
 import aura/validator
+import aura/web
 import aura/workstream
 import aura/workstream_sup
 import aura/xdg
@@ -899,6 +900,24 @@ fn execute_tool(state: BrainState, call: llm.ToolCall) -> String {
         Error(e) -> "Error: " <> e
       }
     }
+    "web_search" -> {
+      let query = get_arg(args, "query")
+      let limit = case int.parse(get_arg(args, "limit")) {
+        Ok(n) -> n
+        Error(_) -> 5
+      }
+      case web.search(query, limit) {
+        Ok(results) -> web.format_search_results(results)
+        Error(e) -> "Error: " <> e
+      }
+    }
+    "web_fetch" -> {
+      let url = get_arg(args, "url")
+      case web.fetch(url, 3000) {
+        Ok(content) -> content
+        Error(e) -> "Error: " <> e
+      }
+    }
     _ -> "Error: Unknown tool " <> call.name
   }
 }
@@ -967,6 +986,13 @@ fn make_built_in_tools() -> List(llm.ToolDefinition) {
     llm.ToolDefinition(name: "search_sessions", description: "Search past conversations across all channels and platforms by keyword. Returns matching message snippets with context. Use when the user references something from a past conversation or you need to recall previous discussions.", parameters: [
       llm.ToolParam(name: "query", param_type: "string", description: "Search terms", required: True),
       llm.ToolParam(name: "limit", param_type: "string", description: "Max results (default 10)", required: False),
+    ]),
+    llm.ToolDefinition(name: "web_search", description: "Search the web using Brave Search. Use when you need current information, documentation, or facts not in your training data or conversation history.", parameters: [
+      llm.ToolParam(name: "query", param_type: "string", description: "Search query", required: True),
+      llm.ToolParam(name: "limit", param_type: "string", description: "Max results (default 5)", required: False),
+    ]),
+    llm.ToolDefinition(name: "web_fetch", description: "Fetch a web page and extract its text content. Use after web_search to read a specific result, or when the user provides a URL to read.", parameters: [
+      llm.ToolParam(name: "url", param_type: "string", description: "The URL to fetch", required: True),
     ]),
   ]
 }

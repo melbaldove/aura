@@ -54,7 +54,7 @@ Brain routes by `channel_id` to the matching workstream. Unmatched channels are 
 - **Workstream** — isolated project context (config, anchors, logs, skills, conversation history). One Discord channel per workstream.
 - **Conversation** — per-channel message history. In-memory buffer (hot cache) backed by SQLite. Auto-compresses when token count exceeds 50% of context window.
 - **Skill** — a directory with a SKILL.md and optional CLI entrypoint. Instruction-only skills teach the LLM; external skills are invoked as subprocesses.
-- **Tool** — primitive operation the LLM can call. 13 built-in tools (filesystem, Discord, skills, memory, search).
+- **Tool** — primitive operation the LLM can call. 15 built-in tools (filesystem, Discord, skills, memory, search, web).
 
 ## Source layout
 
@@ -70,6 +70,7 @@ src/aura/
   structured_memory.gleam  MEMORY.md/USER.md with add/replace/remove + security scan
   llm.gleam             OpenAI-compatible chat + streaming + tool calling
   tools.gleam           Built-in tool implementations
+  web.gleam             Web search (Brave) and URL fetching with HTML stripping
   skill.gleam           Skill discovery, creation, invocation
   tier.gleam            Path-based write permission tiers
   validator.gleam       TOML-defined validation rules engine
@@ -115,7 +116,7 @@ src/
 - Use `gleeunit` + `should` assertions
 - Test pure functions directly. Test actors via their public convenience functions.
 - Temp files in `/tmp/aura-*-test`, clean up after
-- 184 tests currently. Don't regress.
+- 190 tests currently. Don't regress.
 
 ### Database
 
@@ -128,7 +129,7 @@ src/
 
 ### Tool system
 
-- 13 built-in tools defined in `brain.gleam:make_built_in_tools()`
+- 15 built-in tools defined in `brain.gleam:make_built_in_tools()`
 - Tools are static — constructed once at brain startup, stored in `BrainState.built_in_tools`
 - Skill-based tools invoked via `run_skill` tool → subprocess
 - New tools: add definition to `make_built_in_tools()`, add execution case to `execute_tool()`
@@ -153,13 +154,32 @@ src/
 - Security scan blocks prompt injection and exfiltration patterns
 - Both loaded into system prompt on every turn
 
+## Crosscutting concerns checklist
+
+When making any non-trivial change, check whether these need updating:
+
+- [ ] **CLAUDE.md** — does this change the build process, conventions, tool count, env vars, or architecture?
+- [ ] **README.md** — does this change user-facing features, setup steps, or workspace structure?
+- [ ] **ARCHITECTURE.md** — does this change the supervision tree, data model, message flow, or FFI surface?
+- [ ] **Tests** — new public functions need tests. Don't regress the count.
+- [ ] **Doc comments** — new public functions need `///` comments.
+- [ ] **ADR** — does this involve choosing between approaches? Write a decision record.
+- [ ] **Environment variables** — new credentials need: CLAUDE.md, README.md, init.gleam onboarding, .env template
+- [ ] **Tool count** — adding/removing tools? Update the count in CLAUDE.md and README.md.
+- [ ] **Onboarding** — new required config? Update `init.gleam` first-run wizard.
+- [ ] **Eisenhower deploy** — did you deploy the change? Update the launchd plist if env vars changed.
+
 ## Common tasks
 
 ### Add a new built-in tool
 
 1. Add `llm.ToolDefinition` to `make_built_in_tools()` in `brain.gleam`
 2. Add execution case in `execute_tool()` in `brain.gleam`
-3. The tool is available to the LLM immediately
+3. If the tool needs new credentials, add env var to: CLAUDE.md, README.md, init.gleam, .env
+4. Write tests for any testable logic
+5. Add `///` doc comment to the tool description
+6. Update tool count in CLAUDE.md
+7. The tool is available to the LLM immediately
 
 ### Add a new Discord REST endpoint
 
@@ -186,6 +206,7 @@ src/
 - `AURA_DISCORD_TOKEN` — Discord bot token
 - `ZAI_API_KEY` — z.ai/GLM API key
 - `ANTHROPIC_API_KEY` — Anthropic API key (for ACP)
+- `BRAVE_API_KEY` — Brave Search API key (optional, for web_search tool)
 - `HOME` — used for XDG path resolution
 
 Stored in `~/.config/aura/.env`, sourced by the launchd service plist.

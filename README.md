@@ -26,6 +26,7 @@ Every component is a supervised OTP actor. The Discord poller crashing does not 
 - tmux
 - A Discord bot token ([create one here](https://discord.com/developers/applications))
 - An LLM API key (ZAI/GLM or Anthropic/Claude)
+- A Brave Search API key (optional, for web search — [get one here](https://brave.com/search/api/))
 
 ## Quick Start
 
