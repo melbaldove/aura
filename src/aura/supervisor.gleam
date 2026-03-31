@@ -1,5 +1,6 @@
 import aura/brain
 import aura/config
+import aura/db
 import aura/heartbeat_sup
 import aura/memory
 import aura/notification
@@ -38,9 +39,16 @@ pub fn start(
     <> " skills",
   )
 
-  // 3. Start workstream actors
+  // 3. Start database
+  use db_subject <- result.try(
+    db.start(xdg.db_path(paths))
+    |> result.map_error(fn(e) { "Failed to start database: " <> e })
+  )
+  io.println("[supervisor] Database started")
+
+  // 4. Start workstream actors
   use registry <- result.try(
-    workstream_sup.start_all(paths, global_config, soul, all_skills),
+    workstream_sup.start_all(paths, global_config, soul, all_skills, db_subject),
   )
   let brain_workstreams =
     list.map(registry.entries, fn(e) {
@@ -51,7 +59,7 @@ pub fn start(
     <> string.join(list.map(brain_workstreams, fn(ws) { ws.name }), ", "),
   )
 
-  // 4. Load validation rules
+  // 5. Load validation rules
   let validation_rules = case memory.read_file(xdg.config_path(paths, "validations.toml")) {
     Ok(content) -> {
       case validator.parse_rules(content) {
@@ -71,7 +79,7 @@ pub fn start(
     }
   }
 
-  // 5. Start brain with registry
+  // 6. Start brain with registry
   use brain_subject <- result.try(
     brain.start(
       global_config,
@@ -82,11 +90,12 @@ pub fn start(
       global_config.acp_global_max_concurrent,
       validation_rules,
       all_skills,
+      db_subject,
     ),
   )
   io.println("[supervisor] Brain started")
 
-  // 5. Start heartbeat checks
+  // 7. Start heartbeat checks
   let on_finding = fn(finding: notification.Finding) {
     process.send(brain_subject, brain.HeartbeatFinding(finding))
   }
@@ -98,7 +107,7 @@ pub fn start(
   )
   io.println("[supervisor] Heartbeat checks started")
 
-  // 6. Start poller with auto-restart
+  // 8. Start poller with auto-restart
   let discord_config = global_config.discord
   let _poller_pid =
     process.spawn_unlinked(fn() {
@@ -106,7 +115,7 @@ pub fn start(
     })
   io.println("[supervisor] Poller started")
 
-  // 7. Start OTP supervisor
+  // 9. Start OTP supervisor
   // (poller_loop is defined below)
   let result =
     static_supervisor.new(static_supervisor.OneForOne)

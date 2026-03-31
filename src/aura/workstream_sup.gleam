@@ -1,4 +1,5 @@
 import aura/config
+import aura/db
 import aura/models
 import aura/skill
 import aura/workspace
@@ -37,6 +38,7 @@ pub fn start_all(
   global_config: config.GlobalConfig,
   soul: String,
   all_skills: List(skill.SkillInfo),
+  db_subject: process.Subject(db.DbMessage),
 ) -> Result(WorkstreamRegistry, String) {
   use names <- result.try(workspace.list_workstreams(paths))
 
@@ -92,6 +94,7 @@ pub fn start_all(
                       paths.data,
                       soul,
                       all_skills,
+                      db_subject,
                     )
                   {
                     Error(e) -> {

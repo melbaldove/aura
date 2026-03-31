@@ -3,6 +3,7 @@ import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
 import aura/config
 import aura/conversation
+import aura/db
 import aura/discord
 import aura/discord/rest
 import aura/llm
@@ -67,6 +68,7 @@ pub type BrainState {
     validation_rules: List(validator.Rule),
     skill_infos: List(skill.SkillInfo),
     skills_dir: String,
+    db_subject: process.Subject(db.DbMessage),
     conversations: conversation.Buffers,
     self_subject: Option(process.Subject(BrainMessage)),
   )
@@ -164,6 +166,7 @@ pub fn start(
   acp_max_concurrent: Int,
   validation_rules: List(validator.Rule),
   skill_infos: List(skill.SkillInfo),
+  db_subject: process.Subject(db.DbMessage),
 ) -> Result(process.Subject(BrainMessage), String) {
   // Read SOUL.md
   let soul_file = xdg.soul_path(paths)
@@ -194,6 +197,7 @@ pub fn start(
       validation_rules: validation_rules,
       skill_infos: skill_infos,
       skills_dir: xdg.skills_dir(paths),
+      db_subject: db_subject,
       conversations: conversation.new(),
       self_subject: None,
     )
@@ -343,11 +347,21 @@ fn handle_message(
       }
     }
     StoreExchange(channel_id, user_msg, assistant_msg) -> {
-      // Load from disk if not in memory to avoid overwriting history
+      // Write through to database
+      let now = erlang_system_time_ms()
+      let _ = case db.resolve_conversation(state.db_subject, "discord", channel_id, now) {
+        Ok(convo_id) -> conversation.save_to_db(state.db_subject, convo_id, user_msg, assistant_msg, "", "", now)
+        Error(e) -> {
+          io.println("[brain] DB write failed: " <> e)
+          Ok(Nil)
+        }
+      }
+
+      // Update in-memory cache
       let #(hydrated, _) = conversation.get_or_load(state.conversations, channel_id, state.paths.data)
       let new_convos = conversation.append(hydrated, channel_id, user_msg, assistant_msg)
 
-      // Compress if buffer exceeds 50% of context window (Hermes default)
+      // Compress if needed
       let final_convos = case conversation.needs_compression(new_convos, channel_id, 200_000) {
         True -> {
           io.println("[brain] Compressing conversation for " <> channel_id)
@@ -356,7 +370,6 @@ fn handle_message(
         False -> new_convos
       }
 
-      let _ = conversation.save(final_convos, channel_id, state.paths.data)
       actor.continue(BrainState(..state, conversations: final_convos))
     }
   }
@@ -746,6 +759,26 @@ fn execute_tool(state: BrainState, call: llm.ToolCall) -> String {
         _ -> "Error: Unknown action " <> action <> ". Use add, replace, remove, or read."
       }
     }
+    "search_sessions" -> {
+      let query = get_arg(args, "query")
+      let limit = case int.parse(get_arg(args, "limit")) {
+        Ok(n) -> n
+        Error(_) -> 10
+      }
+      case db.search(state.db_subject, query, limit) {
+        Ok(results) -> {
+          case results {
+            [] -> "No results found for: " <> query
+            _ ->
+              list.map(results, fn(r) {
+                r.author_name <> " (" <> r.platform <> "): " <> r.snippet
+              })
+              |> string.join("\n")
+          }
+        }
+        Error(e) -> "Error: " <> e
+      }
+    }
     _ -> "Error: Unknown tool " <> call.name
   }
 }
@@ -811,5 +844,12 @@ fn built_in_tools() -> List(llm.ToolDefinition) {
       llm.ToolParam(name: "content", param_type: "string", description: "Entry text (for add/replace)", required: False),
       llm.ToolParam(name: "old_text", param_type: "string", description: "Substring to match (for replace/remove)", required: False),
     ]),
+    llm.ToolDefinition(name: "search_sessions", description: "Search past conversations across all channels and platforms by keyword. Returns matching message snippets with context. Use when the user references something from a past conversation or you need to recall previous discussions.", parameters: [
+      llm.ToolParam(name: "query", param_type: "string", description: "Search terms", required: True),
+      llm.ToolParam(name: "limit", param_type: "string", description: "Max results (default 10)", required: False),
+    ]),
   ]
 }
+
+@external(erlang, "aura_time_ffi", "system_time_ms")
+fn erlang_system_time_ms() -> Int

@@ -1,5 +1,6 @@
 import aura/config
 import aura/conversation
+import aura/db
 import aura/discord
 import aura/llm
 import aura/memory
@@ -55,6 +56,7 @@ pub type WorkstreamState {
     soul: String,
     skills: List(skill.SkillInfo),
     conversations: conversation.Buffers,
+    db_subject: process.Subject(db.DbMessage),
   )
 }
 
@@ -124,6 +126,7 @@ pub fn start(
   data_dir: String,
   soul: String,
   skills: List(skill.SkillInfo),
+  db_subject: process.Subject(db.DbMessage),
 ) -> Result(process.Subject(WorkstreamMessage), String) {
   let allowed_skills = skill.filter_allowed(skills, ws_config.tools)
 
@@ -136,6 +139,7 @@ pub fn start(
       soul: soul,
       skills: allowed_skills,
       conversations: conversation.new(),
+      db_subject: db_subject,
     )
 
   actor.new(state)
@@ -171,6 +175,16 @@ fn handle_message(
           conversation.compress_buffer(new_convos, msg.channel_id, state.llm_config)
         }
         False -> new_convos
+      }
+
+      // Write through to database
+      let now_ms = erlang_system_time_ms()
+      let _ = case db.resolve_conversation(state.db_subject, "discord", msg.channel_id, now_ms) {
+        Ok(convo_id) -> conversation.save_to_db(state.db_subject, convo_id, msg.content, response_text, msg.author_id, msg.author_name, now_ms)
+        Error(e) -> {
+          io.println("[workstream:" <> state.name <> "] DB write failed: " <> e)
+          Ok(Nil)
+        }
       }
 
       let _ = conversation.save(final_convos, msg.channel_id, state.data_dir)
@@ -258,3 +272,6 @@ fn process_task(
     }
   }
 }
+
+@external(erlang, "aura_time_ffi", "system_time_ms")
+fn erlang_system_time_ms() -> Int
