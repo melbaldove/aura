@@ -1,7 +1,9 @@
 import aura/compressor
+import aura/db
 import aura/llm
 import gleam/dict
 import gleam/dynamic/decode
+import gleam/erlang/process
 import gleam/io
 import gleam/json
 import gleam/list
@@ -45,6 +47,66 @@ pub fn get_or_load(
       }
     }
     existing -> #(buffers, existing)
+  }
+}
+
+/// Load conversation history from the database.
+/// Resolves the conversation by platform+platform_id, then loads messages.
+pub fn load_from_db(
+  db_subject: process.Subject(db.DbMessage),
+  platform: String,
+  platform_id: String,
+  timestamp: Int,
+) -> Result(#(String, List(llm.Message)), String) {
+  use convo_id <- result.try(db.resolve_conversation(db_subject, platform, platform_id, timestamp))
+  use stored <- result.try(db.load_messages(db_subject, convo_id, 200))
+  let messages = list.map(stored, fn(m) {
+    case m.role {
+      "system" -> llm.SystemMessage(m.content)
+      "user" -> llm.UserMessage(m.content)
+      "assistant" -> llm.AssistantMessage(m.content)
+      "tool" -> llm.ToolResultMessage(m.tool_call_id, m.content)
+      _ -> llm.UserMessage(m.content)
+    }
+  })
+  Ok(#(convo_id, messages))
+}
+
+/// Save a user+assistant exchange to the database.
+pub fn save_to_db(
+  db_subject: process.Subject(db.DbMessage),
+  conversation_id: String,
+  user_msg: String,
+  assistant_msg: String,
+  author_id: String,
+  author_name: String,
+  timestamp: Int,
+) -> Result(Nil, String) {
+  use _ <- result.try(db.append_message(db_subject, conversation_id, "user", user_msg, author_id, author_name, timestamp))
+  db.append_message(db_subject, conversation_id, "assistant", assistant_msg, "", "aura", timestamp + 1)
+}
+
+/// Get or load from DB, updating in-memory cache.
+/// Returns updated buffers, the conversation_id, and the message history.
+pub fn get_or_load_db(
+  buffers: Buffers,
+  db_subject: process.Subject(db.DbMessage),
+  platform: String,
+  platform_id: String,
+  timestamp: Int,
+) -> #(Buffers, String, List(llm.Message)) {
+  let cache_key = platform <> ":" <> platform_id
+  case get_history(buffers, cache_key) {
+    [] -> {
+      case load_from_db(db_subject, platform, platform_id, timestamp) {
+        Ok(#(convo_id, messages)) -> {
+          let new_buffers = dict.insert(buffers, cache_key, messages)
+          #(new_buffers, convo_id, messages)
+        }
+        Error(_) -> #(buffers, cache_key, [])
+      }
+    }
+    existing -> #(buffers, platform <> ":" <> platform_id, existing)
   }
 }
 
