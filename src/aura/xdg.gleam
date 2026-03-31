@@ -85,6 +85,10 @@ pub fn events_path(paths: Paths) -> String {
   paths.data <> "/events.jsonl"
 }
 
+pub fn db_path(paths: Paths) -> String {
+  paths.data <> "/aura.db"
+}
+
 pub fn skills_dir(paths: Paths) -> String {
   paths.data <> "/skills"
 }
