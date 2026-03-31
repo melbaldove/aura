@@ -34,15 +34,20 @@ import gleam/string
 // Types
 // ---------------------------------------------------------------------------
 
+/// Maps a workstream name to its Discord channel ID for routing.
 pub type WorkstreamInfo {
   WorkstreamInfo(name: String, channel_id: String)
 }
 
+/// Outcome of routing a Discord message. `DirectRoute` means the channel
+/// matched a known workstream; `NeedsClassification` means the brain handles
+/// it directly.
 pub type RouteDecision {
   DirectRoute(workstream_name: String)
   NeedsClassification
 }
 
+/// Messages the brain actor accepts from other processes and the supervisor.
 pub type BrainMessage {
   HandleMessage(discord.IncomingMessage)
   UpdateWorkstreams(List(WorkstreamInfo))
@@ -67,6 +72,8 @@ pub type BrainConfig {
   )
 }
 
+/// Runtime state of the brain actor. Holds all active handles, caches,
+/// and configuration needed to process messages and drive the LLM tool loop.
 pub type BrainState {
   BrainState(
     discord_token: String,

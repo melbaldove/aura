@@ -10,6 +10,9 @@ import sqlight
 // Types
 // ---------------------------------------------------------------------------
 
+/// A message row as loaded from the database.
+/// `created_at` is milliseconds since epoch; `tool_calls` and `tool_call_id`
+/// are JSON strings, empty string when absent.
 pub type StoredMessage {
   StoredMessage(
     id: Int,
@@ -25,6 +28,8 @@ pub type StoredMessage {
   )
 }
 
+/// A single FTS5 search hit. `snippet` contains the matched excerpt with
+/// `>>>` / `<<<` highlights; `content` is the full message body.
 pub type SearchResult {
   SearchResult(
     conversation_id: String,
@@ -38,6 +43,9 @@ pub type SearchResult {
   )
 }
 
+/// Internal actor message type for the DB actor.
+/// Callers should use the public convenience functions (`append_message`,
+/// `load_messages`, etc.) rather than sending these variants directly.
 pub type DbMessage {
   Shutdown
   ResolveConversation(
@@ -90,6 +98,8 @@ type DbState {
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Open (or create) the SQLite database at `path`, initialize the schema,
+/// and return a subject for sending `DbMessage` requests to the actor.
 pub fn start(
   path: String,
 ) -> Result(process.Subject(DbMessage), String) {
@@ -118,6 +128,8 @@ pub fn start(
   }
 }
 
+/// Look up a conversation by `(platform, platform_id)`, creating one if it
+/// does not yet exist. Returns the conversation's string ID.
 pub fn resolve_conversation(
   subject: process.Subject(DbMessage),
   platform: String,
@@ -134,6 +146,7 @@ pub fn resolve_conversation(
   })
 }
 
+/// Append a new message row to an existing conversation.
 pub fn append_message(
   subject: process.Subject(DbMessage),
   conversation_id: String,
@@ -156,6 +169,7 @@ pub fn append_message(
   })
 }
 
+/// Load the most recent `limit` messages for a conversation, ordered oldest first.
 pub fn load_messages(
   subject: process.Subject(DbMessage),
   conversation_id: String,
@@ -170,6 +184,8 @@ pub fn load_messages(
   })
 }
 
+/// Full-text search across all messages using FTS5. Returns up to `limit`
+/// results ranked by relevance, with highlighted snippets.
 pub fn search(
   subject: process.Subject(DbMessage),
   query: String,
@@ -180,6 +196,7 @@ pub fn search(
   })
 }
 
+/// Store a compaction summary for a conversation, replacing any prior value.
 pub fn update_compaction_summary(
   subject: process.Subject(DbMessage),
   conversation_id: String,
@@ -194,6 +211,7 @@ pub fn update_compaction_summary(
   })
 }
 
+/// Update the `last_active_at` timestamp (ms since epoch) for a conversation.
 pub fn update_last_active(
   subject: process.Subject(DbMessage),
   conversation_id: String,
@@ -208,6 +226,7 @@ pub fn update_last_active(
   })
 }
 
+/// Assign a workstream label to a conversation.
 pub fn set_workstream(
   subject: process.Subject(DbMessage),
   conversation_id: String,

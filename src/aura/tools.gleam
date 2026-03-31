@@ -8,12 +8,17 @@ import gleam/result
 import gleam/string
 import simplifile
 
+/// Read the file at `path` relative to `data_dir`. Returns the file contents
+/// or an error string if the file is not found.
 pub fn read_file(data_dir: String, path: String) -> Result(String, String) {
   let full_path = data_dir <> "/" <> path
   simplifile.read(full_path)
   |> result.map_error(fn(_) { "File not found: " <> path })
 }
 
+/// Write `content` to `path` (relative to `data_dir`), enforcing tier-based
+/// write permissions and validator rules. `approved` bypasses tier restrictions
+/// for paths that normally require explicit approval.
 pub fn write_file(
   data_dir: String,
   path: String,
@@ -30,6 +35,8 @@ pub fn write_file(
   |> result.map_error(fn(e) { "Failed to write " <> path <> ": " <> string.inspect(e) })
 }
 
+/// Append `content` to `path` (relative to `data_dir`), subject to the same
+/// tier and validation checks as `write_file`.
 pub fn append_file(
   data_dir: String,
   path: String,
@@ -46,6 +53,8 @@ pub fn append_file(
   |> result.map_error(fn(e) { "Failed to append to " <> path <> ": " <> string.inspect(e) })
 }
 
+/// List entries of a directory at `path` relative to `data_dir`.
+/// Pass `"."` to list the data directory itself.
 pub fn list_directory(data_dir: String, path: String) -> Result(String, String) {
   let full_path = case path {
     "." -> data_dir
@@ -57,6 +66,8 @@ pub fn list_directory(data_dir: String, path: String) -> Result(String, String) 
   }
 }
 
+/// Invoke a skill by `name` with space-separated `args_str`, with a 30 s
+/// timeout. Returns stdout on exit code 0, or an error describing the failure.
 pub fn run_skill(
   skills: List(skill.SkillInfo),
   name: String,
@@ -87,6 +98,8 @@ pub fn run_skill(
   }
 }
 
+/// Placeholder for the propose workflow (not yet implemented).
+/// Currently returns a message directing the user to handle the action manually.
 pub fn propose(description: String, _details: String) -> Result(String, String) {
   io.println("[tools] propose: " <> description)
   Ok(

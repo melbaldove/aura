@@ -3,10 +3,12 @@ import gleam/result
 import gleam/string
 import tom
 
+/// Discord connection settings (token, guild ID, and fallback channel ID).
 pub type DiscordConfig {
   DiscordConfig(token: String, guild: String, default_channel: String)
 }
 
+/// Model IDs used by each agent role (brain, workstream, ACP, heartbeat, monitor).
 pub type ModelsConfig {
   ModelsConfig(
     brain: String,
@@ -17,6 +19,9 @@ pub type ModelsConfig {
   )
 }
 
+/// Controls when and how digest notifications are delivered.
+/// `digest_windows` are time-of-day windows (e.g. "09:00-10:00").
+/// `urgent_bypass` allows urgent findings to skip the digest schedule.
 pub type NotificationsConfig {
   NotificationsConfig(
     digest_windows: List(String),
@@ -25,6 +30,7 @@ pub type NotificationsConfig {
   )
 }
 
+/// Top-level configuration loaded from the global `config.toml`.
 pub type GlobalConfig {
   GlobalConfig(
     discord: DiscordConfig,
@@ -34,6 +40,7 @@ pub type GlobalConfig {
   )
 }
 
+/// Per-workstream configuration loaded from each workstream's `config.toml`.
 pub type WorkstreamConfig {
   WorkstreamConfig(
     name: String,
@@ -47,6 +54,7 @@ pub type WorkstreamConfig {
   )
 }
 
+/// Return a `GlobalConfig` with all fields set to empty/zero defaults.
 pub fn default_global() -> GlobalConfig {
   GlobalConfig(
     discord: DiscordConfig(token: "", guild: "", default_channel: ""),
@@ -66,6 +74,7 @@ pub fn default_global() -> GlobalConfig {
   )
 }
 
+/// Return a `WorkstreamConfig` with all fields set to empty/zero defaults.
 pub fn default_workstream() -> WorkstreamConfig {
   WorkstreamConfig(
     name: "",
@@ -89,6 +98,8 @@ fn extract_strings(values: List(tom.Toml)) -> List(String) {
   })
 }
 
+/// Parse a TOML string into a `GlobalConfig`. Returns an error message if any
+/// required key is absent or the TOML is malformed.
 pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
   use doc <- result.try(
     tom.parse(toml_string)
@@ -169,6 +180,9 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
   ))
 }
 
+/// Parse a TOML string into a `WorkstreamConfig`. Optional fields
+/// (`model.workstream`, `acp.timeout`, `acp.max_concurrent`) fall back to
+/// sensible defaults when absent.
 pub fn parse_workstream(toml_string: String) -> Result(WorkstreamConfig, String) {
   use doc <- result.try(
     tom.parse(toml_string)

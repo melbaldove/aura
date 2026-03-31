@@ -5,6 +5,8 @@ import sqlight
 
 const current_version = 1
 
+/// Create all tables, indexes, FTS5 virtual table, and triggers if they do not
+/// already exist, then run any pending schema migrations.
 pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
   use _ <- result.try(exec(conn, "PRAGMA journal_mode=WAL"))
   use _ <- result.try(exec(conn, "PRAGMA busy_timeout=1000"))
@@ -96,6 +98,8 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
   migrate_version(conn)
 }
 
+/// Read the current schema version number. Returns `0` for a fresh database
+/// that has not yet been versioned.
 pub fn get_version(conn: sqlight.Connection) -> Result(Int, String) {
   case sqlight.query(
     "SELECT version FROM schema_version LIMIT 1",
