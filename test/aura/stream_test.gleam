@@ -135,3 +135,46 @@ pub fn wrap_summary_has_prefix_test() {
   should.be_true(string.starts_with(result, "[CONTEXT COMPACTION]"))
   should.be_true(string.contains(result, "## Goal"))
 }
+
+// ---------------------------------------------------------------------------
+// Compaction summary detection
+// ---------------------------------------------------------------------------
+
+pub fn is_compaction_summary_true_test() {
+  compressor.is_compaction_summary("[CONTEXT COMPACTION] some content here")
+  |> should.be_true
+}
+
+pub fn is_compaction_summary_false_test() {
+  compressor.is_compaction_summary("regular system message")
+  |> should.be_false
+}
+
+// ---------------------------------------------------------------------------
+// Strip summary prefix
+// ---------------------------------------------------------------------------
+
+pub fn strip_summary_prefix_test() {
+  let full = compressor.wrap_summary("## Goal\nHelp with receipts")
+  let stripped = compressor.strip_summary_prefix(full)
+  should.equal(stripped, "## Goal\nHelp with receipts")
+}
+
+// ---------------------------------------------------------------------------
+// Serialize empty messages list
+// ---------------------------------------------------------------------------
+
+pub fn serialize_empty_messages_test() {
+  compressor.serialize_messages([])
+  |> should.equal("")
+}
+
+// ---------------------------------------------------------------------------
+// Token estimation for Unicode content
+// ---------------------------------------------------------------------------
+
+pub fn estimate_tokens_unicode_test() {
+  // Unicode characters should still yield a positive estimate
+  let result = compressor.estimate_tokens("Hello world! 你好世界")
+  should.be_true(result > 0)
+}
