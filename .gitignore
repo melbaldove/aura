@@ -1,0 +1,30 @@
+# Build artifacts
+/build/
+erl_crash.dump
+
+# Dependencies (downloaded by gleam)
+/deps/
+
+# Environment and credentials
+.env
+*.env
+.env.*
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Temporary test files
+/tmp/
