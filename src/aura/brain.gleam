@@ -695,11 +695,12 @@ fn collect_stream_loop(
             }
             False -> #(msg_id, last_edit_len)
           }
-          collect_stream_loop(token, channel_id, new_msg_id, traces, new_acc, new_edit_len, remaining_ms - wait)
+          // Data received — reset idle timeout to 120s
+          collect_stream_loop(token, channel_id, new_msg_id, traces, new_acc, new_edit_len, 120_000)
         }
         StreamReasoning -> {
-          // GLM-5.1 thinking — stream is alive, keep waiting
-          collect_stream_loop(token, channel_id, msg_id, traces, accumulated, last_edit_len, remaining_ms - wait)
+          // GLM-5.1 thinking — stream is alive, reset idle timeout
+          collect_stream_loop(token, channel_id, msg_id, traces, accumulated, last_edit_len, 120_000)
         }
         StreamComplete(content, tool_calls_json) -> {
           // Stream finished — do final Discord edit if we have content
