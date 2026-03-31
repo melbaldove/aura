@@ -92,18 +92,16 @@ pub fn start(
 
   // 6. Start brain with registry
   use brain_subject <- result.try(
-    brain.start(
-      global_config,
-      paths,
-      soul,
-      brain_workstreams,
-      registry.entries,
-      list.map(all_skills, fn(s) { s.name }),
-      global_config.acp_global_max_concurrent,
-      validation_rules,
-      all_skills,
-      db_subject,
-    ),
+    brain.start(brain.BrainConfig(
+      global: global_config,
+      paths: paths,
+      soul: soul,
+      workstreams: brain_workstreams,
+      registry: registry.entries,
+      skill_infos: all_skills,
+      validation_rules: validation_rules,
+      db_subject: db_subject,
+    )),
   )
   io.println("[supervisor] Brain started")
 

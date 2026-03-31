@@ -1,5 +1,6 @@
 import aura/brain
 import aura/models
+import aura/skill
 import gleam/string
 import gleeunit/should
 
@@ -35,7 +36,11 @@ pub fn route_empty_workstreams_test() {
 }
 
 pub fn build_system_prompt_test() {
-  let prompt = brain.build_system_prompt("You are Aura. Direct. Concise.", ["cm2", "hy"], ["jira", "google"], "", "")
+  let skills = [
+    skill.SkillInfo(name: "jira", description: "Jira integration", path: ""),
+    skill.SkillInfo(name: "google", description: "Google search", path: ""),
+  ]
+  let prompt = brain.build_system_prompt("You are Aura. Direct. Concise.", ["cm2", "hy"], skills, "", "")
   prompt |> string.contains("Aura") |> should.be_true
   prompt |> string.contains("Discord") |> should.be_true
   prompt |> string.contains("cm2") |> should.be_true

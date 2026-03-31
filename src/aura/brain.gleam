@@ -53,6 +53,20 @@ pub type BrainMessage {
   StoreExchange(channel_id: String, user_msg: String, assistant_msg: String)
 }
 
+/// Configuration passed to brain.start — replaces positional params.
+pub type BrainConfig {
+  BrainConfig(
+    global: config.GlobalConfig,
+    paths: xdg.Paths,
+    soul: String,
+    workstreams: List(WorkstreamInfo),
+    registry: List(workstream_sup.WorkstreamEntry),
+    skill_infos: List(skill.SkillInfo),
+    validation_rules: List(validator.Rule),
+    db_subject: process.Subject(db.DbMessage),
+  )
+}
+
 pub type BrainState {
   BrainState(
     discord_token: String,
@@ -61,15 +75,15 @@ pub type BrainState {
     paths: xdg.Paths,
     workstreams: List(WorkstreamInfo),
     soul: String,
-    skill_names: List(String),
+    skill_infos: List(skill.SkillInfo),
     registry: List(workstream_sup.WorkstreamEntry),
     notification_queue: notification.NotificationQueue,
     aura_channel_id: String,
     acp_manager: manager.AcpManager,
     validation_rules: List(validator.Rule),
-    skill_infos: List(skill.SkillInfo),
     skills_dir: String,
     db_subject: process.Subject(db.DbMessage),
+    built_in_tools: List(llm.ToolDefinition),
     conversations: conversation.Buffers,
     self_subject: Option(process.Subject(BrainMessage)),
   )
@@ -94,7 +108,7 @@ pub fn route_message(
 pub fn build_system_prompt(
   soul_content: String,
   workstream_names: List(String),
-  skill_names: List(String),
+  skill_infos: List(skill.SkillInfo),
   memory_content: String,
   user_content: String,
 ) -> String {
@@ -103,6 +117,7 @@ pub fn build_system_prompt(
     names -> "\n\nActive workstreams: " <> string.join(names, ", ")
   }
 
+  let skill_names = list.map(skill_infos, fn(s) { s.name })
   let skills_section = case skill_names {
     [] -> "\nNo skills installed."
     names -> "\nInstalled skills: " <> string.join(names, ", ")
@@ -159,17 +174,9 @@ const default_soul = "You are Aura, a helpful AI assistant. Be direct and concis
 
 /// Start the brain actor
 pub fn start(
-  config: config.GlobalConfig,
-  paths: xdg.Paths,
-  soul: String,
-  workstreams: List(WorkstreamInfo),
-  registry: List(workstream_sup.WorkstreamEntry),
-  skill_names: List(String),
-  acp_max_concurrent: Int,
-  validation_rules: List(validator.Rule),
-  skill_infos: List(skill.SkillInfo),
-  db_subject: process.Subject(db.DbMessage),
+  brain_config: BrainConfig,
 ) -> Result(process.Subject(BrainMessage), String) {
+  let config = brain_config.global
   // Build LLM config from brain model spec
   use llm_config <- result.try(models.build_llm_config(config.models.brain))
 
@@ -178,24 +185,24 @@ pub fn start(
       discord_token: config.discord.token,
       guild_id: config.discord.guild,
       llm_config: llm_config,
-      paths: paths,
-      workstreams: workstreams,
-      soul: soul,
-      skill_names: skill_names,
-      registry: registry,
+      paths: brain_config.paths,
+      workstreams: brain_config.workstreams,
+      soul: brain_config.soul,
+      registry: brain_config.registry,
       notification_queue: notification.new_queue(),
       aura_channel_id: "",
-      acp_manager: manager.new(acp_max_concurrent),
-      validation_rules: validation_rules,
-      skill_infos: skill_infos,
-      skills_dir: xdg.skills_dir(paths),
-      db_subject: db_subject,
+      acp_manager: manager.new(config.acp_global_max_concurrent),
+      validation_rules: brain_config.validation_rules,
+      skill_infos: brain_config.skill_infos,
+      skills_dir: xdg.skills_dir(brain_config.paths),
+      db_subject: brain_config.db_subject,
+      built_in_tools: make_built_in_tools(),
       conversations: conversation.new(),
       self_subject: None,
     )
 
   actor.new_with_initialiser(10_000, fn(self_subject) {
-    let state = BrainState(..base_state, self_subject: Some(self_subject), conversations: conversation.new())
+    let state = BrainState(..base_state, self_subject: Some(self_subject))
     Ok(actor.initialised(state) |> actor.returning(self_subject))
   })
   |> actor.on_message(handle_message)
@@ -519,7 +526,7 @@ fn handle_with_llm(
     Ok(c) -> c
     Error(_) -> ""
   }
-  let system_prompt = build_system_prompt(state.soul, ws_names, state.skill_names, memory_content, user_content)
+  let system_prompt = build_system_prompt(state.soul, ws_names, state.skill_infos, memory_content, user_content)
 
   // Load conversation history (from memory or DB)
   let now_ts = time.now_ms()
@@ -582,7 +589,7 @@ fn tool_loop_progressive(
       // Spawn streaming LLM call with tools
       let self_pid = process.self()
       let _ = process.spawn_unlinked(fn() {
-        llm.chat_streaming_with_tools(state.llm_config, messages, built_in_tools(), self_pid)
+        llm.chat_streaming_with_tools(state.llm_config, messages, state.built_in_tools, self_pid)
       })
 
       // Collect the streaming response (content + tool calls)
@@ -910,7 +917,7 @@ fn get_arg(args: List(#(String, String)), key: String) -> String {
   }
 }
 
-fn built_in_tools() -> List(llm.ToolDefinition) {
+fn make_built_in_tools() -> List(llm.ToolDefinition) {
   [
     llm.ToolDefinition(name: "read_file", description: "Read a file from the Aura workspace", parameters: [
       llm.ToolParam(name: "path", param_type: "string", description: "Relative file path", required: True),

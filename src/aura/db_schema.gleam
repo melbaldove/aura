@@ -92,7 +92,8 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
     END
   "))
 
-  set_version_if_missing(conn, current_version)
+  // Set or migrate schema version
+  migrate_version(conn)
 }
 
 pub fn get_version(conn: sqlight.Connection) -> Result(Int, String) {
@@ -109,20 +110,23 @@ pub fn get_version(conn: sqlight.Connection) -> Result(Int, String) {
   }
 }
 
-fn set_version_if_missing(
-  conn: sqlight.Connection,
-  version: Int,
-) -> Result(Nil, String) {
-  case get_version(conn) {
-    Ok(0) ->
-      exec(
-        conn,
-        "INSERT INTO schema_version (version) VALUES ("
-          <> string.inspect(version)
-          <> ")",
-      )
-    Ok(_) -> Ok(Nil)
-    Error(e) -> Error(e)
+fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
+  use version <- result.try(get_version(conn))
+  case version {
+    0 -> {
+      // Fresh database — set initial version
+      exec(conn, "INSERT INTO schema_version (version) VALUES (" <> string.inspect(current_version) <> ")")
+    }
+    v if v == current_version -> Ok(Nil)
+    v if v < current_version -> {
+      // Future: run migration steps from v to current_version
+      // For now, just update the version number
+      exec(conn, "UPDATE schema_version SET version = " <> string.inspect(current_version))
+    }
+    _ -> {
+      // Database is newer than this code — don't downgrade
+      Error("Database schema version " <> string.inspect(version) <> " is newer than supported version " <> string.inspect(current_version))
+    }
   }
 }
 
