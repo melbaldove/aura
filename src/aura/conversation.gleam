@@ -2,15 +2,12 @@ import aura/compressor
 import aura/db
 import aura/llm
 import gleam/dict
-import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/io
-import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
-import simplifile
 
 /// Conversation buffers keyed by channel_id
 pub type Buffers =
@@ -29,25 +26,6 @@ pub fn new() -> Buffers {
 /// Get conversation history for a channel, or empty list if none.
 pub fn get_history(buffers: Buffers, channel_id: String) -> List(llm.Message) {
   dict.get(buffers, channel_id) |> result.unwrap([])
-}
-
-/// Get history for a channel, loading from disk if not in memory.
-/// Returns updated buffers (with loaded data cached) and the history.
-pub fn get_or_load(
-  buffers: Buffers,
-  channel_id: String,
-  data_dir: String,
-) -> #(Buffers, List(llm.Message)) {
-  case get_history(buffers, channel_id) {
-    [] -> {
-      case load(channel_id, data_dir) {
-        Ok([]) -> #(buffers, [])
-        Ok(loaded) -> #(dict.insert(buffers, channel_id, loaded), loaded)
-        Error(_) -> #(buffers, [])
-      }
-    }
-    existing -> #(buffers, existing)
-  }
 }
 
 /// Load conversation history from the database.
@@ -203,79 +181,6 @@ pub fn compress_buffer(
           dict.insert(buffers, channel_id, capped)
         }
       }
-    }
-  }
-}
-
-/// Serialize a Message to a JSON object with role and content.
-fn message_to_jsonl_obj(message: llm.Message) -> json.Json {
-  let #(role, content) = case message {
-    llm.SystemMessage(c) -> #("system", c)
-    llm.UserMessage(c) -> #("user", c)
-    llm.AssistantMessage(c) -> #("assistant", c)
-    llm.AssistantToolCallMessage(c, _) -> #("assistant", c)
-    llm.ToolResultMessage(_, c) -> #("tool", c)
-  }
-  json.object([#("role", json.string(role)), #("content", json.string(content))])
-}
-
-/// Persist the channel buffer to {data_dir}/conversations/{channel_id}.jsonl
-pub fn save(
-  buffers: Buffers,
-  channel_id: String,
-  data_dir: String,
-) -> Result(Nil, String) {
-  let dir = data_dir <> "/conversations"
-  let path = dir <> "/" <> channel_id <> ".jsonl"
-  use _ <- result.try(
-    simplifile.create_directory_all(dir)
-    |> result.map_error(fn(e) {
-      "Failed to create conversations directory: " <> string.inspect(e)
-    }),
-  )
-  let history = get_history(buffers, channel_id)
-  let lines =
-    list.map(history, fn(msg) { json.to_string(message_to_jsonl_obj(msg)) })
-  let content = string.join(lines, "\n") <> "\n"
-  simplifile.write(path, content)
-  |> result.map_error(fn(e) {
-    "Failed to write conversation file " <> path <> ": " <> string.inspect(e)
-  })
-}
-
-/// Load conversation history from {data_dir}/conversations/{channel_id}.jsonl.
-/// Returns empty list if file doesn't exist.
-pub fn load(
-  channel_id: String,
-  data_dir: String,
-) -> Result(List(llm.Message), String) {
-  let path = data_dir <> "/conversations/" <> channel_id <> ".jsonl"
-  case simplifile.read(path) {
-    Error(_) -> Ok([])
-    Ok(content) -> {
-      let msg_decoder = {
-        use role <- decode.field("role", decode.string)
-        use c <- decode.field("content", decode.string)
-        decode.success(#(role, c))
-      }
-      let lines =
-        string.split(content, "\n")
-        |> list.filter(fn(line) { string.length(string.trim(line)) > 0 })
-      let messages =
-        list.filter_map(lines, fn(line) {
-          case json.parse(line, msg_decoder) {
-            Error(_) -> Error(Nil)
-            Ok(#(role, c)) ->
-              case role {
-                "system" -> Ok(llm.SystemMessage(c))
-                "user" -> Ok(llm.UserMessage(c))
-                "assistant" -> Ok(llm.AssistantMessage(c))
-                "tool" -> Ok(llm.ToolResultMessage("", c))
-                _ -> Error(Nil)
-              }
-          }
-        })
-      Ok(messages)
     }
   }
 }

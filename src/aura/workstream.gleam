@@ -157,8 +157,9 @@ fn handle_message(
 ) -> actor.Next(WorkstreamState, WorkstreamMessage) {
   case message {
     HandleTask(msg, reply_to) -> {
-      // Hydrate from disk before processing (for LLM history context)
-      let #(hydrated, _) = conversation.get_or_load(state.conversations, msg.channel_id, state.data_dir)
+      // Hydrate from DB before processing (for LLM history context)
+      let now_ms = erlang_system_time_ms()
+      let #(hydrated, _, _) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", msg.channel_id, now_ms)
       let hydrated_state = WorkstreamState(..state, conversations: hydrated)
       let response = process_task(hydrated_state, msg)
       process.send(reply_to, response)
@@ -187,7 +188,6 @@ fn handle_message(
         }
       }
 
-      let _ = conversation.save(final_convos, msg.channel_id, state.data_dir)
       actor.continue(WorkstreamState(..state, conversations: final_convos))
     }
   }

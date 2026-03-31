@@ -1,10 +1,8 @@
 import aura/conversation
-import aura/test_helpers
 import gleam/int
 import gleam/list
 import gleam/string
 import gleeunit/should
-import simplifile
 
 pub fn empty_buffer_test() {
   let buffers = conversation.new()
@@ -56,20 +54,6 @@ pub fn needs_compression_test() {
   should.be_true(conversation.needs_compression(buffers, "chan-1", 200))
   // At context_window=2000, threshold=1000 tokens -> should NOT trigger
   should.be_false(conversation.needs_compression(buffers, "chan-1", 2000))
-}
-
-pub fn persist_and_load_test() {
-  let base = "/tmp/aura-conv-test-" <> test_helpers.random_suffix()
-  let _ = simplifile.create_directory_all(base <> "/conversations")
-  let buffers =
-    conversation.new()
-    |> conversation.append("chan-test", "hello", "hi")
-    |> conversation.append("chan-test", "how are you", "good")
-  conversation.save(buffers, "chan-test", base) |> should.be_ok
-  let loaded = conversation.load("chan-test", base) |> should.be_ok
-  list.length(loaded) |> should.equal(4)
-  let _ = simplifile.delete_all([base])
-  Nil
 }
 
 pub fn format_traces_test() {

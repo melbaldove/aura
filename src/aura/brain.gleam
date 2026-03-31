@@ -357,8 +357,8 @@ fn handle_message(
         }
       }
 
-      // Update in-memory cache
-      let #(hydrated, _) = conversation.get_or_load(state.conversations, channel_id, state.paths.data)
+      // Update in-memory cache (load from DB if not in memory)
+      let #(hydrated, _, _) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", channel_id, now)
       let new_convos = conversation.append(hydrated, channel_id, user_msg, assistant_msg)
 
       // Compress if needed
@@ -508,8 +508,9 @@ fn handle_with_llm(
   }
   let system_prompt = build_system_prompt(state.soul, ws_names, state.skill_names, memory_content, user_content)
 
-  // Load conversation history (from memory or disk)
-  let #(_, history) = conversation.get_or_load(state.conversations, msg.channel_id, state.paths.data)
+  // Load conversation history (from memory or DB)
+  let now_ts = erlang_system_time_ms()
+  let #(_, _, history) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", msg.channel_id, now_ts)
   let initial_messages = list.flatten([
     [llm.SystemMessage(system_prompt)],
     history,
