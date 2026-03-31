@@ -552,124 +552,12 @@ fn handle_with_llm(
   }
 }
 
-/// Try a streaming LLM call first. If the model responds with pure text
-/// (no tool calls), the response is streamed progressively to Discord.
-/// If the streaming attempt gets no content (model needs tools), fall
-/// back to the full non-streaming tool loop.
-fn try_streaming_then_tool_loop(
-  state: BrainState,
-  channel_id: String,
-  messages: List(llm.Message),
-) -> Result(#(String, List(conversation.ToolTrace), String), String) {
-  io.println("[brain] Attempting streaming response...")
-
-  // Spawn the streaming HTTP call — sends deltas to our PID
-  let self_pid = process.self()
-  let _ = process.spawn_unlinked(fn() {
-    llm.chat_streaming(state.llm_config, messages, self_pid)
-  })
-
-  // Wait for first content event. GLM-5.1 sends reasoning_content first (10-20s),
-  // then actual content. We wait up to 60s for the first content delta.
-  case receive_first_stream_event(60_000) {
-    StreamGotContent(first_delta) -> {
-      io.println("[brain] Stream producing content — streaming to Discord")
-      // We got content — create a Discord message and continue streaming
-      let initial_text = first_delta <> " ..."
-      let msg_id = case rest.send_message(state.discord_token, channel_id, initial_text, []) {
-        Ok(id) -> id
-        Error(_) -> ""
-      }
-      // Continue accumulating the rest of the stream
-      stream_edit_loop(
-        state.discord_token, channel_id, msg_id, [], first_delta,
-        string.length(first_delta),
-      )
-    }
-    StreamGotDone(text) -> {
-      io.println("[brain] Stream completed immediately")
-      // Model finished without tool calls but the stream ended quickly
-      Ok(#(text, [], ""))
-    }
-    StreamGotError(err) -> {
-      io.println("[brain] Stream error, falling back to tool loop: " <> err)
-      // Fall back to non-streaming tool loop
-      tool_loop_progressive(state, channel_id, messages, [], "", 0)
-    }
-    StreamGotNothing -> {
-      io.println("[brain] No content from stream — falling back to tool loop")
-      // The model likely wants to use tools (stream had no content deltas).
-      // Drain any remaining stream messages so they don't pollute the mailbox.
-      drain_stream_messages()
-      tool_loop_progressive(state, channel_id, messages, [], "", 0)
-    }
-  }
-}
-
-/// Result of waiting for the first stream event.
-type FirstStreamResult {
-  StreamGotContent(String)
-  StreamGotDone(String)
-  StreamGotError(String)
-  StreamGotNothing
-}
-
-/// Wait for the first meaningful stream event. Accumulates any empty deltas
-/// and returns as soon as we get actual content, done, or an error.
-fn receive_first_stream_event(timeout_ms: Int) -> FirstStreamResult {
-  receive_first_stream_event_loop(timeout_ms, "")
-}
-
-fn receive_first_stream_event_loop(
-  remaining_ms: Int,
-  accumulated: String,
-) -> FirstStreamResult {
-  case remaining_ms <= 0 {
-    True -> {
-      case accumulated {
-        "" -> StreamGotNothing
-        text -> StreamGotContent(text)
-      }
-    }
-    False -> {
-      let chunk_timeout = case remaining_ms > 500 {
-        True -> 500
-        False -> remaining_ms
-      }
-      case receive_stream_message(chunk_timeout) {
-        StreamDelta(delta) -> {
-          let new_acc = accumulated <> delta
-          case string.length(new_acc) > 0 {
-            True -> StreamGotContent(new_acc)
-            False ->
-              receive_first_stream_event_loop(
-                remaining_ms - chunk_timeout, new_acc,
-              )
-          }
-        }
-        StreamReasoning -> {
-          // GLM-5.1 is "thinking" — stream is alive, keep waiting for content
-          receive_first_stream_event_loop(
-            remaining_ms - chunk_timeout, accumulated,
-          )
-        }
-        StreamDone -> StreamGotDone(accumulated)
-        StreamError(err) -> StreamGotError(err)
-        StreamTimeout ->
-          receive_first_stream_event_loop(
-            remaining_ms - chunk_timeout, accumulated,
-          )
-      }
-    }
-  }
-}
-
-/// Drain any remaining stream messages from the mailbox so they don't
-/// interfere with subsequent receives.
+/// Drain any remaining stream messages from the mailbox.
 fn drain_stream_messages() -> Nil {
   case receive_stream_message(0) {
     StreamTimeout -> Nil
     StreamDone -> Nil
+    StreamComplete(_, _) -> Nil
     StreamError(_) -> Nil
     StreamDelta(_) -> drain_stream_messages()
     StreamReasoning -> drain_stream_messages()
@@ -687,12 +575,20 @@ fn tool_loop_progressive(
   case iteration >= 20 {
     True -> Error("Tool loop exceeded maximum iterations")
     False -> {
-      case llm.chat_with_tools(state.llm_config, messages, built_in_tools()) {
-        Ok(response) -> {
+      // Spawn streaming LLM call with tools
+      let self_pid = process.self()
+      let _ = process.spawn_unlinked(fn() {
+        llm.chat_streaming_with_tools(state.llm_config, messages, built_in_tools(), self_pid)
+      })
+
+      // Collect the streaming response (content + tool calls)
+      case collect_stream_response(state.discord_token, channel_id, message_id, traces, 120_000) {
+        Ok(#(content, tool_calls_json, msg_id)) -> {
+          let response = parse_streaming_result(content, tool_calls_json)
           case response.tool_calls {
             [] -> {
               // No tool calls — return the text response with accumulated traces
-              Ok(#(response.content, traces, message_id))
+              Ok(#(response.content, traces, msg_id))
             }
             calls -> {
               // Execute tool calls and continue the loop
@@ -749,6 +645,120 @@ fn tool_loop_progressive(
       }
     }
   }
+}
+
+/// Collect a streaming LLM response, progressively editing Discord.
+/// Returns (content, tool_calls_json, message_id).
+fn collect_stream_response(
+  token: String,
+  channel_id: String,
+  message_id: String,
+  traces: List(conversation.ToolTrace),
+  timeout_ms: Int,
+) -> Result(#(String, String, String), String) {
+  collect_stream_loop(token, channel_id, message_id, traces, "", 0, timeout_ms)
+}
+
+fn collect_stream_loop(
+  token: String,
+  channel_id: String,
+  msg_id: String,
+  traces: List(conversation.ToolTrace),
+  accumulated: String,
+  last_edit_len: Int,
+  remaining_ms: Int,
+) -> Result(#(String, String, String), String) {
+  case remaining_ms <= 0 {
+    True -> Error("Stream timeout")
+    False -> {
+      let wait = case remaining_ms > 500 { True -> 500 False -> remaining_ms }
+      case receive_stream_message(wait) {
+        StreamDelta(delta) -> {
+          let new_acc = accumulated <> delta
+          // Progressive edit every 150 chars
+          let #(new_msg_id, new_edit_len) = case string.length(new_acc) - last_edit_len > 150 {
+            True -> {
+              let display = conversation.format_full_message(traces, new_acc <> " ...")
+              let mid = case msg_id {
+                "" -> {
+                  case rest.send_message(token, channel_id, display, []) {
+                    Ok(id) -> id
+                    Error(_) -> ""
+                  }
+                }
+                existing -> {
+                  let _ = rest.edit_message(token, channel_id, existing, display)
+                  existing
+                }
+              }
+              #(mid, string.length(new_acc))
+            }
+            False -> #(msg_id, last_edit_len)
+          }
+          collect_stream_loop(token, channel_id, new_msg_id, traces, new_acc, new_edit_len, remaining_ms - wait)
+        }
+        StreamReasoning -> {
+          // GLM-5.1 thinking — stream is alive, keep waiting
+          collect_stream_loop(token, channel_id, msg_id, traces, accumulated, last_edit_len, remaining_ms - wait)
+        }
+        StreamComplete(content, tool_calls_json) -> {
+          // Stream finished — do final Discord edit if we have content
+          let final_msg_id = case string.length(content) > 0 && string.length(content) != last_edit_len {
+            True -> {
+              let display = conversation.format_full_message(traces, content)
+              case msg_id {
+                "" -> {
+                  case rest.send_message(token, channel_id, display, []) {
+                    Ok(id) -> id
+                    Error(_) -> ""
+                  }
+                }
+                existing -> {
+                  let _ = rest.edit_message(token, channel_id, existing, display)
+                  existing
+                }
+              }
+            }
+            False -> msg_id
+          }
+          Ok(#(content, tool_calls_json, final_msg_id))
+        }
+        StreamDone -> {
+          // Legacy done signal — treat as complete with no tool calls
+          Ok(#(accumulated, "[]", msg_id))
+        }
+        StreamError(err) -> Error("Stream error: " <> err)
+        StreamTimeout -> {
+          collect_stream_loop(token, channel_id, msg_id, traces, accumulated, last_edit_len, remaining_ms - wait)
+        }
+      }
+    }
+  }
+}
+
+/// Parse the streaming result into an LlmResponse.
+fn parse_streaming_result(content: String, tool_calls_json: String) -> llm.LlmResponse {
+  case tool_calls_json {
+    "[]" -> llm.LlmResponse(content: content, tool_calls: [])
+    json_str -> {
+      // Parse tool calls from JSON: [{"id":"...","name":"...","arguments":"..."}]
+      case parse_tool_calls_json(json_str) {
+        Ok(calls) -> llm.LlmResponse(content: content, tool_calls: calls)
+        Error(_) -> llm.LlmResponse(content: content, tool_calls: [])
+      }
+    }
+  }
+}
+
+fn parse_tool_calls_json(json_str: String) -> Result(List(llm.ToolCall), String) {
+  let decoder = decode.list({
+    use id <- decode.field("id", decode.string)
+    use name <- decode.field("name", decode.string)
+    use arguments <- decode.field("arguments", decode.string)
+    decode.success(llm.ToolCall(id: id, name: name, arguments: arguments))
+  })
+  json.parse(json_str, decoder)
+  |> result.map_error(fn(_) { "Failed to parse tool calls JSON" })
 }
 
 fn execute_tool(state: BrainState, call: llm.ToolCall) -> String {
@@ -987,6 +997,7 @@ fn erlang_system_time_ms() -> Int
 type StreamEvent {
   StreamDelta(String)
   StreamReasoning
+  StreamComplete(String, String)
   StreamDone
   StreamError(String)
   StreamTimeout
@@ -996,60 +1007,16 @@ type StreamEvent {
 /// The Erlang FFI returns {<<"delta">>, Bin} | {<<"done">>, <<>>} |
 /// {<<"error">>, Bin} | {<<"timeout">>, <<>>}.
 @external(erlang, "aura_stream_ffi", "receive_stream_message")
-fn receive_stream_message_ffi(timeout_ms: Int) -> #(String, String)
+fn receive_stream_message_ffi(timeout_ms: Int) -> #(String, String, String)
 
 fn receive_stream_message(timeout_ms: Int) -> StreamEvent {
   case receive_stream_message_ffi(timeout_ms) {
-    #("delta", text) -> StreamDelta(text)
-    #("reasoning", _) -> StreamReasoning
-    #("done", _) -> StreamDone
-    #("error", err) -> StreamError(err)
+    #("delta", text, _) -> StreamDelta(text)
+    #("reasoning", _, _) -> StreamReasoning
+    #("complete", content, tc_json) -> StreamComplete(content, tc_json)
+    #("done", _, _) -> StreamDone
+    #("error", err, _) -> StreamError(err)
     _ -> StreamTimeout
   }
 }
 
-/// Accumulate streaming deltas and periodically edit the Discord message.
-fn stream_edit_loop(
-  token: String,
-  channel_id: String,
-  msg_id: String,
-  traces: List(conversation.ToolTrace),
-  accumulated: String,
-  last_edit_len: Int,
-) -> Result(#(String, List(conversation.ToolTrace), String), String) {
-  case receive_stream_message(500) {
-    StreamDelta(delta) -> {
-      let new_acc = accumulated <> delta
-      // Edit Discord roughly every 150 chars of new content
-      let new_edit_len = case string.length(new_acc) - last_edit_len > 150 {
-        True -> {
-          let display =
-            conversation.format_full_message(traces, new_acc <> " ...")
-          let _ = rest.edit_message(token, channel_id, msg_id, display)
-          string.length(new_acc)
-        }
-        False -> last_edit_len
-      }
-      stream_edit_loop(
-        token, channel_id, msg_id, traces, new_acc, new_edit_len,
-      )
-    }
-    StreamDone -> {
-      // Final edit with the complete text (no trailing "...")
-      let display = conversation.format_full_message(traces, accumulated)
-      let _ = rest.edit_message(token, channel_id, msg_id, display)
-      Ok(#(accumulated, traces, msg_id))
-    }
-    StreamReasoning -> {
-      // Still in reasoning phase — keep waiting
-      stream_edit_loop(token, channel_id, msg_id, traces, accumulated, last_edit_len)
-    }
-    StreamError(err) -> Error("Stream error: " <> err)
-    StreamTimeout -> {
-      // No data in 500ms — keep waiting (model may be slow)
-      stream_edit_loop(
-        token, channel_id, msg_id, traces, accumulated, last_edit_len,
-      )
-    }
-  }
-}

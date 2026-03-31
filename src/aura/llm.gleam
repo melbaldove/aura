@@ -1,4 +1,5 @@
 import gleam/dynamic/decode
+import gleam/erlang/process
 import gleam/http
 import gleam/http/request
 import gleam/httpc
@@ -330,3 +331,51 @@ pub fn chat_with_tools(
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Streaming
+// ---------------------------------------------------------------------------
+
+/// Start a streaming chat completion request WITH tool definitions.
+/// The Erlang FFI sends events to callback_pid:
+///   {stream_delta, Content}        — text content chunk
+///   stream_reasoning               — GLM-5.1 thinking token
+///   {stream_complete, Content, ToolCallsJson} — final result
+///   {stream_error, Reason}         — fatal error
+/// This function blocks until the stream completes (run in a spawned process).
+pub fn chat_streaming_with_tools(
+  config: LlmConfig,
+  messages: List(Message),
+  tools: List(ToolDefinition),
+  callback_pid: process.Pid,
+) -> Nil {
+  let url = config.base_url <> "/chat/completions"
+  io.println("[llm] Streaming " <> config.model <> " at " <> url <> " (with tools)")
+  let body_json =
+    build_request_body_with_tools(config.model, messages, tools, None)
+  // Add stream:true to the body
+  // Since build_request_body_with_tools returns json.Json, we need to
+  // reconstruct with stream flag
+  let base_fields = [
+    #("model", json.string(config.model)),
+    #("messages", json.array(messages, message_to_json)),
+    #("stream", json.bool(True)),
+  ]
+  let fields = case tools {
+    [] -> base_fields
+    _ -> list.append(base_fields, [
+      #("tools", json.array(tools, tool_definition_to_json)),
+    ])
+  }
+  let body_str = json.object(fields) |> json.to_string
+  stream_ffi(url, config.api_key, config.model, body_str, callback_pid)
+}
+
+@external(erlang, "aura_stream_ffi", "chat_stream")
+fn stream_ffi(
+  url: String,
+  api_key: String,
+  model: String,
+  body_json: String,
+  callback_pid: process.Pid,
+) -> Nil
