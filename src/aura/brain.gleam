@@ -517,13 +517,7 @@ fn handle_with_llm(
     [llm.UserMessage(msg.content)],
   ])
 
-  // Try streaming first — if the model responds with pure text (no tool
-  // calls), the user sees tokens appearing progressively.  If the stream
-  // yields no content (the model wants to use tools), fall back to the
-  // non-streaming tool loop.
-  let result = try_streaming_then_tool_loop(
-    state, msg.channel_id, initial_messages,
-  )
+  let result = tool_loop_progressive(state, msg.channel_id, initial_messages, [], "", 0)
 
   // Stop typing indicator before any final edits
   stop_typing_loop(typing_stop)
