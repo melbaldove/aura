@@ -65,7 +65,8 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
     CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
       content,
       content=messages,
-      content_rowid=id
+      content_rowid=id,
+      tokenize='porter unicode61'
     )
   "))
 
