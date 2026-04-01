@@ -354,17 +354,9 @@ fn handle_message(
       }
     }
     StoreExchange(channel_id, user_msg, assistant_msg) -> {
-      // Write through to database
+      // DB write already done by the spawned process before Discord delivery.
+      // This handler only updates the in-memory cache.
       let now = time.now_ms()
-      let _ = case db.resolve_conversation(state.db_subject, "discord", channel_id, now) {
-        Ok(convo_id) -> conversation.save_to_db(state.db_subject, convo_id, user_msg, assistant_msg, "", "", now)
-        Error(e) -> {
-          io.println("[brain] DB write failed: " <> e)
-          Ok(Nil)
-        }
-      }
-
-      // Update in-memory cache (load from DB if not in memory)
       let cache_key = "discord:" <> channel_id
       let #(hydrated, _, _) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", channel_id, now)
       let new_convos = conversation.append(hydrated, cache_key, user_msg, assistant_msg)
@@ -557,9 +549,17 @@ fn handle_with_llm(
 
   case result {
     Ok(#(response_text, traces, msg_id)) -> {
+      // Save to DB FIRST — before Discord delivery — so the next turn sees this exchange
+      let now = time.now_ms()
+      let _ = case db.resolve_conversation(state.db_subject, "discord", channel_id, now) {
+        Ok(convo_id) -> conversation.save_to_db(state.db_subject, convo_id, msg.content, response_text, msg.author_id, msg.author_name, now)
+        Error(_) -> Ok(Nil)
+      }
+
       let full = conversation.format_full_message(traces, response_text)
       let _ = send_or_edit(token, channel_id, msg_id, full)
-      // Store exchange in conversation history
+
+      // Update in-memory cache (async via actor mailbox — not blocking)
       case brain_subject_opt {
         Some(subj) -> process.send(subj, StoreExchange(channel_id, msg.content, response_text))
         None -> Nil
