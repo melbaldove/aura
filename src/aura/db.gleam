@@ -382,7 +382,7 @@ fn do_load_messages(
   limit: Int,
 ) -> Result(List(StoredMessage), String) {
   sqlight.query(
-    "SELECT id, conversation_id, role, content, author_id, author_name, tool_call_id, tool_calls, tool_name, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, seq ASC, id ASC LIMIT ?",
+    "SELECT id, conversation_id, role, COALESCE(content,''), COALESCE(author_id,''), COALESCE(author_name,''), COALESCE(tool_call_id,''), COALESCE(tool_calls,''), COALESCE(tool_name,''), created_at FROM (SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at DESC, seq DESC, id DESC LIMIT ?) ORDER BY created_at ASC, seq ASC, id ASC",
     on: conn,
     with: [sqlight.text(conversation_id), sqlight.int(limit)],
     expecting: stored_message_decoder(),

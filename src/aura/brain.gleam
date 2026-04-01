@@ -533,6 +533,19 @@ fn handle_with_llm(
   let now_ts = time.now_ms()
   let #(_, _, history) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", msg.channel_id, now_ts)
   io.println("[brain] Loaded " <> int.to_string(list.length(history)) <> " history messages for " <> msg.channel_id)
+
+  // Log what the LLM will see (for debugging context issues)
+  list.each(history, fn(m) {
+    let #(role, content) = case m {
+      llm.SystemMessage(c) -> #("system", c)
+      llm.UserMessage(c) -> #("user", c)
+      llm.AssistantMessage(c) -> #("assistant", c)
+      llm.AssistantToolCallMessage(c, _) -> #("assistant+tools", c)
+      llm.ToolResultMessage(_, c) -> #("tool", c)
+    }
+    io.println("[brain] history [" <> role <> "]: " <> string.slice(content, 0, 80))
+  })
+
   let initial_messages = list.flatten([
     [llm.SystemMessage(system_prompt)],
     history,
