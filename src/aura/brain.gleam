@@ -2,6 +2,7 @@ import aura/acp/manager
 import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
 import aura/config
+import aura/domain
 import aura/time
 import aura/conversation
 import aura/db
@@ -232,7 +233,7 @@ fn handle_message(
           io.println("[brain] Route: " <> name <> " — full tool loop")
           let subj = state.self_subject
           process.spawn_unlinked(fn() {
-            handle_with_llm(state, msg, subj)
+            handle_with_llm(state, msg, subj, Some(name))
           })
           actor.continue(state)
         }
@@ -241,7 +242,7 @@ fn handle_message(
           // Handle directly with brain's LLM (for #aura channel)
           let subj = state.self_subject
           process.spawn_unlinked(fn() {
-            handle_with_llm(state, msg, subj)
+            handle_with_llm(state, msg, subj, None)
           })
           actor.continue(state)
         }
@@ -447,7 +448,7 @@ fn handle_routed_message(
     }
     Error(Nil) -> {
       io.println("[brain] Workstream not found: " <> workstream_name)
-      handle_with_llm(state, msg, state.self_subject)
+      handle_with_llm(state, msg, state.self_subject, None)
     }
   }
 }
@@ -512,6 +513,7 @@ fn handle_with_llm(
   state: BrainState,
   msg: discord.IncomingMessage,
   brain_subject_opt: Option(process.Subject(BrainMessage)),
+  domain_name: Option(String),
 ) -> Nil {
   io.println("[brain] Processing message from " <> msg.author_name <> " in channel " <> msg.channel_id)
 
@@ -528,6 +530,18 @@ fn handle_with_llm(
     Error(_) -> ""
   }
   let system_prompt = build_system_prompt(state.soul, ws_names, state.skill_infos, memory_content, user_content)
+
+  // Load domain context if routed to a domain
+  let domain_prompt = case domain_name {
+    Some(name) -> {
+      let config_dir = xdg.domain_config_dir(state.paths, name)
+      let data_dir = xdg.domain_data_dir(state.paths, name)
+      let ctx = domain.load_context(config_dir, data_dir, state.skill_infos)
+      "\n\n" <> domain.build_domain_prompt(ctx)
+    }
+    None -> ""
+  }
+  let system_prompt = system_prompt <> domain_prompt
 
   // Load conversation history (from memory or DB)
   let now_ts = time.now_ms()

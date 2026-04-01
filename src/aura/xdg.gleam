@@ -93,6 +93,14 @@ pub fn skills_dir(paths: Paths) -> String {
   paths.data <> "/skills"
 }
 
+pub fn domain_config_dir(paths: Paths, name: String) -> String {
+  paths.config <> "/workstreams/" <> name
+}
+
+pub fn domain_data_dir(paths: Paths, name: String) -> String {
+  paths.data <> "/workstreams/" <> name
+}
+
 pub fn workspace_exists(paths: Paths) -> Bool {
   let config_toml = paths.config <> "/config.toml"
   simplifile.is_file(config_toml) == Ok(True)
