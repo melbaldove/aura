@@ -1,53 +1,48 @@
 # Engineering Practice
 
-## The Rule
+## Principles
 
-Before starting any feature, ask: **"Does this make Aura do work for me today?"**
+1. **One Aura.** There is one agent with domain knowledge partitions. Every channel gets the same capabilities. Architectural decisions that create first-class and second-class contexts are wrong.
 
-If no, it goes to the backlog. No exceptions for "foundational" work, "open source readiness", or "Hermes alignment." Infrastructure that doesn't serve a working feature is waste.
+2. **Working software is the only measure of progress.** If users can't message a channel and get real work done, nothing else matters.
 
-## Priority order
+3. **Vertical before horizontal.** Build one complete workflow end-to-end before building infrastructure that serves multiple workflows.
 
-1. **Vertical slices** — end-to-end features that work on Discord. "Message workstream → tools execute → result appears." Always first.
-2. **Bugs in working features** — if something that WAS working breaks, fix it before building new things.
-3. **Horizontal infrastructure** — persistence, streaming, compression, etc. Only when a vertical slice is blocked by missing infrastructure.
-4. **Polish** — docs, tests, refactoring, open-source prep. Last. Never before function.
+4. **Ship and verify.** Every change deploys and gets tested in the real environment in the same session. No batching.
 
-## Definition of done
+5. **Instrument, don't theorize.** When something breaks, make the system tell you what's happening before you touch the code.
 
-A feature is done when:
-- [ ] It works on Discord (not just passing tests)
-- [ ] You can explain what user action triggers it and what visible result it produces
-- [ ] It has been used for real work, not just demoed
+6. **Subagents are junior engineers.** Their output compiles. That doesn't mean it's correct. Review against intent, not structure.
 
-A feature is NOT done when:
-- It compiles
-- Tests pass
-- It's deployed
-- It has docs
+7. **Ask, then build.** Architectural and workflow changes get brainstormed with the user first. Implementation within an agreed design does not.
 
-These are necessary but not sufficient. If nobody used it for real work, it's not done.
+8. **Every bug reveals a gap in thinking.** Fix the bug, write the test, understand what you missed.
 
-## Anti-patterns we've hit
+9. **Don't break what works.** Before deploying, verify existing functionality still works. New features don't get to break old ones.
 
-| Anti-pattern | Example | Rule |
-|---|---|---|
-| **Shiny feature bias** | Building Hermes learning loop before workstreams have tools | Vertical slices first |
-| **Comparison-driven development** | "Hermes does X, we should too" without checking if X serves our user | Does it make Aura do work today? |
-| **Horizontal layer building** | SQLite migration, context compression, FTS5 before workstreams can read files | Infrastructure follows features, not the reverse |
-| **Polish before function** | 10 ADRs, ARCHITECTURE.md, CONTRIBUTING.md while workstreams are broken | No polish before function |
-| **Review without testing** | Spec review passed but SQL returned oldest messages | End-to-end test on Discord, always |
+10. **Design for one, generalize later.** Solve the concrete problem in front of you. Don't abstract for hypothetical future users or platforms until a second case actually exists.
 
-## Process for new work
+## Domain model
 
-1. **State the user story:** "As Melbs, I want to [action] so that [outcome]."
-2. **Check:** Does this serve a working vertical slice? If no, backlog it.
-3. **Build the thinnest possible version** that works end-to-end on Discord.
-4. **Test it yourself on Discord** — not just unit tests.
-5. **Then** add tests, docs, polish.
+- Aura is one entity with domain knowledge partitions
+- Channels are context selectors, not capability boundaries
+- Each domain has: AGENTS.md (domain expertise), skills, anchors, logs, conversation history
+- Cross-domain access is allowed — the channel sets default context, not a wall
+- #aura is the meta-domain for cross-cutting and general work
 
-## Backlog discipline
+## Core slices checklist
 
-The backlog is not a commitment. Items in the backlog are ideas, not promises. Before picking up a backlog item, re-ask: "Does this make Aura do work for me today?"
+A living list of end-to-end workflows that must always work. Verified before every deploy:
 
-If the answer changed since the item was filed, delete it.
+- [ ] Message any channel → response with full tool capabilities
+- [ ] Conversation context recalled across turns
+- [ ] Domain context (anchors, skills, AGENTS.md) loaded in domain channels
+- [ ] Web search and fetch work
+- [ ] ACP dispatch and monitoring work
+- [ ] Learning loop saves skills and memory
+
+## Process
+
+- **New feature:** Brainstorm with user if architectural → agree on design → implement → deploy → verify in real environment
+- **Bug fix:** Instrument → find root cause → fix → regression test → deploy → verify
+- **Subagent work:** Review output against intent, not just compilation. Check SQL semantics, check data flow, check edge cases.
