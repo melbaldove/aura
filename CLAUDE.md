@@ -154,6 +154,10 @@ src/
 - Security scan blocks prompt injection and exfiltration patterns
 - Both loaded into system prompt on every turn
 
+## Engineering practice
+
+Read `docs/ENGINEERING.md` before starting any feature. The core rule: **"Does this make Aura do work for me today?"** Vertical slices first, polish last.
+
 ## Crosscutting concerns checklist
 
 When making any non-trivial change, check whether these need updating:
