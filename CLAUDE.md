@@ -2,7 +2,7 @@
 
 ## Project overview
 
-Aura (Autonomous Unified Runtime Agent) is a local-first executive assistant framework built in Gleam on the BEAM VM. It communicates via Discord, manages parallel workstreams, and dispatches Claude Code sessions for coding tasks.
+Aura (Autonomous Unified Runtime Agent) is a local-first executive assistant framework built in Gleam on the BEAM VM. It communicates via Discord, manages parallel domains (knowledge partitions), and dispatches Claude Code sessions for coding tasks.
 
 ## Build and test
 
@@ -35,7 +35,7 @@ supervisor (OneForOne)
 ├── db          SQLite actor — serializes all DB reads/writes
 ├── poller      Discord gateway WebSocket
 ├── brain       Routes messages, LLM tool loop, progressive streaming
-├── workstream  One actor per project (loaded from config)
+├── (domains loaded as context, not actors)
 ├── heartbeat   One actor per monitoring check
 └── acp         One actor per Claude Code session
 ```
@@ -47,11 +47,11 @@ Discord → Gateway → Poller → Brain → Workstream → LLM → Brain → Di
                                    ↘ (direct) → LLM with tools → Discord
 ```
 
-Brain routes by `channel_id` to the matching workstream. Unmatched channels are handled directly by the brain with its own LLM + tools.
+Brain routes by `channel_id` to resolve a domain. Every channel gets the full tool loop — domains are context selectors, not capability boundaries.
 
 ### Key abstractions
 
-- **Workstream** — isolated project context (config, anchors, logs, skills, conversation history). One Discord channel per workstream.
+- **Domain** — a knowledge partition representing an area of the user's life (job, project, responsibility). Has its own config, AGENTS.md, anchors, logs, skills, conversation history. One Discord channel per domain.
 - **Conversation** — per-channel message history. In-memory buffer (hot cache) backed by SQLite. Auto-compresses when token count exceeds 50% of context window.
 - **Skill** — a directory with a SKILL.md and optional CLI entrypoint. Instruction-only skills teach the LLM; external skills are invoked as subprocesses.
 - **Tool** — primitive operation the LLM can call. 15 built-in tools (filesystem, Discord, skills, memory, search, web).
@@ -62,7 +62,7 @@ Brain routes by `channel_id` to the matching workstream. Unmatched channels are 
 src/aura/
   brain.gleam           Core actor — routing, LLM tool loop, streaming
   conversation.gleam    In-memory buffers, DB load/save, compression
-  workstream.gleam      Per-project actor with context loading
+  domain.gleam          Domain context loading (AGENTS.md, anchors, skills)
   db.gleam              SQLite actor (serialized writes, FTS5 search)
   db_schema.gleam       DDL, indexes, FTS5 triggers, schema versioning
   db_migration.gleam    One-time JSONL → SQLite migration
@@ -74,7 +74,7 @@ src/aura/
   skill.gleam           Skill discovery, creation, invocation
   tier.gleam            Path-based write permission tiers
   validator.gleam       TOML-defined validation rules engine
-  config.gleam          Global + workstream config parsing
+  config.gleam          Global + domain config parsing
   supervisor.gleam      Root supervision tree startup
   xdg.gleam             XDG Base Directory path resolution
   time.gleam            Shared timestamp helper (ms since epoch)
@@ -144,7 +144,7 @@ src/
 ### Tiers (write permissions)
 
 - **Autonomous**: logs/, anchors.jsonl, events.jsonl, MEMORY.md, skills/
-- **NeedsApproval**: config files, workstream config, USER.md
+- **NeedsApproval**: config files, domain config, USER.md
 - **NeedsApprovalWithPreview**: SOUL.md, META.md
 
 ### Memory

@@ -66,6 +66,15 @@ pub fn start(
     Ok(names) -> {
       list.filter_map(names, fn(name) {
         let config_path = xdg.domain_config_path(paths, name)
+        // Ensure AGENTS.md exists for this domain
+        let agents_path = xdg.domain_config_dir(paths, name) <> "/AGENTS.md"
+        case simplifile.is_file(agents_path) {
+          Ok(True) -> Nil
+          _ -> {
+            let _ = simplifile.write(agents_path, "# " <> name <> "\n\nDomain-specific instructions go here.\n")
+            Nil
+          }
+        }
         case simplifile.read(config_path) {
           Ok(toml_content) -> {
             case config.parse_domain(toml_content) {
@@ -110,7 +119,7 @@ pub fn start(
     }
   }
 
-  // 6. Start brain with registry
+  // 6. Start brain
   use brain_subject <- result.try(
     brain.start(brain.BrainConfig(
       global: global_config,
@@ -196,50 +205,13 @@ fn poller_loop(
 }
 
 fn migrate_directories(paths: xdg.Paths) -> Nil {
-  // Config: workstreams/ → domains/
-  let ws_config = paths.config <> "/workstreams"
-  let dom_config = paths.config <> "/domains"
-  case simplifile.is_directory(ws_config) {
-    Ok(True) -> {
-      case simplifile.is_directory(dom_config) {
-        Ok(True) -> Nil
-        _ -> {
-          let _ = simplifile.rename(ws_config, dom_config)
-          io.println("[supervisor] Migrated config/workstreams → config/domains")
-        }
-      }
-    }
-    _ -> Nil
-  }
-  // Data: workstreams/ → domains/
-  let ws_data = paths.data <> "/workstreams"
-  let dom_data = paths.data <> "/domains"
-  case simplifile.is_directory(ws_data) {
-    Ok(True) -> {
-      case simplifile.is_directory(dom_data) {
-        Ok(True) -> Nil
-        _ -> {
-          let _ = simplifile.rename(ws_data, dom_data)
-          io.println("[supervisor] Migrated data/workstreams → data/domains")
-        }
-      }
-    }
-    _ -> Nil
-  }
-  // Create default AGENTS.md for domains that don't have one
-  case workspace.list_domains(paths) {
-    Ok(names) -> {
-      list.each(names, fn(name) {
-        let agents_path = xdg.domain_config_dir(paths, name) <> "/AGENTS.md"
-        case simplifile.is_file(agents_path) {
-          Ok(True) -> Nil
-          _ -> {
-            let _ = simplifile.write(agents_path, "# " <> name <> "\n\nDomain-specific instructions go here.\n")
-            Nil
-          }
-        }
-      })
-    }
+  migrate_dir(paths.config <> "/workstreams", paths.config <> "/domains", "config")
+  migrate_dir(paths.data <> "/workstreams", paths.data <> "/domains", "data")
+}
+
+fn migrate_dir(from: String, to: String, label: String) -> Nil {
+  case simplifile.rename(from, to) {
+    Ok(_) -> io.println("[supervisor] Migrated " <> label <> "/workstreams → " <> label <> "/domains")
     Error(_) -> Nil
   }
 }

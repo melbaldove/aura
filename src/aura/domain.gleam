@@ -1,6 +1,6 @@
 import aura/memory
 import aura/skill
-import gleam/int
+import aura/time
 import gleam/list
 import gleam/string
 import simplifile
@@ -39,7 +39,7 @@ pub fn load_context(
     Error(_) -> []
   }
 
-  let date = today_date_string()
+  let date = time.today_date_string()
   let todays_log = case memory.read_daily_log(data_dir, domain_name, date) {
     Ok(log) -> log
     Error(_) -> ""
@@ -125,21 +125,3 @@ fn extract_domain_name(data_dir: String) -> String {
   }
 }
 
-fn today_date_string() -> String {
-  let #(#(year, month, day), _time) = erlang_localtime()
-  int.to_string(year)
-  <> "-"
-  <> pad_zero(month)
-  <> "-"
-  <> pad_zero(day)
-}
-
-fn pad_zero(n: Int) -> String {
-  case n < 10 {
-    True -> "0" <> int.to_string(n)
-    False -> int.to_string(n)
-  }
-}
-
-@external(erlang, "calendar", "local_time")
-fn erlang_localtime() -> #(#(Int, Int, Int), #(Int, Int, Int))

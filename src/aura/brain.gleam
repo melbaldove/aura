@@ -43,7 +43,7 @@ pub type DomainInfo {
 /// matched a known domain; `NeedsClassification` means the brain handles
 /// it directly.
 pub type RouteDecision {
-  DirectRoute(workstream_name: String)
+  DirectRoute(domain_name: String)
   NeedsClassification
 }
 
@@ -224,25 +224,21 @@ fn handle_message(
 ) -> actor.Next(BrainState, BrainMessage) {
   case message {
     HandleMessage(msg) -> {
-      case route_message(msg.channel_id, state.domains) {
+      let domain_name = case route_message(msg.channel_id, state.domains) {
         DirectRoute(name) -> {
-          io.println("[brain] Route: " <> name <> " — full tool loop")
-          let subj = state.self_subject
-          process.spawn_unlinked(fn() {
-            handle_with_llm(state, msg, subj, Some(name))
-          })
-          actor.continue(state)
+          io.println("[brain] Route: " <> name)
+          Some(name)
         }
         NeedsClassification -> {
-          io.println("[brain] Route: NeedsClassification")
-          // Handle directly with brain's LLM (for #aura channel)
-          let subj = state.self_subject
-          process.spawn_unlinked(fn() {
-            handle_with_llm(state, msg, subj, None)
-          })
-          actor.continue(state)
+          io.println("[brain] Route: #aura")
+          None
         }
       }
+      let subj = state.self_subject
+      process.spawn_unlinked(fn() {
+        handle_with_llm(state, msg, subj, domain_name)
+      })
+      actor.continue(state)
     }
     UpdateDomains(domains) -> {
       io.println("[brain] Updated domains: " <> string.inspect(list.length(domains)) <> " entries")
