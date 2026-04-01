@@ -168,11 +168,11 @@ pub fn update_compaction_summary_test() {
   process.send(subject, db.Shutdown)
 }
 
-pub fn set_workstream_test() {
+pub fn set_domain_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "ws-chan", 1_000_000)
 
-  let assert Ok(_) = db.set_workstream(subject, convo_id, "local-accounts")
+  let assert Ok(_) = db.set_domain(subject, convo_id, "local-accounts")
 
   process.send(subject, db.Shutdown)
 }

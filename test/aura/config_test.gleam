@@ -36,7 +36,7 @@ global_max_concurrent = 4
   cfg.acp_global_max_concurrent |> should.equal(4)
 }
 
-pub fn parse_workstream_config_test() {
+pub fn parse_domain_config_test() {
   let toml = "
 name = \"CM2\"
 description = \"CMSquared PCHC CICS. Backend. Rust.\"
@@ -54,10 +54,10 @@ timeout = 1800
 max_concurrent = 2
 "
 
-  let result = config.parse_workstream(toml)
+  let result = config.parse_domain(toml)
   result |> should.be_ok
 
-  let ws = result |> result.unwrap(config.default_workstream())
+  let ws = result |> result.unwrap(config.default_domain())
   ws.name |> should.equal("CM2")
   ws.tools |> should.equal(["jira", "google", "slack"])
   ws.acp_timeout |> should.equal(1800)

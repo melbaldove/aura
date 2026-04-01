@@ -6,7 +6,7 @@ import gleeunit/should
 pub fn classify_urgent_test() {
   let finding =
     notification.Finding(
-      workstream: "cm2",
+      domain: "cm2",
       summary: "P0 ticket",
       urgency: notification.Urgent,
       source: "jira",
@@ -17,7 +17,7 @@ pub fn classify_urgent_test() {
 pub fn classify_normal_test() {
   let finding =
     notification.Finding(
-      workstream: "cm2",
+      domain: "cm2",
       summary: "PR review",
       urgency: notification.Normal,
       source: "pr_review",
@@ -29,14 +29,14 @@ pub fn queue_and_drain_test() {
   let queue = notification.new_queue()
   let f1 =
     notification.Finding(
-      workstream: "cm2",
+      domain: "cm2",
       summary: "New ticket",
       urgency: notification.Normal,
       source: "jira",
     )
   let f2 =
     notification.Finding(
-      workstream: "hy",
+      domain: "hy",
       summary: "PR review",
       urgency: notification.Normal,
       source: "pr_review",
@@ -52,13 +52,13 @@ pub fn queue_and_drain_test() {
 pub fn format_digest_test() {
   let findings = [
     notification.Finding(
-      workstream: "cm2",
+      domain: "cm2",
       summary: "2 tickets in sprint",
       urgency: notification.Normal,
       source: "jira",
     ),
     notification.Finding(
-      workstream: "hy",
+      domain: "hy",
       summary: "1 PR needs review",
       urgency: notification.Normal,
       source: "pr_review",

@@ -40,12 +40,12 @@ pub fn start_all(
   all_skills: List(skill.SkillInfo),
   db_subject: process.Subject(db.DbMessage),
 ) -> Result(WorkstreamRegistry, String) {
-  use names <- result.try(workspace.list_workstreams(paths))
+  use names <- result.try(workspace.list_domains(paths))
 
   let entries =
     list.filter_map(names, fn(name) {
       let config_path =
-        xdg.workstream_config_path(paths, name)
+        xdg.domain_config_path(paths, name)
 
       case simplifile.read(config_path) {
         Error(e) -> {
@@ -58,7 +58,7 @@ pub fn start_all(
           Error(Nil)
         }
         Ok(toml_content) -> {
-          case config.parse_workstream(toml_content) {
+          case config.parse_domain(toml_content) {
             Error(e) -> {
               io.println(
                 "[workstream_sup] Failed to parse config for "
@@ -69,10 +69,10 @@ pub fn start_all(
               Error(Nil)
             }
             Ok(ws_config) -> {
-              // Resolve model spec: use workstream-specific or fall back to global
-              let model_spec = case string.is_empty(ws_config.model_workstream) {
-                True -> global_config.models.workstream
-                False -> ws_config.model_workstream
+              // Resolve model spec: use domain-specific or fall back to global
+              let model_spec = case string.is_empty(ws_config.model_domain) {
+                True -> global_config.models.domain
+                False -> ws_config.model_domain
               }
 
               case models.build_llm_config(model_spec) {

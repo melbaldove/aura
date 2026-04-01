@@ -49,18 +49,6 @@ pub fn state_path(paths: Paths, subpath: String) -> String {
   paths.state <> "/" <> subpath
 }
 
-pub fn workstream_config_path(paths: Paths, name: String) -> String {
-  paths.config <> "/workstreams/" <> name <> "/config.toml"
-}
-
-pub fn workstream_config_dir(paths: Paths, name: String) -> String {
-  paths.config <> "/workstreams/" <> name
-}
-
-pub fn workstream_data_dir(paths: Paths, name: String) -> String {
-  paths.data <> "/workstreams/" <> name
-}
-
 pub fn env_path(paths: Paths) -> String {
   paths.config <> "/.env"
 }
@@ -93,12 +81,16 @@ pub fn skills_dir(paths: Paths) -> String {
   paths.data <> "/skills"
 }
 
+pub fn domain_config_path(paths: Paths, name: String) -> String {
+  paths.config <> "/domains/" <> name <> "/config.toml"
+}
+
 pub fn domain_config_dir(paths: Paths, name: String) -> String {
-  paths.config <> "/workstreams/" <> name
+  paths.config <> "/domains/" <> name
 }
 
 pub fn domain_data_dir(paths: Paths, name: String) -> String {
-  paths.data <> "/workstreams/" <> name
+  paths.data <> "/domains/" <> name
 }
 
 pub fn workspace_exists(paths: Paths) -> Bool {

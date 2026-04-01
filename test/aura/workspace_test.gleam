@@ -28,7 +28,7 @@ pub fn scaffold_workspace_test() {
 
   // Config files should exist
   simplifile.is_file(paths.config <> "/config.toml") |> should.be_ok
-  simplifile.is_directory(paths.config <> "/workstreams") |> should.be_ok
+  simplifile.is_directory(paths.config <> "/domains") |> should.be_ok
 
   // Data directories should exist
   simplifile.is_directory(paths.data <> "/skills") |> should.be_ok
@@ -53,17 +53,17 @@ pub fn scaffold_workspace_test() {
   cleanup_paths(paths)
 }
 
-pub fn scaffold_workstream_test() {
+pub fn scaffold_domain_test() {
   let paths = temp_paths("ws-" <> test_helpers.random_suffix())
-  let _ = simplifile.create_directory_all(paths.config <> "/workstreams")
-  let _ = simplifile.create_directory_all(paths.data <> "/workstreams")
+  let _ = simplifile.create_directory_all(paths.config <> "/domains")
+  let _ = simplifile.create_directory_all(paths.data <> "/domains")
 
-  workspace.scaffold_workstream(paths, "test-project", "A test workstream", "test-project")
+  workspace.scaffold_domain(paths, "test-project", "A test domain", "test-project")
   |> should.be_ok
 
-  simplifile.is_file(paths.config <> "/workstreams/test-project/config.toml") |> should.be_ok
-  simplifile.is_directory(paths.data <> "/workstreams/test-project/logs") |> should.be_ok
-  simplifile.is_directory(paths.data <> "/workstreams/test-project/summaries") |> should.be_ok
+  simplifile.is_file(paths.config <> "/domains/test-project/config.toml") |> should.be_ok
+  simplifile.is_directory(paths.data <> "/domains/test-project/logs") |> should.be_ok
+  simplifile.is_directory(paths.data <> "/domains/test-project/summaries") |> should.be_ok
 
   // Cleanup
   cleanup_paths(paths)

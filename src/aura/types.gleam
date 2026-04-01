@@ -1,10 +1,10 @@
 import gleam/json
 
-/// A cross-workstream event emitted to events.jsonl
+/// A cross-domain event emitted to events.jsonl
 pub type Event {
   Event(
     ts: String,
-    workstream: String,
+    domain: String,
     event_type: String,
     ref: String,
     summary: String,
@@ -16,7 +16,7 @@ pub type Anchor {
   Anchor(
     ts: String,
     anchor_type: String,
-    workstream: String,
+    domain: String,
     content: String,
     context: String,
   )
@@ -25,7 +25,7 @@ pub type Anchor {
 pub fn event_to_json(event: Event) -> json.Json {
   json.object([
     #("ts", json.string(event.ts)),
-    #("workstream", json.string(event.workstream)),
+    #("domain", json.string(event.domain)),
     #("type", json.string(event.event_type)),
     #("ref", json.string(event.ref)),
     #("summary", json.string(event.summary)),
@@ -37,7 +37,7 @@ pub fn anchor_to_json(anchor: Anchor) -> json.Json {
     #("ts", json.string(anchor.ts)),
     #("type", json.string(anchor.anchor_type)),
     #("anchor", json.bool(True)),
-    #("workstream", json.string(anchor.workstream)),
+    #("domain", json.string(anchor.domain)),
     #("content", json.string(anchor.content)),
     #("context", json.string(anchor.context)),
   ])

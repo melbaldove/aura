@@ -21,20 +21,20 @@ fn now_ms() -> Int
 // ---------------------------------------------------------------------------
 
 pub type AcpEvent {
-  AcpStarted(session_name: String, workstream: String, task_id: String)
+  AcpStarted(session_name: String, domain: String, task_id: String)
   AcpAlert(
     session_name: String,
-    workstream: String,
+    domain: String,
     status: types.SessionStatus,
     summary: String,
   )
   AcpCompleted(
     session_name: String,
-    workstream: String,
+    domain: String,
     report: types.AcpReport,
   )
-  AcpTimedOut(session_name: String, workstream: String)
-  AcpFailed(session_name: String, workstream: String, error: String)
+  AcpTimedOut(session_name: String, domain: String)
+  AcpFailed(session_name: String, domain: String, error: String)
 }
 
 pub type MonitorMessage {
@@ -75,7 +75,7 @@ pub fn start(
   on_event: fn(AcpEvent) -> Nil,
 ) -> Result(process.Subject(MonitorMessage), String) {
   let session_name =
-    tmux.build_session_name(task_spec.workstream, task_spec.id)
+    tmux.build_session_name(task_spec.domain, task_spec.id)
 
   // Build claude command with report instructions appended to prompt
   let full_prompt = task_spec.prompt <> "\n\n" <> report_instructions
@@ -110,7 +110,7 @@ pub fn start(
           // Emit started event
           on_event(AcpStarted(
             session_name: session_name,
-            workstream: task_spec.workstream,
+            domain: task_spec.domain,
             task_id: task_spec.id,
           ))
 
@@ -160,14 +160,14 @@ fn handle_session_ended(
     Ok(rpt) -> {
       state.on_event(AcpCompleted(
         session_name: state.session_name,
-        workstream: state.task_spec.workstream,
+        domain: state.task_spec.domain,
         report: rpt,
       ))
     }
     Error(_) -> {
       state.on_event(AcpFailed(
         session_name: state.session_name,
-        workstream: state.task_spec.workstream,
+        domain: state.task_spec.domain,
         error: "Session ended without a valid report",
       ))
     }
@@ -205,7 +205,7 @@ fn handle_session_alive(
                 Ok(rpt) -> {
                   state.on_event(AcpCompleted(
                     session_name: state.session_name,
-                    workstream: state.task_spec.workstream,
+                    domain: state.task_spec.domain,
                     report: rpt,
                   ))
                   actor.stop()
@@ -249,7 +249,7 @@ fn check_timeout_and_continue(
     True -> {
       state.on_event(AcpTimedOut(
         session_name: state.session_name,
-        workstream: state.task_spec.workstream,
+        domain: state.task_spec.domain,
       ))
       actor.stop()
     }
@@ -290,7 +290,7 @@ fn classify_and_alert(state: MonitorState, output: String) -> Nil {
             _ -> {
               state.on_event(AcpAlert(
                 session_name: state.session_name,
-                workstream: state.task_spec.workstream,
+                domain: state.task_spec.domain,
                 status: status,
                 summary: string.slice(tail, 0, 200),
               ))

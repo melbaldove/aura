@@ -13,7 +13,7 @@ pub type AcpManager {
 }
 
 pub type ActiveSession {
-  ActiveSession(session_name: String, workstream: String, task_id: String)
+  ActiveSession(session_name: String, domain: String, task_id: String)
 }
 
 // ---------------------------------------------------------------------------
@@ -59,10 +59,10 @@ pub fn dispatch(
           let session =
             ActiveSession(
               session_name: tmux.build_session_name(
-                task_spec.workstream,
+                task_spec.domain,
                 task_spec.id,
               ),
-              workstream: task_spec.workstream,
+              domain: task_spec.domain,
               task_id: task_spec.id,
             )
           Ok(register(manager, session))

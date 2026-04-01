@@ -6,7 +6,7 @@ pub fn event_to_json_test() {
   let event =
     types.Event(
       ts: "2026-03-25T14:30:00+08:00",
-      workstream: "cm2",
+      domain: "cm2",
       event_type: "pr_merged",
       ref: "CICS-967",
       summary: "Fixed ACK receipt format",
@@ -16,7 +16,7 @@ pub fn event_to_json_test() {
   |> types.event_to_json
   |> json.to_string
   |> should.equal(
-    "{\"ts\":\"2026-03-25T14:30:00+08:00\",\"workstream\":\"cm2\",\"type\":\"pr_merged\",\"ref\":\"CICS-967\",\"summary\":\"Fixed ACK receipt format\"}",
+    "{\"ts\":\"2026-03-25T14:30:00+08:00\",\"domain\":\"cm2\",\"type\":\"pr_merged\",\"ref\":\"CICS-967\",\"summary\":\"Fixed ACK receipt format\"}",
   )
 }
 
@@ -25,7 +25,7 @@ pub fn anchor_to_json_test() {
     types.Anchor(
       ts: "2026-03-25T14:30:00+08:00",
       anchor_type: "decision",
-      workstream: "cm2",
+      domain: "cm2",
       content: "Chose separate ACK format for RETURN files",
       context: "CICS-967",
     )
@@ -34,6 +34,6 @@ pub fn anchor_to_json_test() {
   |> types.anchor_to_json
   |> json.to_string
   |> should.equal(
-    "{\"ts\":\"2026-03-25T14:30:00+08:00\",\"type\":\"decision\",\"anchor\":true,\"workstream\":\"cm2\",\"content\":\"Chose separate ACK format for RETURN files\",\"context\":\"CICS-967\"}",
+    "{\"ts\":\"2026-03-25T14:30:00+08:00\",\"type\":\"decision\",\"anchor\":true,\"domain\":\"cm2\",\"content\":\"Chose separate ACK format for RETURN files\",\"context\":\"CICS-967\"}",
   )
 }

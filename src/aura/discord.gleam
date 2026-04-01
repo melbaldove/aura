@@ -10,7 +10,7 @@ import gleam/string
 
 /// Briefing section for morning digest
 pub type BriefingSection {
-  BriefingSection(workstream: String, summary: String)
+  BriefingSection(domain: String, summary: String)
 }
 
 /// Normalized incoming message for Aura's internal use
@@ -51,7 +51,7 @@ pub fn from_received(
 /// Format a morning briefing as a Discord message string
 pub fn format_briefing(title: String, sections: List(BriefingSection)) -> String {
   let section_lines =
-    list.map(sections, fn(s) { "**" <> s.workstream <> "** -- " <> s.summary })
+    list.map(sections, fn(s) { "**" <> s.domain <> "** -- " <> s.summary })
   string.join(["**" <> title <> "**", "", ..section_lines], "\n")
 }
 

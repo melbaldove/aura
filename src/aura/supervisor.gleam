@@ -61,13 +61,13 @@ pub fn start(
   use registry <- result.try(
     workstream_sup.start_all(paths, global_config, soul, all_skills, db_subject),
   )
-  let brain_workstreams =
+  let brain_domains =
     list.map(registry.entries, fn(e) {
-      brain.WorkstreamInfo(name: e.name, channel_id: e.channel_id)
+      brain.DomainInfo(name: e.name, channel_id: e.channel_id)
     })
   io.println(
-    "[supervisor] Workstreams: "
-    <> string.join(list.map(brain_workstreams, fn(ws) { ws.name }), ", "),
+    "[supervisor] Domains: "
+    <> string.join(list.map(brain_domains, fn(d) { d.name }), ", "),
   )
 
   // 5. Load validation rules
@@ -96,7 +96,7 @@ pub fn start(
       global: global_config,
       paths: paths,
       soul: soul,
-      workstreams: brain_workstreams,
+      domains: brain_domains,
       registry: registry.entries,
       skill_infos: all_skills,
       validation_rules: validation_rules,

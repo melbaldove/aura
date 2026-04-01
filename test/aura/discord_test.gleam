@@ -6,8 +6,8 @@ import gleeunit/should
 
 pub fn format_briefing_test() {
   let sections = [
-    discord.BriefingSection(workstream: "cm2", summary: "2 tickets in sprint"),
-    discord.BriefingSection(workstream: "hy", summary: "1 new ticket assigned"),
+    discord.BriefingSection(domain: "cm2", summary: "2 tickets in sprint"),
+    discord.BriefingSection(domain: "hy", summary: "1 new ticket assigned"),
   ]
   let text = discord.format_briefing("Morning Briefing", sections)
   text |> string.contains("**cm2**") |> should.be_true

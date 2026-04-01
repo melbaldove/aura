@@ -83,10 +83,10 @@ pub type DbMessage {
     conversation_id: String,
     timestamp: Int,
   )
-  SetWorkstream(
+  SetDomain(
     reply_to: process.Subject(Result(Nil, String)),
     conversation_id: String,
-    workstream: String,
+    domain: String,
   )
   HasMessages(
     reply_to: process.Subject(Result(Bool, String)),
@@ -229,17 +229,17 @@ pub fn update_last_active(
   })
 }
 
-/// Assign a workstream label to a conversation.
-pub fn set_workstream(
+/// Assign a domain label to a conversation.
+pub fn set_domain(
   subject: process.Subject(DbMessage),
   conversation_id: String,
-  workstream: String,
+  domain: String,
 ) -> Result(Nil, String) {
   process.call(subject, 5000, fn(reply_to) {
-    SetWorkstream(
+    SetDomain(
       reply_to: reply_to,
       conversation_id: conversation_id,
-      workstream: workstream,
+      domain: domain,
     )
   })
 }
@@ -304,8 +304,8 @@ fn handle_message(
       actor.continue(state)
     }
 
-    SetWorkstream(reply_to:, conversation_id:, workstream:) -> {
-      let result = do_set_workstream(state.conn, conversation_id, workstream)
+    SetDomain(reply_to:, conversation_id:, domain:) -> {
+      let result = do_set_domain(state.conn, conversation_id, domain)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -473,20 +473,20 @@ fn do_update_last_active(
   })
 }
 
-fn do_set_workstream(
+fn do_set_domain(
   conn: sqlight.Connection,
   conversation_id: String,
-  workstream: String,
+  domain: String,
 ) -> Result(Nil, String) {
   sqlight.query(
     "UPDATE conversations SET workstream = ? WHERE id = ?",
     on: conn,
-    with: [sqlight.text(workstream), sqlight.text(conversation_id)],
+    with: [sqlight.text(domain), sqlight.text(conversation_id)],
     expecting: decode.success(Nil),
   )
   |> result.map(fn(_) { Nil })
   |> result.map_error(fn(err) {
-    "Failed to set workstream: " <> string.inspect(err)
+    "Failed to set domain: " <> string.inspect(err)
   })
 }
 

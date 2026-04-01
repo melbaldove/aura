@@ -15,7 +15,7 @@ pub type Urgency {
 }
 
 pub type Finding {
-  Finding(workstream: String, summary: String, urgency: Urgency, source: String)
+  Finding(domain: String, summary: String, urgency: Urgency, source: String)
 }
 
 pub type NotificationQueue {
@@ -59,20 +59,20 @@ pub fn is_urgent(finding: Finding) -> Bool {
 // Digest formatting
 // ---------------------------------------------------------------------------
 
-/// Format a list of findings grouped by workstream.
+/// Format a list of findings grouped by domain.
 /// Returns "No pending notifications." for an empty list.
 pub fn format_digest(findings: List(Finding)) -> String {
   case findings {
     [] -> "No pending notifications."
     _ -> {
-      let grouped = list.group(findings, fn(f) { f.workstream })
+      let grouped = list.group(findings, fn(f) { f.domain })
       let sections =
         dict.to_list(grouped)
         |> list.map(fn(entry) {
-          let #(workstream, ws_findings) = entry
-          let header = "**" <> workstream <> "**"
+          let #(domain, domain_findings) = entry
+          let header = "**" <> domain <> "**"
           let lines =
-            list.map(ws_findings, fn(f) {
+            list.map(domain_findings, fn(f) {
               "  - " <> f.summary <> " (" <> f.source <> ")"
             })
           string.join([header, ..lines], "\n")

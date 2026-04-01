@@ -36,13 +36,13 @@ import gleam/string
 // Types
 // ---------------------------------------------------------------------------
 
-/// Maps a workstream name to its Discord channel ID for routing.
-pub type WorkstreamInfo {
-  WorkstreamInfo(name: String, channel_id: String)
+/// Maps a domain name to its Discord channel ID for routing.
+pub type DomainInfo {
+  DomainInfo(name: String, channel_id: String)
 }
 
 /// Outcome of routing a Discord message. `DirectRoute` means the channel
-/// matched a known workstream; `NeedsClassification` means the brain handles
+/// matched a known domain; `NeedsClassification` means the brain handles
 /// it directly.
 pub type RouteDecision {
   DirectRoute(workstream_name: String)
@@ -52,7 +52,7 @@ pub type RouteDecision {
 /// Messages the brain actor accepts from other processes and the supervisor.
 pub type BrainMessage {
   HandleMessage(discord.IncomingMessage)
-  UpdateWorkstreams(List(WorkstreamInfo))
+  UpdateDomains(List(DomainInfo))
   HeartbeatFinding(notification.Finding)
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
@@ -66,7 +66,7 @@ pub type BrainConfig {
     global: config.GlobalConfig,
     paths: xdg.Paths,
     soul: String,
-    workstreams: List(WorkstreamInfo),
+    domains: List(DomainInfo),
     registry: List(workstream_sup.WorkstreamEntry),
     skill_infos: List(skill.SkillInfo),
     validation_rules: List(validator.Rule),
@@ -82,7 +82,7 @@ pub type BrainState {
     guild_id: String,
     llm_config: llm.LlmConfig,
     paths: xdg.Paths,
-    workstreams: List(WorkstreamInfo),
+    domains: List(DomainInfo),
     soul: String,
     skill_infos: List(skill.SkillInfo),
     registry: List(workstream_sup.WorkstreamEntry),
@@ -102,13 +102,13 @@ pub type BrainState {
 // Pure functions (testable)
 // ---------------------------------------------------------------------------
 
-/// Route based on channel_id matching known workstreams
+/// Route based on channel_id matching known domains
 pub fn route_message(
   channel_id: String,
-  workstreams: List(WorkstreamInfo),
+  domains: List(DomainInfo),
 ) -> RouteDecision {
-  case list.find(workstreams, fn(ws) { ws.channel_id == channel_id }) {
-    Ok(ws) -> DirectRoute(ws.name)
+  case list.find(domains, fn(d) { d.channel_id == channel_id }) {
+    Ok(d) -> DirectRoute(d.name)
     Error(_) -> NeedsClassification
   }
 }
@@ -116,14 +116,14 @@ pub fn route_message(
 /// Build system prompt from SOUL.md content
 pub fn build_system_prompt(
   soul_content: String,
-  workstream_names: List(String),
+  domain_names: List(String),
   skill_infos: List(skill.SkillInfo),
   memory_content: String,
   user_content: String,
 ) -> String {
-  let ws_section = case workstream_names {
-    [] -> "\n\nNo workstreams configured yet."
-    names -> "\n\nActive workstreams: " <> string.join(names, ", ")
+  let ws_section = case domain_names {
+    [] -> "\n\nNo domains configured yet."
+    names -> "\n\nActive domains: " <> string.join(names, ", ")
   }
 
   let skill_names = list.map(skill_infos, fn(s) { s.name })
@@ -153,7 +153,7 @@ pub fn build_system_prompt(
   <> "\n- Use tools only when needed to answer the question. Most questions can be answered from context."
   <> "\n- Be efficient: 1-2 tool calls max per response. Do NOT recursively explore directories."
   <> "\n- If you already know the answer from the system context above, respond directly without tools."
-  <> "\n- For workstream creation, use the propose tool to request approval."
+  <> "\n- For domain creation, use the propose tool to request approval."
   <> "\n\nMemory guidance:"
   <> "\nYou have persistent memory across sessions. Save durable facts using the memory tool: user preferences, environment details, tool quirks, and stable conventions. Memory is injected into every turn, so keep it compact and focused on facts that will still matter later."
   <> "\nPrioritize what reduces future user steering — the most valuable memory is one that prevents the user from having to correct or remind you again."
@@ -166,13 +166,13 @@ pub fn build_system_prompt(
 /// Build a routing classification prompt (for #aura messages)
 pub fn build_routing_prompt(
   message_content: String,
-  workstream_names: List(String),
+  domain_names: List(String),
 ) -> String {
-  "Classify the following message into one of these workstreams: "
-  <> string.join(workstream_names, ", ")
+  "Classify the following message into one of these domains: "
+  <> string.join(domain_names, ", ")
   <> "\n\nMessage: "
   <> message_content
-  <> "\n\nRespond with just the workstream name, or \"none\" if it doesn't match any."
+  <> "\n\nRespond with just the domain name, or \"none\" if it doesn't match any."
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +195,7 @@ pub fn start(
       guild_id: config.discord.guild,
       llm_config: llm_config,
       paths: brain_config.paths,
-      workstreams: brain_config.workstreams,
+      domains: brain_config.domains,
       soul: brain_config.soul,
       registry: brain_config.registry,
       notification_queue: notification.new_queue(),
@@ -228,7 +228,7 @@ fn handle_message(
 ) -> actor.Next(BrainState, BrainMessage) {
   case message {
     HandleMessage(msg) -> {
-      case route_message(msg.channel_id, state.workstreams) {
+      case route_message(msg.channel_id, state.domains) {
         DirectRoute(name) -> {
           io.println("[brain] Route: " <> name <> " — full tool loop")
           let subj = state.self_subject
@@ -248,9 +248,9 @@ fn handle_message(
         }
       }
     }
-    UpdateWorkstreams(ws) -> {
-      io.println("[brain] Updated workstreams: " <> string.inspect(list.length(ws)) <> " entries")
-      actor.continue(BrainState(..state, workstreams: ws))
+    UpdateDomains(domains) -> {
+      io.println("[brain] Updated domains: " <> string.inspect(list.length(domains)) <> " entries")
+      actor.continue(BrainState(..state, domains: domains))
     }
     HeartbeatFinding(finding) -> {
       case notification.is_urgent(finding) {
@@ -293,9 +293,9 @@ fn handle_message(
       }
     }
     PostWelcome(channel_id) -> {
-      case list.is_empty(state.workstreams) {
+      case list.is_empty(state.domains) {
         True -> {
-          let msg = "Aura is online. No workstreams configured yet. Tell me about your first project and I'll set one up."
+          let msg = "Aura is online. No domains configured yet. Tell me about your first project and I'll set one up."
           process.spawn(fn() {
             send_discord_response(state.discord_token, channel_id, msg)
           })
@@ -306,20 +306,20 @@ fn handle_message(
     }
     AcpEvent(event) -> {
       case event {
-        acp_monitor.AcpStarted(session_name, workstream, task_id) -> {
+        acp_monitor.AcpStarted(session_name, domain, task_id) -> {
           let msg =
             "**ACP Started** — "
             <> task_id
             <> "\n`tmux attach -t "
             <> session_name
             <> "`"
-          let channel = resolve_workstream_channel(state, workstream)
+          let channel = resolve_domain_channel(state, domain)
           process.spawn(fn() {
             send_discord_response(state.discord_token, channel, msg)
           })
           actor.continue(state)
         }
-        acp_monitor.AcpAlert(session_name, workstream, status, summary) -> {
+        acp_monitor.AcpAlert(session_name, domain, status, summary) -> {
           let status_str = acp_types.status_to_string(status)
           let msg =
             "**ACP Alert** ["
@@ -329,28 +329,28 @@ fn handle_message(
             <> "\n`tmux attach -t "
             <> session_name
             <> "`"
-          let channel = resolve_workstream_channel(state, workstream)
+          let channel = resolve_domain_channel(state, domain)
           process.spawn(fn() {
             send_discord_response(state.discord_token, channel, msg)
           })
           actor.continue(state)
         }
-        acp_monitor.AcpCompleted(session_name, workstream, report) -> {
+        acp_monitor.AcpCompleted(session_name, domain, report) -> {
           let outcome = acp_types.outcome_to_string(report.outcome)
           let msg =
             "**ACP Complete** [" <> outcome <> "] — " <> report.anchor
-          handle_acp_completion(state, session_name, workstream, msg)
+          handle_acp_completion(state, session_name, domain, msg)
         }
-        acp_monitor.AcpTimedOut(session_name, workstream) -> {
+        acp_monitor.AcpTimedOut(session_name, domain) -> {
           let msg =
             "**ACP Timeout** — Session still alive. `tmux attach -t "
             <> session_name
             <> "`"
-          handle_acp_completion(state, session_name, workstream, msg)
+          handle_acp_completion(state, session_name, domain, msg)
         }
-        acp_monitor.AcpFailed(session_name, workstream, error) -> {
+        acp_monitor.AcpFailed(session_name, domain, error) -> {
           let msg = "**ACP Failed** — " <> error
-          handle_acp_completion(state, session_name, workstream, msg)
+          handle_acp_completion(state, session_name, domain, msg)
         }
       }
     }
@@ -379,10 +379,10 @@ fn handle_message(
 fn handle_acp_completion(
   state: BrainState,
   session_name: String,
-  workstream: String,
+  domain: String,
   msg: String,
 ) -> actor.Next(BrainState, BrainMessage) {
-  let channel = resolve_workstream_channel(state, workstream)
+  let channel = resolve_domain_channel(state, domain)
   process.spawn(fn() {
     send_discord_response(state.discord_token, channel, msg)
   })
@@ -390,15 +390,15 @@ fn handle_acp_completion(
   actor.continue(BrainState(..state, acp_manager: new_manager))
 }
 
-fn resolve_workstream_channel(state: BrainState, workstream: String) -> String {
-  case list.find(state.workstreams, fn(ws) { ws.name == workstream }) {
-    Ok(ws) -> ws.channel_id
+fn resolve_domain_channel(state: BrainState, domain: String) -> String {
+  case list.find(state.domains, fn(d) { d.name == domain }) {
+    Ok(d) -> d.channel_id
     Error(_) -> state.aura_channel_id
   }
 }
 
 fn resolve_finding_channel(state: BrainState, finding: notification.Finding) -> String {
-  resolve_workstream_channel(state, finding.workstream)
+  resolve_domain_channel(state, finding.domain)
 }
 
 fn handle_routed_message(
@@ -520,7 +520,7 @@ fn handle_with_llm(
   // Start a typing indicator loop that refreshes every 8 seconds
   let typing_stop = start_typing_loop(state.discord_token, msg.channel_id)
 
-  let ws_names = list.map(state.workstreams, fn(ws) { ws.name })
+  let ws_names = list.map(state.domains, fn(d) { d.name })
   let memory_content = case structured_memory.format_for_display(xdg.memory_path(state.paths)) {
     Ok(c) -> c
     Error(_) -> ""

@@ -9,13 +9,13 @@ pub fn match_exact_path_test() {
 
 pub fn match_glob_path_test() {
   validator.path_matches(
-    "workstreams/cm2/anchors.jsonl",
-    "workstreams/*/anchors.jsonl",
+    "domains/cm2/anchors.jsonl",
+    "domains/*/anchors.jsonl",
   )
   |> should.be_true
   validator.path_matches(
-    "workstreams/cm2/logs/2026-03-30.jsonl",
-    "workstreams/*/logs/*.jsonl",
+    "domains/cm2/logs/2026-03-30.jsonl",
+    "domains/*/logs/*.jsonl",
   )
   |> should.be_true
   validator.path_matches("config.toml", "*.toml") |> should.be_true

@@ -5,7 +5,7 @@ pub fn task_spec_test() {
   let spec =
     types.TaskSpec(
       id: "acp-cm2-cics967",
-      workstream: "cm2",
+      domain: "cm2",
       prompt: "Fix bug",
       cwd: "~/repos/cm2",
       timeout_ms: 1_800_000,

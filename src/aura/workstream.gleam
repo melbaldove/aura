@@ -51,7 +51,7 @@ pub type WorkstreamResponse {
 pub type WorkstreamState {
   WorkstreamState(
     name: String,
-    config: config.WorkstreamConfig,
+    config: config.DomainConfig,
     llm_config: llm.LlmConfig,
     data_dir: String,
     soul: String,
@@ -122,7 +122,7 @@ fn erlang_localtime() -> #(#(Int, Int, Int), #(Int, Int, Int))
 /// Start the workstream actor
 pub fn start(
   name: String,
-  ws_config: config.WorkstreamConfig,
+  ws_config: config.DomainConfig,
   llm_config: llm.LlmConfig,
   data_dir: String,
   soul: String,

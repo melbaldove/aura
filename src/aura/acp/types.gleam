@@ -1,7 +1,7 @@
 pub type TaskSpec {
   TaskSpec(
     id: String,
-    workstream: String,
+    domain: String,
     prompt: String,
     cwd: String,
     timeout_ms: Int,

@@ -8,11 +8,11 @@ pub type DiscordConfig {
   DiscordConfig(token: String, guild: String, default_channel: String)
 }
 
-/// Model IDs used by each agent role (brain, workstream, ACP, heartbeat, monitor).
+/// Model IDs used by each agent role (brain, domain, ACP, heartbeat, monitor).
 pub type ModelsConfig {
   ModelsConfig(
     brain: String,
-    workstream: String,
+    domain: String,
     acp: String,
     heartbeat: String,
     monitor: String,
@@ -40,15 +40,15 @@ pub type GlobalConfig {
   )
 }
 
-/// Per-workstream configuration loaded from each workstream's `config.toml`.
-pub type WorkstreamConfig {
-  WorkstreamConfig(
+/// Per-domain configuration loaded from each domain's `config.toml`.
+pub type DomainConfig {
+  DomainConfig(
     name: String,
     description: String,
     cwd: String,
     tools: List(String),
     discord_channel: String,
-    model_workstream: String,
+    model_domain: String,
     acp_timeout: Int,
     acp_max_concurrent: Int,
   )
@@ -60,7 +60,7 @@ pub fn default_global() -> GlobalConfig {
     discord: DiscordConfig(token: "", guild: "", default_channel: ""),
     models: ModelsConfig(
       brain: "",
-      workstream: "",
+      domain: "",
       acp: "",
       heartbeat: "",
       monitor: "",
@@ -74,15 +74,15 @@ pub fn default_global() -> GlobalConfig {
   )
 }
 
-/// Return a `WorkstreamConfig` with all fields set to empty/zero defaults.
-pub fn default_workstream() -> WorkstreamConfig {
-  WorkstreamConfig(
+/// Return a `DomainConfig` with all fields set to empty/zero defaults.
+pub fn default_domain() -> DomainConfig {
+  DomainConfig(
     name: "",
     description: "",
     cwd: "",
     tools: [],
     discord_channel: "",
-    model_workstream: "",
+    model_domain: "",
     acp_timeout: 0,
     acp_max_concurrent: 0,
   )
@@ -123,7 +123,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     tom.get_string(doc, ["models", "brain"])
     |> result.map_error(fn(_) { "Missing models.brain" }),
   )
-  use models_workstream <- result.try(
+  use models_domain <- result.try(
     tom.get_string(doc, ["models", "workstream"])
     |> result.map_error(fn(_) { "Missing models.workstream" }),
   )
@@ -166,7 +166,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     ),
     models: ModelsConfig(
       brain: brain,
-      workstream: models_workstream,
+      domain: models_domain,
       acp: models_acp,
       heartbeat: heartbeat,
       monitor: monitor,
@@ -180,10 +180,10 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
   ))
 }
 
-/// Parse a TOML string into a `WorkstreamConfig`. Optional fields
+/// Parse a TOML string into a `DomainConfig`. Optional fields
 /// (`model.workstream`, `acp.timeout`, `acp.max_concurrent`) fall back to
 /// sensible defaults when absent.
-pub fn parse_workstream(toml_string: String) -> Result(WorkstreamConfig, String) {
+pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
   use doc <- result.try(
     tom.parse(toml_string)
     |> result.map_error(fn(e) { "TOML parse error: " <> string_of_parse_error(e) }),
@@ -211,7 +211,7 @@ pub fn parse_workstream(toml_string: String) -> Result(WorkstreamConfig, String)
     |> result.map_error(fn(_) { "Missing discord.channel" }),
   )
 
-  let model_workstream =
+  let model_domain =
     tom.get_string(doc, ["model", "workstream"])
     |> result.unwrap("")
 
@@ -223,13 +223,13 @@ pub fn parse_workstream(toml_string: String) -> Result(WorkstreamConfig, String)
     tom.get_int(doc, ["acp", "max_concurrent"])
     |> result.unwrap(2)
 
-  Ok(WorkstreamConfig(
+  Ok(DomainConfig(
     name: name,
     description: description,
     cwd: cwd,
     tools: extract_strings(tools_raw),
     discord_channel: discord_channel,
-    model_workstream: model_workstream,
+    model_domain: model_domain,
     acp_timeout: acp_timeout,
     acp_max_concurrent: acp_max_concurrent,
   ))

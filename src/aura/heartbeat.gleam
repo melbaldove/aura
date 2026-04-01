@@ -19,7 +19,7 @@ pub type CheckConfig {
     interval_ms: Int,
     skill_name: String,
     skill_args: List(String),
-    workstreams: List(String),
+    domains: List(String),
     model: String,
   )
 }
@@ -203,12 +203,12 @@ fn emit_findings(
   output: String,
   urgency: notification.Urgency,
 ) -> Nil {
-  list.each(state.config.workstreams, fn(workstream) {
+  list.each(state.config.domains, fn(domain) {
     let summary = string.slice(output, 0, 50)
     io.println("[heartbeat:" <> state.config.name <> "] Finding: " <> summary)
     let finding =
       notification.Finding(
-        workstream: workstream,
+        domain: domain,
         summary: output,
         urgency: urgency,
         source: state.config.name,

@@ -31,14 +31,14 @@ fn cleanup_paths(paths: xdg.Paths) -> Nil {
 pub fn append_and_read_anchors_test() {
   let paths = temp_paths("anchors-" <> test_helpers.random_suffix())
   workspace.scaffold(paths) |> should.be_ok
-  workspace.scaffold_workstream(paths, "test-ws", "Test workstream", "test-ws")
+  workspace.scaffold_domain(paths, "test-ws", "Test domain", "test-ws")
   |> should.be_ok
 
   let anchor1 =
     types.Anchor(
       ts: "2026-03-30T10:00:00+08:00",
       anchor_type: "decision",
-      workstream: "test-ws",
+      domain: "test-ws",
       content: "Chose SQLite over JSONL",
       context: "AURA-001",
     )
@@ -48,7 +48,7 @@ pub fn append_and_read_anchors_test() {
     types.Anchor(
       ts: "2026-03-30T11:00:00+08:00",
       anchor_type: "decision",
-      workstream: "test-ws",
+      domain: "test-ws",
       content: "Added FTS5 search",
       context: "AURA-002",
     )
@@ -85,7 +85,7 @@ pub fn read_anchors_missing_file_test() {
 pub fn append_and_read_daily_log_test() {
   let paths = temp_paths("log-" <> test_helpers.random_suffix())
   workspace.scaffold(paths) |> should.be_ok
-  workspace.scaffold_workstream(paths, "test-ws", "Test", "test-ws")
+  workspace.scaffold_domain(paths, "test-ws", "Test", "test-ws")
   |> should.be_ok
 
   let entry =
@@ -110,7 +110,7 @@ pub fn append_and_read_daily_log_test() {
 pub fn append_log_creates_directory_test() {
   let paths = temp_paths("logdir-" <> test_helpers.random_suffix())
   workspace.scaffold(paths) |> should.be_ok
-  workspace.scaffold_workstream(paths, "test-ws", "Test", "test-ws")
+  workspace.scaffold_domain(paths, "test-ws", "Test", "test-ws")
   |> should.be_ok
 
   // Append to a date that has no log file yet — directory creation is implicit
@@ -139,14 +139,14 @@ pub fn read_daily_log_missing_test() {
 pub fn read_anchors_limit_exceeds_count_test() {
   let paths = temp_paths("anchors-lim-" <> test_helpers.random_suffix())
   workspace.scaffold(paths) |> should.be_ok
-  workspace.scaffold_workstream(paths, "test-ws", "Test", "test-ws")
+  workspace.scaffold_domain(paths, "test-ws", "Test", "test-ws")
   |> should.be_ok
 
   let anchor =
     types.Anchor(
       ts: "2026-03-30T09:00:00+08:00",
       anchor_type: "goal",
-      workstream: "test-ws",
+      domain: "test-ws",
       content: "Build a great product",
       context: "AURA-000",
     )
@@ -163,7 +163,7 @@ pub fn read_anchors_limit_exceeds_count_test() {
 pub fn append_multiple_log_entries_test() {
   let paths = temp_paths("multilog-" <> test_helpers.random_suffix())
   workspace.scaffold(paths) |> should.be_ok
-  workspace.scaffold_workstream(paths, "ws1", "WS One", "ws1")
+  workspace.scaffold_domain(paths, "ws1", "WS One", "ws1")
   |> should.be_ok
 
   let e1 = json.object([#("msg", json.string("first entry"))])

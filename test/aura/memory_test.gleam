@@ -28,7 +28,7 @@ pub fn append_event_test() {
   let event =
     types.Event(
       ts: "2026-03-25T14:30:00+08:00",
-      workstream: "cm2",
+      domain: "cm2",
       event_type: "pr_merged",
       ref: "CICS-967",
       summary: "Fixed ACK receipt format",
@@ -48,13 +48,13 @@ pub fn append_event_test() {
 pub fn append_anchor_test() {
   let paths = temp_paths("anchor-" <> test_helpers.random_suffix())
   workspace.scaffold(paths) |> should.be_ok
-  workspace.scaffold_workstream(paths, "cm2", "test", "cm2") |> should.be_ok
+  workspace.scaffold_domain(paths, "cm2", "test", "cm2") |> should.be_ok
 
   let anchor =
     types.Anchor(
       ts: "2026-03-25T14:30:00+08:00",
       anchor_type: "decision",
-      workstream: "cm2",
+      domain: "cm2",
       content: "Test decision",
       context: "TEST-001",
     )
@@ -62,7 +62,7 @@ pub fn append_anchor_test() {
   memory.append_anchor(paths.data, "cm2", anchor) |> should.be_ok
 
   let content =
-    simplifile.read(paths.data <> "/workstreams/cm2/anchors.jsonl")
+    simplifile.read(paths.data <> "/domains/cm2/anchors.jsonl")
     |> should.be_ok
   content
   |> string.contains("Test decision")

@@ -28,16 +28,16 @@ pub fn data_subpath_test() {
   |> should.equal("/home/testuser/.local/share/aura/events.jsonl")
 }
 
-pub fn workstream_config_path_test() {
+pub fn domain_config_path_test() {
   let paths = xdg.resolve_with_home("/home/testuser")
-  xdg.workstream_config_path(paths, "cm2")
-  |> should.equal("/home/testuser/.config/aura/workstreams/cm2/config.toml")
+  xdg.domain_config_path(paths, "cm2")
+  |> should.equal("/home/testuser/.config/aura/domains/cm2/config.toml")
 }
 
-pub fn workstream_data_dir_test() {
+pub fn domain_data_dir_test() {
   let paths = xdg.resolve_with_home("/home/testuser")
-  xdg.workstream_data_dir(paths, "cm2")
-  |> should.equal("/home/testuser/.local/share/aura/workstreams/cm2")
+  xdg.domain_data_dir(paths, "cm2")
+  |> should.equal("/home/testuser/.local/share/aura/domains/cm2")
 }
 
 pub fn env_path_test() {

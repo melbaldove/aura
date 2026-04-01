@@ -13,15 +13,15 @@ const meta_md = "# META.md - What Goes Where
 
 - SOUL.md: Core identity rules, personality, and behavioral boundaries
 - USER.md: User profile, preferences, schedule, cognitive profile
-- workstreams/<name>/config.toml: Per-workstream config (cwd, tools, discord channel)
-- workstreams/<name>/logs/: Raw session logs
-- workstreams/<name>/summaries/: Compressed session summaries
-- workstreams/<name>/anchors.jsonl: Persistent context anchors for this workstream
+- domains/<name>/config.toml: Per-domain config (cwd, tools, discord channel)
+- domains/<name>/logs/: Raw session logs
+- domains/<name>/summaries/: Compressed session summaries
+- domains/<name>/anchors.jsonl: Persistent context anchors for this domain
 - acp/sessions/: Active agent coordination protocol sessions
 - acp/completed/: Completed ACP sessions
 - events.jsonl: Global event log
 
-Golden rule: If it belongs to one workstream, put it in that workstream's directory.
+Golden rule: If it belongs to one domain, put it in that domain's directory.
 "
 
 const user_md = "# USER.md
@@ -55,7 +55,7 @@ urgent_bypass = true
 global_max_concurrent = 4
 "
 
-fn workstream_config_toml(name: String, description: String, channel: String) -> String {
+fn domain_config_toml(name: String, description: String, channel: String) -> String {
   "name = \""
   <> name
   <> "\"\ndescription = \""
@@ -91,7 +91,7 @@ fn create_dir(path: String) -> Result(Nil, String) {
 pub fn scaffold(paths: xdg.Paths) -> Result(Nil, String) {
   // Config directories and files
   use _ <- result.try(create_dir(paths.config))
-  use _ <- result.try(create_dir(paths.config <> "/workstreams"))
+  use _ <- result.try(create_dir(paths.config <> "/domains"))
 
   // Data directories and files
   use _ <- result.try(create_dir(paths.data))
@@ -118,43 +118,43 @@ pub fn scaffold(paths: xdg.Paths) -> Result(Nil, String) {
   Ok(Nil)
 }
 
-pub fn scaffold_workstream(
+pub fn scaffold_domain(
   paths: xdg.Paths,
   name: String,
   description: String,
   channel: String,
 ) -> Result(Nil, String) {
-  // Config dir for workstream
-  let ws_config_dir = paths.config <> "/workstreams/" <> name
-  use _ <- result.try(create_dir(ws_config_dir))
+  // Config dir for domain
+  let domain_config_dir = paths.config <> "/domains/" <> name
+  use _ <- result.try(create_dir(domain_config_dir))
   use _ <- result.try(
     write_if_missing(
-      ws_config_dir <> "/config.toml",
-      workstream_config_toml(name, description, channel),
+      domain_config_dir <> "/config.toml",
+      domain_config_toml(name, description, channel),
     ),
   )
 
-  // Data dir for workstream
-  let ws_data_dir = paths.data <> "/workstreams/" <> name
-  use _ <- result.try(create_dir(ws_data_dir))
-  use _ <- result.try(create_dir(ws_data_dir <> "/logs"))
-  use _ <- result.try(create_dir(ws_data_dir <> "/summaries"))
-  use _ <- result.try(write_if_missing(ws_data_dir <> "/anchors.jsonl", ""))
+  // Data dir for domain
+  let domain_data_dir = paths.data <> "/domains/" <> name
+  use _ <- result.try(create_dir(domain_data_dir))
+  use _ <- result.try(create_dir(domain_data_dir <> "/logs"))
+  use _ <- result.try(create_dir(domain_data_dir <> "/summaries"))
+  use _ <- result.try(write_if_missing(domain_data_dir <> "/anchors.jsonl", ""))
 
   Ok(Nil)
 }
 
-pub fn list_workstreams(paths: xdg.Paths) -> Result(List(String), String) {
-  let ws_dir = paths.config <> "/workstreams"
+pub fn list_domains(paths: xdg.Paths) -> Result(List(String), String) {
+  let domains_dir = paths.config <> "/domains"
   use entries <- result.try(
-    simplifile.read_directory(ws_dir)
+    simplifile.read_directory(domains_dir)
     |> result.map_error(fn(e) {
-      "Failed to read workstreams directory: " <> string.inspect(e)
+      "Failed to read domains directory: " <> string.inspect(e)
     }),
   )
   let dirs =
     list.filter(entries, fn(entry) {
-      case simplifile.is_directory(ws_dir <> "/" <> entry) {
+      case simplifile.is_directory(domains_dir <> "/" <> entry) {
         Ok(True) -> True
         _ -> False
       }

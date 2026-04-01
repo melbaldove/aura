@@ -23,12 +23,12 @@ pub fn read_file_test() {
 
 pub fn write_file_tier1_test() {
   let base = "/tmp/aura-tools-write1-" <> test_helpers.random_suffix()
-  let _ = simplifile.create_directory_all(base <> "/workstreams/cm2/logs")
+  let _ = simplifile.create_directory_all(base <> "/domains/cm2/logs")
 
   // Tier 1 path — should succeed without approval
   tools.write_file(
     base,
-    "workstreams/cm2/logs/2026-03-30.jsonl",
+    "domains/cm2/logs/2026-03-30.jsonl",
     "{\"test\": true}\n",
     [],
     False,

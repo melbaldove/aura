@@ -14,7 +14,7 @@ pub fn default_checks() -> List(heartbeat.CheckConfig) {
       interval_ms: 900_000,
       skill_name: "jira",
       skill_args: ["--action", "assigned-to-me"],
-      workstreams: ["cm2", "hy"],
+      domains: ["cm2", "hy"],
       model: "zai/glm-5-turbo",
     ),
     heartbeat.CheckConfig(
@@ -22,7 +22,7 @@ pub fn default_checks() -> List(heartbeat.CheckConfig) {
       interval_ms: 1_800_000,
       skill_name: "google",
       skill_args: ["--action", "calendar-today"],
-      workstreams: [],
+      domains: [],
       model: "zai/glm-5-turbo",
     ),
     heartbeat.CheckConfig(
@@ -30,7 +30,7 @@ pub fn default_checks() -> List(heartbeat.CheckConfig) {
       interval_ms: 1_800_000,
       skill_name: "jira",
       skill_args: ["--action", "pending-reviews"],
-      workstreams: ["cm2", "hy"],
+      domains: ["cm2", "hy"],
       model: "zai/glm-5-turbo",
     ),
   ]

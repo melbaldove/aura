@@ -73,7 +73,7 @@ fn create_directories(paths: xdg.Paths) -> Result(Nil, String) {
 
   let dirs = [
     paths.config,
-    paths.config <> "/workstreams",
+    paths.config <> "/domains",
     paths.data,
     paths.data <> "/skills",
     paths.state,

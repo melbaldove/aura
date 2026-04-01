@@ -8,8 +8,8 @@ pub type Command {
 
 // --- Pure functions ---
 
-pub fn build_session_name(workstream: String, task_id: String) -> String {
-  "acp-" <> workstream <> "-" <> task_id
+pub fn build_session_name(domain: String, task_id: String) -> String {
+  "acp-" <> domain <> "-" <> task_id
 }
 
 pub fn build_create_command(
