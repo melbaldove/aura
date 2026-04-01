@@ -229,10 +229,10 @@ fn handle_message(
     HandleMessage(msg) -> {
       case route_message(msg.channel_id, state.workstreams) {
         DirectRoute(name) -> {
-          io.println("[brain] Route: DirectRoute(" <> name <> ")")
-          // Spawn a process to avoid blocking the brain actor
-          process.spawn(fn() {
-            handle_routed_message(state, name, msg)
+          io.println("[brain] Route: " <> name <> " — full tool loop")
+          let subj = state.self_subject
+          process.spawn_unlinked(fn() {
+            handle_with_llm(state, msg, subj)
           })
           actor.continue(state)
         }
