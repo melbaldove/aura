@@ -1,0 +1,145 @@
+import aura/memory
+import aura/skill
+import gleam/int
+import gleam/list
+import gleam/string
+import simplifile
+
+/// Domain context loaded from disk for injection into the LLM system prompt.
+pub type DomainContext {
+  DomainContext(
+    agents_md: String,
+    description: String,
+    recent_anchors: List(String),
+    todays_log: String,
+    skill_descriptions: String,
+  )
+}
+
+/// Load domain context from config and data directories.
+pub fn load_context(
+  config_dir: String,
+  data_dir: String,
+  skills: List(skill.SkillInfo),
+) -> DomainContext {
+  let agents_md = case simplifile.read(config_dir <> "/AGENTS.md") {
+    Ok(content) -> content
+    Error(_) -> ""
+  }
+
+  let description = case load_description(config_dir) {
+    Ok(desc) -> desc
+    Error(_) -> ""
+  }
+
+  let domain_name = extract_domain_name(data_dir)
+
+  let recent_anchors = case memory.read_anchors(data_dir, domain_name, 20) {
+    Ok(a) -> a
+    Error(_) -> []
+  }
+
+  let date = today_date_string()
+  let todays_log = case memory.read_daily_log(data_dir, domain_name, date) {
+    Ok(log) -> log
+    Error(_) -> ""
+  }
+
+  let skill_desc = skill.descriptions_for_prompt(skills)
+
+  DomainContext(
+    agents_md: agents_md,
+    description: description,
+    recent_anchors: recent_anchors,
+    todays_log: todays_log,
+    skill_descriptions: skill_desc,
+  )
+}
+
+/// Build a prompt section from domain context.
+pub fn build_domain_prompt(context: DomainContext) -> String {
+  let sections = [
+    build_agents_section(context.agents_md),
+    "## Domain\n" <> case context.description {
+      "" -> "No description."
+      desc -> desc
+    },
+    build_anchors_section(context.recent_anchors),
+    build_log_section(context.todays_log),
+    "## Skills\n" <> case context.skill_descriptions {
+      "" -> "No skills available."
+      desc -> desc
+    },
+  ]
+  string.join(list.filter(sections, fn(s) { s != "" }), "\n\n")
+}
+
+fn build_agents_section(agents_md: String) -> String {
+  case agents_md {
+    "" -> ""
+    content -> "## Domain Instructions\n" <> content
+  }
+}
+
+fn build_anchors_section(anchors: List(String)) -> String {
+  case anchors {
+    [] -> "## Recent Anchors\nNone."
+    _ -> "## Recent Anchors\n" <> string.join(anchors, "\n")
+  }
+}
+
+fn build_log_section(log: String) -> String {
+  case string.trim(log) {
+    "" -> "## Today's Log\nNo activity yet."
+    content -> "## Today's Log\n" <> content
+  }
+}
+
+fn load_description(config_dir: String) -> Result(String, Nil) {
+  case simplifile.read(config_dir <> "/config.toml") {
+    Ok(content) -> {
+      let lines = string.split(content, "\n")
+      case
+        list.find(lines, fn(l) {
+          string.starts_with(string.trim(l), "description")
+        })
+      {
+        Ok(line) -> {
+          case string.split(line, "\"") {
+            [_, value, ..] -> Ok(value)
+            _ -> Error(Nil)
+          }
+        }
+        Error(_) -> Error(Nil)
+      }
+    }
+    Error(_) -> Error(Nil)
+  }
+}
+
+fn extract_domain_name(data_dir: String) -> String {
+  let parts = string.split(data_dir, "/")
+  case list.last(parts) {
+    Ok(name) -> name
+    Error(_) -> ""
+  }
+}
+
+fn today_date_string() -> String {
+  let #(#(year, month, day), _time) = erlang_localtime()
+  int.to_string(year)
+  <> "-"
+  <> pad_zero(month)
+  <> "-"
+  <> pad_zero(day)
+}
+
+fn pad_zero(n: Int) -> String {
+  case n < 10 {
+    True -> "0" <> int.to_string(n)
+    False -> int.to_string(n)
+  }
+}
+
+@external(erlang, "calendar", "local_time")
+fn erlang_localtime() -> #(#(Int, Int, Int), #(Int, Int, Int))
