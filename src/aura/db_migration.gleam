@@ -28,8 +28,8 @@ pub fn migrate_jsonl(
         [] -> Ok(0)
         _ -> {
           // Check if we already have data (don't double-migrate)
-          case db.search(db_subject, "*", 1) {
-            Ok([_, ..]) -> {
+          case db.has_messages(db_subject) {
+            Ok(True) -> {
               io.println(
                 "[migration] Database already has data, skipping JSONL migration",
               )

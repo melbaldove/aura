@@ -88,6 +88,9 @@ pub type DbMessage {
     conversation_id: String,
     workstream: String,
   )
+  HasMessages(
+    reply_to: process.Subject(Result(Bool, String)),
+  )
 }
 
 type DbState {
@@ -241,6 +244,16 @@ pub fn set_workstream(
   })
 }
 
+/// Check if the database has any messages at all.
+/// Used by migration to avoid double-importing JSONL files.
+pub fn has_messages(
+  subject: process.Subject(DbMessage),
+) -> Result(Bool, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    HasMessages(reply_to: reply_to)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
@@ -293,6 +306,12 @@ fn handle_message(
 
     SetWorkstream(reply_to:, conversation_id:, workstream:) -> {
       let result = do_set_workstream(state.conn, conversation_id, workstream)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    HasMessages(reply_to:) -> {
+      let result = do_has_messages(state.conn)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -397,8 +416,15 @@ fn do_search(
   query: String,
   limit: Int,
 ) -> Result(List(SearchResult), String) {
-  // Sanitize FTS5 query by wrapping in double quotes
-  let safe_query = "\"" <> string.replace(query, "\"", "") <> "\""
+  // Sanitize FTS5 query: strip special chars, reject empty
+  let cleaned = query
+    |> string.replace("\"", "")
+    |> string.replace("*", "")
+    |> string.trim
+  case cleaned {
+    "" -> Ok([])
+    _ -> {
+  let safe_query = "\"" <> cleaned <> "\""
 
   sqlight.query(
     "SELECT m.conversation_id, m.role, snippet(messages_fts, 0, '>>>', '<<<', '...', 32) AS snippet, m.content, m.author_name, m.created_at, c.platform, c.platform_id FROM messages_fts AS fts JOIN messages AS m ON fts.rowid = m.id JOIN conversations AS c ON m.conversation_id = c.id WHERE messages_fts MATCH ? ORDER BY fts.rank LIMIT ?",
@@ -409,6 +435,8 @@ fn do_search(
   |> result.map_error(fn(err) {
     "Failed to search messages: " <> string.inspect(err)
   })
+    }
+  }
 }
 
 fn do_update_compaction_summary(
@@ -460,6 +488,19 @@ fn do_set_workstream(
   |> result.map_error(fn(err) {
     "Failed to set workstream: " <> string.inspect(err)
   })
+}
+
+fn do_has_messages(conn: sqlight.Connection) -> Result(Bool, String) {
+  case sqlight.query(
+    "SELECT 1 FROM messages LIMIT 1",
+    on: conn,
+    with: [],
+    expecting: decode.at([0], decode.int),
+  ) {
+    Ok([]) -> Ok(False)
+    Ok(_) -> Ok(True)
+    Error(e) -> Error("Failed to check messages: " <> string.inspect(e))
+  }
 }
 
 // ---------------------------------------------------------------------------
