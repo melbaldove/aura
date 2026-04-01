@@ -31,5 +31,8 @@ docs/plans/
 docs/specs/
 docs/superpowers/
 
+# User skills (personal, not for open source)
+skills/
+
 # Temporary test files
 /tmp/

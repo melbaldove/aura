@@ -8,12 +8,13 @@ import aura/notification
 import aura/poller
 import aura/skill
 import aura/validator
-import aura/workstream_sup
+import aura/workspace
 import aura/xdg
 import gleam/erlang/process
 import gleam/int
 import gleam/io
 import gleam/list
+import simplifile
 import gleam/otp/static_supervisor
 import gleam/result
 import gleam/string
@@ -23,6 +24,9 @@ pub fn start(
   global_config: config.GlobalConfig,
   paths: xdg.Paths,
 ) -> Result(process.Pid, String) {
+  // 0. Migrate workstreams/ → domains/ if needed
+  migrate_directories(paths)
+
   // 1. Load SOUL.md
   let soul = case memory.read_file(xdg.soul_path(paths)) {
     Ok(content) -> content
@@ -57,14 +61,30 @@ pub fn start(
     Error(e) -> io.println("[supervisor] JSONL migration error: " <> e)
   }
 
-  // 4. Start workstream actors
-  use registry <- result.try(
-    workstream_sup.start_all(paths, global_config, soul, all_skills, db_subject),
-  )
-  let brain_domains =
-    list.map(registry.entries, fn(e) {
-      brain.DomainInfo(name: e.name, channel_id: e.channel_id)
-    })
+  // 4. Load domain configs (no actors — brain handles all channels directly)
+  let brain_domains = case workspace.list_domains(paths) {
+    Ok(names) -> {
+      list.filter_map(names, fn(name) {
+        let config_path = xdg.domain_config_path(paths, name)
+        case simplifile.read(config_path) {
+          Ok(toml_content) -> {
+            case config.parse_domain(toml_content) {
+              Ok(cfg) -> Ok(brain.DomainInfo(name: name, channel_id: cfg.discord_channel))
+              Error(e) -> {
+                io.println("[supervisor] Failed to parse domain " <> name <> ": " <> e)
+                Error(Nil)
+              }
+            }
+          }
+          Error(_) -> {
+            io.println("[supervisor] Failed to read config for domain " <> name)
+            Error(Nil)
+          }
+        }
+      })
+    }
+    Error(_) -> []
+  }
   io.println(
     "[supervisor] Domains: "
     <> string.join(list.map(brain_domains, fn(d) { d.name }), ", "),
@@ -97,7 +117,6 @@ pub fn start(
       paths: paths,
       soul: soul,
       domains: brain_domains,
-      registry: registry.entries,
       skill_infos: all_skills,
       validation_rules: validation_rules,
       db_subject: db_subject,
@@ -173,6 +192,55 @@ fn poller_loop(
       process.sleep(delay)
       poller_loop(discord_config, brain_subject, retry_count + 1)
     }
+  }
+}
+
+fn migrate_directories(paths: xdg.Paths) -> Nil {
+  // Config: workstreams/ → domains/
+  let ws_config = paths.config <> "/workstreams"
+  let dom_config = paths.config <> "/domains"
+  case simplifile.is_directory(ws_config) {
+    Ok(True) -> {
+      case simplifile.is_directory(dom_config) {
+        Ok(True) -> Nil
+        _ -> {
+          let _ = simplifile.rename(ws_config, dom_config)
+          io.println("[supervisor] Migrated config/workstreams → config/domains")
+        }
+      }
+    }
+    _ -> Nil
+  }
+  // Data: workstreams/ → domains/
+  let ws_data = paths.data <> "/workstreams"
+  let dom_data = paths.data <> "/domains"
+  case simplifile.is_directory(ws_data) {
+    Ok(True) -> {
+      case simplifile.is_directory(dom_data) {
+        Ok(True) -> Nil
+        _ -> {
+          let _ = simplifile.rename(ws_data, dom_data)
+          io.println("[supervisor] Migrated data/workstreams → data/domains")
+        }
+      }
+    }
+    _ -> Nil
+  }
+  // Create default AGENTS.md for domains that don't have one
+  case workspace.list_domains(paths) {
+    Ok(names) -> {
+      list.each(names, fn(name) {
+        let agents_path = xdg.domain_config_dir(paths, name) <> "/AGENTS.md"
+        case simplifile.is_file(agents_path) {
+          Ok(True) -> Nil
+          _ -> {
+            let _ = simplifile.write(agents_path, "# " <> name <> "\n\nDomain-specific instructions go here.\n")
+            Nil
+          }
+        }
+      })
+    }
+    Error(_) -> Nil
   }
 }
 

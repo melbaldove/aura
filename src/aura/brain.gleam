@@ -17,8 +17,6 @@ import aura/structured_memory
 import aura/tools
 import aura/validator
 import aura/web
-import aura/workstream
-import aura/workstream_sup
 import aura/xdg
 import gleam/dict
 import gleam/dynamic/decode
@@ -67,7 +65,6 @@ pub type BrainConfig {
     paths: xdg.Paths,
     soul: String,
     domains: List(DomainInfo),
-    registry: List(workstream_sup.WorkstreamEntry),
     skill_infos: List(skill.SkillInfo),
     validation_rules: List(validator.Rule),
     db_subject: process.Subject(db.DbMessage),
@@ -85,7 +82,6 @@ pub type BrainState {
     domains: List(DomainInfo),
     soul: String,
     skill_infos: List(skill.SkillInfo),
-    registry: List(workstream_sup.WorkstreamEntry),
     notification_queue: notification.NotificationQueue,
     aura_channel_id: String,
     acp_manager: manager.AcpManager,
@@ -197,7 +193,7 @@ pub fn start(
       paths: brain_config.paths,
       domains: brain_config.domains,
       soul: brain_config.soul,
-      registry: brain_config.registry,
+
       notification_queue: notification.new_queue(),
       aura_channel_id: "",
       acp_manager: manager.new(config.acp_global_max_concurrent),
@@ -399,58 +395,6 @@ fn resolve_domain_channel(state: BrainState, domain: String) -> String {
 
 fn resolve_finding_channel(state: BrainState, finding: notification.Finding) -> String {
   resolve_domain_channel(state, finding.domain)
-}
-
-fn handle_routed_message(
-  state: BrainState,
-  workstream_name: String,
-  msg: discord.IncomingMessage,
-) -> Nil {
-  case list.find(state.registry, fn(e) { e.name == workstream_name }) {
-    Ok(entry) -> {
-      // Show typing indicator while workstream processes
-      let _ = rest.trigger_typing(state.discord_token, msg.channel_id)
-
-      let reply_subject = process.new_subject()
-
-      process.send(
-        entry.subject,
-        workstream.HandleTask(message: msg, reply_to: reply_subject),
-      )
-
-      // Wait for response (with 60s timeout)
-      case process.receive(from: reply_subject, within: 60_000) {
-        Ok(response) -> {
-          case response {
-            workstream.WorkstreamResponse(_, channel_id, content) ->
-              send_discord_response(state.discord_token, channel_id, content)
-            workstream.WorkstreamError(_, channel_id, error) -> {
-              io.println("[brain] Workstream error: " <> error)
-              send_discord_response(
-                state.discord_token,
-                channel_id,
-                "Sorry, I encountered an error.",
-              )
-            }
-          }
-        }
-        Error(Nil) -> {
-          io.println(
-            "[brain] Workstream " <> workstream_name <> " timed out",
-          )
-          send_discord_response(
-            state.discord_token,
-            msg.channel_id,
-            "Request timed out.",
-          )
-        }
-      }
-    }
-    Error(Nil) -> {
-      io.println("[brain] Workstream not found: " <> workstream_name)
-      handle_with_llm(state, msg, state.self_subject, None)
-    }
-  }
 }
 
 /// Spawn a process that sends typing indicators every 8 seconds.
