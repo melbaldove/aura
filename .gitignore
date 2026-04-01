@@ -26,5 +26,10 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Internal plans and specs (contain personal details)
+docs/plans/
+docs/specs/
+docs/superpowers/
+
 # Temporary test files
 /tmp/
