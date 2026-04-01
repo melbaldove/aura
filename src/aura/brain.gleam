@@ -365,14 +365,15 @@ fn handle_message(
       }
 
       // Update in-memory cache (load from DB if not in memory)
+      let cache_key = "discord:" <> channel_id
       let #(hydrated, _, _) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", channel_id, now)
-      let new_convos = conversation.append(hydrated, channel_id, user_msg, assistant_msg)
+      let new_convos = conversation.append(hydrated, cache_key, user_msg, assistant_msg)
 
       // Compress if needed
-      let final_convos = case conversation.needs_compression(new_convos, channel_id, 200_000) {
+      let final_convos = case conversation.needs_compression(new_convos, cache_key, 200_000) {
         True -> {
-          io.println("[brain] Compressing conversation for " <> channel_id)
-          conversation.compress_buffer(new_convos, channel_id, state.llm_config)
+          io.println("[brain] Compressing conversation for " <> cache_key)
+          conversation.compress_buffer(new_convos, cache_key, state.llm_config)
         }
         False -> new_convos
       }
@@ -539,6 +540,7 @@ fn handle_with_llm(
   // Load conversation history (from memory or DB)
   let now_ts = time.now_ms()
   let #(_, _, history) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", msg.channel_id, now_ts)
+  io.println("[brain] Loaded " <> int.to_string(list.length(history)) <> " history messages for " <> msg.channel_id)
   let initial_messages = list.flatten([
     [llm.SystemMessage(system_prompt)],
     history,

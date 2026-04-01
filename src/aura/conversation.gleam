@@ -37,7 +37,7 @@ pub fn load_from_db(
   timestamp: Int,
 ) -> Result(#(String, List(llm.Message)), String) {
   use convo_id <- result.try(db.resolve_conversation(db_subject, platform, platform_id, timestamp))
-  use stored <- result.try(db.load_messages(db_subject, convo_id, 200))
+  use stored <- result.try(db.load_messages(db_subject, convo_id, 40))
   let messages = list.map(stored, fn(m) {
     case m.role {
       "system" -> llm.SystemMessage(m.content)
