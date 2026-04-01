@@ -176,3 +176,38 @@ pub fn set_workstream_test() {
 
   process.send(subject, db.Shutdown)
 }
+
+pub fn load_messages_returns_newest_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "order-test", 1000)
+
+  // Insert 10 messages with distinct timestamps
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 1", "", "", 1000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 2", "", "", 2000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 3", "", "", 3000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 4", "", "", 4000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 5", "", "", 5000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 6", "", "", 6000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 7", "", "", 7000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 8", "", "", 8000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 9", "", "", 9000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 10", "", "", 10_000)
+
+  // Load only 4 — should be the NEWEST 4, in chronological order
+  let assert Ok(messages) = db.load_messages(subject, convo_id, 4)
+  should.equal(list.length(messages), 4)
+
+  // Verify we got the newest messages, not the oldest
+  let assert [m1, m2, m3, m4] = messages
+  should.equal(m1.content, "msg 7")
+  should.equal(m2.content, "msg 8")
+  should.equal(m3.content, "msg 9")
+  should.equal(m4.content, "msg 10")
+
+  // Verify chronological order (ascending timestamps)
+  should.be_true(m1.created_at < m2.created_at)
+  should.be_true(m2.created_at < m3.created_at)
+  should.be_true(m3.created_at < m4.created_at)
+
+  process.send(subject, db.Shutdown)
+}
