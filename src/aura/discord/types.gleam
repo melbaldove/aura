@@ -32,6 +32,11 @@ pub type Embed {
   )
 }
 
+/// A file attached to a Discord message
+pub type Attachment {
+  Attachment(url: String, content_type: String, filename: String)
+}
+
 /// A message received from MESSAGE_CREATE
 pub type ReceivedMessage {
   ReceivedMessage(
@@ -40,6 +45,7 @@ pub type ReceivedMessage {
     guild_id: Option(String),
     author: User,
     content: String,
+    attachments: List(Attachment),
   )
 }
 

@@ -15,6 +15,7 @@ import gleam/uri
 pub type Message {
   SystemMessage(content: String)
   UserMessage(content: String)
+  UserMessageWithImage(content: String, image_url: String)
   AssistantMessage(content: String)
   AssistantToolCallMessage(content: String, tool_calls: List(ToolCall))
   ToolResultMessage(tool_call_id: String, content: String)
@@ -77,12 +78,29 @@ pub fn message_to_json(message: Message) -> json.Json {
         _ -> json.object([#("content", json.string(c)), ..base])
       }
     }
+    UserMessageWithImage(c, url) -> {
+      let text_part =
+        json.object([
+          #("type", json.string("text")),
+          #("text", json.string(c)),
+        ])
+      let image_part =
+        json.object([
+          #("type", json.string("image_url")),
+          #("image_url", json.object([#("url", json.string(url))])),
+        ])
+      json.object([
+        #("role", json.string("user")),
+        #("content", json.preprocessed_array([text_part, image_part])),
+      ])
+    }
     _ -> {
       let #(role, content) = case message {
         SystemMessage(c) -> #("system", c)
         UserMessage(c) -> #("user", c)
         AssistantMessage(c) -> #("assistant", c)
         // These cases are already handled above but needed for exhaustiveness
+        UserMessageWithImage(c, _) -> #("user", c)
         AssistantToolCallMessage(c, _) -> #("assistant", c)
         ToolResultMessage(_, c) -> #("tool", c)
       }

@@ -372,6 +372,13 @@ fn parse_message_create(
     decode.success(types.User(id: id, username: username, bot: bot))
   }
 
+  let attachment_decoder = {
+    use url <- decode.field("url", decode.string)
+    use content_type <- decode.optional_field("content_type", "", decode.string)
+    use filename <- decode.optional_field("filename", "", decode.string)
+    decode.success(types.Attachment(url: url, content_type: content_type, filename: filename))
+  }
+
   let decoder =
     decode.at(["d"], {
       use id <- decode.field("id", decode.string)
@@ -383,16 +390,23 @@ fn parse_message_create(
       )
       use author <- decode.field("author", user_decoder)
       use content <- decode.optional_field("content", "", decode.string)
+      use attachments <- decode.optional_field("attachments", [], decode.list(attachment_decoder))
       decode.success(types.ReceivedMessage(
         id: id,
         channel_id: channel_id,
         guild_id: guild_id,
         author: author,
         content: content,
+        attachments: attachments,
       ))
     })
 
   json.parse(text, decoder)
+}
+
+/// Public wrapper for testing parse_message_create
+pub fn parse_message_create_public(text: String) -> Result(types.ReceivedMessage, json.DecodeError) {
+  parse_message_create(text)
 }
 
 fn parse_invalid_session(text: String) -> Bool {

@@ -493,6 +493,7 @@ fn handle_with_llm(
     let #(role, content) = case m {
       llm.SystemMessage(c) -> #("system", c)
       llm.UserMessage(c) -> #("user", c)
+      llm.UserMessageWithImage(c, _) -> #("user+image", c)
       llm.AssistantMessage(c) -> #("assistant", c)
       llm.AssistantToolCallMessage(c, _) -> #("assistant+tools", c)
       llm.ToolResultMessage(_, c) -> #("tool", c)

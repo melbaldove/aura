@@ -104,3 +104,18 @@ pub fn tool_result_message_test() {
   json_str |> string.contains("tool") |> should.be_true
   json_str |> string.contains("call_1") |> should.be_true
 }
+
+pub fn user_message_with_image_to_json_test() {
+  let msg =
+    llm.UserMessageWithImage(
+      content: "Describe this image",
+      image_url: "https://cdn.discordapp.com/attachments/123/456/image.png",
+    )
+  let json_str = llm.message_to_json(msg) |> json.to_string
+
+  json_str |> string.contains("\"role\":\"user\"") |> should.be_true
+  json_str |> string.contains("\"type\":\"text\"") |> should.be_true
+  json_str |> string.contains("\"type\":\"image_url\"") |> should.be_true
+  json_str |> string.contains("Describe this image") |> should.be_true
+  json_str |> string.contains("image.png") |> should.be_true
+}

@@ -57,6 +57,7 @@ pub fn serialize_messages(messages: List(llm.Message)) -> String {
     case msg {
       llm.SystemMessage(_) -> Error(Nil)
       llm.UserMessage(c) -> Ok("[user]: " <> truncate(c, 500))
+      llm.UserMessageWithImage(c, _) -> Ok("[user]: " <> truncate(c, 500) <> " [image]")
       llm.AssistantMessage(c) -> Ok("[assistant]: " <> truncate(c, 500))
       llm.AssistantToolCallMessage(c, calls) -> {
         let call_names =
@@ -143,6 +144,7 @@ fn message_content(msg: llm.Message) -> String {
   case msg {
     llm.SystemMessage(c) -> c
     llm.UserMessage(c) -> c
+    llm.UserMessageWithImage(c, _) -> c
     llm.AssistantMessage(c) -> c
     llm.AssistantToolCallMessage(c, _) -> c
     llm.ToolResultMessage(_, c) -> c

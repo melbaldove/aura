@@ -24,6 +24,7 @@ pub type IncomingMessage {
     author_name: String,
     content: String,
     is_bot: Bool,
+    attachments: List(discord_types.Attachment),
   )
 }
 
@@ -45,6 +46,7 @@ pub fn from_received(
     author_name: msg.author.username,
     content: msg.content,
     is_bot: msg.author.bot,
+    attachments: msg.attachments,
   )
 }
 

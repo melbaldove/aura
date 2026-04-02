@@ -23,6 +23,7 @@ pub fn incoming_from_received_test() {
       guild_id: option.Some("789"),
       author: discord_types.User(id: "111", username: "melbs", bot: False),
       content: "hello aura",
+      attachments: [],
     )
   let incoming = discord.from_received(received, option.Some("cm2"))
   incoming.channel_name |> should.equal(option.Some("cm2"))

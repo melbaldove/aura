@@ -64,3 +64,28 @@ pub fn heartbeat_payload_null_test() {
   let json_str = payload |> json.to_string
   json_str |> string.contains("null") |> should.be_true
 }
+
+pub fn attachment_type_test() {
+  let att = types.Attachment(
+    url: "https://cdn.discordapp.com/attachments/123/456/image.png",
+    content_type: "image/png",
+    filename: "image.png",
+  )
+  att.url |> should.equal("https://cdn.discordapp.com/attachments/123/456/image.png")
+  att.content_type |> should.equal("image/png")
+}
+
+pub fn received_message_with_attachments_test() {
+  let msg = types.ReceivedMessage(
+    id: "msg1",
+    channel_id: "ch1",
+    guild_id: Some("guild1"),
+    author: types.User(id: "u1", username: "test", bot: False),
+    content: "check this out",
+    attachments: [
+      types.Attachment(url: "https://cdn.discordapp.com/image.png", content_type: "image/png", filename: "image.png"),
+    ],
+  )
+  msg.content |> should.equal("check this out")
+  msg.attachments |> should.not_equal([])
+}
