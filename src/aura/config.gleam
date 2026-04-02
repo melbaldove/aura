@@ -8,7 +8,7 @@ pub type DiscordConfig {
   DiscordConfig(token: String, guild: String, default_channel: String)
 }
 
-/// Model IDs used by each agent role (brain, domain, ACP, heartbeat, monitor).
+/// Model IDs used by each agent role (brain, domain, ACP, heartbeat, monitor, vision).
 pub type ModelsConfig {
   ModelsConfig(
     brain: String,
@@ -16,7 +16,13 @@ pub type ModelsConfig {
     acp: String,
     heartbeat: String,
     monitor: String,
+    vision: String,
   )
+}
+
+/// Vision model configuration (prompt for image description).
+pub type VisionConfig {
+  VisionConfig(prompt: String)
 }
 
 /// Controls when and how digest notifications are delivered.
@@ -36,6 +42,7 @@ pub type GlobalConfig {
     discord: DiscordConfig,
     models: ModelsConfig,
     notifications: NotificationsConfig,
+    vision: VisionConfig,
     acp_global_max_concurrent: Int,
   )
 }
@@ -51,6 +58,8 @@ pub type DomainConfig {
     model_domain: String,
     acp_timeout: Int,
     acp_max_concurrent: Int,
+    vision_model: String,
+    vision_prompt: String,
   )
 }
 
@@ -64,12 +73,14 @@ pub fn default_global() -> GlobalConfig {
       acp: "",
       heartbeat: "",
       monitor: "",
+      vision: "",
     ),
     notifications: NotificationsConfig(
       digest_windows: [],
       timezone: "",
       urgent_bypass: False,
     ),
+    vision: VisionConfig(prompt: ""),
     acp_global_max_concurrent: 0,
   )
 }
@@ -85,6 +96,8 @@ pub fn default_domain() -> DomainConfig {
     model_domain: "",
     acp_timeout: 0,
     acp_max_concurrent: 0,
+    vision_model: "",
+    vision_prompt: "",
   )
 }
 
@@ -158,6 +171,14 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     |> result.map_error(fn(_) { "Missing acp.global_max_concurrent" }),
   )
 
+  let vision_model =
+    tom.get_string(doc, ["models", "vision"])
+    |> result.unwrap("")
+
+  let vision_prompt =
+    tom.get_string(doc, ["vision", "prompt"])
+    |> result.unwrap("")
+
   Ok(GlobalConfig(
     discord: DiscordConfig(
       token: token,
@@ -170,12 +191,14 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
       acp: models_acp,
       heartbeat: heartbeat,
       monitor: monitor,
+      vision: vision_model,
     ),
     notifications: NotificationsConfig(
       digest_windows: extract_strings(digest_windows_raw),
       timezone: timezone,
       urgent_bypass: urgent_bypass,
     ),
+    vision: VisionConfig(prompt: vision_prompt),
     acp_global_max_concurrent: global_max_concurrent,
   ))
 }
@@ -223,6 +246,14 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     tom.get_int(doc, ["acp", "max_concurrent"])
     |> result.unwrap(2)
 
+  let vision_model =
+    tom.get_string(doc, ["models", "vision"])
+    |> result.unwrap("")
+
+  let vision_prompt =
+    tom.get_string(doc, ["vision", "prompt"])
+    |> result.unwrap("")
+
   Ok(DomainConfig(
     name: name,
     description: description,
@@ -232,6 +263,8 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     model_domain: model_domain,
     acp_timeout: acp_timeout,
     acp_max_concurrent: acp_max_concurrent,
+    vision_model: vision_model,
+    vision_prompt: vision_prompt,
   ))
 }
 
