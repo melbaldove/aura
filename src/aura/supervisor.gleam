@@ -3,7 +3,7 @@ import aura/config
 import aura/db
 import aura/db_migration
 import aura/discord/rest
-import aura/heartbeat_sup
+import aura/scheduler
 import aura/memory
 import aura/notification
 import aura/poller
@@ -157,17 +157,21 @@ pub fn start(
   )
   io.println("[supervisor] Brain started")
 
-  // 7. Start heartbeat checks
+  // 7. Start scheduler
+  let schedules_path = xdg.config_path(paths, "schedules.toml")
   let on_finding = fn(finding: notification.Finding) {
     process.send(brain_subject, brain.HeartbeatFinding(finding))
   }
-
-  let _started_checks = heartbeat_sup.start_all(
-    heartbeat_sup.default_checks(),
-    all_skills,
-    on_finding,
-  )
-  io.println("[supervisor] Heartbeat checks started")
+  case scheduler.start(schedules_path, all_skills, on_finding) {
+    Ok(scheduler_subject) -> {
+      io.println("[supervisor] Scheduler started")
+      process.send(brain_subject, brain.SetScheduler(scheduler_subject))
+    }
+    Error(e) -> {
+      io.println("[supervisor] Failed to start scheduler: " <> e)
+      Nil
+    }
+  }
 
   // 8. Start poller with auto-restart
   let discord_config = global_config.discord

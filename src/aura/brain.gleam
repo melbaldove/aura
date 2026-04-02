@@ -12,6 +12,7 @@ import aura/llm
 import aura/memory
 import aura/models
 import aura/notification
+import aura/scheduler
 import aura/skill
 import aura/structured_memory
 import aura/tools
@@ -57,6 +58,7 @@ pub type BrainMessage {
   AcpEvent(acp_monitor.AcpEvent)
   PostWelcome(channel_id: String)
   StoreExchange(channel_id: String, user_msg: String, assistant_msg: String)
+  SetScheduler(process.Subject(scheduler.SchedulerMessage))
 }
 
 /// Configuration passed to brain.start — replaces positional params.
@@ -95,6 +97,7 @@ pub type BrainState {
     self_subject: Option(process.Subject(BrainMessage)),
     global_config: config.GlobalConfig,
     domain_configs: List(#(String, config.DomainConfig)),
+    scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
   )
 }
 
@@ -210,6 +213,7 @@ pub fn start(
       self_subject: None,
       global_config: brain_config.global,
       domain_configs: brain_config.domain_configs,
+      scheduler_subject: None,
     )
 
   actor.new_with_initialiser(10_000, fn(self_subject) {
@@ -370,6 +374,10 @@ fn handle_message(
       }
 
       actor.continue(BrainState(..state, conversations: final_convos))
+    }
+    SetScheduler(subject) -> {
+      io.println("[brain] Scheduler connected")
+      actor.continue(BrainState(..state, scheduler_subject: Some(subject)))
     }
   }
 }
@@ -937,6 +945,34 @@ fn execute_tool(state: BrainState, call: llm.ToolCall) -> String {
         Error(e) -> "Error: " <> e
       }
     }
+    "manage_schedule" -> {
+      let action = get_arg(args, "action")
+      case action {
+        "create" | "delete" -> {
+          let description = case action {
+            "create" -> "Create schedule: " <> get_arg(args, "name") <> " (" <> get_arg(args, "type") <> ")"
+            _ -> "Delete schedule: " <> get_arg(args, "name")
+          }
+          case tools.propose(description, string.inspect(args)) {
+            Ok(output) -> output
+            Error(e) -> "Error: " <> e
+          }
+        }
+        _ -> {
+          case state.scheduler_subject {
+            None -> "Error: Scheduler not started"
+            Some(subj) -> {
+              let reply_subject = process.new_subject()
+              process.send(subj, scheduler.ManageSchedule(action, args, reply_subject))
+              case process.receive(reply_subject, 5000) {
+                Ok(response) -> response
+                Error(_) -> "Error: Scheduler timeout"
+              }
+            }
+          }
+        }
+      }
+    }
     _ -> "Error: Unknown tool " <> call.name
   }
 }
@@ -1012,6 +1048,17 @@ fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ]),
     llm.ToolDefinition(name: "web_fetch", description: "Fetch a web page and extract its text content. Use after web_search to read a specific result, or when the user provides a URL to read.", parameters: [
       llm.ToolParam(name: "url", param_type: "string", description: "The URL to fetch", required: True),
+    ]),
+    llm.ToolDefinition(name: "manage_schedule", description: "Manage scheduled tasks. Use 'list' to see all schedules. Use 'create' to add a new schedule (requires user approval). Use 'delete' to remove a schedule (requires user approval). Use 'pause' or 'resume' to toggle a schedule immediately.", parameters: [
+      llm.ToolParam(name: "action", param_type: "string", description: "One of: list, create, delete, pause, resume", required: True),
+      llm.ToolParam(name: "name", param_type: "string", description: "Schedule name (for create/delete/pause/resume)", required: False),
+      llm.ToolParam(name: "type", param_type: "string", description: "Schedule type: 'interval' or 'cron' (for create)", required: False),
+      llm.ToolParam(name: "every", param_type: "string", description: "Interval like '15m', '1h' (for create with type=interval)", required: False),
+      llm.ToolParam(name: "cron", param_type: "string", description: "Cron expression like '0 9 * * *' (for create with type=cron)", required: False),
+      llm.ToolParam(name: "skill", param_type: "string", description: "Skill name to invoke (for create)", required: False),
+      llm.ToolParam(name: "args", param_type: "string", description: "Arguments for the skill (for create)", required: False),
+      llm.ToolParam(name: "domains", param_type: "string", description: "Comma-separated domain names (for create)", required: False),
+      llm.ToolParam(name: "model", param_type: "string", description: "LLM model for urgency classification (for create, default zai/glm-5-turbo)", required: False),
     ]),
   ]
 }
