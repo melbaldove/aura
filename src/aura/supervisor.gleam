@@ -2,6 +2,7 @@ import aura/brain
 import aura/config
 import aura/db
 import aura/db_migration
+import aura/discord/rest
 import aura/heartbeat_sup
 import aura/memory
 import aura/notification
@@ -61,7 +62,16 @@ pub fn start(
     Error(e) -> io.println("[supervisor] JSONL migration error: " <> e)
   }
 
-  // 4. Load domain configs (no actors — brain handles all channels directly)
+  // 4. Resolve Discord channel name → ID mapping
+  let channel_map = case rest.list_channels(global_config.discord.token, global_config.discord.guild) {
+    Ok(channels) -> channels
+    Error(e) -> {
+      io.println("[supervisor] Failed to list Discord channels: " <> e)
+      []
+    }
+  }
+
+  // 5. Load domain configs (no actors — brain handles all channels directly)
   let brain_domains = case workspace.list_domains(paths) {
     Ok(names) -> {
       list.filter_map(names, fn(name) {
@@ -78,7 +88,14 @@ pub fn start(
         case simplifile.read(config_path) {
           Ok(toml_content) -> {
             case config.parse_domain(toml_content) {
-              Ok(cfg) -> Ok(brain.DomainInfo(name: name, channel_id: cfg.discord_channel))
+              Ok(cfg) -> {
+                // Resolve channel name → ID. If the config value is already numeric, use it directly.
+                let channel_id = case list.find(channel_map, fn(c) { c.0 == cfg.discord_channel }) {
+                  Ok(#(_, id)) -> id
+                  Error(_) -> cfg.discord_channel
+                }
+                Ok(brain.DomainInfo(name: name, channel_id: channel_id))
+              }
               Error(e) -> {
                 io.println("[supervisor] Failed to parse domain " <> name <> ": " <> e)
                 Error(Nil)

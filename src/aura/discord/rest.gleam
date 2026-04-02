@@ -6,6 +6,7 @@ import gleam/httpc
 import gleam/int
 import gleam/io
 import gleam/json
+import gleam/list
 import gleam/result
 import gleam/string
 import gleam/uri
@@ -150,6 +151,45 @@ pub fn list_guilds(token: String) -> Result(List(#(String, String)), String) {
       |> result.map_error(fn(_) { "Failed to parse guilds from response" })
     }
     status -> Error(unexpected_status(status, "users/@me/guilds"))
+  }
+}
+
+/// GET /guilds/{guild_id}/channels — list text channels.
+/// Returns list of (name, id) tuples for text channels (type 0).
+pub fn list_channels(
+  token: String,
+  guild_id: String,
+) -> Result(List(#(String, String)), String) {
+  let url = api_url("/guilds/" <> guild_id <> "/channels")
+  use req <- result.try(authed_request(url, http.Get, token))
+  use resp <- result.try(
+    httpc.send(req)
+    |> result.map_error(fn(_) { "HTTP request failed" }),
+  )
+  case resp.status {
+    200 -> {
+      let channel_decoder =
+        decode.list({
+          use id <- decode.field("id", decode.string)
+          use name <- decode.field("name", decode.string)
+          use channel_type <- decode.field("type", decode.int)
+          decode.success(#(name, id, channel_type))
+        })
+      case json.parse(resp.body, channel_decoder) {
+        Ok(channels) -> {
+          // Filter to text channels (type 0) and return (name, id)
+          Ok(list.filter_map(channels, fn(c) {
+            let #(name, id, t) = c
+            case t {
+              0 -> Ok(#(name, id))
+              _ -> Error(Nil)
+            }
+          }))
+        }
+        Error(_) -> Error("Failed to parse channels from response")
+      }
+    }
+    status -> Error(unexpected_status(status, "guild channels"))
   }
 }
 
