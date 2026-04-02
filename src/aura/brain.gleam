@@ -16,6 +16,7 @@ import aura/skill
 import aura/structured_memory
 import aura/tools
 import aura/validator
+import aura/vision
 import aura/web
 import aura/xdg
 import gleam/dict
@@ -65,6 +66,7 @@ pub type BrainConfig {
     paths: xdg.Paths,
     soul: String,
     domains: List(DomainInfo),
+    domain_configs: List(#(String, config.DomainConfig)),
     skill_infos: List(skill.SkillInfo),
     validation_rules: List(validator.Rule),
     db_subject: process.Subject(db.DbMessage),
@@ -91,6 +93,8 @@ pub type BrainState {
     built_in_tools: List(llm.ToolDefinition),
     conversations: conversation.Buffers,
     self_subject: Option(process.Subject(BrainMessage)),
+    global_config: config.GlobalConfig,
+    domain_configs: List(#(String, config.DomainConfig)),
   )
 }
 
@@ -204,6 +208,8 @@ pub fn start(
       built_in_tools: make_built_in_tools(),
       conversations: conversation.new(),
       self_subject: None,
+      global_config: brain_config.global,
+      domain_configs: brain_config.domain_configs,
     )
 
   actor.new_with_initialiser(10_000, fn(self_subject) {
@@ -483,6 +489,49 @@ fn handle_with_llm(
   }
   let system_prompt = system_prompt <> domain_prompt
 
+  // Vision preprocessing — describe attached images before tool loop
+  let enriched_content = case msg.attachments {
+    [] -> msg.content
+    attachments -> {
+      let image_urls = vision.extract_image_urls(attachments)
+      case image_urls {
+        [] -> msg.content
+        [first_url, ..] -> {
+          // Resolve vision config for this domain
+          let domain_config = case domain_name {
+            Some(name) -> {
+              case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
+                Ok(#(_, cfg)) -> Some(cfg)
+                Error(_) -> None
+              }
+            }
+            None -> None
+          }
+          let vision_config = vision.resolve_vision_config(state.global_config, domain_config)
+          case vision.is_enabled(vision_config) {
+            False -> {
+              io.println("[brain] Vision not configured, skipping image")
+              msg.content
+            }
+            True -> {
+              io.println("[brain] Processing image attachment: " <> first_url)
+              case describe_image(vision_config, first_url) {
+                Ok(description) -> {
+                  io.println("[brain] Vision description: " <> string.slice(description, 0, 100))
+                  "[Image: " <> description <> "]\n\n" <> msg.content
+                }
+                Error(err) -> {
+                  io.println("[brain] Vision error: " <> err)
+                  msg.content
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Load conversation history (from memory or DB)
   let now_ts = time.now_ms()
   let #(_, _, history) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", msg.channel_id, now_ts)
@@ -504,7 +553,7 @@ fn handle_with_llm(
   let initial_messages = list.flatten([
     [llm.SystemMessage(system_prompt)],
     history,
-    [llm.UserMessage(msg.content)],
+    [llm.UserMessage(enriched_content)],
   ])
 
   let result = tool_loop_progressive(state, msg.channel_id, initial_messages, [], "", 0)
@@ -520,7 +569,7 @@ fn handle_with_llm(
       // Save to DB FIRST — before Discord delivery — so the next turn sees this exchange
       let now = time.now_ms()
       let _ = case db.resolve_conversation(state.db_subject, "discord", channel_id, now) {
-        Ok(convo_id) -> conversation.save_to_db(state.db_subject, convo_id, msg.content, response_text, msg.author_id, msg.author_name, now)
+        Ok(convo_id) -> conversation.save_to_db(state.db_subject, convo_id, enriched_content, response_text, msg.author_id, msg.author_name, now)
         Error(_) -> Ok(Nil)
       }
 
@@ -529,7 +578,7 @@ fn handle_with_llm(
 
       // Update in-memory cache (async via actor mailbox — not blocking)
       case brain_subject_opt {
-        Some(subj) -> process.send(subj, StoreExchange(channel_id, msg.content, response_text))
+        Some(subj) -> process.send(subj, StoreExchange(channel_id, enriched_content, response_text))
         None -> Nil
       }
     }
@@ -967,6 +1016,23 @@ fn make_built_in_tools() -> List(llm.ToolDefinition) {
   ]
 }
 
+
+/// Call the vision model to describe an image.
+fn describe_image(
+  vision_config: vision.ResolvedVisionConfig,
+  image_url: String,
+) -> Result(String, String) {
+  use llm_config <- result.try(
+    models.build_llm_config(vision_config.model_spec)
+  )
+  let messages = [
+    llm.UserMessageWithImage(
+      content: vision_config.prompt,
+      image_url: image_url,
+    ),
+  ]
+  llm.chat_with_options(llm_config, messages, None)
+}
 
 // ---------------------------------------------------------------------------
 // Streaming support

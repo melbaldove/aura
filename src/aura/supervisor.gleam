@@ -72,9 +72,9 @@ pub fn start(
   }
 
   // 5. Load domain configs (no actors — brain handles all channels directly)
-  let brain_domains = case workspace.list_domains(paths) {
+  let #(brain_domains, domain_configs) = case workspace.list_domains(paths) {
     Ok(names) -> {
-      list.filter_map(names, fn(name) {
+      let results = list.filter_map(names, fn(name) {
         let config_path = xdg.domain_config_path(paths, name)
         // Ensure AGENTS.md exists for this domain
         let agents_path = xdg.domain_config_dir(paths, name) <> "/AGENTS.md"
@@ -94,7 +94,10 @@ pub fn start(
                   Ok(#(_, id)) -> id
                   Error(_) -> cfg.discord_channel
                 }
-                Ok(brain.DomainInfo(name: name, channel_id: channel_id))
+                Ok(#(
+                  brain.DomainInfo(name: name, channel_id: channel_id),
+                  #(name, cfg),
+                ))
               }
               Error(e) -> {
                 io.println("[supervisor] Failed to parse domain " <> name <> ": " <> e)
@@ -108,8 +111,11 @@ pub fn start(
           }
         }
       })
+      let domains = list.map(results, fn(r) { r.0 })
+      let configs = list.map(results, fn(r) { r.1 })
+      #(domains, configs)
     }
-    Error(_) -> []
+    Error(_) -> #([], [])
   }
   io.println(
     "[supervisor] Domains: "
@@ -143,6 +149,7 @@ pub fn start(
       paths: paths,
       soul: soul,
       domains: brain_domains,
+      domain_configs: domain_configs,
       skill_infos: all_skills,
       validation_rules: validation_rules,
       db_subject: db_subject,
