@@ -5,7 +5,9 @@ import aura/discord/gateway
 import aura/discord/rest
 import aura/discord/types as discord_types
 import gleam/erlang/process
+import gleam/int
 import gleam/io
+import gleam/list
 import gleam/option.{None}
 import gleam/result
 
@@ -31,7 +33,7 @@ pub fn start(
           True -> Nil
           False -> {
             let incoming = discord.from_received(msg, None)
-            io.println("[poller] Message from " <> msg.author.username <> " in " <> msg.channel_id)
+            io.println("[poller] Message from " <> msg.author.username <> " in " <> msg.channel_id <> " (attachments: " <> int.to_string(list.length(msg.attachments)) <> ")")
             process.send(brain_subject, brain.HandleMessage(incoming))
           }
         }

@@ -275,6 +275,53 @@ fn is_due_cron(entry: ScheduleEntry, now_ms: Int) -> Bool {
 }
 
 // ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+fn validate_schedules(entries: List(ScheduleEntry)) -> Nil {
+  list.each(entries, fn(entry) {
+    case entry.config.schedule_type {
+      "interval" -> {
+        case notification.parse_interval(entry.config.every) {
+          Ok(_) -> Nil
+          Error(e) ->
+            io.println(
+              "[scheduler] WARNING: schedule '"
+              <> entry.config.name
+              <> "' has invalid interval '"
+              <> entry.config.every
+              <> "': "
+              <> e,
+            )
+        }
+      }
+      "cron" -> {
+        case cron.parse(entry.config.cron) {
+          Ok(_) -> Nil
+          Error(e) ->
+            io.println(
+              "[scheduler] WARNING: schedule '"
+              <> entry.config.name
+              <> "' has invalid cron '"
+              <> entry.config.cron
+              <> "': "
+              <> e,
+            )
+        }
+      }
+      other ->
+        io.println(
+          "[scheduler] WARNING: schedule '"
+          <> entry.config.name
+          <> "' has unknown type '"
+          <> other
+          <> "'",
+        )
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Actor — start / message handler
 // ---------------------------------------------------------------------------
 
@@ -298,6 +345,7 @@ pub fn start(
       []
     }
   }
+  validate_schedules(entries)
 
   let builder =
     actor.new_with_initialiser(5000, fn(subject) {
@@ -386,6 +434,7 @@ fn handle_message(
           state.entries
         }
       }
+      validate_schedules(new_entries)
       io.println(
         "[scheduler] Reloaded "
         <> int.to_string(list.length(new_entries))

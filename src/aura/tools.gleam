@@ -75,7 +75,15 @@ pub fn run_skill(
 ) -> Result(String, String) {
   case list.find(skills, fn(s) { s.name == name }) {
     Ok(skill_info) -> {
-      let args = string.split(args_str, " ") |> list.filter(fn(a) { a != "" })
+      let args = string.split(args_str, " ")
+        |> list.filter(fn(a) { a != "" })
+        |> list.map(fn(a) {
+          // Strip surrounding quotes that LLMs tend to add
+          case string.starts_with(a, "\"") && string.ends_with(a, "\"") {
+            True -> string.slice(a, 1, string.length(a) - 2)
+            False -> a
+          }
+        })
       io.println("[tools] run_skill: " <> name <> " " <> args_str)
       case skill.invoke(skill_info, args, 30_000) {
         Ok(r) ->

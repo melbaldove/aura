@@ -64,7 +64,10 @@ pub fn send_message(
       // Parse message ID from response
       case json.parse(resp.body, decode.at(["id"], decode.string)) {
         Ok(id) -> Ok(id)
-        Error(_) -> Ok("")
+        Error(_) -> {
+          io.println("[discord] Failed to parse message ID from send response")
+          Ok("")
+        }
       }
     }
     status -> {

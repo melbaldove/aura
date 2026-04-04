@@ -37,7 +37,10 @@ pub fn start(
   // 2. Discover skills
   let all_skills = case skill.discover(xdg.skills_dir(paths)) {
     Ok(skills) -> skills
-    Error(_) -> []
+    Error(e) -> {
+      io.println("[supervisor] Skill discovery failed: " <> e)
+      []
+    }
   }
   io.println(
     "[supervisor] Discovered "

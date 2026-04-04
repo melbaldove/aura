@@ -22,6 +22,20 @@
 
 10. **Design for one, generalize later.** Solve the concrete problem in front of you. Don't abstract for hypothetical future users or platforms until a second case actually exists.
 
+11. **Elegance and efficiency first.** The right solution is as simple as the problem. You can explain it in one sentence. It composes with the rest of the system instead of fighting it. Before writing code, ask: does this solve the general problem or patch this specific instance? Will this still make sense when the next skill, domain, or platform is added?
+
+    **Efficiency means you got there without waste.** When the first attempt feels like it needs a workaround, that's information — the discomfort is telling you the design is wrong. Pause and redesign instead of iterating on patches. Five patches that each make the system slightly worse are not progress, even if the symptom eventually goes away.
+
+    **Signs you're duck-taping instead of solving:**
+    - Hardcoding what should be discovered at runtime.
+    - Patching inputs (stripping quotes, reordering args) instead of fixing the interface that confused the caller.
+    - Adding more instructions to explain how to use something — the tool should be self-evident from its interface.
+    - Growing special cases: if every new input needs a new line of handling, the abstraction is wrong.
+
+    Duck tape is sometimes unavoidable — a third-party API that doesn't work the way it should, an external system you can't control. When you do reach for it, mark it clearly and know what the real fix is. But it should never be the first option.
+
+12. **No silent errors.** When something fails, someone must find out. Two rules: (1) LLM-facing functions never return silent defaults — if a tool call fails, the LLM gets an error string back so it can self-correct or inform the user. Returning `""` or `[]` on failure means the LLM confidently proceeds with garbage. (2) Everything else logs on error — config loading, file reads, and network calls can still fall back to defaults, but the error gets a log line. `Error(_) -> []` without a log is a bug waiting to happen. Optional absence (config field not set) is not an error — don't log that. But a parse failure, a disk error, a network timeout — those are errors, even if the system can continue without the result.
+
 ## Domain model
 
 - Aura is one entity with domain knowledge partitions

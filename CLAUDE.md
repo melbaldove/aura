@@ -36,7 +36,7 @@ supervisor (OneForOne)
 ├── poller      Discord gateway WebSocket
 ├── brain       Routes messages, LLM tool loop, progressive streaming
 ├── (domains loaded as context, not actors)
-├── heartbeat   One actor per monitoring check
+├── scheduler   Config-driven cron + interval schedules
 └── acp         One actor per Claude Code session
 ```
 
@@ -49,18 +49,30 @@ Discord → Gateway → Poller → Brain → Workstream → LLM → Brain → Di
 
 Brain routes by `channel_id` to resolve a domain. Every channel gets the full tool loop — domains are context selectors, not capability boundaries.
 
+### Vision pipeline
+
+```
+User sends image → Gateway parses attachments → Brain detects image
+  → Vision model (GLM-5V-Turbo) describes image → Description prepended to user message
+  → Normal tool loop (GLM-5.1) continues with enriched message
+```
+
+Two-model pipeline: vision model as preprocessor, orchestrator model for tool loop. Config is tiered: domain overrides global overrides built-in defaults. Vision model and prompt configurable per domain via `[models] vision` and `[vision] prompt` in config.toml.
+
 ### Key abstractions
 
 - **Domain** — a knowledge partition representing an area of the user's life (job, project, responsibility). Has its own config, AGENTS.md, anchors, logs, skills, conversation history. One Discord channel per domain.
 - **Conversation** — per-channel message history. In-memory buffer (hot cache) backed by SQLite. Auto-compresses when token count exceeds 50% of context window.
 - **Skill** — a directory with a SKILL.md and optional CLI entrypoint. Instruction-only skills teach the LLM; external skills are invoked as subprocesses.
-- **Tool** — primitive operation the LLM can call. 15 built-in tools (filesystem, Discord, skills, memory, search, web).
+- **Tool** — primitive operation the LLM can call. 16 built-in tools (filesystem, Discord, skills, memory, search, web, schedules).
+- **Schedule** — a config-driven periodic task defined in `schedules.toml`. Supports fixed intervals ("15m") and cron expressions ("0 9 * * *"). Each schedule invokes a skill, classifies urgency via LLM, and emits findings.
 
 ## Source layout
 
 ```
 src/aura/
-  brain.gleam           Core actor — routing, LLM tool loop, streaming
+  brain.gleam           Core actor — routing, LLM tool loop, streaming, vision preprocessing
+  vision.gleam          Vision config resolution, image URL extraction
   conversation.gleam    In-memory buffers, DB load/save, compression
   domain.gleam          Domain context loading (AGENTS.md, anchors, skills)
   db.gleam              SQLite actor (serialized writes, FTS5 search)
@@ -71,6 +83,8 @@ src/aura/
   llm.gleam             OpenAI-compatible chat + streaming + tool calling
   tools.gleam           Built-in tool implementations
   web.gleam             Web search (Brave) and URL fetching with HTML stripping
+  scheduler.gleam       Config-driven scheduler actor (cron + interval)
+  cron.gleam            Cron expression parser and matcher
   skill.gleam           Skill discovery, creation, invocation
   tier.gleam            Path-based write permission tiers
   validator.gleam       TOML-defined validation rules engine
@@ -129,10 +143,19 @@ src/
 
 ### Tool system
 
-- 15 built-in tools defined in `brain.gleam:make_built_in_tools()`
+- 16 built-in tools defined in `brain.gleam:make_built_in_tools()`
 - Tools are static — constructed once at brain startup, stored in `BrainState.built_in_tools`
 - Skill-based tools invoked via `run_skill` tool → subprocess
 - New tools: add definition to `make_built_in_tools()`, add execution case to `execute_tool()`
+
+### Vision
+
+- Two-model pipeline: vision model describes image, orchestrator runs tool loop
+- Vision call is synchronous (`llm.chat_with_options`), runs before the streaming tool loop
+- Config is tiered: domain `config.toml` overrides global `config.toml` overrides built-in defaults
+- `[models] vision` sets the vision model, `[vision] prompt` sets the description prompt
+- Only first image attachment per message is processed
+- Graceful fallback: if vision fails, original message is used without description
 
 ### Streaming
 

@@ -1,6 +1,7 @@
 import aura/memory
 import aura/skill
 import aura/time
+import gleam/io
 import gleam/list
 import gleam/string
 import simplifile
@@ -24,25 +25,38 @@ pub fn load_context(
 ) -> DomainContext {
   let agents_md = case simplifile.read(config_dir <> "/AGENTS.md") {
     Ok(content) -> content
-    Error(_) -> ""
+    Error(simplifile.Enoent) -> ""
+    Error(e) -> {
+      io.println("[domain] Failed to read AGENTS.md: " <> string.inspect(e))
+      ""
+    }
   }
 
   let description = case load_description(config_dir) {
     Ok(desc) -> desc
-    Error(_) -> ""
+    Error(e) -> {
+      io.println("[domain] Failed to load description for " <> config_dir <> ": " <> string.inspect(e))
+      ""
+    }
   }
 
   let domain_name = extract_domain_name(data_dir)
 
   let recent_anchors = case memory.read_anchors(data_dir, domain_name, 20) {
     Ok(a) -> a
-    Error(_) -> []
+    Error(e) -> {
+      io.println("[domain] Failed to read anchors for " <> domain_name <> ": " <> e)
+      []
+    }
   }
 
   let date = time.today_date_string()
   let todays_log = case memory.read_daily_log(data_dir, domain_name, date) {
     Ok(log) -> log
-    Error(_) -> ""
+    Error(e) -> {
+      io.println("[domain] Failed to read daily log for " <> domain_name <> ": " <> e)
+      ""
+    }
   }
 
   let skill_desc = skill.descriptions_for_prompt(skills)
