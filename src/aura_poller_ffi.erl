@@ -5,6 +5,7 @@
 %% Must be called from a process that has trap_exits enabled.
 wait_for_exit() ->
     receive
-        {'EXIT', _Pid, _Reason} ->
-            nil
+        {'EXIT', _Pid, _Reason} -> nil
+    after 300000 ->
+        nil
     end.

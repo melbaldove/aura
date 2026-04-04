@@ -3,6 +3,8 @@
 
 ms_to_time_parts(Ms) ->
     Seconds = Ms div 1000,
+    %% Seconds from year 0 (Gregorian calendar) to Unix epoch (1970-01-01).
+    %% Used to convert between erlang:system_time(millisecond) and calendar module.
     DateTime = calendar:gregorian_seconds_to_datetime(Seconds + 62167219200),
     {{_Year, Month, Day}, {Hour, Minute, _Second}} = DateTime,
     DayOfWeek = calendar:day_of_the_week(element(1, DateTime)),

@@ -19,6 +19,8 @@ connect(Host, Path, CallbackPid) ->
     end).
 
 ws_loop(Host, Path, CallbackPid) ->
+    %% ssl:start() is idempotent in OTP — returns ok or {error, {already_started, ssl}}.
+    %% Called here to ensure availability regardless of startup order.
     ssl:start(),
     Port = 443,
     HostStr = binary_to_list(Host),
@@ -36,13 +38,21 @@ ws_loop(Host, Path, CallbackPid) ->
                     %% Process any piggybacked frames from the upgrade response
                     case Extra of
                         <<>> -> ok;
-                        _ -> process_frames(Extra, Socket, CallbackPid)
+                        _ ->
+                            try
+                                process_frames(Extra, Socket, CallbackPid)
+                            catch
+                                _:Reason ->
+                                    catch ssl:close(Socket),
+                                    CallbackPid ! {ws_error, io_lib:format("~p", [Reason])},
+                                    ok
+                            end
                     end,
                     %% Use passive recv loop — {active, true} unreliable on macOS SSL
                     relay_loop_recv(Socket, CallbackPid, <<>>);
                 {error, Reason} ->
                     CallbackPid ! {ws_error, Reason},
-                    ssl:close(Socket)
+                    catch ssl:close(Socket)
             end;
         {error, Reason} ->
             Msg = iolist_to_binary(
@@ -149,7 +159,7 @@ relay_loop_recv(Socket, CallbackPid, Buffer) ->
                         relay_loop_recv(Socket, CallbackPid, Rest);
                     {error, frame_too_large} ->
                         CallbackPid ! {ws_error, <<"Frame exceeds maximum size">>},
-                        ssl:close(Socket)
+                        catch ssl:close(Socket)
                 end;
             {error, timeout} ->
                 %% No data available — loop back to check for outgoing
@@ -159,7 +169,7 @@ relay_loop_recv(Socket, CallbackPid, Buffer) ->
             {error, Reason} ->
                 CallbackPid ! {ws_error, iolist_to_binary(
                     io_lib:format("SSL error: ~p", [Reason]))},
-                ssl:close(Socket)
+                catch ssl:close(Socket)
         end
     end.
 

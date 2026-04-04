@@ -16,6 +16,8 @@
 %% ---------------------------------------------------------------------------
 
 chat_stream(Url, ApiKey, _Model, BodyJson, CallbackPid) ->
+    %% Idempotent — no-op after first call. Called here to ensure
+    %% availability regardless of startup order.
     ssl:start(),
     inets:start(),
     UrlStr = binary_to_list(Url),
@@ -29,7 +31,13 @@ chat_stream(Url, ApiKey, _Model, BodyJson, CallbackPid) ->
         {ok, RequestId} ->
             %% State: {AccContent, ToolCalls}
             %% ToolCalls = #{Index => {Id, Name, ArgsAcc}}
-            stream_loop(RequestId, CallbackPid, <<>>, <<>>, #{}),
+            try
+                stream_loop(RequestId, CallbackPid, <<>>, <<>>, #{})
+            catch
+                _:Reason ->
+                    httpc:cancel_request(RequestId),
+                    CallbackPid ! {stream_error, io_lib:format("~p", [Reason])}
+            end,
             nil;
         {error, Reason} ->
             CallbackPid ! {stream_error,
