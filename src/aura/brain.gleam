@@ -1,6 +1,7 @@
 import aura/acp/manager
 import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
+import aura/brain_tools
 import aura/config
 import aura/domain
 import aura/time
@@ -9,18 +10,14 @@ import aura/db
 import aura/discord
 import aura/discord/rest
 import aura/llm
-import aura/memory
 import aura/models
 import aura/notification
 import aura/scheduler
 import aura/skill
 import aura/structured_memory
-import aura/tools
 import aura/validator
 import aura/vision
-import aura/web
 import aura/xdg
-import gleam/dict
 import gleam/dynamic/decode
 import gleam/int
 import gleam/io
@@ -31,6 +28,18 @@ import gleam/otp/actor
 import gleam/erlang/process
 import gleam/result
 import gleam/string
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const max_tool_iterations = 20
+
+const stream_idle_timeout_ms = 120_000
+
+const stream_check_interval_ms = 500
+
+const progressive_edit_chars = 150
 
 // ---------------------------------------------------------------------------
 // Types
@@ -209,7 +218,7 @@ pub fn start(
       skill_infos: brain_config.skill_infos,
       skills_dir: xdg.skills_dir(brain_config.paths),
       db_subject: brain_config.db_subject,
-      built_in_tools: make_built_in_tools(),
+      built_in_tools: brain_tools.make_built_in_tools(),
       conversations: conversation.new(),
       self_subject: None,
       global_config: brain_config.global,
@@ -307,56 +316,7 @@ fn handle_message(
         False -> actor.continue(BrainState(..state, aura_channel_id: channel_id))
       }
     }
-    AcpEvent(event) -> {
-      case event {
-        acp_monitor.AcpStarted(session_name, domain, task_id) -> {
-          let msg =
-            "**ACP Started** — "
-            <> task_id
-            <> "\n`tmux attach -t "
-            <> session_name
-            <> "`"
-          let channel = resolve_domain_channel(state, domain)
-          process.spawn(fn() {
-            send_discord_response(state.discord_token, channel, msg)
-          })
-          actor.continue(state)
-        }
-        acp_monitor.AcpAlert(session_name, domain, status, summary) -> {
-          let status_str = acp_types.status_to_string(status)
-          let msg =
-            "**ACP Alert** ["
-            <> status_str
-            <> "] — "
-            <> summary
-            <> "\n`tmux attach -t "
-            <> session_name
-            <> "`"
-          let channel = resolve_domain_channel(state, domain)
-          process.spawn(fn() {
-            send_discord_response(state.discord_token, channel, msg)
-          })
-          actor.continue(state)
-        }
-        acp_monitor.AcpCompleted(session_name, domain, report) -> {
-          let outcome = acp_types.outcome_to_string(report.outcome)
-          let msg =
-            "**ACP Complete** [" <> outcome <> "] — " <> report.anchor
-          handle_acp_completion(state, session_name, domain, msg)
-        }
-        acp_monitor.AcpTimedOut(session_name, domain) -> {
-          let msg =
-            "**ACP Timeout** — Session still alive. `tmux attach -t "
-            <> session_name
-            <> "`"
-          handle_acp_completion(state, session_name, domain, msg)
-        }
-        acp_monitor.AcpFailed(session_name, domain, error) -> {
-          let msg = "**ACP Failed** — " <> error
-          handle_acp_completion(state, session_name, domain, msg)
-        }
-      }
-    }
+    AcpEvent(event) -> handle_acp_event(state, event)
     StoreExchange(channel_id, user_msg, assistant_msg) -> {
       // DB write already done by the spawned process before Discord delivery.
       // This handler only updates the in-memory cache.
@@ -379,6 +339,57 @@ fn handle_message(
     SetScheduler(subject) -> {
       io.println("[brain] Scheduler connected")
       actor.continue(BrainState(..state, scheduler_subject: Some(subject)))
+    }
+  }
+}
+
+fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Next(BrainState, BrainMessage) {
+  case event {
+    acp_monitor.AcpStarted(session_name, domain, task_id) -> {
+      let msg =
+        "**ACP Started** — "
+        <> task_id
+        <> "\n`tmux attach -t "
+        <> session_name
+        <> "`"
+      let channel = resolve_domain_channel(state, domain)
+      process.spawn(fn() {
+        send_discord_response(state.discord_token, channel, msg)
+      })
+      actor.continue(state)
+    }
+    acp_monitor.AcpAlert(session_name, domain, status, summary) -> {
+      let status_str = acp_types.status_to_string(status)
+      let msg =
+        "**ACP Alert** ["
+        <> status_str
+        <> "] — "
+        <> summary
+        <> "\n`tmux attach -t "
+        <> session_name
+        <> "`"
+      let channel = resolve_domain_channel(state, domain)
+      process.spawn(fn() {
+        send_discord_response(state.discord_token, channel, msg)
+      })
+      actor.continue(state)
+    }
+    acp_monitor.AcpCompleted(session_name, domain, report) -> {
+      let outcome = acp_types.outcome_to_string(report.outcome)
+      let msg =
+        "**ACP Complete** [" <> outcome <> "] — " <> report.anchor
+      handle_acp_completion(state, session_name, domain, msg)
+    }
+    acp_monitor.AcpTimedOut(session_name, domain) -> {
+      let msg =
+        "**ACP Timeout** — Session still alive. `tmux attach -t "
+        <> session_name
+        <> "`"
+      handle_acp_completion(state, session_name, domain, msg)
+    }
+    acp_monitor.AcpFailed(session_name, domain, error) -> {
+      let msg = "**ACP Failed** — " <> error
+      handle_acp_completion(state, session_name, domain, msg)
     }
   }
 }
@@ -499,49 +510,9 @@ fn handle_with_llm(
   let system_prompt = system_prompt <> domain_prompt
 
   // Vision preprocessing — describe attached images before tool loop
-  let enriched_content = case msg.attachments {
-    [] -> msg.content
-    attachments -> {
-      let image_urls = vision.extract_image_urls(attachments)
-      case image_urls {
-        [] -> msg.content
-        [first_url, ..] -> {
-          // Resolve vision config for this domain
-          let domain_config = case domain_name {
-            Some(name) -> {
-              case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
-                Ok(#(_, cfg)) -> Some(cfg)
-                Error(_) -> None
-              }
-            }
-            None -> None
-          }
-          let vision_config = vision.resolve_vision_config(state.global_config, domain_config)
-          case vision.is_enabled(vision_config) {
-            False -> {
-              io.println("[brain] Vision not configured, skipping image")
-              msg.content
-            }
-            True -> {
-              io.println("[brain] Processing image attachment: " <> first_url)
-              case describe_image(vision_config, first_url) {
-                Ok(description) -> {
-                  io.println("[brain] Vision description: " <> string.slice(description, 0, 100))
-                  "[Image: " <> description <> "]\n\n" <> msg.content
-                }
-                Error(err) -> {
-                  io.println("[brain] Vision error: " <> err)
-                  msg.content
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
+  let enriched_content = preprocess_vision(state, msg, domain_name)
 
-  // Load conversation history (from memory or DB)
+    // Load conversation history (from memory or DB)
   let now_ts = time.now_ms()
   let #(_, _, history) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", msg.channel_id, now_ts)
   io.println("[brain] Loaded " <> int.to_string(list.length(history)) <> " history messages for " <> msg.channel_id)
@@ -611,7 +582,7 @@ fn tool_loop_progressive(
   message_id: String,
   iteration: Int,
 ) -> Result(#(String, List(conversation.ToolTrace), String), String) {
-  case iteration >= 20 {
+  case iteration >= max_tool_iterations {
     True -> Error("Tool loop exceeded maximum iterations")
     False -> {
       // Spawn streaming LLM call with tools
@@ -621,7 +592,7 @@ fn tool_loop_progressive(
       })
 
       // Collect the streaming response (content + tool calls)
-      case collect_stream_response(state.discord_token, channel_id, message_id, traces, 120_000) {
+      case collect_stream_response(state.discord_token, channel_id, message_id, traces, stream_idle_timeout_ms) {
         Ok(#(content, tool_calls_json, msg_id)) -> {
           let response = parse_streaming_result(content, tool_calls_json)
           case response.tool_calls {
@@ -637,14 +608,25 @@ fn tool_loop_progressive(
               let #(new_traces, tool_results) = list.fold(calls, #(traces, []), fn(acc, call) {
                 let #(acc_traces, acc_results) = acc
                 io.println("[brain] Tool: " <> call.name <> " args: " <> call.arguments)
-                let result = execute_tool(state, call)
+                let tool_ctx = brain_tools.ToolContext(
+                  data_dir: state.paths.data,
+                  discord_token: state.discord_token,
+                  guild_id: state.guild_id,
+                  paths: state.paths,
+                  skill_infos: state.skill_infos,
+                  skills_dir: state.skills_dir,
+                  validation_rules: state.validation_rules,
+                  db_subject: state.db_subject,
+                  scheduler_subject: state.scheduler_subject,
+                )
+                let result = brain_tools.execute_tool(tool_ctx, call)
                 let result_preview = string.slice(result, 0, 100)
                 io.println("[brain] Result: " <> result_preview)
 
                 let is_error = string.starts_with(result, "Error")
                 let trace = conversation.ToolTrace(
                   name: call.name,
-                  args: format_tool_args(call.arguments),
+                  args: brain_tools.format_tool_args(call.arguments),
                   result: result,
                   is_error: is_error,
                 )
@@ -699,12 +681,12 @@ fn collect_stream_loop(
   case remaining_ms <= 0 {
     True -> Error("Stream timeout")
     False -> {
-      let wait = case remaining_ms > 500 { True -> 500 False -> remaining_ms }
+      let wait = case remaining_ms > stream_check_interval_ms { True -> stream_check_interval_ms False -> remaining_ms }
       case receive_stream_message(wait) {
         StreamDelta(delta) -> {
           let new_acc = accumulated <> delta
           // Progressive edit every 150 chars
-          let #(new_msg_id, new_edit_len) = case string.length(new_acc) - last_edit_len > 150 {
+          let #(new_msg_id, new_edit_len) = case string.length(new_acc) - last_edit_len > progressive_edit_chars {
             True -> {
               let display = conversation.format_full_message(traces, new_acc <> " ...")
               #(send_or_edit(token, channel_id, msg_id, display), string.length(new_acc))
@@ -712,11 +694,11 @@ fn collect_stream_loop(
             False -> #(msg_id, last_edit_len)
           }
           // Data received — reset idle timeout to 120s
-          collect_stream_loop(token, channel_id, new_msg_id, traces, new_acc, new_edit_len, 120_000)
+          collect_stream_loop(token, channel_id, new_msg_id, traces, new_acc, new_edit_len, stream_idle_timeout_ms)
         }
         StreamReasoning -> {
           // GLM-5.1 thinking — stream is alive, reset idle timeout
-          collect_stream_loop(token, channel_id, msg_id, traces, accumulated, last_edit_len, 120_000)
+          collect_stream_loop(token, channel_id, msg_id, traces, accumulated, last_edit_len, stream_idle_timeout_ms)
         }
         StreamComplete(content, tool_calls_json) -> {
           // Stream finished — do final Discord edit if we have content
@@ -767,272 +749,50 @@ fn parse_tool_calls_json(json_str: String) -> Result(List(llm.ToolCall), String)
   |> result.map_error(fn(_) { "Failed to parse tool calls JSON" })
 }
 
-fn execute_tool(state: BrainState, call: llm.ToolCall) -> String {
-  let args = parse_tool_args(call.arguments)
-  case get_arg(args, "_parse_error") {
-    "" -> execute_tool_dispatch(state, call.name, args)
-    raw -> {
-      io.println("[brain] Failed to parse tool args for " <> call.name <> ": " <> string.slice(raw, 0, 200))
-      "Error: failed to parse tool arguments. Check the argument format and try again."
-    }
-  }
-}
 
-fn execute_tool_dispatch(state: BrainState, name: String, args: List(#(String, String))) -> String {
-  case name {
-    "read_file" -> {
-      case require_arg(args, "path") {
-        Error(e) -> e
-        Ok(path) -> {
-          case tools.read_file(state.paths.data, path) {
-            Ok(content) -> content
-            Error(e) -> "Error: " <> e
-          }
-        }
-      }
-    }
-    "write_file" -> {
-      case require_arg(args, "path") {
-        Error(e) -> e
-        Ok(path) -> case require_arg(args, "content") {
-          Error(e) -> e
-          Ok(content) -> {
-            case tools.write_file(state.paths.data, path, content, state.validation_rules, False) {
-              Ok(_) -> "File written: " <> path
-              Error(e) -> "Error: " <> e
-            }
-          }
-        }
-      }
-    }
-    "append_file" -> {
-      case require_arg(args, "path") {
-        Error(e) -> e
-        Ok(path) -> case require_arg(args, "content") {
-          Error(e) -> e
-          Ok(content) -> {
-            case tools.append_file(state.paths.data, path, content, state.validation_rules, False) {
-              Ok(_) -> "Appended to: " <> path
-              Error(e) -> "Error: " <> e
-            }
-          }
-        }
-      }
-    }
-    "list_directory" -> {
-      case require_arg(args, "path") {
-        Error(e) -> e
-        Ok(path) -> {
-          case tools.list_directory(state.paths.data, path) {
-            Ok(listing) -> listing
-            Error(e) -> "Error: " <> e
-          }
-        }
-      }
-    }
-    "view_skill" -> {
-      case require_arg(args, "name") {
-        Error(e) -> e
-        Ok(skill_name) -> {
-          case list.find(state.skill_infos, fn(s) { s.name == skill_name }) {
-            Ok(info) -> {
-              case memory.read_file(info.path <> "/SKILL.md") {
-                Ok(content) -> content
-                Error(_) -> "Error: SKILL.md not found for " <> skill_name
+// ---------------------------------------------------------------------------
+// Vision preprocessing
+// ---------------------------------------------------------------------------
+
+/// Preprocess message content with vision descriptions for image attachments.
+fn preprocess_vision(
+  state: BrainState,
+  msg: discord.IncomingMessage,
+  domain_name: Option(String),
+) -> String {
+  case msg.attachments {
+    [] -> msg.content
+    attachments -> {
+      let image_urls = vision.extract_image_urls(attachments)
+      case image_urls {
+        [] -> msg.content
+        [first_url, ..] -> {
+          // Resolve vision config for this domain
+          let domain_config = case domain_name {
+            Some(name) -> {
+              case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
+                Ok(#(_, cfg)) -> Some(cfg)
+                Error(_) -> None
               }
             }
-            Error(_) -> "Error: Skill not found: " <> skill_name
+            None -> None
           }
-        }
-      }
-    }
-    "run_skill" -> {
-      case require_arg(args, "name") {
-        Error(e) -> e
-        Ok(skill_name) -> {
-          case tools.run_skill(state.skill_infos, skill_name, get_arg(args, "args")) {
-            Ok(output) -> output
-            Error(e) -> "Error: " <> e
-          }
-        }
-      }
-    }
-    "propose" -> {
-      case tools.propose(get_arg(args, "description"), get_arg(args, "details")) {
-        Ok(output) -> output
-        Error(e) -> "Error: " <> e
-      }
-    }
-    "list_threads" -> {
-      case rest.get_active_threads(state.discord_token, state.guild_id) {
-        Ok(threads) -> {
-          case threads {
-            [] -> "No active threads found."
-            _ ->
-              list.map(threads, fn(t) {
-                let #(id, tname, parent_id) = t
-                tname <> " (id: " <> id <> ", parent: " <> parent_id <> ")"
-              })
-              |> string.join("\n")
-          }
-        }
-        Error(e) -> "Error: " <> e
-      }
-    }
-    "read_thread" -> {
-      let thread_id = get_arg(args, "thread_id")
-      let limit = case int.parse(get_arg(args, "limit")) {
-        Ok(n) -> n
-        Error(_) -> 20
-      }
-      case rest.get_channel_messages(state.discord_token, thread_id, limit) {
-        Ok(messages) -> {
-          case messages {
-            [] -> "No messages in this thread."
-            _ ->
-              list.reverse(messages)
-              |> list.map(fn(m) {
-                let #(author, content) = m
-                author <> ": " <> content
-              })
-              |> string.join("\n")
-          }
-        }
-        Error(e) -> "Error: " <> e
-      }
-    }
-    "create_skill" -> {
-      case require_arg(args, "name") {
-        Error(e) -> e
-        Ok(skill_name) -> case require_arg(args, "content") {
-          Error(e) -> e
-          Ok(content) -> {
-            case skill.create(state.skills_dir, skill_name, content) {
-              Ok(_) -> "Skill created: " <> skill_name <> ". Available immediately via list_skills and run_skill."
-              Error(e) -> "Error: " <> e
+          let vision_config = vision.resolve_vision_config(state.global_config, domain_config)
+          case vision.is_enabled(vision_config) {
+            False -> {
+              io.println("[brain] Vision not configured, skipping image")
+              msg.content
             }
-          }
-        }
-      }
-    }
-    "list_skills" -> {
-      case skill.list_with_details(state.skills_dir) {
-        Ok(listing) -> listing
-        Error(e) -> "Error: " <> e
-      }
-    }
-    "memory" -> {
-      case require_arg(args, "action") {
-        Error(e) -> e
-        Ok(action) -> {
-          let target = get_arg(args, "target")
-          let content = get_arg(args, "content")
-          let old_text = get_arg(args, "old_text")
-          let path = case target {
-            "user" -> xdg.user_path(state.paths)
-            _ -> xdg.memory_path(state.paths)
-          }
-          case action {
-            "add" -> {
-              case structured_memory.add(path, content) {
-                Ok(_) -> "Memory saved."
-                Error(e) -> "Error: " <> e
-              }
-            }
-            "replace" -> {
-              case structured_memory.replace(path, old_text, content) {
-                Ok(_) -> "Memory updated."
-                Error(e) -> "Error: " <> e
-              }
-            }
-            "remove" -> {
-              case structured_memory.remove(path, old_text) {
-                Ok(_) -> "Memory entry removed."
-                Error(e) -> "Error: " <> e
-              }
-            }
-            "read" -> {
-              case structured_memory.format_for_display(path) {
-                Ok(display) -> display
-                Error(e) -> "Error: " <> e
-              }
-            }
-            _ -> "Error: Unknown action " <> action <> ". Use add, replace, remove, or read."
-          }
-        }
-      }
-    }
-    "search_sessions" -> {
-      let query = get_arg(args, "query")
-      let limit = case int.parse(get_arg(args, "limit")) {
-        Ok(n) -> n
-        Error(_) -> 10
-      }
-      case db.search(state.db_subject, query, limit) {
-        Ok(results) -> {
-          case results {
-            [] -> "No results found for: " <> query
-            _ ->
-              list.map(results, fn(r) {
-                r.author_name <> " (" <> r.platform <> "): " <> r.snippet
-              })
-              |> string.join("\n")
-          }
-        }
-        Error(e) -> "Error: " <> e
-      }
-    }
-    "web_search" -> {
-      case require_arg(args, "query") {
-        Error(e) -> e
-        Ok(query) -> {
-          let limit = case int.parse(get_arg(args, "limit")) {
-            Ok(n) -> n
-            Error(_) -> 5
-          }
-          case web.search(query, limit) {
-            Ok(results) -> web.format_search_results(results)
-            Error(e) -> "Error: " <> e
-          }
-        }
-      }
-    }
-    "web_fetch" -> {
-      case require_arg(args, "url") {
-        Error(e) -> e
-        Ok(url) -> {
-          case web.fetch(url, 3000) {
-            Ok(content) -> content
-            Error(e) -> "Error: " <> e
-          }
-        }
-      }
-    }
-    "manage_schedule" -> {
-      case require_arg(args, "action") {
-        Error(e) -> e
-        Ok(action) -> {
-          case action {
-            "create" | "delete" -> {
-              let description = case action {
-                "create" -> "Create schedule: " <> get_arg(args, "name") <> " (" <> get_arg(args, "type") <> ")"
-                _ -> "Delete schedule: " <> get_arg(args, "name")
-              }
-              case tools.propose(description, string.inspect(args)) {
-                Ok(output) -> output
-                Error(e) -> "Error: " <> e
-              }
-            }
-            _ -> {
-              case state.scheduler_subject {
-                None -> "Error: Scheduler not started"
-                Some(subj) -> {
-                  let reply_subject = process.new_subject()
-                  process.send(subj, scheduler.ManageSchedule(action, args, reply_subject))
-                  case process.receive(reply_subject, 5000) {
-                    Ok(response) -> response
-                    Error(_) -> "Error: Scheduler timeout"
-                  }
+            True -> {
+              io.println("[brain] Processing image attachment: " <> first_url)
+              case describe_image(vision_config, first_url) {
+                Ok(description) -> {
+                  io.println("[brain] Vision description: " <> string.slice(description, 0, 100))
+                  "[Image: " <> description <> "]\n\n" <> msg.content
+                }
+                Error(err) -> {
+                  io.println("[brain] Vision error: " <> err)
+                  msg.content
                 }
               }
             }
@@ -1040,119 +800,9 @@ fn execute_tool_dispatch(state: BrainState, name: String, args: List(#(String, S
         }
       }
     }
-    _ -> "Error: Unknown tool " <> name
   }
 }
 
-/// Parse a JSON object string into key-value pairs. Handles GLM-5.1's
-/// occasional concatenation of multiple JSON objects by taking the first.
-pub fn parse_tool_args(json_str: String) -> List(#(String, String)) {
-  case json.parse(json_str, decode.dict(decode.string, decode.string)) {
-    Ok(d) -> dict.to_list(d)
-    Error(_) -> {
-      // GLM-5.1 sometimes concatenates multiple JSON objects: {...}{...}{...}
-      // Try to parse just the first object by finding the first '}'
-      case string.split_once(json_str, "}{") {
-        Ok(#(first, _)) -> {
-          case json.parse(first <> "}", decode.dict(decode.string, decode.string)) {
-            Ok(d) -> dict.to_list(d)
-            Error(_) -> [#("_parse_error", json_str)]
-          }
-        }
-        Error(_) -> [#("_parse_error", json_str)]
-      }
-    }
-  }
-}
-
-fn format_tool_args(json_str: String) -> String {
-  let args = parse_tool_args(json_str)
-  args
-  |> list.map(fn(pair) { pair.1 })
-  |> string.join(", ")
-}
-
-fn get_arg(args: List(#(String, String)), key: String) -> String {
-  case list.find(args, fn(pair) { pair.0 == key }) {
-    Ok(#(_, value)) -> value
-    Error(_) -> ""
-  }
-}
-
-fn require_arg(args: List(#(String, String)), key: String) -> Result(String, String) {
-  case get_arg(args, key) {
-    "" -> Error("Error: missing required argument '" <> key <> "'")
-    value -> Ok(value)
-  }
-}
-
-fn make_built_in_tools() -> List(llm.ToolDefinition) {
-  [
-    llm.ToolDefinition(name: "read_file", description: "Read a file from the Aura workspace", parameters: [
-      llm.ToolParam(name: "path", param_type: "string", description: "Relative file path", required: True),
-    ]),
-    llm.ToolDefinition(name: "write_file", description: "Write content to a workspace file. Logs, anchors, events, MEMORY.md write immediately. Config and identity files require propose() first.", parameters: [
-      llm.ToolParam(name: "path", param_type: "string", description: "Relative file path", required: True),
-      llm.ToolParam(name: "content", param_type: "string", description: "File content", required: True),
-    ]),
-    llm.ToolDefinition(name: "append_file", description: "Append content to a workspace file. Same rules as write_file.", parameters: [
-      llm.ToolParam(name: "path", param_type: "string", description: "Relative file path", required: True),
-      llm.ToolParam(name: "content", param_type: "string", description: "Content to append", required: True),
-    ]),
-    llm.ToolDefinition(name: "list_directory", description: "List contents of a workspace directory", parameters: [
-      llm.ToolParam(name: "path", param_type: "string", description: "Directory path (use '.' for root)", required: True),
-    ]),
-    llm.ToolDefinition(name: "view_skill", description: "Read a skill's full instructions before using it. Returns the SKILL.md content with exact commands, argument format, and examples. Always call this before run_skill.", parameters: [
-      llm.ToolParam(name: "name", param_type: "string", description: "Skill name", required: True),
-    ]),
-    llm.ToolDefinition(name: "run_skill", description: "Run an installed skill as a CLI subprocess. Call view_skill first to learn the exact command syntax.", parameters: [
-      llm.ToolParam(name: "name", param_type: "string", description: "Skill name", required: True),
-      llm.ToolParam(name: "args", param_type: "string", description: "Arguments string", required: True),
-    ]),
-    llm.ToolDefinition(name: "propose", description: "Propose a change requiring user approval", parameters: [
-      llm.ToolParam(name: "description", param_type: "string", description: "What you want to do", required: True),
-      llm.ToolParam(name: "details", param_type: "string", description: "Details of the change", required: True),
-    ]),
-    llm.ToolDefinition(name: "list_threads", description: "List all active threads in the Discord server", parameters: []),
-    llm.ToolDefinition(name: "read_thread", description: "Read messages from a Discord thread", parameters: [
-      llm.ToolParam(name: "thread_id", param_type: "string", description: "The thread/channel ID to read", required: True),
-      llm.ToolParam(name: "limit", param_type: "string", description: "Max messages to fetch (default 20)", required: False),
-    ]),
-    llm.ToolDefinition(name: "create_skill", description: "Manage skills — your procedural memory. Create reusable approaches for recurring task types. Save as SKILL.md with title, description, and step-by-step instructions. Use after complex tasks (3+ tool calls), tricky error fixes, or discovering non-trivial workflows.", parameters: [
-      llm.ToolParam(name: "name", param_type: "string", description: "Skill name (lowercase, hyphens, underscores, e.g. 'deploy-to-prod'). Max 64 chars.", required: True),
-      llm.ToolParam(name: "content", param_type: "string", description: "Full SKILL.md content with title, description, and step-by-step instructions", required: True),
-    ]),
-    llm.ToolDefinition(name: "list_skills", description: "List all available skills with descriptions. Check before creating a new skill to avoid duplicates, or when deciding which skill to run.", parameters: []),
-    llm.ToolDefinition(name: "memory", description: "Save durable information to persistent memory that survives across sessions. Memory is injected into future turns, so keep it compact and focused on facts that will still matter later. Save when: user corrects you or says 'remember this', user shares preferences/habits/personal details, you discover environment facts (OS, tools, project structure), you learn conventions or quirks. Priority: user preferences and corrections > environment facts > procedural knowledge. Do NOT save: task progress, session outcomes, completed-work logs, temporary TODO state, trivial or easily re-discovered facts.", parameters: [
-      llm.ToolParam(name: "action", param_type: "string", description: "One of: add, replace, remove, read", required: True),
-      llm.ToolParam(name: "target", param_type: "string", description: "'user' (who the user is: name, role, preferences, communication style) or 'memory' (agent notes: environment facts, project conventions, tool quirks, lessons learned)", required: True),
-      llm.ToolParam(name: "content", param_type: "string", description: "Entry text (for add/replace)", required: False),
-      llm.ToolParam(name: "old_text", param_type: "string", description: "Substring to match (for replace/remove)", required: False),
-    ]),
-    llm.ToolDefinition(name: "search_sessions", description: "Search past conversations across all channels and platforms by keyword. Returns matching message snippets with context. Use when the user references something from a past conversation or you need to recall previous discussions.", parameters: [
-      llm.ToolParam(name: "query", param_type: "string", description: "Search terms", required: True),
-      llm.ToolParam(name: "limit", param_type: "string", description: "Max results (default 10)", required: False),
-    ]),
-    llm.ToolDefinition(name: "web_search", description: "Search the web using Brave Search. Use when you need current information, documentation, or facts not in your training data or conversation history.", parameters: [
-      llm.ToolParam(name: "query", param_type: "string", description: "Search query", required: True),
-      llm.ToolParam(name: "limit", param_type: "string", description: "Max results (default 5)", required: False),
-    ]),
-    llm.ToolDefinition(name: "web_fetch", description: "Fetch a web page and extract its text content. Use after web_search to read a specific result, or when the user provides a URL to read.", parameters: [
-      llm.ToolParam(name: "url", param_type: "string", description: "The URL to fetch", required: True),
-    ]),
-    llm.ToolDefinition(name: "manage_schedule", description: "Manage scheduled tasks. Use 'list' to see all schedules. Use 'create' to add a new schedule (requires user approval). Use 'delete' to remove a schedule (requires user approval). Use 'pause' or 'resume' to toggle a schedule immediately.", parameters: [
-      llm.ToolParam(name: "action", param_type: "string", description: "One of: list, create, delete, pause, resume", required: True),
-      llm.ToolParam(name: "name", param_type: "string", description: "Schedule name (for create/delete/pause/resume)", required: False),
-      llm.ToolParam(name: "type", param_type: "string", description: "Schedule type: 'interval' or 'cron' (for create)", required: False),
-      llm.ToolParam(name: "every", param_type: "string", description: "Interval like '15m', '1h' (for create with type=interval)", required: False),
-      llm.ToolParam(name: "cron", param_type: "string", description: "Cron expression like '0 9 * * *' (for create with type=cron)", required: False),
-      llm.ToolParam(name: "skill", param_type: "string", description: "Skill name to invoke (for create)", required: False),
-      llm.ToolParam(name: "args", param_type: "string", description: "Arguments for the skill (for create)", required: False),
-      llm.ToolParam(name: "domains", param_type: "string", description: "Comma-separated domain names (for create)", required: False),
-      llm.ToolParam(name: "model", param_type: "string", description: "LLM model for urgency classification (for create, default zai/glm-5-turbo)", required: False),
-    ]),
-  ]
-}
 /// Call the vision model to describe an image.
 fn describe_image(
   vision_config: vision.ResolvedVisionConfig,
