@@ -107,9 +107,9 @@ pub fn list_directory_test() {
 }
 
 pub fn propose_placeholder_test() {
-  tools.propose("create workstream", "details here")
+  tools.propose("create domain", "details here")
   |> should.be_ok
   let result =
-    tools.propose("create workstream", "details here") |> result.unwrap("")
+    tools.propose("create domain", "details here") |> result.unwrap("")
   string.contains(result, "not yet implemented") |> should.be_true
 }

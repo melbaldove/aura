@@ -136,9 +136,12 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     tom.get_string(doc, ["models", "brain"])
     |> result.map_error(fn(_) { "Missing models.brain" }),
   )
+  // "domain" is the canonical key; fall back to legacy "workstream" for
+  // existing config files that have not been updated yet.
   use models_domain <- result.try(
-    tom.get_string(doc, ["models", "workstream"])
-    |> result.map_error(fn(_) { "Missing models.workstream" }),
+    tom.get_string(doc, ["models", "domain"])
+    |> result.try_recover(fn(_) { tom.get_string(doc, ["models", "workstream"]) })
+    |> result.map_error(fn(_) { "Missing models.domain (or legacy models.workstream)" }),
   )
   use models_acp <- result.try(
     tom.get_string(doc, ["models", "acp"])
@@ -204,8 +207,8 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
 }
 
 /// Parse a TOML string into a `DomainConfig`. Optional fields
-/// (`model.workstream`, `acp.timeout`, `acp.max_concurrent`) fall back to
-/// sensible defaults when absent.
+/// (`model.domain` or legacy `model.workstream`, `acp.timeout`,
+/// `acp.max_concurrent`) fall back to sensible defaults when absent.
 pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
   use doc <- result.try(
     tom.parse(toml_string)
@@ -234,8 +237,10 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     |> result.map_error(fn(_) { "Missing discord.channel" }),
   )
 
+  // "domain" is the canonical key; fall back to legacy "workstream".
   let model_domain =
-    tom.get_string(doc, ["model", "workstream"])
+    tom.get_string(doc, ["model", "domain"])
+    |> result.try_recover(fn(_) { tom.get_string(doc, ["model", "workstream"]) })
     |> result.unwrap("")
 
   let acp_timeout =

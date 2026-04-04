@@ -31,7 +31,7 @@ Describe yourself here. Role, preferences, schedule, cognitive profile.
 
 const memory_md = "# MEMORY.md - Long-Term Memory
 
-Cross-workstream insights, learned patterns, and things that don't belong to one workstream.
+Cross-domain insights, learned patterns, and things that don't belong to one domain.
 "
 
 const config_toml = "[discord]
@@ -41,7 +41,7 @@ default_channel = \"\"
 
 [models]
 brain = \"claude-opus-4-5\"
-workstream = \"claude-sonnet-4-5\"
+domain = \"claude-sonnet-4-5\"
 acp = \"claude-sonnet-4-5\"
 heartbeat = \"claude-haiku-4-5\"
 monitor = \"claude-haiku-4-5\"

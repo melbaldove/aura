@@ -61,7 +61,7 @@ pub fn format_traces_test() {
     conversation.ToolTrace(
       name: "list_directory",
       args: ".",
-      result: "events.jsonl, skills, workstreams",
+      result: "events.jsonl, skills, domains",
       is_error: False,
     ),
     conversation.ToolTrace(

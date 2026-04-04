@@ -11,7 +11,7 @@ default_channel = \"aura\"
 
 [models]
 brain = \"zai/glm-5-turbo\"
-workstream = \"claude/sonnet\"
+domain = \"claude/sonnet\"
 acp = \"claude/opus\"
 heartbeat = \"zai/glm-5-turbo\"
 monitor = \"zai/glm-5-turbo\"
@@ -31,6 +31,7 @@ global_max_concurrent = 4
   let cfg = result |> result.unwrap(config.default_global())
   cfg.discord.guild |> should.equal("aura")
   cfg.models.brain |> should.equal("zai/glm-5-turbo")
+  cfg.models.domain |> should.equal("claude/sonnet")
   cfg.models.acp |> should.equal("claude/opus")
   cfg.notifications.timezone |> should.equal("Asia/Manila")
   cfg.acp_global_max_concurrent |> should.equal(4)
@@ -47,7 +48,7 @@ tools = [\"jira\", \"google\", \"slack\"]
 channel = \"cm2\"
 
 [model]
-workstream = \"claude/opus\"
+domain = \"claude/opus\"
 
 [acp]
 timeout = 1800
@@ -72,7 +73,7 @@ default_channel = \"aura\"
 
 [models]
 brain = \"zai/glm-5.1\"
-workstream = \"zai/glm-5.1\"
+domain = \"zai/glm-5.1\"
 acp = \"claude/opus\"
 heartbeat = \"zai/glm-5-turbo\"
 monitor = \"zai/glm-5-turbo\"
@@ -96,6 +97,7 @@ global_max_concurrent = 4
   cfg.vision.prompt |> should.equal("Describe this image concisely.")
 }
 
+// This test uses the legacy "workstream" key to verify backwards compatibility
 pub fn parse_global_config_without_vision_test() {
   let toml = "
 [discord]

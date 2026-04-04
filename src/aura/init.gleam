@@ -246,7 +246,7 @@ fn generate_config(
         "",
         "[models]",
         "brain = \"" <> brain_model <> "\"",
-        "workstream = \"claude/sonnet\"",
+        "domain = \"claude/sonnet\"",
         "acp = \"claude/opus\"",
         "heartbeat = \"" <> brain_model <> "\"",
         "monitor = \"" <> brain_model <> "\"",
@@ -365,7 +365,7 @@ type = \"valid_toml\"
 message = \"TOML files must parse without errors\"
 
 [[rules]]
-path = \"workstreams/*/anchors.jsonl\"
+path = \"domains/*/anchors.jsonl\"
 type = \"valid_jsonl\"
 message = \"Anchor entries must be valid JSON\"
 
