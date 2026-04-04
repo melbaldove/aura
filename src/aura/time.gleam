@@ -1,5 +1,4 @@
 import gleam/int
-import gleam/string
 
 /// Current time in milliseconds since epoch.
 pub fn now_ms() -> Int {

@@ -27,8 +27,7 @@ pub fn separate_channels_test() {
 pub fn append_does_not_cap_test() {
   // append no longer caps — compression handles overflow separately
   let buffers =
-    list.range(1, 25)
-    |> list.fold(conversation.new(), fn(buf, i) {
+    int.range(from: 1, to: 26, with: conversation.new(), run: fn(buf, i) {
       conversation.append(
         buf,
         "chan-1",
