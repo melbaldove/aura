@@ -116,7 +116,7 @@ pub fn route_message(
   }
 }
 
-/// Build system prompt from SOUL.md content
+/// Build system prompt from soul, domains, skills, memory, and user profile.
 pub fn build_system_prompt(
   soul_content: String,
   domain_names: List(String),
@@ -185,9 +185,6 @@ pub fn build_routing_prompt(
 // ---------------------------------------------------------------------------
 // Actor
 // ---------------------------------------------------------------------------
-
-const default_soul = "You are Aura, a helpful AI assistant. Be direct and concise."
-
 /// Start the brain actor
 pub fn start(
   brain_config: BrainConfig,
@@ -606,19 +603,6 @@ fn handle_with_llm(
     }
   }
 }
-
-/// Drain any remaining stream messages from the mailbox.
-fn drain_stream_messages() -> Nil {
-  case receive_stream_message(0) {
-    StreamTimeout -> Nil
-    StreamDone -> Nil
-    StreamComplete(_, _) -> Nil
-    StreamError(_) -> Nil
-    StreamDelta(_) -> drain_stream_messages()
-    StreamReasoning -> drain_stream_messages()
-  }
-}
-
 fn tool_loop_progressive(
   state: BrainState,
   channel_id: String,
@@ -1060,6 +1044,8 @@ fn execute_tool_dispatch(state: BrainState, name: String, args: List(#(String, S
   }
 }
 
+/// Parse a JSON object string into key-value pairs. Handles GLM-5.1's
+/// occasional concatenation of multiple JSON objects by taking the first.
 pub fn parse_tool_args(json_str: String) -> List(#(String, String)) {
   case json.parse(json_str, decode.dict(decode.string, decode.string)) {
     Ok(d) -> dict.to_list(d)
@@ -1167,8 +1153,6 @@ fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ]),
   ]
 }
-
-
 /// Call the vision model to describe an image.
 fn describe_image(
   vision_config: vision.ResolvedVisionConfig,
