@@ -35,7 +35,7 @@ pub fn build_has_session_command(session_name: String) -> Command {
 }
 
 pub fn build_claude_command(prompt: String, cwd: String) -> String {
-  "cd " <> cwd <> " && claude -p '" <> shell_quote_inner(prompt) <> "'"
+  "cd " <> cwd <> " && claude --dangerously-skip-permissions '" <> shell_quote_inner(prompt) <> "'"
 }
 
 fn shell_quote_inner(s: String) -> String {
