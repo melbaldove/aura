@@ -113,6 +113,7 @@ src/
 ### Code style
 
 - **Gleam** for all business logic. Erlang FFI only when BEAM primitives are needed (raw sockets, receive, system_time).
+- **One Gleam wrapper per FFI function.** `@external` declarations can't be verified at compile time. Each FFI function gets one wrapper in a shared module (e.g., `time.now_ms()`). Other modules import the wrapper, never declare their own `@external` to the same FFI.
 - No unnecessary abstractions. Three similar lines > premature helper.
 - Pure functions where possible. Side effects in actors.
 - `use _ <- result.try(...)` for error propagation (Gleam's Result chaining).

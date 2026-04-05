@@ -36,8 +36,6 @@
 
 12. **No silent errors.** When something fails, someone must find out. Two rules: (1) LLM-facing functions never return silent defaults — if a tool call fails, the LLM gets an error string back so it can self-correct or inform the user. Returning `""` or `[]` on failure means the LLM confidently proceeds with garbage. (2) Everything else logs on error — config loading, file reads, and network calls can still fall back to defaults, but the error gets a log line. `Error(_) -> []` without a log is a bug waiting to happen. Optional absence (config field not set) is not an error — don't log that. But a parse failure, a disk error, a network timeout — those are errors, even if the system can continue without the result.
 
-13. **One wrapper per FFI function.** Erlang FFI bindings (`@external`) can't be verified at compile time — a typo in the function name compiles fine and crashes at runtime. Every FFI function gets exactly one Gleam wrapper in a shared module (e.g., `time.now_ms()` wraps `aura_time_ffi:system_time_ms`). Other modules import the wrapper, never declare their own `@external` to the same FFI. If you need a new FFI call, add it to the appropriate wrapper module.
-
 ## Domain model
 
 - Aura is one entity with domain knowledge partitions
