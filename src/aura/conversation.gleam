@@ -4,6 +4,7 @@ import aura/llm
 import gleam/dict
 import gleam/erlang/process
 import gleam/io
+import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -37,12 +38,23 @@ pub fn load_from_db(
   timestamp: Int,
 ) -> Result(#(String, List(llm.Message)), String) {
   use convo_id <- result.try(db.resolve_conversation(db_subject, platform, platform_id, timestamp))
-  use stored <- result.try(db.load_messages(db_subject, convo_id, 40))
+  use stored <- result.try(db.load_messages(db_subject, convo_id, 80))
   let messages = list.map(stored, fn(m) {
     case m.role {
       "system" -> llm.SystemMessage(m.content)
       "user" -> llm.UserMessage(m.content)
-      "assistant" -> llm.AssistantMessage(m.content)
+      "assistant" -> {
+        case m.tool_calls {
+          "" -> llm.AssistantMessage(m.content)
+          tc_json -> {
+            let calls = llm.parse_tool_calls_json(tc_json)
+            case calls {
+              [] -> llm.AssistantMessage(m.content)
+              _ -> llm.AssistantToolCallMessage(m.content, calls)
+            }
+          }
+        }
+      }
       "tool" -> llm.ToolResultMessage(m.tool_call_id, m.content)
       _ -> llm.UserMessage(m.content)
     }
@@ -62,6 +74,57 @@ pub fn save_to_db(
 ) -> Result(Nil, String) {
   use _ <- result.try(db.append_message(db_subject, conversation_id, "user", user_msg, author_id, author_name, timestamp))
   db.append_message(db_subject, conversation_id, "assistant", assistant_msg, "", "aura", timestamp + 1)
+}
+
+/// Save a full exchange (user message + tool calls + results + final response)
+/// to the database. Each message gets an incrementing timestamp offset to
+/// preserve ordering.
+pub fn save_exchange_to_db(
+  db_subject: process.Subject(db.DbMessage),
+  conversation_id: String,
+  messages: List(llm.Message),
+  author_id: String,
+  author_name: String,
+  timestamp: Int,
+) -> Result(Nil, String) {
+  let _ = list.index_fold(messages, Ok(Nil), fn(acc, msg, idx) {
+    case acc {
+      Error(e) -> Error(e)
+      Ok(_) -> {
+        let #(role, content, tool_call_id, tool_calls_json) = message_to_db_fields(msg)
+        let msg_author_id = case role { "user" -> author_id _ -> "" }
+        let msg_author_name = case role { "user" -> author_name _ -> "aura" }
+        db.append_message_full(db_subject, conversation_id, role, content, msg_author_id, msg_author_name, tool_call_id, tool_calls_json, timestamp + idx)
+      }
+    }
+  })
+}
+
+/// Convert an LLM message to database field tuple: (role, content, tool_call_id, tool_calls_json).
+fn message_to_db_fields(msg: llm.Message) -> #(String, String, String, String) {
+  case msg {
+    llm.UserMessage(c) -> #("user", c, "", "")
+    llm.UserMessageWithImage(c, _) -> #("user", c, "", "")
+    llm.AssistantMessage(c) -> #("assistant", c, "", "")
+    llm.AssistantToolCallMessage(c, calls) -> {
+      let calls_json = json.array(calls, llm.tool_call_to_json) |> json.to_string
+      #("assistant", c, "", calls_json)
+    }
+    llm.ToolResultMessage(id, c) -> #("tool", c, id, "")
+    llm.SystemMessage(c) -> #("system", c, "", "")
+  }
+}
+
+/// Append a full list of messages to the channel buffer.
+/// Used when persisting the complete tool call chain in memory.
+pub fn append_messages(
+  buffers: Buffers,
+  channel_id: String,
+  messages: List(llm.Message),
+) -> Buffers {
+  let history = get_history(buffers, channel_id)
+  let new_history = list.append(history, messages)
+  dict.insert(buffers, channel_id, new_history)
 }
 
 /// Get or load from DB, updating in-memory cache.

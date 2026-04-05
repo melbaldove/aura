@@ -45,7 +45,7 @@ pub type LlmConfig {
 }
 
 /// Encode a ToolCall as a JSON object for the assistant message tool_calls array.
-fn tool_call_to_json(call: ToolCall) -> json.Json {
+pub fn tool_call_to_json(call: ToolCall) -> json.Json {
   json.object([
     #("id", json.string(call.id)),
     #("type", json.string("function")),
@@ -382,6 +382,25 @@ pub fn chat_streaming_with_tools(
   }
   let body_str = json.object(fields) |> json.to_string
   stream_ffi(url, config.api_key, config.model, body_str, callback_pid)
+}
+
+/// Parse a JSON array of tool calls (as stored in the database) back into
+/// a list of `ToolCall` values. Returns an empty list on parse failure.
+pub fn parse_tool_calls_json(json_str: String) -> List(ToolCall) {
+  let function_decoder = {
+    use name <- decode.field("name", decode.string)
+    use arguments <- decode.field("arguments", decode.string)
+    decode.success(#(name, arguments))
+  }
+  let tool_call_decoder = {
+    use id <- decode.field("id", decode.string)
+    use func <- decode.field("function", function_decoder)
+    decode.success(ToolCall(id: id, name: func.0, arguments: func.1))
+  }
+  case json.parse(json_str, decode.list(tool_call_decoder)) {
+    Ok(calls) -> calls
+    Error(_) -> []
+  }
 }
 
 @external(erlang, "aura_stream_ffi", "chat_stream")

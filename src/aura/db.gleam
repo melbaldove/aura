@@ -91,6 +91,17 @@ pub type DbMessage {
   HasMessages(
     reply_to: process.Subject(Result(Bool, String)),
   )
+  AppendMessageFull(
+    reply_to: process.Subject(Result(Nil, String)),
+    conversation_id: String,
+    role: String,
+    content: String,
+    author_id: String,
+    author_name: String,
+    tool_call_id: String,
+    tool_calls: String,
+    timestamp: Int,
+  )
 }
 
 type DbState {
@@ -244,6 +255,34 @@ pub fn set_domain(
   })
 }
 
+/// Append a message with full tool call metadata (tool_call_id, tool_calls JSON).
+/// Used when persisting the complete tool call chain.
+pub fn append_message_full(
+  subject: process.Subject(DbMessage),
+  conversation_id: String,
+  role: String,
+  content: String,
+  author_id: String,
+  author_name: String,
+  tool_call_id: String,
+  tool_calls: String,
+  timestamp: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    AppendMessageFull(
+      reply_to: reply_to,
+      conversation_id: conversation_id,
+      role: role,
+      content: content,
+      author_id: author_id,
+      author_name: author_name,
+      tool_call_id: tool_call_id,
+      tool_calls: tool_calls,
+      timestamp: timestamp,
+    )
+  })
+}
+
 /// Check if the database has any messages at all.
 /// Used by migration to avoid double-importing JSONL files.
 pub fn has_messages(
@@ -312,6 +351,12 @@ fn handle_message(
 
     HasMessages(reply_to:) -> {
       let result = do_has_messages(state.conn)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    AppendMessageFull(reply_to:, conversation_id:, role:, content:, author_id:, author_name:, tool_call_id:, tool_calls:, timestamp:) -> {
+      let result = do_append_message_full(state.conn, conversation_id, role, content, author_id, author_name, tool_call_id, tool_calls, timestamp)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -385,6 +430,38 @@ fn do_append_message(
       sqlight.text(content),
       sqlight.text(author_id),
       sqlight.text(author_name),
+      sqlight.int(timestamp),
+    ],
+    expecting: decode.success(Nil),
+  )
+  |> result.map(fn(_) { Nil })
+  |> result.map_error(fn(err) {
+    "Failed to insert message: " <> string.inspect(err)
+  })
+}
+
+fn do_append_message_full(
+  conn: sqlight.Connection,
+  conversation_id: String,
+  role: String,
+  content: String,
+  author_id: String,
+  author_name: String,
+  tool_call_id: String,
+  tool_calls: String,
+  timestamp: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "INSERT INTO messages (conversation_id, role, content, author_id, author_name, tool_call_id, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    on: conn,
+    with: [
+      sqlight.text(conversation_id),
+      sqlight.text(role),
+      sqlight.text(content),
+      sqlight.text(author_id),
+      sqlight.text(author_name),
+      sqlight.text(tool_call_id),
+      sqlight.text(tool_calls),
       sqlight.int(timestamp),
     ],
     expecting: decode.success(Nil),

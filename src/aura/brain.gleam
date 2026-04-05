@@ -66,7 +66,7 @@ pub type BrainMessage {
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
   PostWelcome(channel_id: String)
-  StoreExchange(channel_id: String, user_msg: String, assistant_msg: String)
+  StoreExchange(channel_id: String, messages: List(llm.Message))
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
 }
 
@@ -317,13 +317,13 @@ fn handle_message(
       }
     }
     AcpEvent(event) -> handle_acp_event(state, event)
-    StoreExchange(channel_id, user_msg, assistant_msg) -> {
+    StoreExchange(channel_id, messages) -> {
       // DB write already done by the spawned process before Discord delivery.
       // This handler only updates the in-memory cache.
       let now = time.now_ms()
       let cache_key = "discord:" <> channel_id
       let #(hydrated, _, _) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", channel_id, now)
-      let new_convos = conversation.append(hydrated, cache_key, user_msg, assistant_msg)
+      let new_convos = conversation.append_messages(hydrated, cache_key, messages)
 
       // Compress if needed
       let final_convos = case conversation.needs_compression(new_convos, cache_key, 200_000) {
@@ -536,7 +536,7 @@ fn handle_with_llm(
     [llm.UserMessage(enriched_content)],
   ])
 
-  let result = tool_loop_progressive(state, msg.channel_id, initial_messages, [], "", 0)
+  let result = tool_loop_progressive(state, msg.channel_id, initial_messages, [], "", 0, [])
 
   // Stop typing indicator before any final edits
   stop_typing_loop(typing_stop)
@@ -545,12 +545,16 @@ fn handle_with_llm(
   let channel_id = msg.channel_id
 
   case result {
-    Ok(#(response_text, traces, msg_id)) -> {
+    Ok(#(response_text, traces, msg_id, new_messages)) -> {
+      // Build the full turn: user message + tool chain + final response
+      let user_msg = llm.UserMessage(enriched_content)
+      let all_turn_messages = [user_msg, ..new_messages]
+
       // Save to DB FIRST — before Discord delivery — so the next turn sees this exchange
       let now = time.now_ms()
       case db.resolve_conversation(state.db_subject, "discord", channel_id, now) {
         Ok(convo_id) -> {
-          case conversation.save_to_db(state.db_subject, convo_id, enriched_content, response_text, msg.author_id, msg.author_name, now) {
+          case conversation.save_exchange_to_db(state.db_subject, convo_id, all_turn_messages, msg.author_id, msg.author_name, now) {
             Ok(_) -> Nil
             Error(e) -> io.println("[brain] DB save failed for " <> channel_id <> ": " <> e)
           }
@@ -563,7 +567,7 @@ fn handle_with_llm(
 
       // Update in-memory cache (async via actor mailbox — not blocking)
       case brain_subject_opt {
-        Some(subj) -> process.send(subj, StoreExchange(channel_id, enriched_content, response_text))
+        Some(subj) -> process.send(subj, StoreExchange(channel_id, all_turn_messages))
         None -> Nil
       }
     }
@@ -581,7 +585,8 @@ fn tool_loop_progressive(
   traces: List(conversation.ToolTrace),
   message_id: String,
   iteration: Int,
-) -> Result(#(String, List(conversation.ToolTrace), String), String) {
+  new_messages: List(llm.Message),
+) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message)), String) {
   case iteration >= max_tool_iterations {
     True -> Error("Tool loop exceeded maximum iterations")
     False -> {
@@ -598,7 +603,8 @@ fn tool_loop_progressive(
           case response.tool_calls {
             [] -> {
               // No tool calls — return the text response with accumulated traces
-              Ok(#(response.content, traces, msg_id))
+              let final_new_messages = list.append(new_messages, [llm.AssistantMessage(response.content)])
+              Ok(#(response.content, traces, msg_id, final_new_messages))
             }
             calls -> {
               // Execute tool calls and continue the loop
@@ -641,13 +647,17 @@ fn tool_loop_progressive(
               // Send or edit message with current trace progress
               let new_message_id = send_or_edit(state.discord_token, channel_id, message_id, progress_text)
 
-              // Build new messages: original + assistant response + tool results
-              let new_messages = list.append(messages, [
+              // Track new messages from this iteration: assistant tool call + tool results
+              let iteration_messages = [
                 llm.AssistantToolCallMessage(response.content, calls),
                 ..tool_results
-              ])
+              ]
+              let updated_new_messages = list.append(new_messages, iteration_messages)
 
-              tool_loop_progressive(state, channel_id, new_messages, new_traces, new_message_id, iteration + 1)
+              // Build full messages for the next LLM call: all prior messages + this iteration
+              let updated_messages = list.append(messages, iteration_messages)
+
+              tool_loop_progressive(state, channel_id, updated_messages, new_traces, new_message_id, iteration + 1, updated_new_messages)
             }
           }
         }
