@@ -35,7 +35,7 @@ pub fn build_has_session_command_test() {
 pub fn build_claude_command_test() {
   let cmd = tmux.build_claude_command("fix the bug", "~/repos/cm2")
   cmd |> string.contains("cd ~/repos/cm2") |> should.be_true
-  cmd |> string.contains("claude -p --dangerously-skip-permissions") |> should.be_true
+  cmd |> string.contains("claude --dangerously-skip-permissions") |> should.be_true
 }
 
 pub fn build_claude_command_escapes_single_quotes_test() {
