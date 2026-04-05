@@ -1,4 +1,9 @@
+import aura/acp/manager
+import aura/acp/monitor as acp_monitor
+import aura/acp/tmux as acp_tmux
+import aura/acp/types as acp_types
 import aura/db
+import aura/time
 import aura/discord/rest
 import aura/llm
 import aura/memory
@@ -36,6 +41,10 @@ pub type ToolContext {
     validation_rules: List(validator.Rule),
     db_subject: process.Subject(db.DbMessage),
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
+    acp_manager: manager.AcpManager,
+    on_acp_event: fn(acp_monitor.AcpEvent) -> Nil,
+    monitor_model: String,
+    domain_name: String,
   )
 }
 
@@ -359,6 +368,54 @@ fn execute_tool_dispatch(
                 }
               }
             }
+          }
+        }
+      }
+    }
+    "acp_dispatch" -> {
+      case require_arg(args, "prompt") {
+        Error(e) -> e
+        Ok(prompt) -> {
+          let task_id = "t" <> int.to_string(time.now_ms())
+          let cwd = case get_arg(args, "cwd") {
+            "" -> "."
+            c -> c
+          }
+          let timeout_ms = case int.parse(get_arg(args, "timeout_minutes")) {
+            Ok(m) -> m * 60_000
+            Error(_) -> 30 * 60_000
+          }
+          let task_spec = acp_types.TaskSpec(
+            id: task_id,
+            domain: ctx.domain_name,
+            prompt: prompt,
+            cwd: cwd,
+            timeout_ms: timeout_ms,
+            acceptance_criteria: [],
+          )
+          case manager.dispatch(ctx.acp_manager, task_spec, ctx.monitor_model, ctx.on_acp_event) {
+            Ok(_) -> {
+              let session_name = "acp-" <> ctx.domain_name <> "-" <> task_id
+              "ACP session started: " <> session_name <> "\nAttach with: `tmux attach -t " <> session_name <> "`"
+            }
+            Error(e) -> "Error: " <> e
+          }
+        }
+      }
+    }
+    "acp_status" -> {
+      case require_arg(args, "session_name") {
+        Error(e) -> e
+        Ok(session_name) -> {
+          case acp_tmux.capture_pane(session_name) {
+            Ok(output) -> {
+              let tail = case string.length(output) > 500 {
+                True -> "...\n" <> string.slice(output, string.length(output) - 500, 500)
+                False -> output
+              }
+              "Session: " <> session_name <> "\n\n" <> tail
+            }
+            Error(_) -> "Session not found or not running: " <> session_name
           }
         }
       }
@@ -720,6 +777,42 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           param_type: "string",
           description: "LLM model for urgency classification (for create, default zai/glm-5-turbo)",
           required: False,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
+      name: "acp_dispatch",
+      description: "Dispatch a Claude Code session to work on a task autonomously in a tmux session. The session runs in the background — you'll get Discord notifications on progress, alerts, and completion. Use for coding tasks that take multiple steps.",
+      parameters: [
+        llm.ToolParam(
+          name: "prompt",
+          param_type: "string",
+          description: "The full task prompt for Claude Code. Be specific about what to do, which files, and acceptance criteria.",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "cwd",
+          param_type: "string",
+          description: "Working directory for the session (absolute path)",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "timeout_minutes",
+          param_type: "string",
+          description: "Max duration in minutes (default 30)",
+          required: False,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
+      name: "acp_status",
+      description: "Check the current output of a running ACP (Claude Code) session. Shows the last 500 characters of the tmux pane.",
+      parameters: [
+        llm.ToolParam(
+          name: "session_name",
+          param_type: "string",
+          description: "The tmux session name (e.g. acp-hy-t1234567)",
+          required: True,
         ),
       ],
     ),

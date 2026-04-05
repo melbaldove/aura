@@ -536,7 +536,28 @@ fn handle_with_llm(
     [llm.UserMessage(enriched_content)],
   ])
 
-  let result = tool_loop_progressive(state, msg.channel_id, initial_messages, [], "", 0, [])
+  let tool_ctx = brain_tools.ToolContext(
+    data_dir: state.paths.data,
+    discord_token: state.discord_token,
+    guild_id: state.guild_id,
+    paths: state.paths,
+    skill_infos: state.skill_infos,
+    skills_dir: state.skills_dir,
+    validation_rules: state.validation_rules,
+    db_subject: state.db_subject,
+    scheduler_subject: state.scheduler_subject,
+    acp_manager: state.acp_manager,
+    on_acp_event: fn(event) {
+      case brain_subject_opt {
+        Some(subj) -> process.send(subj, AcpEvent(event))
+        None -> Nil
+      }
+    },
+    monitor_model: state.global_config.models.monitor,
+    domain_name: option.unwrap(domain_name, "aura"),
+  )
+
+  let result = tool_loop_progressive(state, tool_ctx, msg.channel_id, initial_messages, [], "", 0, [])
 
   // Stop typing indicator before any final edits
   stop_typing_loop(typing_stop)
@@ -580,6 +601,7 @@ fn handle_with_llm(
 }
 fn tool_loop_progressive(
   state: BrainState,
+  tool_ctx: brain_tools.ToolContext,
   channel_id: String,
   messages: List(llm.Message),
   traces: List(conversation.ToolTrace),
@@ -614,17 +636,6 @@ fn tool_loop_progressive(
               let #(new_traces, tool_results) = list.fold(calls, #(traces, []), fn(acc, call) {
                 let #(acc_traces, acc_results) = acc
                 io.println("[brain] Tool: " <> call.name <> " args: " <> call.arguments)
-                let tool_ctx = brain_tools.ToolContext(
-                  data_dir: state.paths.data,
-                  discord_token: state.discord_token,
-                  guild_id: state.guild_id,
-                  paths: state.paths,
-                  skill_infos: state.skill_infos,
-                  skills_dir: state.skills_dir,
-                  validation_rules: state.validation_rules,
-                  db_subject: state.db_subject,
-                  scheduler_subject: state.scheduler_subject,
-                )
                 let result = brain_tools.execute_tool(tool_ctx, call)
                 let result_preview = string.slice(result, 0, 100)
                 io.println("[brain] Result: " <> result_preview)
@@ -657,7 +668,7 @@ fn tool_loop_progressive(
               // Build full messages for the next LLM call: all prior messages + this iteration
               let updated_messages = list.append(messages, iteration_messages)
 
-              tool_loop_progressive(state, channel_id, updated_messages, new_traces, new_message_id, iteration + 1, updated_new_messages)
+              tool_loop_progressive(state, tool_ctx, channel_id, updated_messages, new_traces, new_message_id, iteration + 1, updated_new_messages)
             }
           }
         }
