@@ -45,6 +45,7 @@ pub type ToolContext {
     on_acp_event: fn(acp_monitor.AcpEvent) -> Nil,
     monitor_model: String,
     domain_name: String,
+    domain_cwd: String,
   )
 }
 
@@ -378,7 +379,11 @@ fn execute_tool_dispatch(
         Ok(prompt) -> {
           let task_id = "t" <> int.to_string(time.now_ms())
           let cwd = case get_arg(args, "cwd") {
-            "" -> "."
+            "" -> case ctx.domain_cwd {
+              "" -> "."
+              "." -> "."
+              d -> d
+            }
             c -> c
           }
           let timeout_ms = case int.parse(get_arg(args, "timeout_minutes")) {

@@ -542,6 +542,15 @@ fn handle_with_llm(
     },
     monitor_model: state.global_config.models.monitor,
     domain_name: option.unwrap(domain_name, "aura"),
+    domain_cwd: case domain_name {
+      Some(name) -> {
+        case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
+          Ok(#(_, cfg)) -> cfg.cwd
+          Error(_) -> "."
+        }
+      }
+      None -> "."
+    },
   )
 
   let result = tool_loop_progressive(state, tool_ctx, msg.channel_id, initial_messages, [], "", 0, [])
