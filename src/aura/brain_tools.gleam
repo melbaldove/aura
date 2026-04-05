@@ -505,7 +505,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "run_skill",
-      description: "Run an installed skill as a CLI subprocess. Call view_skill first to learn the exact command syntax.",
+      description: "Run an installed skill as a CLI subprocess. Call view_skill first to learn the exact command syntax. Pass args as a JSON array where each element is one argument — this avoids quoting issues with spaces in values.",
       parameters: [
         llm.ToolParam(
           name: "name",
@@ -516,7 +516,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         llm.ToolParam(
           name: "args",
           param_type: "string",
-          description: "Arguments string",
+          description: "JSON array of arguments, e.g. [\"--instance\", \"HY\", \"tickets\", \"search\", \"project = HY AND status = To Do\"]",
           required: True,
         ),
       ],

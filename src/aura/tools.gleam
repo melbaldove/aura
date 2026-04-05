@@ -1,8 +1,10 @@
 import aura/skill
 import aura/tier
 import aura/validator
+import gleam/dynamic/decode
 import gleam/int
 import gleam/io
+import gleam/json
 import gleam/list
 import gleam/result
 import gleam/string
@@ -75,8 +77,12 @@ pub fn run_skill(
 ) -> Result(String, String) {
   case list.find(skills, fn(s) { s.name == name }) {
     Ok(skill_info) -> {
-      let args = split_shell_args(args_str)
-      io.println("[tools] run_skill: " <> name <> " " <> args_str)
+      // Parse args as JSON array first (structured), fall back to shell splitting (legacy)
+      let args = case json.parse(args_str, decode.list(decode.string)) {
+        Ok(parsed) -> parsed
+        Error(_) -> split_shell_args(args_str)
+      }
+      io.println("[tools] run_skill: " <> name <> " " <> string.inspect(args))
       case skill.invoke(skill_info, args, 30_000) {
         Ok(r) ->
           case r.exit_code {
