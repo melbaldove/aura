@@ -13,7 +13,7 @@ import gleam/string
 // FFI
 // ---------------------------------------------------------------------------
 
-@external(erlang, "aura_time_ffi", "now_ms")
+@external(erlang, "aura_time_ffi", "system_time_ms")
 fn now_ms() -> Int
 
 // ---------------------------------------------------------------------------
