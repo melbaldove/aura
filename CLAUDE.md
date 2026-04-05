@@ -209,6 +209,15 @@ When making any non-trivial change, check whether these need updating:
 6. Update tool count in CLAUDE.md
 7. The tool is available to the LLM immediately
 
+### Add a new domain
+
+1. Create the domain directory: `~/domains/<name>/` with `repos/`, `plans/`, `notes/` subdirs
+2. Create `config.toml` with name, description, cwd (domain root), tools, discord channel
+3. Create `AGENTS.md` with repo index, domain expertise, jira instance if applicable
+4. Create the Discord channel (if it doesn't exist)
+5. Add the domain path to `trustedDirectories` in `~/.claude/settings.json` on Eisenhower (both domain root and repo paths) — required for ACP sessions to start without the trust prompt
+6. Restart Aura to pick up the new domain
+
 ### Add a new Discord REST endpoint
 
 1. Add the function to `src/aura/discord/rest.gleam`
