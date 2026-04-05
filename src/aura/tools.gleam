@@ -75,15 +75,7 @@ pub fn run_skill(
 ) -> Result(String, String) {
   case list.find(skills, fn(s) { s.name == name }) {
     Ok(skill_info) -> {
-      let args = string.split(args_str, " ")
-        |> list.filter(fn(a) { a != "" })
-        |> list.map(fn(a) {
-          // Strip surrounding quotes that LLMs tend to add
-          case string.starts_with(a, "\"") && string.ends_with(a, "\"") {
-            True -> string.slice(a, 1, string.length(a) - 2)
-            False -> a
-          }
-        })
+      let args = split_shell_args(args_str)
       io.println("[tools] run_skill: " <> name <> " " <> args_str)
       case skill.invoke(skill_info, args, 30_000) {
         Ok(r) ->
@@ -124,6 +116,52 @@ fn check_tier(path: String, approved: Bool) -> Result(Nil, String) {
       Error(
         "This path requires approval. Use propose() first. Path: " <> path,
       )
+  }
+}
+
+/// Split a string into args respecting quoted substrings.
+/// `tickets search "project = HY"` → ["tickets", "search", "project = HY"]
+/// Handles both double and single quotes. Strips the quotes from the result.
+pub fn split_shell_args(input: String) -> List(String) {
+  split_shell_args_loop(string.to_graphemes(input), "", [], False, "")
+}
+
+fn split_shell_args_loop(
+  chars: List(String),
+  current: String,
+  acc: List(String),
+  in_quote: Bool,
+  quote_char: String,
+) -> List(String) {
+  case chars {
+    [] -> {
+      case current {
+        "" -> list.reverse(acc)
+        _ -> list.reverse([current, ..acc])
+      }
+    }
+    [c, ..rest] -> {
+      case in_quote {
+        True -> {
+          case c == quote_char {
+            True -> split_shell_args_loop(rest, current, acc, False, "")
+            False -> split_shell_args_loop(rest, current <> c, acc, True, quote_char)
+          }
+        }
+        False -> {
+          case c {
+            "\"" | "'" -> split_shell_args_loop(rest, current, acc, True, c)
+            " " -> {
+              case current {
+                "" -> split_shell_args_loop(rest, "", acc, False, "")
+                _ -> split_shell_args_loop(rest, "", [current, ..acc], False, "")
+              }
+            }
+            _ -> split_shell_args_loop(rest, current <> c, acc, False, "")
+          }
+        }
+      }
+    }
   }
 }
 

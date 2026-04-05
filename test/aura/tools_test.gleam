@@ -106,6 +106,31 @@ pub fn list_directory_test() {
   Nil
 }
 
+pub fn split_shell_args_simple_test() {
+  tools.split_shell_args("tickets assigned")
+  |> should.equal(["tickets", "assigned"])
+}
+
+pub fn split_shell_args_quoted_test() {
+  tools.split_shell_args("tickets search \"project = HY AND status = To Do\"")
+  |> should.equal(["tickets", "search", "project = HY AND status = To Do"])
+}
+
+pub fn split_shell_args_single_quotes_test() {
+  tools.split_shell_args("tickets search 'status = To Do'")
+  |> should.equal(["tickets", "search", "status = To Do"])
+}
+
+pub fn split_shell_args_mixed_test() {
+  tools.split_shell_args("--instance HY tickets search \"project = HY\"")
+  |> should.equal(["--instance", "HY", "tickets", "search", "project = HY"])
+}
+
+pub fn split_shell_args_empty_test() {
+  tools.split_shell_args("")
+  |> should.equal([])
+}
+
 pub fn propose_placeholder_test() {
   tools.propose("create domain", "details here")
   |> should.be_ok
