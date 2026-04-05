@@ -3,18 +3,12 @@ import aura/acp/tmux
 import aura/acp/types
 import aura/llm
 import aura/models
+import aura/time
 import gleam/erlang/process
 import gleam/io
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/string
-
-// ---------------------------------------------------------------------------
-// FFI
-// ---------------------------------------------------------------------------
-
-@external(erlang, "aura_time_ffi", "system_time_ms")
-fn now_ms() -> Int
 
 // ---------------------------------------------------------------------------
 // Types
@@ -89,7 +83,7 @@ pub fn start(
         models.build_llm_config(monitor_model)
         |> option.from_result
 
-      let started_at = now_ms()
+      let started_at = time.now_ms()
 
       let builder =
         actor.new_with_initialiser(5000, fn(subject) {
@@ -244,7 +238,7 @@ fn check_timeout_and_continue(
   state: MonitorState,
   output: String,
 ) -> actor.Next(MonitorState, MonitorMessage) {
-  let elapsed = now_ms() - state.started_at_ms
+  let elapsed = time.now_ms() - state.started_at_ms
   case elapsed > state.task_spec.timeout_ms {
     True -> {
       state.on_event(AcpTimedOut(
