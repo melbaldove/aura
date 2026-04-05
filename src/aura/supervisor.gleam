@@ -176,19 +176,12 @@ pub fn start(
     }
   }
 
-  // 8. Start poller with auto-restart
+  // 8. Start OTP supervisor with gateway as supervised child
   let discord_config = global_config.discord
-  let _poller_pid =
-    process.spawn_unlinked(fn() {
-      poller_loop(discord_config, brain_subject, 0)
-    })
-  io.println("[supervisor] Poller started")
-
-  // 9. Start OTP supervisor
-  // (poller_loop is defined below)
   let result =
     static_supervisor.new(static_supervisor.OneForOne)
-    |> static_supervisor.restart_tolerance(intensity: 3, period: 5)
+    |> static_supervisor.restart_tolerance(intensity: 10, period: 60)
+    |> static_supervisor.add(poller.supervised(discord_config, brain_subject))
     |> static_supervisor.start
 
   case result {
@@ -200,40 +193,6 @@ pub fn start(
   }
 }
 
-/// Poller loop with auto-restart and backoff.
-/// Traps exits so gateway actor crashes are caught instead of propagated.
-fn poller_loop(
-  discord_config: config.DiscordConfig,
-  brain_subject: process.Subject(brain.BrainMessage),
-  retry_count: Int,
-) -> Nil {
-  // Trap exits so linked gateway actor crash doesn't kill us
-  process.trap_exits(True)
-
-  io.println("[poller-loop] Starting poller (attempt " <> int.to_string(retry_count + 1) <> ")")
-  case poller.start(discord_config, brain_subject) {
-    Ok(Nil) -> {
-      // Poller connected — wait for the gateway to die
-      // (we'll receive an exit message since we're trapping exits)
-      io.println("[poller-loop] Gateway connected, monitoring...")
-      wait_for_exit()
-      io.println("[poller-loop] Gateway exited, restarting in 5s...")
-      process.sleep(5000)
-      poller_loop(discord_config, brain_subject, 0)
-    }
-    Error(e) -> {
-      let delay = case retry_count {
-        0 -> 1000
-        1 -> 5000
-        2 -> 15000
-        _ -> 30000
-      }
-      io.println("[poller-loop] Poller error: " <> e <> ", retrying in " <> int.to_string(delay) <> "ms")
-      process.sleep(delay)
-      poller_loop(discord_config, brain_subject, retry_count + 1)
-    }
-  }
-}
 
 fn migrate_directories(paths: xdg.Paths) -> Nil {
   migrate_dir(paths.config <> "/workstreams", paths.config <> "/domains", "config")
@@ -247,5 +206,3 @@ fn migrate_dir(from: String, to: String, label: String) -> Nil {
   }
 }
 
-@external(erlang, "aura_poller_ffi", "wait_for_exit")
-fn wait_for_exit() -> Nil

@@ -37,13 +37,13 @@ pub type GatewayMessage {
 // ---------------------------------------------------------------------------
 
 /// Connect to Discord gateway via raw WebSocket.
-/// Returns the PID of the gateway actor.
+/// Returns the started actor (pid + subject).
 pub fn connect(
   token: String,
   intents: Int,
   gateway_url: String,
   on_event: fn(types.GatewayEvent) -> Nil,
-) -> Result(process.Pid, String) {
+) -> Result(actor.Started(process.Subject(GatewayMessage)), String) {
   // Parse host from URL (e.g., "wss://gateway.discord.gg" -> "gateway.discord.gg")
   let host = case string.split(gateway_url, "//") {
     [_, rest] -> case string.split(rest, "/") {
@@ -90,7 +90,7 @@ pub fn connect(
     |> actor.start
 
   case result {
-    Ok(started) -> Ok(started.pid)
+    Ok(started) -> Ok(started)
     Error(err) -> Error("Gateway failed: " <> string.inspect(err))
   }
 }
