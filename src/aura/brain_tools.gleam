@@ -376,13 +376,11 @@ fn execute_tool_dispatch(
     "acp_dispatch" -> {
       case require_arg(args, "prompt") {
         Error(e) -> e
-        Ok(prompt) -> {
+        Ok(prompt) -> case require_arg(args, "repo") {
+          Error(e) -> e
+          Ok(repo) -> {
           let task_id = "t" <> int.to_string(time.now_ms())
-          let cwd = case ctx.domain_cwd {
-            "" -> "."
-            "." -> "."
-            d -> d
-          }
+          let cwd = ctx.domain_cwd <> "/" <> repo
           let timeout_ms = case int.parse(get_arg(args, "timeout_minutes")) {
             Ok(m) -> m * 60_000
             Error(_) -> 30 * 60_000
@@ -402,6 +400,7 @@ fn execute_tool_dispatch(
             }
             Error(e) -> "Error: " <> e
           }
+        }
         }
       }
     }
@@ -783,12 +782,18 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "acp_dispatch",
-      description: "Dispatch a Claude Code session to work on a task autonomously in a tmux session. The session runs in the domain's working directory. You'll get Discord notifications on progress, alerts, and completion. Use for coding tasks that take multiple steps.",
+      description: "Dispatch a Claude Code session to work on a task autonomously in a tmux session. Check the domain's AGENTS.md to find which repo to use. You'll get Discord notifications on progress, alerts, and completion.",
       parameters: [
         llm.ToolParam(
           name: "prompt",
           param_type: "string",
           description: "The full task prompt for Claude Code. Be specific about what to do, which files, and acceptance criteria.",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "repo",
+          param_type: "string",
+          description: "Repo path relative to domain root (e.g. 'repos/cm2'). Check AGENTS.md for available repos.",
           required: True,
         ),
         llm.ToolParam(
