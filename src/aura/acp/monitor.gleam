@@ -71,6 +71,9 @@ pub fn start(
   let session_name =
     tmux.build_session_name(task_spec.domain, task_spec.id)
 
+  // Ensure the working directory is trusted by Claude Code
+  let _ = tmux.ensure_trusted(task_spec.cwd)
+
   // Build claude command with report instructions appended to prompt
   let full_prompt = task_spec.prompt <> "\n\n" <> report_instructions
   let shell_command = tmux.build_claude_command(full_prompt, task_spec.cwd)

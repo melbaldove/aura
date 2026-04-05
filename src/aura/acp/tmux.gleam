@@ -1,4 +1,6 @@
 import aura/cmd
+import aura/time
+import gleam/erlang/process
 import gleam/int
 import gleam/string
 
@@ -75,6 +77,32 @@ pub fn create_session(
 pub fn capture_pane(session_name: String) -> Result(String, String) {
   let cmd = build_capture_command(session_name)
   run(cmd)
+}
+
+/// Ensure a directory is trusted by Claude Code.
+/// Launches claude, sends Enter to accept the trust prompt, waits, kills session.
+pub fn ensure_trusted(cwd: String) -> Result(Nil, String) {
+  let session_name = "aura-trust-" <> int.to_string(time.now_ms())
+  let shell_command = "cd " <> cwd <> " && claude --dangerously-skip-permissions 'echo trusted'"
+  case create_session(session_name, shell_command) {
+    Error(e) -> Error("Failed to create trust session: " <> e)
+    Ok(Nil) -> {
+      // Wait for trust prompt to appear
+      process.sleep(3000)
+      // Send Enter to accept
+      send_keys(session_name, "Enter")
+      // Wait for claude to start and respond
+      process.sleep(5000)
+      // Kill the session
+      let _ = kill_session(session_name)
+      Ok(Nil)
+    }
+  }
+}
+
+fn send_keys(session_name: String, keys: String) -> Nil {
+  let _ = cmd.run("tmux", ["send-keys", "-t", session_name, keys], 5000)
+  Nil
 }
 
 pub fn kill_session(session_name: String) -> Result(Nil, String) {
