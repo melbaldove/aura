@@ -149,6 +149,7 @@ fn handle_check(
 fn handle_session_ended(
   state: MonitorState,
 ) -> actor.Next(MonitorState, MonitorMessage) {
+  io.println("[acp-monitor] Session " <> state.session_name <> " ended. Last output length: " <> string.inspect(string.length(state.last_output)))
   // Session disappeared — try to parse report from last output
   case report.parse(state.last_output) {
     Ok(rpt) -> {

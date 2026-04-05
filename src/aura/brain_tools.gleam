@@ -378,13 +378,10 @@ fn execute_tool_dispatch(
         Error(e) -> e
         Ok(prompt) -> {
           let task_id = "t" <> int.to_string(time.now_ms())
-          let cwd = case get_arg(args, "cwd") {
-            "" -> case ctx.domain_cwd {
-              "" -> "."
-              "." -> "."
-              d -> d
-            }
-            c -> c
+          let cwd = case ctx.domain_cwd {
+            "" -> "."
+            "." -> "."
+            d -> d
           }
           let timeout_ms = case int.parse(get_arg(args, "timeout_minutes")) {
             Ok(m) -> m * 60_000
@@ -786,19 +783,13 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "acp_dispatch",
-      description: "Dispatch a Claude Code session to work on a task autonomously in a tmux session. The session runs in the background — you'll get Discord notifications on progress, alerts, and completion. Use for coding tasks that take multiple steps.",
+      description: "Dispatch a Claude Code session to work on a task autonomously in a tmux session. The session runs in the domain's working directory. You'll get Discord notifications on progress, alerts, and completion. Use for coding tasks that take multiple steps.",
       parameters: [
         llm.ToolParam(
           name: "prompt",
           param_type: "string",
           description: "The full task prompt for Claude Code. Be specific about what to do, which files, and acceptance criteria.",
           required: True,
-        ),
-        llm.ToolParam(
-          name: "cwd",
-          param_type: "string",
-          description: "Working directory for the session (absolute path)",
-          required: False,
         ),
         llm.ToolParam(
           name: "timeout_minutes",
