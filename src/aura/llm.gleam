@@ -300,56 +300,6 @@ pub fn parse_response_with_tools(body: String) -> Result(LlmResponse, String) {
   }
 }
 
-/// Make a POST request with tools and return an LlmResponse with possible tool calls.
-pub fn chat_with_tools(
-  config: LlmConfig,
-  messages: List(Message),
-  tools: List(ToolDefinition),
-) -> Result(LlmResponse, String) {
-  let url = config.base_url <> "/chat/completions"
-  io.println("[llm] Calling " <> config.model <> " at " <> url <> " (with tools)")
-  let body =
-    build_request_body_with_tools(config.model, messages, tools, None)
-    |> json.to_string
-  use parsed_uri <- result.try(
-    uri.parse(url)
-    |> result.map_error(fn(_) { "Failed to parse URL: " <> url }),
-  )
-  use req <- result.try(
-    request.from_uri(parsed_uri)
-    |> result.map_error(fn(_) { "Failed to build request from URL: " <> url }),
-  )
-  let req =
-    req
-    |> request.set_method(http.Post)
-    |> request.set_header(
-      "authorization",
-      "Bearer " <> config.api_key,
-    )
-    |> request.set_header("content-type", "application/json")
-    |> request.set_body(body)
-  use resp <- result.try(
-    httpc.configure()
-    |> httpc.timeout(120_000)
-    |> httpc.dispatch(req)
-    |> result.map_error(fn(e) { "HTTP request failed: " <> string.inspect(e) }),
-  )
-  case resp.status {
-    200 -> parse_response_with_tools(resp.body)
-    status -> {
-      io.println(
-        "[llm] Error from " <> config.model <> ": status " <> int.to_string(status),
-      )
-      Error(
-        "Unexpected status "
-        <> int.to_string(status)
-        <> ": "
-        <> string.slice(resp.body, 0, 200),
-      )
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Streaming
 // ---------------------------------------------------------------------------
@@ -401,6 +351,20 @@ pub fn parse_tool_calls_json(json_str: String) -> List(ToolCall) {
     Ok(calls) -> calls
     Error(_) -> []
   }
+}
+
+/// Parse a JSON array of flat tool calls as produced by the streaming FFI:
+/// `[{"id":"...","name":"...","arguments":"..."}]`.
+/// Returns Ok(list) or Error(message).
+pub fn parse_flat_tool_calls_json(json_str: String) -> Result(List(ToolCall), String) {
+  let decoder = decode.list({
+    use id <- decode.field("id", decode.string)
+    use name <- decode.field("name", decode.string)
+    use arguments <- decode.field("arguments", decode.string)
+    decode.success(ToolCall(id: id, name: name, arguments: arguments))
+  })
+  json.parse(json_str, decoder)
+  |> result.map_error(fn(_) { "Failed to parse tool calls JSON" })
 }
 
 @external(erlang, "aura_stream_ffi", "chat_stream")

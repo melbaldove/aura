@@ -101,7 +101,7 @@ pub fn default_domain() -> DomainConfig {
   )
 }
 
-fn extract_strings(values: List(tom.Toml)) -> List(String) {
+pub fn extract_toml_strings(values: List(tom.Toml)) -> List(String) {
   values
   |> list.filter_map(fn(v) {
     case v {
@@ -116,7 +116,7 @@ fn extract_strings(values: List(tom.Toml)) -> List(String) {
 pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
   use doc <- result.try(
     tom.parse(toml_string)
-    |> result.map_error(fn(e) { "TOML parse error: " <> string_of_parse_error(e) }),
+    |> result.map_error(fn(e) { "TOML parse error: " <> format_parse_error(e) }),
   )
 
   use token <- result.try(
@@ -197,7 +197,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
       vision: vision_model,
     ),
     notifications: NotificationsConfig(
-      digest_windows: extract_strings(digest_windows_raw),
+      digest_windows: extract_toml_strings(digest_windows_raw),
       timezone: timezone,
       urgent_bypass: urgent_bypass,
     ),
@@ -212,7 +212,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
 pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
   use doc <- result.try(
     tom.parse(toml_string)
-    |> result.map_error(fn(e) { "TOML parse error: " <> string_of_parse_error(e) }),
+    |> result.map_error(fn(e) { "TOML parse error: " <> format_parse_error(e) }),
   )
 
   use name <- result.try(
@@ -263,7 +263,7 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     name: name,
     description: description,
     cwd: cwd,
-    tools: extract_strings(tools_raw),
+    tools: extract_toml_strings(tools_raw),
     discord_channel: discord_channel,
     model_domain: model_domain,
     acp_timeout: acp_timeout,
@@ -273,7 +273,7 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
   ))
 }
 
-fn string_of_parse_error(e: tom.ParseError) -> String {
+pub fn format_parse_error(e: tom.ParseError) -> String {
   case e {
     tom.Unexpected(got, expected) ->
       "unexpected " <> got <> ", expected " <> expected

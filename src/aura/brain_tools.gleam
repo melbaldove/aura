@@ -454,9 +454,8 @@ pub fn parse_tool_args(json_str: String) -> List(#(String, String)) {
   }
 }
 
-/// Format tool arguments for display in traces.
-pub fn format_tool_args(json_str: String) -> String {
-  let args = parse_tool_args(json_str)
+/// Format parsed tool arguments for display in traces.
+pub fn format_tool_args(args: List(#(String, String))) -> String {
   args
   |> list.map(fn(pair) { pair.1 })
   |> string.join(", ")

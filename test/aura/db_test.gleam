@@ -82,8 +82,9 @@ pub fn conversation_db_roundtrip_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "roundtrip-chan", 1_000_000)
 
-  // Save via conversation module
-  let assert Ok(_) = conversation.save_to_db(subject, convo_id, "hello world", "hi back", "user1", "melbs", 1_000_000)
+  // Save via db.append_message directly
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "hello world", "user1", "melbs", 1_000_000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "assistant", "hi back", "", "aura", 1_000_001)
 
   // Load via conversation module
   let assert Ok(#(loaded_id, messages)) = conversation.load_from_db(subject, "discord", "roundtrip-chan", 1_000_001)

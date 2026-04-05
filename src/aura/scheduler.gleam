@@ -1,9 +1,11 @@
+import aura/config
 import aura/cron
 import aura/llm
 import aura/models
 import aura/notification
 import aura/skill
 import aura/time
+import aura/tools
 import gleam/dict
 import gleam/erlang/process
 import gleam/int
@@ -80,7 +82,7 @@ pub fn parse_schedules(
     trimmed -> {
       use doc <- result.try(
         tom.parse(trimmed)
-        |> result.map_error(fn(e) { "TOML parse error: " <> parse_error_string(e) }),
+        |> result.map_error(fn(e) { "TOML parse error: " <> config.format_parse_error(e) }),
       )
 
       let schedules_result =
@@ -136,7 +138,7 @@ fn parse_schedule_table(
     tom.get_bool(tbl, ["enabled"])
     |> result.unwrap(True)
 
-  let domains = extract_strings(domains_raw)
+  let domains = config.extract_toml_strings(domains_raw)
 
   Ok(ScheduleConfig(
     name: name,
@@ -151,23 +153,6 @@ fn parse_schedule_table(
   ))
 }
 
-fn extract_strings(values: List(tom.Toml)) -> List(String) {
-  values
-  |> list.filter_map(fn(v) {
-    case v {
-      tom.String(s) -> Ok(s)
-      _ -> Error(Nil)
-    }
-  })
-}
-
-fn parse_error_string(e: tom.ParseError) -> String {
-  case e {
-    tom.Unexpected(got, expected) ->
-      "unexpected " <> got <> ", expected " <> expected
-    tom.KeyAlreadyInUse(key) -> "key already in use: " <> string.join(key, ".")
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Serialization
@@ -461,53 +446,14 @@ fn execute_schedule(
   on_finding: fn(notification.Finding) -> Nil,
 ) -> Nil {
   io.println("[scheduler] Executing schedule: " <> config.name)
-  let matched_skill =
-    list.find(skills, fn(s) { s.name == config.skill })
-
-  case matched_skill {
-    Error(_) -> {
-      io.println(
-        "[scheduler] Skill '"
-        <> config.skill
-        <> "' not found, skipping schedule '"
-        <> config.name
-        <> "'",
-      )
-      Nil
+  case tools.run_skill(skills, config.skill, config.args) {
+    Ok(output) -> {
+      let urgency = classify_urgency(config, output)
+      emit_findings(config, output, urgency, on_finding)
     }
-    Ok(info) -> {
-      let args = case config.args {
-        "" -> []
-        a -> string.split(a, " ")
-      }
-      case skill.invoke(info, args, 30_000) {
-        Ok(result) -> {
-          case result.exit_code {
-            0 -> {
-              let urgency = classify_urgency(config, result.stdout)
-              emit_findings(config, result.stdout, urgency, on_finding)
-            }
-            _code -> {
-              io.println(
-                "[scheduler] Schedule '"
-                <> config.name
-                <> "' exited with non-zero code, stderr: "
-                <> string.slice(result.stderr, 0, 200),
-              )
-              Nil
-            }
-          }
-        }
-        Error(err) -> {
-          io.println(
-            "[scheduler] Schedule '"
-            <> config.name
-            <> "' failed: "
-            <> err,
-          )
-          Nil
-        }
-      }
+    Error(e) -> {
+      io.println("[scheduler] " <> config.name <> " failed: " <> e)
+      Nil
     }
   }
 }
@@ -644,38 +590,24 @@ fn handle_pause(
   state: SchedulerState,
   params: List(#(String, String)),
 ) -> #(String, SchedulerState) {
-  case get_param(params, "name") {
-    Error(_) -> #("Missing 'name' parameter for pause action.", state)
-    Ok(name) -> {
-      case list.any(state.entries, fn(e) { e.config.name == name }) {
-        False -> #("Schedule not found: " <> name, state)
-        True -> {
-          let new_entries =
-            list.map(state.entries, fn(e) {
-              case e.config.name == name {
-                True ->
-                  ScheduleEntry(
-                    ..e,
-                    config: ScheduleConfig(..e.config, enabled: False),
-                  )
-                False -> e
-              }
-            })
-          let new_state = SchedulerState(..state, entries: new_entries)
-          write_schedules(new_state)
-          #("Paused schedule: " <> name, new_state)
-        }
-      }
-    }
-  }
+  handle_toggle(state, params, False, "Paused")
 }
 
 fn handle_resume(
   state: SchedulerState,
   params: List(#(String, String)),
 ) -> #(String, SchedulerState) {
+  handle_toggle(state, params, True, "Resumed")
+}
+
+fn handle_toggle(
+  state: SchedulerState,
+  params: List(#(String, String)),
+  enabled: Bool,
+  verb: String,
+) -> #(String, SchedulerState) {
   case get_param(params, "name") {
-    Error(_) -> #("Missing 'name' parameter for resume action.", state)
+    Error(_) -> #("Missing 'name' parameter for " <> string.lowercase(verb) <> " action.", state)
     Ok(name) -> {
       case list.any(state.entries, fn(e) { e.config.name == name }) {
         False -> #("Schedule not found: " <> name, state)
@@ -686,14 +618,14 @@ fn handle_resume(
                 True ->
                   ScheduleEntry(
                     ..e,
-                    config: ScheduleConfig(..e.config, enabled: True),
+                    config: ScheduleConfig(..e.config, enabled: enabled),
                   )
                 False -> e
               }
             })
           let new_state = SchedulerState(..state, entries: new_entries)
           write_schedules(new_state)
-          #("Resumed schedule: " <> name, new_state)
+          #(verb <> " schedule: " <> name, new_state)
         }
       }
     }

@@ -18,10 +18,8 @@ import aura/structured_memory
 import aura/validator
 import aura/vision
 import aura/xdg
-import gleam/dynamic/decode
 import gleam/int
 import gleam/io
-import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -177,18 +175,6 @@ pub fn build_system_prompt(
   <> "\nBefore using run_skill, call view_skill first to read the skill's full instructions. The instructions contain exact commands, argument format, and examples. Never guess CLI syntax."
   <> "\nAfter completing a complex task (3+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with create_skill so you can reuse it next time."
   <> "\nWhen using a skill and finding it outdated, incomplete, or wrong, update it immediately with create_skill — don't wait to be asked."
-}
-
-/// Build a routing classification prompt (for #aura messages)
-pub fn build_routing_prompt(
-  message_content: String,
-  domain_names: List(String),
-) -> String {
-  "Classify the following message into one of these domains: "
-  <> string.join(domain_names, ", ")
-  <> "\n\nMessage: "
-  <> message_content
-  <> "\n\nRespond with just the domain name, or \"none\" if it doesn't match any."
 }
 
 // ---------------------------------------------------------------------------
@@ -517,19 +503,6 @@ fn handle_with_llm(
   let #(_, _, history) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", msg.channel_id, now_ts)
   io.println("[brain] Loaded " <> int.to_string(list.length(history)) <> " history messages for " <> msg.channel_id)
 
-  // Log what the LLM will see (for debugging context issues)
-  list.each(history, fn(m) {
-    let #(role, content) = case m {
-      llm.SystemMessage(c) -> #("system", c)
-      llm.UserMessage(c) -> #("user", c)
-      llm.UserMessageWithImage(c, _) -> #("user+image", c)
-      llm.AssistantMessage(c) -> #("assistant", c)
-      llm.AssistantToolCallMessage(c, _) -> #("assistant+tools", c)
-      llm.ToolResultMessage(_, c) -> #("tool", c)
-    }
-    io.println("[brain] history [" <> role <> "]: " <> string.slice(content, 0, 80))
-  })
-
   let initial_messages = list.flatten([
     [llm.SystemMessage(system_prompt)],
     history,
@@ -633,7 +606,7 @@ fn tool_loop_progressive(
               io.println("[brain] " <> int.to_string(list.length(calls)) <> " tool call(s)")
 
               // Execute each tool and build traces + result messages
-              let #(new_traces, tool_results) = list.fold(calls, #(traces, []), fn(acc, call) {
+              let #(rev_traces, rev_results) = list.fold(calls, #([], []), fn(acc, call) {
                 let #(acc_traces, acc_results) = acc
                 io.println("[brain] Tool: " <> call.name <> " args: " <> call.arguments)
                 let result = brain_tools.execute_tool(tool_ctx, call)
@@ -641,16 +614,17 @@ fn tool_loop_progressive(
                 io.println("[brain] Result: " <> result_preview)
 
                 let is_error = string.starts_with(result, "Error")
+                let parsed_args = brain_tools.parse_tool_args(call.arguments)
                 let trace = conversation.ToolTrace(
                   name: call.name,
-                  args: brain_tools.format_tool_args(call.arguments),
+                  args: brain_tools.format_tool_args(parsed_args),
                   result: result,
                   is_error: is_error,
                 )
-                let updated_traces = list.append(acc_traces, [trace])
-                let updated_results = list.append(acc_results, [llm.ToolResultMessage(call.id, result)])
-                #(updated_traces, updated_results)
+                #([trace, ..acc_traces], [llm.ToolResultMessage(call.id, result), ..acc_results])
               })
+              let new_traces = list.append(traces, list.reverse(rev_traces))
+              let tool_results = list.reverse(rev_results)
 
               // Format current traces for progressive display
               let progress_text = conversation.format_traces(new_traces) <> "\n\n*Thinking...*"
@@ -751,23 +725,12 @@ fn parse_streaming_result(content: String, tool_calls_json: String) -> llm.LlmRe
     "[]" -> llm.LlmResponse(content: content, tool_calls: [])
     json_str -> {
       // Parse tool calls from JSON: [{"id":"...","name":"...","arguments":"..."}]
-      case parse_tool_calls_json(json_str) {
+      case llm.parse_flat_tool_calls_json(json_str) {
         Ok(calls) -> llm.LlmResponse(content: content, tool_calls: calls)
         Error(_) -> llm.LlmResponse(content: content, tool_calls: [])
       }
     }
   }
-}
-
-fn parse_tool_calls_json(json_str: String) -> Result(List(llm.ToolCall), String) {
-  let decoder = decode.list({
-    use id <- decode.field("id", decode.string)
-    use name <- decode.field("name", decode.string)
-    use arguments <- decode.field("arguments", decode.string)
-    decode.success(llm.ToolCall(id: id, name: name, arguments: arguments))
-  })
-  json.parse(json_str, decoder)
-  |> result.map_error(fn(_) { "Failed to parse tool calls JSON" })
 }
 
 

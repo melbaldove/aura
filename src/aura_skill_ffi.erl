@@ -11,7 +11,7 @@ run_command(Command, Args, TimeoutMs) ->
         Port = open_port({spawn_executable, Executable},
                          [{args, [binary_to_list(A) || A <- Args]},
                           exit_status, binary, stderr_to_stdout,
-                          {env, [{"PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"}]}]),
+                          {env, [{"PATH", os:getenv("PATH")}]}]),
         collect_output(Port, <<>>, TimeoutMs)
     catch
         _:Reason ->

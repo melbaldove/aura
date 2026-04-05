@@ -53,14 +53,6 @@ pub fn build_system_prompt_includes_soul_content_test() {
   prompt |> string.contains("No domains") |> should.be_true
 }
 
-pub fn build_routing_prompt_test() {
-  let prompt = brain.build_routing_prompt("fix the login bug", ["cm2", "hy", "aura"])
-  prompt |> string.contains("fix the login bug") |> should.be_true
-  prompt |> string.contains("cm2") |> should.be_true
-  prompt |> string.contains("hy") |> should.be_true
-  prompt |> string.contains("aura") |> should.be_true
-}
-
 pub fn resolve_model_name_test() {
   models.resolve_model_name("zai/glm-5-turbo")
   |> should.equal("glm-5-turbo")

@@ -62,20 +62,6 @@ pub fn load_from_db(
   Ok(#(convo_id, messages))
 }
 
-/// Save a user+assistant exchange to the database.
-pub fn save_to_db(
-  db_subject: process.Subject(db.DbMessage),
-  conversation_id: String,
-  user_msg: String,
-  assistant_msg: String,
-  author_id: String,
-  author_name: String,
-  timestamp: Int,
-) -> Result(Nil, String) {
-  use _ <- result.try(db.append_message(db_subject, conversation_id, "user", user_msg, author_id, author_name, timestamp))
-  db.append_message(db_subject, conversation_id, "assistant", assistant_msg, "", "aura", timestamp + 1)
-}
-
 /// Save a full exchange (user message + tool calls + results + final response)
 /// to the database. Each message gets an incrementing timestamp offset to
 /// preserve ordering.
@@ -153,6 +139,7 @@ pub fn get_or_load_db(
 
 /// Append user + assistant messages to the channel buffer.
 /// No hard cap — compression is triggered separately.
+/// Note: only used in tests; production code uses append_messages instead.
 pub fn append(
   buffers: Buffers,
   channel_id: String,
