@@ -10,6 +10,7 @@ fn temp_paths(suffix: String) -> xdg.Paths {
     config: base <> "/config",
     data: base <> "/data",
     state: base <> "/state",
+    domains: base <> "/domains",
   )
 }
 

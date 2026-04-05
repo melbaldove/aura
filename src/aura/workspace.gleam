@@ -145,7 +145,7 @@ pub fn scaffold_domain(
 }
 
 pub fn list_domains(paths: xdg.Paths) -> Result(List(String), String) {
-  let domains_dir = paths.config <> "/domains"
+  let domains_dir = paths.domains
   use entries <- result.try(
     simplifile.read_directory(domains_dir)
     |> result.map_error(fn(e) {

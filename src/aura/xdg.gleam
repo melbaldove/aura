@@ -2,7 +2,7 @@ import aura/env
 import simplifile
 
 pub type Paths {
-  Paths(config: String, data: String, state: String)
+  Paths(config: String, data: String, state: String, domains: String)
 }
 
 pub fn resolve() -> Paths {
@@ -26,7 +26,12 @@ pub fn resolve() -> Paths {
     Error(_) -> home <> "/.local/state/aura"
   }
 
-  Paths(config: config, data: data, state: state)
+  let domains = case env.get_env("AURA_DOMAINS_DIR") {
+    Ok(v) -> v
+    Error(_) -> home <> "/domains"
+  }
+
+  Paths(config: config, data: data, state: state, domains: domains)
 }
 
 pub fn resolve_with_home(home: String) -> Paths {
@@ -34,6 +39,7 @@ pub fn resolve_with_home(home: String) -> Paths {
     config: home <> "/.config/aura",
     data: home <> "/.local/share/aura",
     state: home <> "/.local/state/aura",
+    domains: home <> "/domains",
   )
 }
 
@@ -82,15 +88,15 @@ pub fn skills_dir(paths: Paths) -> String {
 }
 
 pub fn domain_config_path(paths: Paths, name: String) -> String {
-  paths.config <> "/domains/" <> name <> "/config.toml"
+  paths.domains <> "/" <> name <> "/config.toml"
 }
 
 pub fn domain_config_dir(paths: Paths, name: String) -> String {
-  paths.config <> "/domains/" <> name
+  paths.domains <> "/" <> name
 }
 
 pub fn domain_data_dir(paths: Paths, name: String) -> String {
-  paths.data <> "/domains/" <> name
+  paths.domains <> "/" <> name
 }
 
 pub fn workspace_exists(paths: Paths) -> Bool {
