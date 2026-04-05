@@ -28,6 +28,13 @@ import gleam/result
 import gleam/string
 
 // ---------------------------------------------------------------------------
+// FFI
+// ---------------------------------------------------------------------------
+
+@external(erlang, "aura_rescue_ffi", "rescue")
+fn rescue(fun: fn() -> a) -> Result(a, String)
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -242,7 +249,14 @@ fn handle_message(
       }
       let subj = state.self_subject
       process.spawn_unlinked(fn() {
-        handle_with_llm(state, msg, subj, domain_name)
+        case rescue(fn() { handle_with_llm(state, msg, subj, domain_name) }) {
+          Ok(_) -> Nil
+          Error(reason) -> {
+            io.println("[brain] CRASH in handle_with_llm: " <> reason)
+            let _ = rest.send_message(state.discord_token, msg.channel_id, "Sorry, I crashed while processing your message. Check the logs.", [])
+            Nil
+          }
+        }
       })
       actor.continue(state)
     }
