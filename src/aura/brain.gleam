@@ -613,7 +613,8 @@ fn handle_with_llm(
   let channel_id = msg.channel_id
 
   case result {
-    Ok(#(response_text, traces, msg_id, new_messages)) -> {
+    Ok(#(response_text, traces, msg_id, new_messages, final_channel_id)) -> {
+      let channel_id = final_channel_id
       // Build the full turn: user message + tool chain + final response
       let user_msg = llm.UserMessage(enriched_content)
       let all_turn_messages = [user_msg, ..new_messages]
@@ -652,7 +653,7 @@ fn tool_loop_with_retry(
   channel_id: String,
   messages: List(llm.Message),
   retries_left: Int,
-) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message)), String) {
+) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message), String), String) {
   case tool_loop_progressive(state, tool_ctx, channel_id, messages, [], "", 0, []) {
     Ok(result) -> Ok(result)
     Error(err) -> {
@@ -677,7 +678,7 @@ fn tool_loop_progressive(
   message_id: String,
   iteration: Int,
   new_messages: List(llm.Message),
-) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message)), String) {
+) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message), String), String) {
   case iteration >= max_tool_iterations {
     True -> Error("Tool loop exceeded maximum iterations")
     False -> {
@@ -695,7 +696,7 @@ fn tool_loop_progressive(
             [] -> {
               // No tool calls — return the text response with accumulated traces
               let final_new_messages = list.append(new_messages, [llm.AssistantMessage(response.content)])
-              Ok(#(response.content, traces, msg_id, final_new_messages))
+              Ok(#(response.content, traces, msg_id, final_new_messages, channel_id))
             }
             calls -> {
               // Execute tool calls and continue the loop
@@ -721,6 +722,19 @@ fn tool_loop_progressive(
               })
               let new_traces = list.append(traces, list.reverse(rev_traces))
               let tool_results = list.reverse(rev_results)
+
+              // Check if any tool redirected output to a thread
+              let channel_id = list.fold(tool_results, channel_id, fn(ch, msg) {
+                case msg {
+                  llm.ToolResultMessage(_, content) -> {
+                    case string.starts_with(content, "THREAD:") {
+                      True -> string.drop_start(content, 7)
+                      False -> ch
+                    }
+                  }
+                  _ -> ch
+                }
+              })
 
               // Format current traces for progressive display
               let progress_text = conversation.format_traces(new_traces) <> "\n\n*Thinking...*"

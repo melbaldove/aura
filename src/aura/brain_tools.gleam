@@ -437,7 +437,7 @@ fn execute_tool_dispatch(
                   Nil
                 }
               }
-              "ACP dispatched → thread"
+              "THREAD:" <> thread_id
             }
             Error(e) -> "Error: " <> e
           }
