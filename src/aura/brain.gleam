@@ -70,7 +70,11 @@ pub type BrainMessage {
   HeartbeatFinding(notification.Finding)
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
-  RegisterAcpSession(manager.ActiveSession)
+  RegisterAcpSession(
+    session: manager.ActiveSession,
+    prompt: String,
+    cwd: String,
+  )
   PostWelcome(channel_id: String)
   StoreExchange(channel_id: String, messages: List(llm.Message))
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
@@ -87,6 +91,7 @@ pub type BrainConfig {
     skill_infos: List(skill.SkillInfo),
     validation_rules: List(validator.Rule),
     db_subject: process.Subject(db.DbMessage),
+    acp_store_path: String,
   )
 }
 
@@ -209,7 +214,10 @@ pub fn start(
 
       notification_queue: notification.new_queue(),
       aura_channel_id: "",
-      acp_manager: manager.new(config.acp_global_max_concurrent),
+      acp_manager: manager.new(
+        config.acp_global_max_concurrent,
+        brain_config.acp_store_path,
+      ),
       validation_rules: brain_config.validation_rules,
       skill_infos: brain_config.skill_infos,
       skills_dir: xdg.skills_dir(brain_config.paths),
@@ -320,8 +328,9 @@ fn handle_message(
       }
     }
     AcpEvent(event) -> handle_acp_event(state, event)
-    RegisterAcpSession(session) -> {
-      let new_manager = manager.register(state.acp_manager, session)
+    RegisterAcpSession(session:, prompt:, cwd:) -> {
+      let new_manager =
+        manager.register(state.acp_manager, session, prompt, cwd)
       actor.continue(BrainState(..state, acp_manager: new_manager))
     }
     StoreExchange(channel_id, messages) -> {
@@ -434,7 +443,8 @@ fn handle_acp_completion(
   // Set terminal state, then unregister
   let new_manager =
     manager.update_state(state.acp_manager, session_name, terminal_state)
-  let new_manager = manager.unregister(new_manager, session_name)
+  let new_manager =
+    manager.unregister(new_manager, session_name, terminal_state)
   actor.continue(BrainState(..state, acp_manager: new_manager))
 }
 
@@ -585,9 +595,13 @@ fn handle_with_llm(
         None -> Nil
       }
     },
-    on_register_acp: fn(session) {
+    on_register_acp: fn(session, prompt, cwd) {
       case brain_subject_opt {
-        Some(subj) -> process.send(subj, RegisterAcpSession(session))
+        Some(subj) ->
+          process.send(
+            subj,
+            RegisterAcpSession(session: session, prompt: prompt, cwd: cwd),
+          )
         None -> Nil
       }
     },

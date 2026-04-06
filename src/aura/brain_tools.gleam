@@ -46,7 +46,7 @@ pub type ToolContext {
     acp_manager: manager.AcpManager,
     acp_sessions: List(manager.ActiveSession),
     on_acp_event: fn(acp_monitor.AcpEvent) -> Nil,
-    on_register_acp: fn(manager.ActiveSession) -> Nil,
+    on_register_acp: fn(manager.ActiveSession, String, String) -> Nil,
     monitor_model: String,
     domain_name: String,
     domain_cwd: String,
@@ -419,7 +419,7 @@ fn execute_tool_dispatch(
             started_at_ms: time.now_ms(),
             thread_id: thread_id,
           )
-          ctx.on_register_acp(session)
+          ctx.on_register_acp(session, prompt, cwd)
           // Small delay to let the brain actor process the registration
           process.sleep(100)
 

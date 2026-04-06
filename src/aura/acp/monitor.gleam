@@ -137,6 +137,58 @@ pub fn start(
   }
 }
 
+/// Start a monitor for an existing tmux session (recovery after restart).
+/// Unlike `start`, this does NOT create a tmux session or emit AcpStarted.
+pub fn start_recovery(
+  task_spec: types.TaskSpec,
+  monitor_model: String,
+  on_event: fn(AcpEvent) -> Nil,
+) -> Result(process.Subject(MonitorMessage), String) {
+  let session_name =
+    tmux.build_session_name(task_spec.domain, task_spec.id)
+
+  let llm_config =
+    models.build_llm_config(monitor_model)
+    |> option.from_result
+
+  let started_at = time.now_ms()
+
+  let builder =
+    actor.new_with_initialiser(5000, fn(subject) {
+      let state =
+        MonitorState(
+          task_spec: task_spec,
+          session_name: session_name,
+          last_output: "",
+          started_at_ms: started_at,
+          last_progress_ms: started_at,
+          idle_checks: 0,
+          llm_config: llm_config,
+          on_event: on_event,
+          self_subject: subject,
+        )
+
+      io.println(
+        "[acp-monitor] Recovery monitor initialized for " <> session_name,
+      )
+
+      // Schedule the first check
+      schedule_next(subject)
+
+      // Do NOT emit AcpStarted — session was already started before restart
+      Ok(actor.initialised(state) |> actor.returning(subject))
+    })
+    |> actor.on_message(handle_message)
+
+  case actor.start(builder) {
+    Ok(started) -> Ok(started.data)
+    Error(err) ->
+      Error(
+        "Failed to start recovery monitor actor: " <> string.inspect(err),
+      )
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
