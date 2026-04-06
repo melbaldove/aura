@@ -14,10 +14,17 @@ pub fn empty_report() -> types.AcpReport {
 }
 
 pub fn parse(output: String) -> Result(types.AcpReport, String) {
+  // Normalize: trim each line to handle tmux indentation
+  let normalized =
+    output
+    |> string.split("\n")
+    |> list.map(string.trim)
+    |> string.join("\n")
+
   // Split on ALL occurrences of the marker and take the LAST block.
   // The prompt contains the marker as instructions — we want Claude's actual output,
   // which is always the last occurrence.
-  let parts = string.split(output, "---AURA-REPORT---")
+  let parts = string.split(normalized, "---AURA-REPORT---")
   case list.last(parts) {
     Error(_) -> Error("No ---AURA-REPORT--- marker found")
     Ok(last_part) -> {
