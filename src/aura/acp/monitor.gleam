@@ -233,7 +233,13 @@ fn handle_session_alive(
                 False -> diff_len
               }
               case abs_diff > 100 {
-                True -> classify_and_alert(state, output)
+                True -> {
+                  // Spawn to avoid blocking the monitor actor
+                  let s = state
+                  let o = output
+                  process.spawn_unlinked(fn() { classify_and_alert(s, o) })
+                  Nil
+                }
                 False -> Nil
               }
 
@@ -241,7 +247,9 @@ fn handle_session_alive(
               let now = time.now_ms()
               let new_progress_ms = case now - state.last_progress_ms >= progress_interval_ms {
                 True -> {
-                  summarize_and_report(state, output)
+                  let s = state
+                  let o = output
+                  process.spawn_unlinked(fn() { summarize_and_report(s, o) })
                   now
                 }
                 False -> state.last_progress_ms
