@@ -29,6 +29,7 @@ pub type AcpEvent {
   )
   AcpTimedOut(session_name: String, domain: String)
   AcpFailed(session_name: String, domain: String, error: String)
+  AcpProgress(session_name: String, domain: String, summary: String)
 }
 
 pub type MonitorMessage {
@@ -41,6 +42,7 @@ pub type MonitorState {
     session_name: String,
     last_output: String,
     started_at_ms: Int,
+    last_progress_ms: Int,
     llm_config: Option(llm.LlmConfig),
     on_event: fn(AcpEvent) -> Nil,
     self_subject: process.Subject(MonitorMessage),
@@ -52,6 +54,8 @@ pub type MonitorState {
 // ---------------------------------------------------------------------------
 
 const check_interval_ms = 15_000
+
+const progress_interval_ms = 120_000
 
 const max_output_size = 50_000
 
@@ -96,6 +100,7 @@ pub fn start(
               session_name: session_name,
               last_output: "",
               started_at_ms: started_at,
+              last_progress_ms: started_at,
               llm_config: llm_config,
               on_event: on_event,
               self_subject: subject,
@@ -228,8 +233,26 @@ fn handle_session_alive(
                 False -> Nil
               }
 
-              // 6. Check timeout
-              check_timeout_and_continue(state, output)
+              // 6. Emit progress update if enough time has passed
+              let now = time.now_ms()
+              let new_progress_ms = case now - state.last_progress_ms >= progress_interval_ms {
+                True -> {
+                  let tail = string.slice(output, string.length(output) - 200, 200)
+                  state.on_event(AcpProgress(
+                    session_name: state.session_name,
+                    domain: state.task_spec.domain,
+                    summary: tail,
+                  ))
+                  now
+                }
+                False -> state.last_progress_ms
+              }
+
+              // 7. Check timeout
+              check_timeout_and_continue(
+                MonitorState(..state, last_progress_ms: new_progress_ms),
+                output,
+              )
             }
           }
         }

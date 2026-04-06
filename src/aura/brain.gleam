@@ -391,6 +391,19 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
         <> "`"
       handle_acp_completion(state, session_name, domain, msg, manager.TimedOut)
     }
+    acp_monitor.AcpProgress(session_name, domain, summary) -> {
+      let elapsed_ms = time.now_ms() - case manager.get_session(state.acp_manager, session_name) {
+        Ok(s) -> s.started_at_ms
+        Error(_) -> 0
+      }
+      let elapsed_min = elapsed_ms / 60_000
+      let msg = "**ACP Progress** [" <> int.to_string(elapsed_min) <> "m] `" <> session_name <> "`\n```\n" <> summary <> "\n```"
+      let channel = resolve_domain_channel(state, domain)
+      process.spawn(fn() {
+        send_discord_response(state.discord_token, channel, msg)
+      })
+      actor.continue(state)
+    }
     acp_monitor.AcpFailed(session_name, domain, error) -> {
       let msg = "**ACP Failed** — " <> error
       handle_acp_completion(
