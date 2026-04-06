@@ -70,6 +70,7 @@ pub type BrainMessage {
   HeartbeatFinding(notification.Finding)
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
+  RegisterAcpSession(manager.ActiveSession)
   PostWelcome(channel_id: String)
   StoreExchange(channel_id: String, messages: List(llm.Message))
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
@@ -319,6 +320,10 @@ fn handle_message(
       }
     }
     AcpEvent(event) -> handle_acp_event(state, event)
+    RegisterAcpSession(session) -> {
+      let new_manager = manager.register(state.acp_manager, session)
+      actor.continue(BrainState(..state, acp_manager: new_manager))
+    }
     StoreExchange(channel_id, messages) -> {
       // DB write already done by the spawned process before Discord delivery.
       // This handler only updates the in-memory cache.
@@ -577,6 +582,12 @@ fn handle_with_llm(
     on_acp_event: fn(event) {
       case brain_subject_opt {
         Some(subj) -> process.send(subj, AcpEvent(event))
+        None -> Nil
+      }
+    },
+    on_register_acp: fn(session) {
+      case brain_subject_opt {
+        Some(subj) -> process.send(subj, RegisterAcpSession(session))
         None -> Nil
       }
     },

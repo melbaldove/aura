@@ -46,6 +46,7 @@ pub type ToolContext {
     acp_manager: manager.AcpManager,
     acp_sessions: List(manager.ActiveSession),
     on_acp_event: fn(acp_monitor.AcpEvent) -> Nil,
+    on_register_acp: fn(manager.ActiveSession) -> Nil,
     monitor_model: String,
     domain_name: String,
     domain_cwd: String,
@@ -407,9 +408,23 @@ fn execute_tool_dispatch(
             Ok(id) -> id
             Error(_) -> ""
           }
+          let session_name = "acp-" <> ctx.domain_name <> "-" <> task_id
+          // Register session with brain BEFORE starting monitor
+          // so AcpStarted event can find the thread_id
+          let session = manager.ActiveSession(
+            session_name: session_name,
+            domain: ctx.domain_name,
+            task_id: task_id,
+            state: manager.Starting,
+            started_at_ms: time.now_ms(),
+            thread_id: thread_id,
+          )
+          ctx.on_register_acp(session)
+          // Small delay to let the brain actor process the registration
+          process.sleep(100)
+
           case manager.dispatch(ctx.acp_manager, task_spec, ctx.monitor_model, ctx.on_acp_event, thread_id) {
             Ok(_) -> {
-              let session_name = "acp-" <> ctx.domain_name <> "-" <> task_id
               let details_msg =
                 "ACP session started: " <> session_name
                 <> "\nAttach with: `tmux attach -t " <> session_name <> "`"

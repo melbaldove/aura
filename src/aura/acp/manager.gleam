@@ -124,21 +124,24 @@ pub fn dispatch(
         <> ")",
       )
     True -> {
+      // Register session BEFORE starting monitor — monitor emits AcpStarted
+      // during init, and the brain needs to find the session to resolve the thread_id
+      let session =
+        ActiveSession(
+          session_name: tmux.build_session_name(
+            task_spec.domain,
+            task_spec.id,
+          ),
+          domain: task_spec.domain,
+          task_id: task_spec.id,
+          state: Starting,
+          started_at_ms: time.now_ms(),
+          thread_id: thread_id,
+        )
+      let new_manager = register(manager, session)
       case monitor.start(task_spec, monitor_model, on_event) {
         Ok(_subject) -> {
-          let session =
-            ActiveSession(
-              session_name: tmux.build_session_name(
-                task_spec.domain,
-                task_spec.id,
-              ),
-              domain: task_spec.domain,
-              task_id: task_spec.id,
-              state: Starting,
-              started_at_ms: time.now_ms(),
-              thread_id: thread_id,
-            )
-          Ok(register(manager, session))
+          Ok(new_manager)
         }
         Error(err) -> Error(err)
       }
