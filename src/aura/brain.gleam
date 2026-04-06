@@ -1,5 +1,6 @@
 import aura/acp/manager
 import aura/acp/monitor as acp_monitor
+import aura/acp/session_store
 import aura/acp/types as acp_types
 import aura/brain_tools
 import aura/config
@@ -560,6 +561,24 @@ fn handle_with_llm(
     None -> ""
   }
   let system_prompt = system_prompt <> domain_prompt
+
+  // Inject ACP session context if this message is in an ACP thread
+  let acp_context = case list.find(
+    session_store.load(state.acp_manager.store_path),
+    fn(s) { s.thread_id == msg.channel_id },
+  ) {
+    Ok(session) -> {
+      "\n\n## Active ACP Session"
+      <> "\nYou are in an ACP session thread."
+      <> "\nSession: " <> session.session_name
+      <> "\nState: " <> session.state
+      <> "\nDomain: " <> session.domain
+      <> "\nTask: " <> string.slice(session.prompt, 0, 300)
+      <> "\n\nUse acp_status to check progress, acp_prompt to send instructions, acp_list to see all sessions."
+    }
+    Error(_) -> ""
+  }
+  let system_prompt = system_prompt <> acp_context
 
   // Vision preprocessing — describe attached images before tool loop
   let enriched_content = preprocess_vision(state, msg, domain_name)
