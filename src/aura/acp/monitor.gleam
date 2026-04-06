@@ -1,4 +1,3 @@
-import aura/acp/report
 import aura/acp/tmux
 import aura/acp/types
 import aura/llm
@@ -65,9 +64,8 @@ const progress_interval_ms = 120_000
 
 const max_output_size = 50_000
 
-const report_marker = "---AURA-REPORT---"
-
-const report_instructions = "IMPORTANT: When you have completed all tasks, you MUST output a completion report as your very last message. Use three dashes followed by AURA-REPORT followed by three dashes as the opening marker, and three dashes followed by END-REPORT followed by three dashes as the closing marker. Between the markers, include these fields on separate lines — replace the descriptions with actual values:\nOUTCOME: clean if fully done, partial if some tasks remain, failed if blocked\nFILES_CHANGED: comma-separated list of files you created or modified\nDECISIONS: key decisions you made and why\nTESTS: pass/fail summary or none\nBLOCKERS: unresolved items or none\nANCHOR: one sentence summary worth remembering long-term"
+/// Number of consecutive idle checks before declaring session complete
+const idle_complete_threshold = 6
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -84,9 +82,8 @@ pub fn start(
   // Ensure the working directory is trusted by Claude Code
   let _ = tmux.ensure_trusted(task_spec.cwd)
 
-  // Build claude command with report instructions appended to prompt
-  let full_prompt = task_spec.prompt <> "\n\n" <> report_instructions
-  let shell_command = tmux.build_claude_command(full_prompt, task_spec.cwd)
+  // Pass the task prompt directly — no report markers or structured output instructions
+  let shell_command = tmux.build_claude_command(task_spec.prompt, task_spec.cwd)
 
   // Create the tmux session
   case tmux.create_session(session_name, shell_command) {
@@ -167,88 +164,73 @@ fn handle_check(
 fn handle_session_ended(
   state: MonitorState,
 ) -> actor.Next(MonitorState, MonitorMessage) {
-  io.println("[acp-monitor] Session " <> state.session_name <> " ended. Last output length: " <> string.inspect(string.length(state.last_output)))
-  // Session disappeared — try to parse report from last output
-  case report.parse(state.last_output) {
-    Ok(rpt) -> {
-      state.on_event(AcpCompleted(
-        session_name: state.session_name,
-        domain: state.task_spec.domain,
-        report: rpt,
-      ))
-    }
-    Error(_) -> {
-      state.on_event(AcpFailed(
-        session_name: state.session_name,
-        domain: state.task_spec.domain,
-        error: "Session ended without a valid report",
-      ))
-    }
-  }
+  io.println("[acp-monitor] Session " <> state.session_name <> " tmux session disappeared")
+  let summary = summarize_completion(state, state.last_output)
+  let report = types.AcpReport(
+    outcome: types.Clean,
+    files_changed: [],
+    decisions: "",
+    tests: "",
+    blockers: "",
+    anchor: summary,
+  )
+  state.on_event(AcpCompleted(
+    session_name: state.session_name,
+    domain: state.task_spec.domain,
+    report: report,
+  ))
   actor.stop()
 }
 
 fn handle_session_alive(
   state: MonitorState,
 ) -> actor.Next(MonitorState, MonitorMessage) {
-  // 2. Capture pane output
   case tmux.capture_pane(state.session_name) {
     Error(err) -> {
-      io.println(
-        "[acp-monitor] Failed to capture pane for "
-        <> state.session_name
-        <> ": "
-        <> err,
-      )
+      io.println("[acp-monitor] Failed to capture pane for " <> state.session_name <> ": " <> err)
       schedule_next(state.self_subject)
       actor.continue(state)
     }
     Ok(output) -> {
-      // 3. Detect idle — output unchanged
       let output_changed = output != state.last_output
       let new_idle_checks = case output_changed {
         True -> 0
         False -> state.idle_checks + 1
       }
-      let is_idle = new_idle_checks >= idle_threshold
 
-      // 4. Always check for report marker first
-      case string.contains(output, report_marker) {
+      // Session completed: idle long enough = Claude finished and is waiting at prompt
+      case new_idle_checks >= idle_complete_threshold {
         True -> {
-          case report.parse(output) {
-            Ok(rpt) -> {
-              io.println("[acp-monitor] Report parsed for " <> state.session_name)
-              state.on_event(AcpCompleted(
-                session_name: state.session_name,
-                domain: state.task_spec.domain,
-                report: rpt,
-              ))
-              actor.stop()
-            }
-            Error(e) -> {
-              io.println("[acp-monitor] Report parse failed for " <> state.session_name <> ": " <> e)
-              schedule_next(state.self_subject)
-              actor.continue(MonitorState(..state, last_output: cap_output(output)))
-            }
-          }
+          io.println("[acp-monitor] Session " <> state.session_name <> " idle for " <> int.to_string(new_idle_checks) <> " checks — completing")
+          // Ask LLM to summarize what happened
+          let summary = summarize_completion(state, output)
+          let report = types.AcpReport(
+            outcome: types.Clean,
+            files_changed: [],
+            decisions: "",
+            tests: "",
+            blockers: "",
+            anchor: summary,
+          )
+          state.on_event(AcpCompleted(
+            session_name: state.session_name,
+            domain: state.task_spec.domain,
+            report: report,
+          ))
+          actor.stop()
         }
         False -> {
-          // Skip expensive checks when idle
-          case is_idle {
+          // Active or recently idle — classify and report progress
+          case new_idle_checks >= idle_threshold {
             True -> {
-              // Back off to slower interval
-              let interval = idle_check_interval_ms
-              process.send_after(state.self_subject, interval, CheckSession)
+              // Idle but not yet complete — back off
+              process.send_after(state.self_subject, idle_check_interval_ms, CheckSession)
               actor.continue(MonitorState(..state, last_output: cap_output(output), idle_checks: new_idle_checks))
             }
             False -> {
-              // 5. Classify if substantial new output
-              let diff_len =
-                string.length(output) - string.length(state.last_output)
-              let abs_diff = case diff_len < 0 {
-                True -> 0 - diff_len
-                False -> diff_len
-              }
+              // Active — classify if substantial new output
+              let diff_len = string.length(output) - string.length(state.last_output)
+              let abs_diff = case diff_len < 0 { True -> 0 - diff_len False -> diff_len }
               case abs_diff > 100 {
                 True -> {
                   let s = state
@@ -259,7 +241,7 @@ fn handle_session_alive(
                 False -> Nil
               }
 
-              // 6. Emit progress update if enough time has passed
+              // Progress update if enough time passed
               let now = time.now_ms()
               let new_progress_ms = case now - state.last_progress_ms >= progress_interval_ms {
                 True -> {
@@ -271,7 +253,6 @@ fn handle_session_alive(
                 False -> state.last_progress_ms
               }
 
-              // 7. Check timeout
               check_timeout_and_continue(
                 MonitorState(..state, last_progress_ms: new_progress_ms, idle_checks: new_idle_checks),
                 output,
@@ -307,6 +288,27 @@ fn check_timeout_and_continue(
 // ---------------------------------------------------------------------------
 // LLM classification
 // ---------------------------------------------------------------------------
+
+fn summarize_completion(state: MonitorState, output: String) -> String {
+  case state.llm_config {
+    None -> "Session completed (no LLM available for summary)"
+    Some(config) -> {
+      let tail = string.slice(output, string.length(output) - 3000, 3000)
+      let system_prompt =
+        "You are reviewing the output of a completed AI coding session. "
+        <> "Summarize what was accomplished in 2-3 sentences. "
+        <> "Mention specific files created/modified and key decisions. No preamble."
+      let user_prompt =
+        "Session: " <> state.session_name
+        <> "\nTask: " <> string.slice(state.task_spec.prompt, 0, 500)
+        <> "\n\nSession output (last 3000 chars):\n" <> tail
+      case llm.chat(config, [llm.SystemMessage(system_prompt), llm.UserMessage(user_prompt)]) {
+        Ok(summary) -> string.trim(summary)
+        Error(_) -> "Session completed (summary failed)"
+      }
+    }
+  }
+}
 
 fn summarize_and_report(state: MonitorState, output: String) -> Nil {
   case state.llm_config {
