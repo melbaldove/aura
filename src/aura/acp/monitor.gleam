@@ -62,7 +62,7 @@ const max_output_size = 50_000
 
 const report_marker = "---AURA-REPORT---"
 
-const report_instructions = "IMPORTANT: When you have completed all tasks, you MUST output this report as your very last message. Do not skip this. Replace the bracketed placeholders with actual values:\n\n---AURA-REPORT---\nOUTCOME: [clean if fully done, partial if some tasks remain, failed if blocked]\nFILES_CHANGED: [comma-separated list of files you created or modified]\nDECISIONS: [key decisions you made and why]\nTESTS: [pass/fail summary or 'none' if no tests]\nBLOCKERS: [unresolved items or 'none']\nANCHOR: [one sentence summary worth remembering long-term]\n---END-REPORT---"
+const report_instructions = "IMPORTANT: When you have completed all tasks, you MUST output a completion report as your very last message. Use three dashes followed by AURA-REPORT followed by three dashes as the opening marker, and three dashes followed by END-REPORT followed by three dashes as the closing marker. Between the markers, include these fields on separate lines — replace the descriptions with actual values:\nOUTCOME: clean if fully done, partial if some tasks remain, failed if blocked\nFILES_CHANGED: comma-separated list of files you created or modified\nDECISIONS: key decisions you made and why\nTESTS: pass/fail summary or none\nBLOCKERS: unresolved items or none\nANCHOR: one sentence summary worth remembering long-term"
 
 // ---------------------------------------------------------------------------
 // Public API
