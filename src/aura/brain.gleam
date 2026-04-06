@@ -518,7 +518,7 @@ fn stop_typing_loop(pid: process.Pid) -> Nil {
 }
 
 fn send_discord_response(token: String, channel_id: String, content: String) -> Nil {
-  io.println("[brain] Sending to channel " <> channel_id)
+  io.println("[brain] Sending to channel " <> channel_id <> ": " <> string.slice(content, 0, 100))
   case rest.send_message(token, channel_id, content, []) {
     Ok(_) -> Nil
     Error(err) -> {

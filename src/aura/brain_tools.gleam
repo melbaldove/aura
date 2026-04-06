@@ -398,16 +398,26 @@ fn execute_tool_dispatch(
             timeout_ms: timeout_ms,
             acceptance_criteria: [],
           )
-          // Create a Discord thread from the user's message
-          let thread_name = "ACP: " <> string.slice(prompt, 0, 50)
-          let thread_id = case rest.create_thread_from_message(
-            ctx.discord_token,
-            ctx.channel_id,
-            ctx.message_id,
-            thread_name,
-          ) {
-            Ok(id) -> id
-            Error(_) -> ""
+          // Check if we're already in an ACP thread — reuse it instead of creating nested thread
+          let existing_thread = list.find(
+            session_store.load(ctx.acp_store_path),
+            fn(s) { s.thread_id == ctx.channel_id },
+          )
+          let thread_id = case existing_thread {
+            Ok(_) -> ctx.channel_id
+            Error(_) -> {
+              // Create a new thread from the user's message
+              let thread_name = "ACP: " <> string.slice(prompt, 0, 50)
+              case rest.create_thread_from_message(
+                ctx.discord_token,
+                ctx.channel_id,
+                ctx.message_id,
+                thread_name,
+              ) {
+                Ok(id) -> id
+                Error(_) -> ""
+              }
+            }
           }
           let session_name = "acp-" <> ctx.domain_name <> "-" <> task_id
           // Register session with brain BEFORE starting monitor
