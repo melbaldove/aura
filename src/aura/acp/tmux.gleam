@@ -25,7 +25,7 @@ pub fn build_create_command(
 }
 
 pub fn build_capture_command(session_name: String) -> Command {
-  Command(program: "tmux", args: ["capture-pane", "-p", "-t", session_name])
+  Command(program: "tmux", args: ["capture-pane", "-p", "-S", "-500", "-t", session_name])
 }
 
 pub fn build_kill_command(session_name: String) -> Command {
