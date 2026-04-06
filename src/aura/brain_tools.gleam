@@ -486,6 +486,20 @@ fn execute_tool_dispatch(
         }
       }
     }
+    "acp_prompt" -> {
+      case require_arg(args, "session_name") {
+        Error(e) -> e
+        Ok(session_name) -> case require_arg(args, "message") {
+          Error(e) -> e
+          Ok(message) -> {
+            case acp_tmux.send_input(session_name, message) {
+              Ok(_) -> "Sent to " <> session_name
+              Error(e) -> "Error: " <> e
+            }
+          }
+        }
+      }
+    }
     _ -> "Error: Unknown tool " <> name
   }
 }
@@ -885,6 +899,24 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
       name: "acp_list",
       description: "List all active ACP (Claude Code) sessions with their current state, domain, and uptime.",
       parameters: [],
+    ),
+    llm.ToolDefinition(
+      name: "acp_prompt",
+      description: "Send a follow-up instruction to a running ACP session. The message is typed into the Claude Code session as if the user typed it.",
+      parameters: [
+        llm.ToolParam(
+          name: "session_name",
+          param_type: "string",
+          description: "The tmux session name (e.g. acp-hy-t1234567)",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "message",
+          param_type: "string",
+          description: "The instruction to send to Claude Code",
+          required: True,
+        ),
+      ],
     ),
   ]
 }

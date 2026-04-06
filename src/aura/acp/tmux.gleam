@@ -74,6 +74,15 @@ pub fn create_session(
   }
 }
 
+/// Send text input to a running tmux session followed by Enter.
+pub fn send_input(session_name: String, text: String) -> Result(Nil, String) {
+  case cmd.run("tmux", ["send-keys", "-t", session_name, text, "Enter"], 5000) {
+    Ok(#(0, _, _)) -> Ok(Nil)
+    Ok(#(code, _, stderr)) -> Error("tmux send-keys exit " <> int.to_string(code) <> ": " <> stderr)
+    Error(e) -> Error(e)
+  }
+}
+
 pub fn capture_pane(session_name: String) -> Result(String, String) {
   let cmd = build_capture_command(session_name)
   run(cmd)
