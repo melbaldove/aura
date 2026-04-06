@@ -14,18 +14,28 @@ pub fn empty_report() -> types.AcpReport {
 }
 
 pub fn parse(output: String) -> Result(types.AcpReport, String) {
-  case string.split_once(output, "---AURA-REPORT---") {
+  // Split on ALL occurrences of the marker and take the LAST block.
+  // The prompt contains the marker as instructions — we want Claude's actual output,
+  // which is always the last occurrence.
+  let parts = string.split(output, "---AURA-REPORT---")
+  case list.last(parts) {
     Error(_) -> Error("No ---AURA-REPORT--- marker found")
-    Ok(#(_, after_marker)) -> {
-      case string.split_once(after_marker, "---END-REPORT---") {
-        Error(_) -> Error("No ---END-REPORT--- marker found")
-        Ok(#(block, _)) -> {
-          let lines =
-            block
-            |> string.split("\n")
-            |> list.map(string.trim)
-            |> list.filter(fn(l) { l != "" })
-          Ok(parse_lines(lines, empty_report()))
+    Ok(last_part) -> {
+      // Only valid if there were at least 2 parts (marker appeared at least once)
+      case list.length(parts) < 2 {
+        True -> Error("No ---AURA-REPORT--- marker found")
+        False -> {
+          case string.split_once(last_part, "---END-REPORT---") {
+            Error(_) -> Error("No ---END-REPORT--- marker found")
+            Ok(#(block, _)) -> {
+              let lines =
+                block
+                |> string.split("\n")
+                |> list.map(string.trim)
+                |> list.filter(fn(l) { l != "" })
+              Ok(parse_lines(lines, empty_report()))
+            }
+          }
         }
       }
     }
