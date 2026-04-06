@@ -198,70 +198,61 @@ fn handle_session_alive(
       actor.continue(state)
     }
     Ok(output) -> {
-      // 3. If output unchanged, just reschedule
-      case output == state.last_output {
+      // 3. Always check for report marker first — regardless of output change
+      case string.contains(output, report_marker) {
         True -> {
-          // Still check timeout even if output unchanged
-          check_timeout_and_continue(state, output)
-        }
-        False -> {
-          // 4. Check for report marker
-          case string.contains(output, report_marker) {
-            True -> {
-              case report.parse(output) {
-                Ok(rpt) -> {
-                  state.on_event(AcpCompleted(
-                    session_name: state.session_name,
-                    domain: state.task_spec.domain,
-                    report: rpt,
-                  ))
-                  actor.stop()
-                }
-                Error(_) -> {
-                  // Marker found but parse failed, keep monitoring
-                  schedule_next(state.self_subject)
-                  actor.continue(MonitorState(..state, last_output: cap_output(output)))
-                }
-              }
+          case report.parse(output) {
+            Ok(rpt) -> {
+              io.println("[acp-monitor] Report parsed for " <> state.session_name)
+              state.on_event(AcpCompleted(
+                session_name: state.session_name,
+                domain: state.task_spec.domain,
+                report: rpt,
+              ))
+              actor.stop()
             }
-            False -> {
-              // 5. Classify if substantial new output
-              let diff_len =
-                string.length(output) - string.length(state.last_output)
-              let abs_diff = case diff_len < 0 {
-                True -> 0 - diff_len
-                False -> diff_len
-              }
-              case abs_diff > 100 {
-                True -> {
-                  // Spawn to avoid blocking the monitor actor
-                  let s = state
-                  let o = output
-                  process.spawn_unlinked(fn() { classify_and_alert(s, o) })
-                  Nil
-                }
-                False -> Nil
-              }
-
-              // 6. Emit progress update if enough time has passed
-              let now = time.now_ms()
-              let new_progress_ms = case now - state.last_progress_ms >= progress_interval_ms {
-                True -> {
-                  let s = state
-                  let o = output
-                  process.spawn_unlinked(fn() { summarize_and_report(s, o) })
-                  now
-                }
-                False -> state.last_progress_ms
-              }
-
-              // 7. Check timeout
-              check_timeout_and_continue(
-                MonitorState(..state, last_progress_ms: new_progress_ms),
-                output,
-              )
+            Error(e) -> {
+              io.println("[acp-monitor] Report parse failed for " <> state.session_name <> ": " <> e)
+              schedule_next(state.self_subject)
+              actor.continue(MonitorState(..state, last_output: cap_output(output)))
             }
           }
+        }
+        False -> {
+          // 4. Classify if substantial new output
+          let diff_len =
+            string.length(output) - string.length(state.last_output)
+          let abs_diff = case diff_len < 0 {
+            True -> 0 - diff_len
+            False -> diff_len
+          }
+          case abs_diff > 100 {
+            True -> {
+              let s = state
+              let o = output
+              process.spawn_unlinked(fn() { classify_and_alert(s, o) })
+              Nil
+            }
+            False -> Nil
+          }
+
+          // 5. Emit progress update if enough time has passed
+          let now = time.now_ms()
+          let new_progress_ms = case now - state.last_progress_ms >= progress_interval_ms {
+            True -> {
+              let s = state
+              let o = output
+              process.spawn_unlinked(fn() { summarize_and_report(s, o) })
+              now
+            }
+            False -> state.last_progress_ms
+          }
+
+          // 6. Check timeout
+          check_timeout_and_continue(
+            MonitorState(..state, last_progress_ms: new_progress_ms),
+            output,
+          )
         }
       }
     }
