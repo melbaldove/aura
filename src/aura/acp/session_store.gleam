@@ -68,17 +68,6 @@ pub fn upsert(
   save(path, updated)
 }
 
-/// Remove a session by name from the store.
-pub fn remove(
-  path: String,
-  session_name: String,
-) -> Result(Nil, String) {
-  let existing = load(path)
-  let filtered =
-    list.filter(existing, fn(s) { s.session_name != session_name })
-  save(path, filtered)
-}
-
 // ---------------------------------------------------------------------------
 // JSON encoding
 // ---------------------------------------------------------------------------

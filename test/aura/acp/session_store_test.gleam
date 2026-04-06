@@ -89,25 +89,6 @@ pub fn upsert_updates_existing_session_test() {
   cleanup()
 }
 
-pub fn remove_session_test() {
-  cleanup()
-  let path = test_path()
-  let s1 = sample_session("acp-test-t1")
-  let s2 = sample_session("acp-test-t2")
-
-  session_store.save(path, [s1, s2]) |> should.be_ok
-  session_store.remove(path, "acp-test-t1") |> should.be_ok
-
-  let loaded = session_store.load(path)
-  list.length(loaded) |> should.equal(1)
-  case list.first(loaded) {
-    Ok(s) -> s.session_name |> should.equal("acp-test-t2")
-    Error(_) -> panic as "expected session"
-  }
-
-  cleanup()
-}
-
 pub fn is_terminal_test() {
   session_store.is_terminal("complete") |> should.be_true
   session_store.is_terminal("timed_out") |> should.be_true

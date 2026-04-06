@@ -29,6 +29,12 @@ import gleam/string
 // Types
 // ---------------------------------------------------------------------------
 
+/// Result of executing a tool — either plain text or a redirect to a channel.
+pub type ToolResult {
+  TextResult(String)
+  RedirectResult(channel_id: String, text: String)
+}
+
 /// Subset of BrainState fields needed for tool execution.
 /// Avoids a circular dependency between brain and brain_tools.
 pub type ToolContext {
@@ -45,9 +51,7 @@ pub type ToolContext {
     db_subject: process.Subject(db.DbMessage),
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
     acp_manager: manager.AcpManager,
-    acp_store_path: String,
     on_acp_event: fn(acp_monitor.AcpEvent) -> Nil,
-    on_register_acp: fn(manager.ActiveSession, String, String) -> Nil,
     monitor_model: String,
     domain_name: String,
     domain_cwd: String,
@@ -59,10 +63,15 @@ pub type ToolContext {
 // ---------------------------------------------------------------------------
 
 /// Execute a tool call against the given tool context.
-pub fn execute_tool(ctx: ToolContext, call: llm.ToolCall) -> String {
+/// Returns the result and the parsed args (so the caller can build traces
+/// without re-parsing).
+pub fn execute_tool(
+  ctx: ToolContext,
+  call: llm.ToolCall,
+) -> #(ToolResult, List(#(String, String))) {
   let args = parse_tool_args(call.arguments)
   case get_arg(args, "_parse_error") {
-    "" -> execute_tool_dispatch(ctx, call.name, args)
+    "" -> #(execute_tool_dispatch(ctx, call.name, args), args)
     raw -> {
       io.println(
         "[brain] Failed to parse tool args for "
@@ -70,7 +79,12 @@ pub fn execute_tool(ctx: ToolContext, call: llm.ToolCall) -> String {
         <> ": "
         <> string.slice(raw, 0, 200),
       )
-      "Error: failed to parse tool arguments. Check the argument format and try again."
+      #(
+        TextResult(
+          "Error: failed to parse tool arguments. Check the argument format and try again.",
+        ),
+        args,
+      )
     }
   }
 }
@@ -79,25 +93,25 @@ fn execute_tool_dispatch(
   ctx: ToolContext,
   name: String,
   args: List(#(String, String)),
-) -> String {
+) -> ToolResult {
   case name {
     "read_file" -> {
       case require_arg(args, "path") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(path) -> {
           case tools.read_file(ctx.data_dir, path) {
-            Ok(content) -> content
-            Error(e) -> "Error: " <> e
+            Ok(content) -> TextResult(content)
+            Error(e) -> TextResult("Error: " <> e)
           }
         }
       }
     }
     "write_file" -> {
       case require_arg(args, "path") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(path) ->
           case require_arg(args, "content") {
-            Error(e) -> e
+            Error(e) -> TextResult(e)
             Ok(content) -> {
               case
                 tools.write_file(
@@ -108,8 +122,8 @@ fn execute_tool_dispatch(
                   False,
                 )
               {
-                Ok(_) -> "File written: " <> path
-                Error(e) -> "Error: " <> e
+                Ok(_) -> TextResult("File written: " <> path)
+                Error(e) -> TextResult("Error: " <> e)
               }
             }
           }
@@ -117,10 +131,10 @@ fn execute_tool_dispatch(
     }
     "append_file" -> {
       case require_arg(args, "path") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(path) ->
           case require_arg(args, "content") {
-            Error(e) -> e
+            Error(e) -> TextResult(e)
             Ok(content) -> {
               case
                 tools.append_file(
@@ -131,8 +145,8 @@ fn execute_tool_dispatch(
                   False,
                 )
               {
-                Ok(_) -> "Appended to: " <> path
-                Error(e) -> "Error: " <> e
+                Ok(_) -> TextResult("Appended to: " <> path)
+                Error(e) -> TextResult("Error: " <> e)
               }
             }
           }
@@ -140,40 +154,40 @@ fn execute_tool_dispatch(
     }
     "list_directory" -> {
       case require_arg(args, "path") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(path) -> {
           case tools.list_directory(ctx.data_dir, path) {
-            Ok(listing) -> listing
-            Error(e) -> "Error: " <> e
+            Ok(listing) -> TextResult(listing)
+            Error(e) -> TextResult("Error: " <> e)
           }
         }
       }
     }
     "view_skill" -> {
       case require_arg(args, "name") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(skill_name) -> {
           case list.find(ctx.skill_infos, fn(s) { s.name == skill_name }) {
             Ok(info) -> {
               case memory.read_file(info.path <> "/SKILL.md") {
-                Ok(content) -> content
-                Error(_) -> "Error: SKILL.md not found for " <> skill_name
+                Ok(content) -> TextResult(content)
+                Error(_) -> TextResult("Error: SKILL.md not found for " <> skill_name)
               }
             }
-            Error(_) -> "Error: Skill not found: " <> skill_name
+            Error(_) -> TextResult("Error: Skill not found: " <> skill_name)
           }
         }
       }
     }
     "run_skill" -> {
       case require_arg(args, "name") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(skill_name) -> {
           case
             tools.run_skill(ctx.skill_infos, skill_name, get_arg(args, "args"))
           {
-            Ok(output) -> output
-            Error(e) -> "Error: " <> e
+            Ok(output) -> TextResult(output)
+            Error(e) -> TextResult("Error: " <> e)
           }
         }
       }
@@ -182,24 +196,25 @@ fn execute_tool_dispatch(
       case
         tools.propose(get_arg(args, "description"), get_arg(args, "details"))
       {
-        Ok(output) -> output
-        Error(e) -> "Error: " <> e
+        Ok(output) -> TextResult(output)
+        Error(e) -> TextResult("Error: " <> e)
       }
     }
     "list_threads" -> {
       case rest.get_active_threads(ctx.discord_token, ctx.guild_id) {
         Ok(threads) -> {
           case threads {
-            [] -> "No active threads found."
+            [] -> TextResult("No active threads found.")
             _ ->
               list.map(threads, fn(t) {
                 let #(id, tname, parent_id) = t
                 tname <> " (id: " <> id <> ", parent: " <> parent_id <> ")"
               })
               |> string.join("\n")
+              |> TextResult
           }
         }
-        Error(e) -> "Error: " <> e
+        Error(e) -> TextResult("Error: " <> e)
       }
     }
     "read_thread" -> {
@@ -211,7 +226,7 @@ fn execute_tool_dispatch(
       case rest.get_channel_messages(ctx.discord_token, thread_id, limit) {
         Ok(messages) -> {
           case messages {
-            [] -> "No messages in this thread."
+            [] -> TextResult("No messages in this thread.")
             _ ->
               list.reverse(messages)
               |> list.map(fn(m) {
@@ -219,24 +234,27 @@ fn execute_tool_dispatch(
                 author <> ": " <> content
               })
               |> string.join("\n")
+              |> TextResult
           }
         }
-        Error(e) -> "Error: " <> e
+        Error(e) -> TextResult("Error: " <> e)
       }
     }
     "create_skill" -> {
       case require_arg(args, "name") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(skill_name) ->
           case require_arg(args, "content") {
-            Error(e) -> e
+            Error(e) -> TextResult(e)
             Ok(content) -> {
               case skill.create(ctx.skills_dir, skill_name, content) {
                 Ok(_) ->
-                  "Skill created: "
-                  <> skill_name
-                  <> ". Available immediately via list_skills and run_skill."
-                Error(e) -> "Error: " <> e
+                  TextResult(
+                    "Skill created: "
+                    <> skill_name
+                    <> ". Available immediately via list_skills and run_skill.",
+                  )
+                Error(e) -> TextResult("Error: " <> e)
               }
             }
           }
@@ -244,13 +262,13 @@ fn execute_tool_dispatch(
     }
     "list_skills" -> {
       case skill.list_with_details(ctx.skills_dir) {
-        Ok(listing) -> listing
-        Error(e) -> "Error: " <> e
+        Ok(listing) -> TextResult(listing)
+        Error(e) -> TextResult("Error: " <> e)
       }
     }
     "memory" -> {
       case require_arg(args, "action") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(action) -> {
           let target = get_arg(args, "target")
           let content = get_arg(args, "content")
@@ -262,32 +280,34 @@ fn execute_tool_dispatch(
           case action {
             "add" -> {
               case structured_memory.add(path, content) {
-                Ok(_) -> "Memory saved."
-                Error(e) -> "Error: " <> e
+                Ok(_) -> TextResult("Memory saved.")
+                Error(e) -> TextResult("Error: " <> e)
               }
             }
             "replace" -> {
               case structured_memory.replace(path, old_text, content) {
-                Ok(_) -> "Memory updated."
-                Error(e) -> "Error: " <> e
+                Ok(_) -> TextResult("Memory updated.")
+                Error(e) -> TextResult("Error: " <> e)
               }
             }
             "remove" -> {
               case structured_memory.remove(path, old_text) {
-                Ok(_) -> "Memory entry removed."
-                Error(e) -> "Error: " <> e
+                Ok(_) -> TextResult("Memory entry removed.")
+                Error(e) -> TextResult("Error: " <> e)
               }
             }
             "read" -> {
               case structured_memory.format_for_display(path) {
-                Ok(display) -> display
-                Error(e) -> "Error: " <> e
+                Ok(display) -> TextResult(display)
+                Error(e) -> TextResult("Error: " <> e)
               }
             }
             _ ->
-              "Error: Unknown action "
-              <> action
-              <> ". Use add, replace, remove, or read."
+              TextResult(
+                "Error: Unknown action "
+                <> action
+                <> ". Use add, replace, remove, or read.",
+              )
           }
         }
       }
@@ -301,46 +321,47 @@ fn execute_tool_dispatch(
       case db.search(ctx.db_subject, query, limit) {
         Ok(results) -> {
           case results {
-            [] -> "No results found for: " <> query
+            [] -> TextResult("No results found for: " <> query)
             _ ->
               list.map(results, fn(r) {
                 r.author_name <> " (" <> r.platform <> "): " <> r.snippet
               })
               |> string.join("\n")
+              |> TextResult
           }
         }
-        Error(e) -> "Error: " <> e
+        Error(e) -> TextResult("Error: " <> e)
       }
     }
     "web_search" -> {
       case require_arg(args, "query") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(query) -> {
           let limit = case int.parse(get_arg(args, "limit")) {
             Ok(n) -> n
             Error(_) -> 5
           }
           case web.search(query, limit) {
-            Ok(results) -> web.format_search_results(results)
-            Error(e) -> "Error: " <> e
+            Ok(results) -> TextResult(web.format_search_results(results))
+            Error(e) -> TextResult("Error: " <> e)
           }
         }
       }
     }
     "web_fetch" -> {
       case require_arg(args, "url") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(url) -> {
           case web.fetch(url, 3000) {
-            Ok(content) -> content
-            Error(e) -> "Error: " <> e
+            Ok(content) -> TextResult(content)
+            Error(e) -> TextResult("Error: " <> e)
           }
         }
       }
     }
     "manage_schedule" -> {
       case require_arg(args, "action") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(action) -> {
           case action {
             "create" | "delete" -> {
@@ -354,13 +375,13 @@ fn execute_tool_dispatch(
                 _ -> "Delete schedule: " <> get_arg(args, "name")
               }
               case tools.propose(description, string.inspect(args)) {
-                Ok(output) -> output
-                Error(e) -> "Error: " <> e
+                Ok(output) -> TextResult(output)
+                Error(e) -> TextResult("Error: " <> e)
               }
             }
             _ -> {
               case ctx.scheduler_subject {
-                None -> "Error: Scheduler not started"
+                None -> TextResult("Error: Scheduler not started")
                 Some(subj) -> {
                   let reply_subject = process.new_subject()
                   process.send(
@@ -368,8 +389,8 @@ fn execute_tool_dispatch(
                     scheduler.ManageSchedule(action, args, reply_subject),
                   )
                   case process.receive(reply_subject, 5000) {
-                    Ok(response) -> response
-                    Error(_) -> "Error: Scheduler timeout"
+                    Ok(response) -> TextResult(response)
+                    Error(_) -> TextResult("Error: Scheduler timeout")
                   }
                 }
               }
@@ -380,9 +401,9 @@ fn execute_tool_dispatch(
     }
     "acp_dispatch" -> {
       case require_arg(args, "prompt") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(prompt) -> case require_arg(args, "repo") {
-          Error(e) -> e
+          Error(e) -> TextResult(e)
           Ok(repo) -> {
           let task_id = "t" <> int.to_string(time.now_ms())
           let cwd = ctx.domain_cwd <> "/" <> repo
@@ -400,7 +421,7 @@ fn execute_tool_dispatch(
           )
           // Check if we're already in an ACP thread — reuse it instead of creating nested thread
           let existing_thread = list.find(
-            session_store.load(ctx.acp_store_path),
+            session_store.load(ctx.acp_manager.store_path),
             fn(s) { s.thread_id == ctx.channel_id },
           )
           let thread_id = case existing_thread {
@@ -419,21 +440,9 @@ fn execute_tool_dispatch(
               }
             }
           }
-          let session_name = "acp-" <> ctx.domain_name <> "-" <> task_id
-          // Register session with brain BEFORE starting monitor
-          // so AcpStarted event can find the thread_id
-          let session = manager.ActiveSession(
-            session_name: session_name,
-            domain: ctx.domain_name,
-            task_id: task_id,
-            state: manager.Starting,
-            started_at_ms: time.now_ms(),
-            thread_id: thread_id,
-          )
-          ctx.on_register_acp(session, prompt, cwd)
-          // Small delay to let the brain actor process the registration
-          process.sleep(100)
+          let session_name = acp_tmux.build_session_name(ctx.domain_name, task_id)
 
+          // manager.dispatch handles registration before starting the monitor
           case manager.dispatch(ctx.acp_manager, task_spec, ctx.monitor_model, ctx.on_acp_event, thread_id) {
             Ok(_) -> {
               let details_msg =
@@ -449,11 +458,11 @@ fn execute_tool_dispatch(
                 }
               }
               case thread_id {
-                "" -> "ACP dispatched."
-                id -> "___REDIRECT_CHANNEL___:" <> id
+                "" -> TextResult("ACP dispatched.")
+                id -> RedirectResult(channel_id: id, text: "ACP dispatched.")
               }
             }
-            Error(e) -> "Error: " <> e
+            Error(e) -> TextResult("Error: " <> e)
           }
         }
         }
@@ -461,9 +470,9 @@ fn execute_tool_dispatch(
     }
     "acp_status" -> {
       case require_arg(args, "session_name") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(session_name) -> {
-          let sessions = session_store.load(ctx.acp_store_path)
+          let sessions = session_store.load(ctx.acp_manager.store_path)
           let state_str = case list.find(sessions, fn(s) { s.session_name == session_name }) {
             Ok(session) -> {
               let elapsed_ms = time.now_ms() - session.started_at_ms
@@ -478,17 +487,17 @@ fn execute_tool_dispatch(
                 True -> "...\n" <> string.slice(output, string.length(output) - 500, 500)
                 False -> output
               }
-              "Session: " <> session_name <> state_str <> "\n\n" <> tail
+              TextResult("Session: " <> session_name <> state_str <> "\n\n" <> tail)
             }
-            Error(_) -> "Session not found or not running: " <> session_name
+            Error(_) -> TextResult("Session not found or not running: " <> session_name)
           }
         }
       }
     }
     "acp_list" -> {
-      let sessions = session_store.load(ctx.acp_store_path)
+      let sessions = session_store.load(ctx.acp_manager.store_path)
       case sessions {
-        [] -> "No ACP sessions."
+        [] -> TextResult("No ACP sessions.")
         _ -> {
           list.map(sessions, fn(s) {
             let elapsed_ms = time.now_ms() - s.started_at_ms
@@ -499,19 +508,20 @@ fn execute_tool_dispatch(
             <> " (started " <> int.to_string(elapsed_min) <> "m ago)"
           })
           |> string.join("\n")
+          |> TextResult
         }
       }
     }
     "acp_prompt" -> {
       case require_arg(args, "session_name") {
-        Error(e) -> e
+        Error(e) -> TextResult(e)
         Ok(session_name) -> case require_arg(args, "message") {
-          Error(e) -> e
+          Error(e) -> TextResult(e)
           Ok(message) -> {
             case acp_tmux.send_input(session_name, message) {
               Ok(_) -> {
                 // Restart monitor so we observe the result
-                let sessions = session_store.load(ctx.acp_store_path)
+                let sessions = session_store.load(ctx.acp_manager.store_path)
                 case list.find(sessions, fn(s) { s.session_name == session_name }) {
                   Ok(stored) -> {
                     let task_spec = acp_types.TaskSpec(
@@ -528,15 +538,23 @@ fn execute_tool_dispatch(
                   }
                   Error(_) -> Nil
                 }
-                "Sent to " <> session_name <> " (monitoring restarted)"
+                TextResult("Sent to " <> session_name <> " (monitoring restarted)")
               }
-              Error(e) -> "Error: " <> e
+              Error(e) -> TextResult("Error: " <> e)
             }
           }
         }
       }
     }
-    _ -> "Error: Unknown tool " <> name
+    _ -> TextResult("Error: Unknown tool " <> name)
+  }
+}
+
+/// Extract the text content from a ToolResult.
+pub fn tool_result_text(result: ToolResult) -> String {
+  case result {
+    TextResult(text) -> text
+    RedirectResult(_, text) -> text
   }
 }
 

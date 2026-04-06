@@ -35,6 +35,8 @@ pub type ActiveSession {
     state: SessionState,
     started_at_ms: Int,
     thread_id: String,
+    prompt: String,
+    cwd: String,
   )
 }
 
@@ -57,23 +59,11 @@ pub fn can_start(manager: AcpManager) -> Bool {
 pub fn register(
   manager: AcpManager,
   session: ActiveSession,
-  prompt: String,
-  cwd: String,
 ) -> AcpManager {
-  // Persist to store
-  let stored =
-    session_store.StoredSession(
-      session_name: session.session_name,
-      domain: session.domain,
-      task_id: session.task_id,
-      thread_id: session.thread_id,
-      started_at_ms: session.started_at_ms,
-      state: session_state_to_string(session.state),
-      prompt: prompt,
-      cwd: cwd,
-    )
-  let _ = session_store.upsert(manager.store_path, stored)
-  AcpManager(..manager, active_sessions: [session, ..manager.active_sessions])
+  let new_manager =
+    AcpManager(..manager, active_sessions: [session, ..manager.active_sessions])
+  persist_sessions(new_manager)
+  new_manager
 }
 
 pub fn unregister(
@@ -81,20 +71,17 @@ pub fn unregister(
   session_name: String,
   terminal_state: SessionState,
 ) -> AcpManager {
-  // Update the store to mark as terminal (keep for history, don't remove)
-  let sessions = session_store.load(manager.store_path)
-  let updated =
-    list.map(sessions, fn(s) {
+  // Update in-memory state to terminal, then persist, then remove from active list.
+  // The persist step writes the terminal state to disk for history.
+  let marked =
+    list.map(manager.active_sessions, fn(s) {
       case s.session_name == session_name {
-        True ->
-          session_store.StoredSession(
-            ..s,
-            state: session_state_to_string(terminal_state),
-          )
+        True -> ActiveSession(..s, state: terminal_state)
         False -> s
       }
     })
-  let _ = session_store.save(manager.store_path, updated)
+  let marked_manager = AcpManager(..manager, active_sessions: marked)
+  persist_sessions(marked_manager)
   // Remove from in-memory active list
   let remaining =
     list.filter(manager.active_sessions, fn(s) {
@@ -126,21 +113,9 @@ pub fn update_state(
         False -> s
       }
     })
-  // Persist state change to store
-  let stored_sessions = session_store.load(manager.store_path)
-  let updated_stored =
-    list.map(stored_sessions, fn(s) {
-      case s.session_name == session_name {
-        True ->
-          session_store.StoredSession(
-            ..s,
-            state: session_state_to_string(new_state),
-          )
-        False -> s
-      }
-    })
-  let _ = session_store.save(manager.store_path, updated_stored)
-  AcpManager(..manager, active_sessions: new_sessions)
+  let new_manager = AcpManager(..manager, active_sessions: new_sessions)
+  persist_sessions(new_manager)
+  new_manager
 }
 
 /// Look up a session by name.
@@ -151,11 +126,6 @@ pub fn get_session(
   list.find(manager.active_sessions, fn(s) {
     s.session_name == session_name
   })
-}
-
-/// List all active sessions.
-pub fn list_sessions(manager: AcpManager) -> List(ActiveSession) {
-  manager.active_sessions
 }
 
 /// Convert a session state to a human-readable string.
@@ -197,9 +167,11 @@ pub fn dispatch(
           state: Starting,
           started_at_ms: time.now_ms(),
           thread_id: thread_id,
+          prompt: task_spec.prompt,
+          cwd: task_spec.cwd,
         )
       let new_manager =
-        register(manager, session, task_spec.prompt, task_spec.cwd)
+        register(manager, session)
       case monitor.start(task_spec, monitor_model, on_event) {
         Ok(_subject) -> {
           Ok(new_manager)
@@ -208,4 +180,28 @@ pub fn dispatch(
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Persist the in-memory active sessions list to disk.
+/// This is the single write path — no reads from disk needed.
+fn persist_sessions(mgr: AcpManager) -> Nil {
+  let stored =
+    list.map(mgr.active_sessions, fn(s) {
+      session_store.StoredSession(
+        session_name: s.session_name,
+        domain: s.domain,
+        task_id: s.task_id,
+        thread_id: s.thread_id,
+        started_at_ms: s.started_at_ms,
+        state: session_state_to_string(s.state),
+        prompt: s.prompt,
+        cwd: s.cwd,
+      )
+    })
+  let _ = session_store.save(mgr.store_path, stored)
+  Nil
 }

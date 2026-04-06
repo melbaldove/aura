@@ -88,52 +88,8 @@ pub fn start(
   // Create the tmux session
   case tmux.create_session(session_name, shell_command) {
     Error(reason) -> Error("Failed to create tmux session: " <> reason)
-    Ok(Nil) -> {
-      let llm_config =
-        models.build_llm_config(monitor_model)
-        |> option.from_result
-
-      let started_at = time.now_ms()
-
-      let builder =
-        actor.new_with_initialiser(5000, fn(subject) {
-          let state =
-            MonitorState(
-              task_spec: task_spec,
-              session_name: session_name,
-              last_output: "",
-              started_at_ms: started_at,
-              last_progress_ms: started_at,
-              idle_checks: 0,
-              llm_config: llm_config,
-              on_event: on_event,
-              self_subject: subject,
-            )
-
-          io.println("[acp-monitor] Monitor initialized for " <> session_name)
-
-          // Schedule the first check
-          schedule_next(subject)
-
-          // Emit started event
-          on_event(AcpStarted(
-            session_name: session_name,
-            domain: task_spec.domain,
-            task_id: task_spec.id,
-          ))
-
-          Ok(actor.initialised(state) |> actor.returning(subject))
-        })
-        |> actor.on_message(handle_message)
-
-      case actor.start(builder) {
-        Ok(started) -> Ok(started.data)
-        Error(err) ->
-          Error(
-            "Failed to start monitor actor: " <> string.inspect(err),
-          )
-      }
-    }
+    Ok(Nil) ->
+      start_monitor_actor(task_spec, session_name, monitor_model, on_event, True)
   }
 }
 
@@ -146,7 +102,18 @@ pub fn start_recovery(
 ) -> Result(process.Subject(MonitorMessage), String) {
   let session_name =
     tmux.build_session_name(task_spec.domain, task_spec.id)
+  start_monitor_actor(task_spec, session_name, monitor_model, on_event, False)
+}
 
+/// Shared actor creation for both start and start_recovery.
+/// When `emit_started` is True, the AcpStarted event is emitted during init.
+fn start_monitor_actor(
+  task_spec: types.TaskSpec,
+  session_name: String,
+  monitor_model: String,
+  on_event: fn(AcpEvent) -> Nil,
+  emit_started: Bool,
+) -> Result(process.Subject(MonitorMessage), String) {
   let llm_config =
     models.build_llm_config(monitor_model)
     |> option.from_result
@@ -168,14 +135,26 @@ pub fn start_recovery(
           self_subject: subject,
         )
 
-      io.println(
-        "[acp-monitor] Recovery monitor initialized for " <> session_name,
-      )
+      let label = case emit_started {
+        True -> "Monitor"
+        False -> "Recovery monitor"
+      }
+      io.println("[acp-monitor] " <> label <> " initialized for " <> session_name)
 
       // Schedule the first check
       schedule_next(subject)
 
-      // Do NOT emit AcpStarted — session was already started before restart
+      // Only emit AcpStarted for new sessions, not recovery
+      case emit_started {
+        True ->
+          on_event(AcpStarted(
+            session_name: session_name,
+            domain: task_spec.domain,
+            task_id: task_spec.id,
+          ))
+        False -> Nil
+      }
+
       Ok(actor.initialised(state) |> actor.returning(subject))
     })
     |> actor.on_message(handle_message)
@@ -184,7 +163,7 @@ pub fn start_recovery(
     Ok(started) -> Ok(started.data)
     Error(err) ->
       Error(
-        "Failed to start recovery monitor actor: " <> string.inspect(err),
+        "Failed to start monitor actor: " <> string.inspect(err),
       )
   }
 }

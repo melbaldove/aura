@@ -14,12 +14,12 @@ import gleam/uri
 const base_url = "https://discord.com/api/v10"
 
 /// Prepend the Discord API base URL to a path.
-pub fn api_url(path: String) -> String {
+fn api_url(path: String) -> String {
   base_url <> path
 }
 
 /// Build the Authorization header tuple for a bot token.
-pub fn auth_header(token: String) -> #(String, String) {
+fn auth_header(token: String) -> #(String, String) {
   #("authorization", "Bot " <> token)
 }
 

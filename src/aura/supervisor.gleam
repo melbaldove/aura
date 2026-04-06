@@ -261,14 +261,12 @@ fn recover_acp_sessions(
                 state: manager.Running,
                 started_at_ms: stored.started_at_ms,
                 thread_id: stored.thread_id,
+                prompt: stored.prompt,
+                cwd: stored.cwd,
               )
             process.send(
               brain_subject,
-              brain.RegisterAcpSession(
-                session: session,
-                prompt: stored.prompt,
-                cwd: stored.cwd,
-              ),
+              brain.RecoverAcpSession(session: session),
             )
 
             // Start a new monitor for the surviving tmux session

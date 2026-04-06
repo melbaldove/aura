@@ -71,11 +71,7 @@ pub type BrainMessage {
   HeartbeatFinding(notification.Finding)
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
-  RegisterAcpSession(
-    session: manager.ActiveSession,
-    prompt: String,
-    cwd: String,
-  )
+  RecoverAcpSession(session: manager.ActiveSession)
   PostWelcome(channel_id: String)
   StoreExchange(channel_id: String, messages: List(llm.Message))
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
@@ -329,9 +325,8 @@ fn handle_message(
       }
     }
     AcpEvent(event) -> handle_acp_event(state, event)
-    RegisterAcpSession(session:, prompt:, cwd:) -> {
-      let new_manager =
-        manager.register(state.acp_manager, session, prompt, cwd)
+    RecoverAcpSession(session:) -> {
+      let new_manager = manager.register(state.acp_manager, session)
       actor.continue(BrainState(..state, acp_manager: new_manager))
     }
     StoreExchange(channel_id, messages) -> {
@@ -607,20 +602,9 @@ fn handle_with_llm(
     db_subject: state.db_subject,
     scheduler_subject: state.scheduler_subject,
     acp_manager: state.acp_manager,
-    acp_store_path: state.acp_manager.store_path,
     on_acp_event: fn(event) {
       case brain_subject_opt {
         Some(subj) -> process.send(subj, AcpEvent(event))
-        None -> Nil
-      }
-    },
-    on_register_acp: fn(session, prompt, cwd) {
-      case brain_subject_opt {
-        Some(subj) ->
-          process.send(
-            subj,
-            RegisterAcpSession(session: session, prompt: prompt, cwd: cwd),
-          )
         None -> Nil
       }
     },
@@ -728,47 +712,39 @@ fn tool_loop_progressive(
           case response.tool_calls {
             [] -> {
               // No tool calls — return the text response with accumulated traces
-              let final_new_messages = list.append(new_messages, [llm.AssistantMessage(response.content)])
+              let final_new_messages = list.reverse([llm.AssistantMessage(response.content), ..list.reverse(new_messages)])
               Ok(#(response.content, traces, msg_id, final_new_messages, channel_id))
             }
             calls -> {
               // Execute tool calls and continue the loop
               io.println("[brain] " <> int.to_string(list.length(calls)) <> " tool call(s)")
 
-              // Execute each tool and build traces + result messages
-              let #(rev_traces, rev_results) = list.fold(calls, #([], []), fn(acc, call) {
-                let #(acc_traces, acc_results) = acc
+              // Execute each tool and build traces + result messages + redirect info
+              let #(rev_traces, rev_results, redirect) = list.fold(calls, #([], [], #(channel_id, message_id)), fn(acc, call) {
+                let #(acc_traces, acc_results, acc_redirect) = acc
                 io.println("[brain] Tool: " <> call.name <> " args: " <> call.arguments)
-                let result = brain_tools.execute_tool(tool_ctx, call)
-                let result_preview = string.slice(result, 0, 100)
+                let #(tool_result, parsed_args) = brain_tools.execute_tool(tool_ctx, call)
+                let result_text = brain_tools.tool_result_text(tool_result)
+                let result_preview = string.slice(result_text, 0, 100)
                 io.println("[brain] Result: " <> result_preview)
 
-                let is_error = string.starts_with(result, "Error")
-                let parsed_args = brain_tools.parse_tool_args(call.arguments)
+                let is_error = string.starts_with(result_text, "Error")
                 let trace = conversation.ToolTrace(
                   name: call.name,
                   args: brain_tools.format_tool_args(parsed_args),
-                  result: result,
+                  result: result_text,
                   is_error: is_error,
                 )
-                #([trace, ..acc_traces], [llm.ToolResultMessage(call.id, result), ..acc_results])
-              })
-              let new_traces = list.append(traces, list.reverse(rev_traces))
-              let tool_results = list.reverse(rev_results)
-
-              // Check if any tool redirected output to a thread
-              let #(channel_id, message_id) = list.fold(tool_results, #(channel_id, message_id), fn(acc, msg) {
-                case msg {
-                  llm.ToolResultMessage(_, content) -> {
-                    case string.starts_with(content, "___REDIRECT_CHANNEL___:") {
-                      // Switch to thread and reset message_id so next send creates a new message
-                      True -> #(string.drop_start(content, 23), "")
-                      False -> acc
-                    }
-                  }
-                  _ -> acc
+                // Check for channel redirect
+                let new_redirect = case tool_result {
+                  brain_tools.RedirectResult(rid, _) -> #(rid, "")
+                  _ -> acc_redirect
                 }
+                #([trace, ..acc_traces], [llm.ToolResultMessage(call.id, result_text), ..acc_results], new_redirect)
               })
+              let new_traces = list.flatten([traces, list.reverse(rev_traces)])
+              let tool_results = list.reverse(rev_results)
+              let #(channel_id, message_id) = redirect
 
               // Format current traces for progressive display
               let progress_text = conversation.format_traces(new_traces) <> "\n\n*Thinking...*"
@@ -781,10 +757,10 @@ fn tool_loop_progressive(
                 llm.AssistantToolCallMessage(response.content, calls),
                 ..tool_results
               ]
-              let updated_new_messages = list.append(new_messages, iteration_messages)
+              let updated_new_messages = list.flatten([new_messages, iteration_messages])
 
               // Build full messages for the next LLM call: all prior messages + this iteration
-              let updated_messages = list.append(messages, iteration_messages)
+              let updated_messages = list.flatten([messages, iteration_messages])
 
               tool_loop_progressive(state, tool_ctx, channel_id, updated_messages, new_traces, new_message_id, iteration + 1, updated_new_messages)
             }
