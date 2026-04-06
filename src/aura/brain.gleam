@@ -357,7 +357,7 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
         <> "\n`tmux attach -t "
         <> session_name
         <> "`"
-      let channel = resolve_domain_channel(state, domain)
+      let channel = resolve_acp_channel(state, session_name, domain)
       process.spawn(fn() {
         send_discord_response(state.discord_token, channel, msg)
       })
@@ -374,7 +374,7 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
         <> "\n`tmux attach -t "
         <> session_name
         <> "`"
-      let channel = resolve_domain_channel(state, domain)
+      let channel = resolve_acp_channel(state, session_name, domain)
       process.spawn(fn() {
         send_discord_response(state.discord_token, channel, msg)
       })
@@ -395,7 +395,7 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
     }
     acp_monitor.AcpProgress(session_name, domain, summary) -> {
       let msg = "**ACP Progress** `" <> session_name <> "`\n" <> summary
-      let channel = resolve_domain_channel(state, domain)
+      let channel = resolve_acp_channel(state, session_name, domain)
       process.spawn(fn() {
         send_discord_response(state.discord_token, channel, msg)
       })
@@ -421,7 +421,8 @@ fn handle_acp_completion(
   msg: String,
   terminal_state: manager.SessionState,
 ) -> actor.Next(BrainState, BrainMessage) {
-  let channel = resolve_domain_channel(state, domain)
+  // Resolve channel BEFORE unregistering so we can still find the thread_id
+  let channel = resolve_acp_channel(state, session_name, domain)
   process.spawn(fn() {
     send_discord_response(state.discord_token, channel, msg)
   })
@@ -436,6 +437,18 @@ fn resolve_domain_channel(state: BrainState, domain: String) -> String {
   case list.find(state.domains, fn(d) { d.name == domain }) {
     Ok(d) -> d.channel_id
     Error(_) -> state.aura_channel_id
+  }
+}
+
+/// Resolve the channel for ACP events: use the session's thread if available,
+/// otherwise fall back to the domain channel.
+fn resolve_acp_channel(state: BrainState, session_name: String, domain: String) -> String {
+  case manager.get_session(state.acp_manager, session_name) {
+    Ok(session) -> case session.thread_id {
+      "" -> resolve_domain_channel(state, domain)
+      id -> id
+    }
+    Error(_) -> resolve_domain_channel(state, domain)
   }
 }
 
@@ -551,6 +564,8 @@ fn handle_with_llm(
     data_dir: state.paths.data,
     discord_token: state.discord_token,
     guild_id: state.guild_id,
+    message_id: msg.message_id,
+    channel_id: msg.channel_id,
     paths: state.paths,
     skill_infos: state.skill_infos,
     skills_dir: state.skills_dir,

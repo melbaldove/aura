@@ -29,6 +29,7 @@ pub type ActiveSession {
     task_id: String,
     state: SessionState,
     started_at_ms: Int,
+    thread_id: String,
   )
 }
 
@@ -113,6 +114,7 @@ pub fn dispatch(
   task_spec: types.TaskSpec,
   monitor_model: String,
   on_event: fn(monitor.AcpEvent) -> Nil,
+  thread_id: String,
 ) -> Result(AcpManager, String) {
   case can_start(manager) {
     False ->
@@ -134,6 +136,7 @@ pub fn dispatch(
               task_id: task_spec.id,
               state: Starting,
               started_at_ms: time.now_ms(),
+              thread_id: thread_id,
             )
           Ok(register(manager, session))
         }

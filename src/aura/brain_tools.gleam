@@ -35,6 +35,8 @@ pub type ToolContext {
     data_dir: String,
     discord_token: String,
     guild_id: String,
+    message_id: String,
+    channel_id: String,
     paths: xdg.Paths,
     skill_infos: List(skill.SkillInfo),
     skills_dir: String,
@@ -394,10 +396,33 @@ fn execute_tool_dispatch(
             timeout_ms: timeout_ms,
             acceptance_criteria: [],
           )
-          case manager.dispatch(ctx.acp_manager, task_spec, ctx.monitor_model, ctx.on_acp_event) {
+          // Create a Discord thread from the user's message
+          let thread_name = "ACP: " <> string.slice(prompt, 0, 50)
+          let thread_id = case rest.create_thread_from_message(
+            ctx.discord_token,
+            ctx.channel_id,
+            ctx.message_id,
+            thread_name,
+          ) {
+            Ok(id) -> id
+            Error(_) -> ""
+          }
+          case manager.dispatch(ctx.acp_manager, task_spec, ctx.monitor_model, ctx.on_acp_event, thread_id) {
             Ok(_) -> {
               let session_name = "acp-" <> ctx.domain_name <> "-" <> task_id
-              "ACP session started: " <> session_name <> "\nAttach with: `tmux attach -t " <> session_name <> "`"
+              let details_msg =
+                "ACP session started: " <> session_name
+                <> "\nAttach with: `tmux attach -t " <> session_name <> "`"
+                <> "\nPrompt: " <> string.slice(prompt, 0, 200)
+              // Post details to the thread if we have one
+              case thread_id {
+                "" -> Nil
+                tid -> {
+                  let _ = rest.send_message(ctx.discord_token, tid, details_msg, [])
+                  Nil
+                }
+              }
+              "ACP dispatched → thread"
             }
             Error(e) -> "Error: " <> e
           }

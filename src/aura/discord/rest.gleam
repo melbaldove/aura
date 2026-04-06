@@ -289,6 +289,44 @@ pub fn trigger_typing(token: String, channel_id: String) -> Result(Nil, String) 
   }
 }
 
+/// POST /channels/{channel_id}/messages/{message_id}/threads — create a thread from a message.
+/// Returns the thread channel ID on success.
+pub fn create_thread_from_message(
+  token: String,
+  channel_id: String,
+  message_id: String,
+  name: String,
+) -> Result(String, String) {
+  let url =
+    api_url(
+      "/channels/" <> channel_id <> "/messages/" <> message_id <> "/threads",
+    )
+  let body =
+    json.object([
+      #("name", json.string(string.slice(name, 0, 100))),
+      #("auto_archive_duration", json.int(1440)),
+    ])
+    |> json.to_string()
+  use req <- result.try(authed_request(url, http.Post, token))
+  let req =
+    req
+    |> request.set_header("content-type", "application/json")
+    |> request.set_body(body)
+  use resp <- result.try(
+    httpc.send(req)
+    |> result.map_error(fn(_) { "HTTP request failed" }),
+  )
+  case resp.status {
+    200 | 201 -> {
+      case json.parse(resp.body, decode.at(["id"], decode.string)) {
+        Ok(id) -> Ok(id)
+        Error(_) -> Error("Failed to parse thread ID from response")
+      }
+    }
+    status -> Error(unexpected_status(status, "create thread from message"))
+  }
+}
+
 fn unexpected_status(status: Int, context: String) -> String {
   "Unexpected status " <> int.to_string(status) <> " from " <> context
 }
