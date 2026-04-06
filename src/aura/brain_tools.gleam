@@ -439,7 +439,7 @@ fn execute_tool_dispatch(
               }
               case thread_id {
                 "" -> "ACP dispatched."
-                id -> "THREAD:" <> id
+                id -> "___REDIRECT_CHANNEL___:" <> id
               }
             }
             Error(e) -> "Error: " <> e

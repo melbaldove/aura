@@ -741,9 +741,9 @@ fn tool_loop_progressive(
               let #(channel_id, message_id) = list.fold(tool_results, #(channel_id, message_id), fn(acc, msg) {
                 case msg {
                   llm.ToolResultMessage(_, content) -> {
-                    case string.starts_with(content, "THREAD:") {
+                    case string.starts_with(content, "___REDIRECT_CHANNEL___:") {
                       // Switch to thread and reset message_id so next send creates a new message
-                      True -> #(string.drop_start(content, 7), "")
+                      True -> #(string.drop_start(content, 23), "")
                       False -> acc
                     }
                   }
