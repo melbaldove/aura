@@ -724,15 +724,16 @@ fn tool_loop_progressive(
               let tool_results = list.reverse(rev_results)
 
               // Check if any tool redirected output to a thread
-              let channel_id = list.fold(tool_results, channel_id, fn(ch, msg) {
+              let #(channel_id, message_id) = list.fold(tool_results, #(channel_id, message_id), fn(acc, msg) {
                 case msg {
                   llm.ToolResultMessage(_, content) -> {
                     case string.starts_with(content, "THREAD:") {
-                      True -> string.drop_start(content, 7)
-                      False -> ch
+                      // Switch to thread and reset message_id so next send creates a new message
+                      True -> #(string.drop_start(content, 7), "")
+                      False -> acc
                     }
                   }
-                  _ -> ch
+                  _ -> acc
                 }
               })
 
