@@ -5,6 +5,7 @@ import aura/llm
 import aura/models
 import aura/time
 import gleam/erlang/process
+import gleam/int
 import gleam/io
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -106,6 +107,8 @@ pub fn start(
               self_subject: subject,
             )
 
+          io.println("[acp-monitor] Monitor initialized for " <> session_name)
+
           // Schedule the first check
           schedule_next(subject)
 
@@ -147,6 +150,7 @@ fn handle_message(
 fn handle_check(
   state: MonitorState,
 ) -> actor.Next(MonitorState, MonitorMessage) {
+  io.println("[acp-monitor] Checking " <> state.session_name)
   // 1. Check if session still exists
   case tmux.session_exists(state.session_name) {
     False -> handle_session_ended(state)
@@ -237,12 +241,7 @@ fn handle_session_alive(
               let now = time.now_ms()
               let new_progress_ms = case now - state.last_progress_ms >= progress_interval_ms {
                 True -> {
-                  let tail = string.slice(output, string.length(output) - 200, 200)
-                  state.on_event(AcpProgress(
-                    session_name: state.session_name,
-                    domain: state.task_spec.domain,
-                    summary: tail,
-                  ))
+                  summarize_and_report(state, output)
                   now
                 }
                 False -> state.last_progress_ms
@@ -284,6 +283,38 @@ fn check_timeout_and_continue(
 // ---------------------------------------------------------------------------
 // LLM classification
 // ---------------------------------------------------------------------------
+
+fn summarize_and_report(state: MonitorState, output: String) -> Nil {
+  case state.llm_config {
+    None -> Nil
+    Some(config) -> {
+      let tail = string.slice(output, string.length(output) - 1500, 1500)
+      let elapsed_min = { time.now_ms() - state.started_at_ms } / 60_000
+      let system_prompt =
+        "You are monitoring an AI coding session. "
+        <> "Summarize what the session is currently doing in 1-2 sentences. "
+        <> "Be specific about files, tools, or tasks. No preamble."
+      let user_prompt =
+        "Session: " <> state.session_name
+        <> " (" <> int.to_string(elapsed_min) <> " minutes elapsed)"
+        <> "\n\nLatest output:\n" <> tail
+      let messages = [
+        llm.SystemMessage(system_prompt),
+        llm.UserMessage(user_prompt),
+      ]
+      case llm.chat(config, messages) {
+        Ok(summary) -> {
+          state.on_event(AcpProgress(
+            session_name: state.session_name,
+            domain: state.task_spec.domain,
+            summary: string.trim(summary),
+          ))
+        }
+        Error(_) -> Nil
+      }
+    }
+  }
+}
 
 fn classify_and_alert(state: MonitorState, output: String) -> Nil {
   case state.llm_config {
