@@ -173,6 +173,8 @@ pub fn build_system_prompt(
   <> "\n- Do NOT recursively explore directories."
   <> "\n- If you already know the answer from the system context above, respond directly without tools."
   <> "\n- NEVER fabricate tool results. If you need data (calendar events, tickets, files), you MUST call the tool. Do not generate fake data from memory of past results."
+  <> "\n- NEVER write to external systems (Jira comments, ticket transitions, assignments, emails, Slack messages) unless the user explicitly asks you to. Read-only by default."
+  <> "\n- When asked to triage, investigate, plan, or work on a ticket — dispatch an ACP session. Do NOT try to do the work inline in chat."
   <> "\n- For domain creation, use the propose tool to request approval."
   <> "\n\nMemory guidance:"
   <> "\nYou have persistent memory across sessions. Save durable facts using the memory tool: user preferences, environment details, tool quirks, and stable conventions. Memory is injected into every turn, so keep it compact and focused on facts that will still matter later."
