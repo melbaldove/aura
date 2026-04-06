@@ -509,7 +509,27 @@ fn execute_tool_dispatch(
           Error(e) -> e
           Ok(message) -> {
             case acp_tmux.send_input(session_name, message) {
-              Ok(_) -> "Sent to " <> session_name
+              Ok(_) -> {
+                // Restart monitor so we observe the result
+                let sessions = session_store.load(ctx.acp_store_path)
+                case list.find(sessions, fn(s) { s.session_name == session_name }) {
+                  Ok(stored) -> {
+                    let task_spec = acp_types.TaskSpec(
+                      id: stored.task_id,
+                      domain: stored.domain,
+                      prompt: stored.prompt,
+                      cwd: stored.cwd,
+                      timeout_ms: 30 * 60_000,
+                      acceptance_criteria: [],
+                    )
+                    let _ = acp_monitor.start_recovery(task_spec, ctx.monitor_model, ctx.on_acp_event)
+                    io.println("[acp] Restarted monitor for " <> session_name)
+                    Nil
+                  }
+                  Error(_) -> Nil
+                }
+                "Sent to " <> session_name <> " (monitoring restarted)"
+              }
               Error(e) -> "Error: " <> e
             }
           }
