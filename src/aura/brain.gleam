@@ -578,7 +578,7 @@ fn handle_with_llm(
     },
   )
 
-  let result = tool_loop_progressive(state, tool_ctx, msg.channel_id, initial_messages, [], "", 0, [])
+  let result = tool_loop_with_retry(state, tool_ctx, msg.channel_id, initial_messages, 3)
 
   // Stop typing indicator before any final edits
   stop_typing_loop(typing_stop)
@@ -620,6 +620,28 @@ fn handle_with_llm(
     }
   }
 }
+fn tool_loop_with_retry(
+  state: BrainState,
+  tool_ctx: brain_tools.ToolContext,
+  channel_id: String,
+  messages: List(llm.Message),
+  retries_left: Int,
+) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message)), String) {
+  case tool_loop_progressive(state, tool_ctx, channel_id, messages, [], "", 0, []) {
+    Ok(result) -> Ok(result)
+    Error(err) -> {
+      case retries_left > 0 && string.contains(err, "timeout") {
+        True -> {
+          io.println("[brain] Stream timeout, retrying (" <> int.to_string(retries_left) <> " left)...")
+          process.sleep(2000)
+          tool_loop_with_retry(state, tool_ctx, channel_id, messages, retries_left - 1)
+        }
+        False -> Error(err)
+      }
+    }
+  }
+}
+
 fn tool_loop_progressive(
   state: BrainState,
   tool_ctx: brain_tools.ToolContext,
