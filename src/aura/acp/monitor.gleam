@@ -62,7 +62,7 @@ const max_output_size = 50_000
 
 const report_marker = "---AURA-REPORT---"
 
-const report_instructions = "Before exiting, output exactly this format as your final message:\n\n---AURA-REPORT---\nOUTCOME: clean | partial | failed\nFILES_CHANGED: [list of files]\nDECISIONS: [key decisions and why]\nTESTS: [pass/fail summary]\nBLOCKERS: [unresolved items]\nANCHOR: [one sentence worth remembering long-term]\n---END-REPORT---"
+const report_instructions = "IMPORTANT: When you have completed all tasks, you MUST output this report as your very last message. Do not skip this. Replace the bracketed placeholders with actual values:\n\n---AURA-REPORT---\nOUTCOME: [clean if fully done, partial if some tasks remain, failed if blocked]\nFILES_CHANGED: [comma-separated list of files you created or modified]\nDECISIONS: [key decisions you made and why]\nTESTS: [pass/fail summary or 'none' if no tests]\nBLOCKERS: [unresolved items or 'none']\nANCHOR: [one sentence summary worth remembering long-term]\n---END-REPORT---"
 
 // ---------------------------------------------------------------------------
 // Public API
