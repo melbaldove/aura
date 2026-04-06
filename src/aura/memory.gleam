@@ -30,22 +30,20 @@ pub fn append_event(data_dir: String, event: types.Event) -> Result(Nil, String)
 
 /// Append an anchor to data_dir/domains/<domain>/anchors.jsonl
 pub fn append_anchor(
-  data_dir: String,
-  domain: String,
+  domain_dir: String,
   anchor: types.Anchor,
 ) -> Result(Nil, String) {
-  let path = data_dir <> "/domains/" <> domain <> "/anchors.jsonl"
+  let path = domain_dir <> "/anchors.jsonl"
   append_jsonl(path, types.anchor_to_json(anchor))
 }
 
 /// Append a JSON value to the daily log for a domain
 pub fn append_log(
-  data_dir: String,
-  domain: String,
+  domain_dir: String,
   date: String,
   json_value: json.Json,
 ) -> Result(Nil, String) {
-  let dir = data_dir <> "/domains/" <> domain <> "/logs"
+  let dir = domain_dir <> "/logs"
   let path = dir <> "/" <> date <> ".jsonl"
   use _ <- result.try(
     simplifile.create_directory_all(dir)
@@ -58,11 +56,10 @@ pub fn append_log(
 
 /// Read the last N anchors from the domain's anchors.jsonl
 pub fn read_anchors(
-  data_dir: String,
-  domain: String,
+  domain_dir: String,
   limit: Int,
 ) -> Result(List(String), String) {
-  let path = data_dir <> "/domains/" <> domain <> "/anchors.jsonl"
+  let path = domain_dir <> "/anchors.jsonl"
   use content <- result.try(read_file(path))
   let lines =
     content
@@ -78,11 +75,10 @@ pub fn read_anchors(
 
 /// Read a daily log for a domain. Returns "" if missing.
 pub fn read_daily_log(
-  data_dir: String,
-  domain: String,
+  domain_dir: String,
   date: String,
 ) -> Result(String, String) {
-  let path = data_dir <> "/domains/" <> domain <> "/logs/" <> date <> ".jsonl"
+  let path = domain_dir <> "/logs/" <> date <> ".jsonl"
   case simplifile.read(path) {
     Ok(content) -> Ok(content)
     Error(_) -> Ok("")

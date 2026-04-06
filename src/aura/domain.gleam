@@ -42,7 +42,7 @@ pub fn load_context(
 
   let domain_name = extract_domain_name(data_dir)
 
-  let recent_anchors = case memory.read_anchors(data_dir, domain_name, 20) {
+  let recent_anchors = case memory.read_anchors(data_dir, 20) {
     Ok(a) -> a
     Error(e) -> {
       io.println("[domain] Failed to read anchors for " <> domain_name <> ": " <> e)
@@ -51,7 +51,7 @@ pub fn load_context(
   }
 
   let date = time.today_date_string()
-  let todays_log = case memory.read_daily_log(data_dir, domain_name, date) {
+  let todays_log = case memory.read_daily_log(data_dir, date) {
     Ok(log) -> log
     Error(e) -> {
       io.println("[domain] Failed to read daily log for " <> domain_name <> ": " <> e)

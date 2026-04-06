@@ -36,6 +36,16 @@
 
 12. **No silent errors.** When something fails, someone must find out. Two rules: (1) LLM-facing functions never return silent defaults — if a tool call fails, the LLM gets an error string back so it can self-correct or inform the user. Returning `""` or `[]` on failure means the LLM confidently proceeds with garbage. (2) Everything else logs on error — config loading, file reads, and network calls can still fall back to defaults, but the error gets a log line. `Error(_) -> []` without a log is a bug waiting to happen. Optional absence (config field not set) is not an error — don't log that. But a parse failure, a disk error, a network timeout — those are errors, even if the system can continue without the result.
 
+## Session invariants
+
+Invariants that must hold at all times. Violations are bugs.
+
+1. **One gateway.** There is exactly one Discord gateway connection. OTP supervises it. Duplicates cause message duplication.
+2. **Paths are absolute and resolved.** No function constructs a path by combining a root with a sub-path that already contains the root. When a path parameter IS the target directory, don't append subdirectories to reach it.
+3. **The LLM never provides information the system already has.** Domain cwd, repo paths, jira instance — these come from config, not from the LLM guessing. If the system has a value, use it. If the LLM needs to choose between options, show it the options (AGENTS.md) and let it pick a key, not construct a path.
+4. **Tool results are never fabricated.** If data comes from an external source (calendar, jira, files), the tool MUST be called. History of past results is context, not a substitute for current data.
+5. **Errors are visible.** No silent defaults on failure in LLM-facing code. See principle #12.
+
 ## Domain model
 
 - Aura is one entity with domain knowledge partitions

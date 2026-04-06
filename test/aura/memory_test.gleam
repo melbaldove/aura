@@ -60,7 +60,7 @@ pub fn append_anchor_test() {
       context: "TEST-001",
     )
 
-  memory.append_anchor(paths.data, "cm2", anchor) |> should.be_ok
+  memory.append_anchor(paths.data <> "/domains/cm2", anchor) |> should.be_ok
 
   let content =
     simplifile.read(paths.data <> "/domains/cm2/anchors.jsonl")
