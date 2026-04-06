@@ -42,6 +42,7 @@ pub type ToolContext {
     db_subject: process.Subject(db.DbMessage),
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
     acp_manager: manager.AcpManager,
+    acp_sessions: List(manager.ActiveSession),
     on_acp_event: fn(acp_monitor.AcpEvent) -> Nil,
     monitor_model: String,
     domain_name: String,
@@ -408,16 +409,40 @@ fn execute_tool_dispatch(
       case require_arg(args, "session_name") {
         Error(e) -> e
         Ok(session_name) -> {
+          let state_str = case list.find(ctx.acp_sessions, fn(s) { s.session_name == session_name }) {
+            Ok(session) -> {
+              let elapsed_ms = time.now_ms() - session.started_at_ms
+              let elapsed_min = elapsed_ms / 60_000
+              " [" <> manager.session_state_to_string(session.state) <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
+            }
+            Error(_) -> " [unknown]"
+          }
           case acp_tmux.capture_pane(session_name) {
             Ok(output) -> {
               let tail = case string.length(output) > 500 {
                 True -> "...\n" <> string.slice(output, string.length(output) - 500, 500)
                 False -> output
               }
-              "Session: " <> session_name <> "\n\n" <> tail
+              "Session: " <> session_name <> state_str <> "\n\n" <> tail
             }
             Error(_) -> "Session not found or not running: " <> session_name
           }
+        }
+      }
+    }
+    "acp_list" -> {
+      case ctx.acp_sessions {
+        [] -> "No active ACP sessions."
+        sessions -> {
+          list.map(sessions, fn(s) {
+            let elapsed_ms = time.now_ms() - s.started_at_ms
+            let elapsed_min = elapsed_ms / 60_000
+            s.session_name
+            <> " [" <> manager.session_state_to_string(s.state) <> "]"
+            <> " domain=" <> s.domain
+            <> " (started " <> int.to_string(elapsed_min) <> "m ago)"
+          })
+          |> string.join("\n")
         }
       }
     }
@@ -806,7 +831,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "acp_status",
-      description: "Check the current output of a running ACP (Claude Code) session. Shows the last 500 characters of the tmux pane.",
+      description: "Check the current output of a running ACP (Claude Code) session. Shows session state, uptime, and the last 500 characters of the tmux pane.",
       parameters: [
         llm.ToolParam(
           name: "session_name",
@@ -815,6 +840,11 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           required: True,
         ),
       ],
+    ),
+    llm.ToolDefinition(
+      name: "acp_list",
+      description: "List all active ACP (Claude Code) sessions with their current state, domain, and uptime.",
+      parameters: [],
     ),
   ]
 }

@@ -346,6 +346,9 @@ fn handle_message(
 fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Next(BrainState, BrainMessage) {
   case event {
     acp_monitor.AcpStarted(session_name, domain, task_id) -> {
+      // Transition: Starting → Running
+      let new_manager =
+        manager.update_state(state.acp_manager, session_name, manager.Running)
       let msg =
         "**ACP Started** — "
         <> task_id
@@ -356,9 +359,10 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
       process.spawn(fn() {
         send_discord_response(state.discord_token, channel, msg)
       })
-      actor.continue(state)
+      actor.continue(BrainState(..state, acp_manager: new_manager))
     }
     acp_monitor.AcpAlert(session_name, domain, status, summary) -> {
+      // Alerts are informational — state stays Running
       let status_str = acp_types.status_to_string(status)
       let msg =
         "**ACP Alert** ["
@@ -378,18 +382,24 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
       let outcome = acp_types.outcome_to_string(report.outcome)
       let msg =
         "**ACP Complete** [" <> outcome <> "] — " <> report.anchor
-      handle_acp_completion(state, session_name, domain, msg)
+      handle_acp_completion(state, session_name, domain, msg, manager.Complete)
     }
     acp_monitor.AcpTimedOut(session_name, domain) -> {
       let msg =
         "**ACP Timeout** — Session still alive. `tmux attach -t "
         <> session_name
         <> "`"
-      handle_acp_completion(state, session_name, domain, msg)
+      handle_acp_completion(state, session_name, domain, msg, manager.TimedOut)
     }
     acp_monitor.AcpFailed(session_name, domain, error) -> {
       let msg = "**ACP Failed** — " <> error
-      handle_acp_completion(state, session_name, domain, msg)
+      handle_acp_completion(
+        state,
+        session_name,
+        domain,
+        msg,
+        manager.Failed(error),
+      )
     }
   }
 }
@@ -399,12 +409,16 @@ fn handle_acp_completion(
   session_name: String,
   domain: String,
   msg: String,
+  terminal_state: manager.SessionState,
 ) -> actor.Next(BrainState, BrainMessage) {
   let channel = resolve_domain_channel(state, domain)
   process.spawn(fn() {
     send_discord_response(state.discord_token, channel, msg)
   })
-  let new_manager = manager.unregister(state.acp_manager, session_name)
+  // Set terminal state, then unregister
+  let new_manager =
+    manager.update_state(state.acp_manager, session_name, terminal_state)
+  let new_manager = manager.unregister(new_manager, session_name)
   actor.continue(BrainState(..state, acp_manager: new_manager))
 }
 
@@ -534,6 +548,7 @@ fn handle_with_llm(
     db_subject: state.db_subject,
     scheduler_subject: state.scheduler_subject,
     acp_manager: state.acp_manager,
+    acp_sessions: manager.list_sessions(state.acp_manager),
     on_acp_event: fn(event) {
       case brain_subject_opt {
         Some(subj) -> process.send(subj, AcpEvent(event))
