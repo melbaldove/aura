@@ -1,5 +1,6 @@
 import aura/acp/manager
 import aura/acp/monitor as acp_monitor
+import aura/acp/session_store
 import aura/acp/tmux as acp_tmux
 import aura/acp/types as acp_types
 import aura/db
@@ -44,7 +45,7 @@ pub type ToolContext {
     db_subject: process.Subject(db.DbMessage),
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
     acp_manager: manager.AcpManager,
-    acp_sessions: List(manager.ActiveSession),
+    acp_store_path: String,
     on_acp_event: fn(acp_monitor.AcpEvent) -> Nil,
     on_register_acp: fn(manager.ActiveSession, String, String) -> Nil,
     monitor_model: String,
@@ -452,11 +453,12 @@ fn execute_tool_dispatch(
       case require_arg(args, "session_name") {
         Error(e) -> e
         Ok(session_name) -> {
-          let state_str = case list.find(ctx.acp_sessions, fn(s) { s.session_name == session_name }) {
+          let sessions = session_store.load(ctx.acp_store_path)
+          let state_str = case list.find(sessions, fn(s) { s.session_name == session_name }) {
             Ok(session) -> {
               let elapsed_ms = time.now_ms() - session.started_at_ms
               let elapsed_min = elapsed_ms / 60_000
-              " [" <> manager.session_state_to_string(session.state) <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
+              " [" <> session.state <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
             }
             Error(_) -> " [unknown]"
           }
@@ -474,14 +476,15 @@ fn execute_tool_dispatch(
       }
     }
     "acp_list" -> {
-      case ctx.acp_sessions {
-        [] -> "No active ACP sessions."
-        sessions -> {
+      let sessions = session_store.load(ctx.acp_store_path)
+      case sessions {
+        [] -> "No ACP sessions."
+        _ -> {
           list.map(sessions, fn(s) {
             let elapsed_ms = time.now_ms() - s.started_at_ms
             let elapsed_min = elapsed_ms / 60_000
             s.session_name
-            <> " [" <> manager.session_state_to_string(s.state) <> "]"
+            <> " [" <> s.state <> "]"
             <> " domain=" <> s.domain
             <> " (started " <> int.to_string(elapsed_min) <> "m ago)"
           })

@@ -588,7 +588,7 @@ fn handle_with_llm(
     db_subject: state.db_subject,
     scheduler_subject: state.scheduler_subject,
     acp_manager: state.acp_manager,
-    acp_sessions: manager.list_sessions(state.acp_manager),
+    acp_store_path: state.acp_manager.store_path,
     on_acp_event: fn(event) {
       case brain_subject_opt {
         Some(subj) -> process.send(subj, AcpEvent(event))
