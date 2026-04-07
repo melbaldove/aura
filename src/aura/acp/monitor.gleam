@@ -232,9 +232,12 @@ fn handle_session_alive(
       case new_idle_checks >= idle_surface_threshold && !new_idle_surfaced {
         True -> {
           io.println("[acp-monitor] Session " <> state.session_name <> " idle — surfacing status")
-          let s = state
-          let o = output
-          process.spawn_unlinked(fn() { summarize_and_report(s, o) })
+          let tail = string.slice(output, string.length(output) - 500, 500)
+          state.on_event(AcpProgress(
+            session_name: state.session_name,
+            domain: state.task_spec.domain,
+            summary: "**idle** — waiting at prompt\n```\n" <> tail <> "\n```",
+          ))
           process.send_after(state.self_subject, idle_check_interval_ms, CheckSession)
           actor.continue(MonitorState(..state, last_output: cap_output(output), idle_checks: new_idle_checks, idle_surfaced: True))
         }
