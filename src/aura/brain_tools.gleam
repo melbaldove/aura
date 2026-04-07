@@ -542,6 +542,15 @@ fn execute_tool_dispatch(
         }
       }
     }
+    "acp_kill" -> {
+      case require_arg(args, "session_name") {
+        Error(e) -> TextResult(e)
+        Ok(session_name) -> {
+          let _ = acp_tmux.kill_session(session_name)
+          TextResult("Session killed: " <> session_name)
+        }
+      }
+    }
     _ -> TextResult("Error: Unknown tool " <> name)
   }
 }
@@ -963,6 +972,18 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "message",
           param_type: "string",
           description: "The instruction to send to Claude Code",
+          required: True,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
+      name: "acp_kill",
+      description: "Kill an ACP session's tmux session. Use when closing/completing a session. Always update state and memory BEFORE killing.",
+      parameters: [
+        llm.ToolParam(
+          name: "session_name",
+          param_type: "string",
+          description: "The tmux session name to kill",
           required: True,
         ),
       ],
