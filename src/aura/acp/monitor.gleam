@@ -327,12 +327,12 @@ fn summarize_and_report(state: MonitorState, output: String) -> Nil {
       let tail = string.slice(output, string.length(output) - 3000, 3000)
       let elapsed_min = { time.now_ms() - state.started_at_ms } / 60_000
       let system_prompt =
-        "You are reporting on an AI coding session to the developer who dispatched it. "
-        <> "They need to know: (1) what was accomplished, (2) what decisions or findings matter, "
-        <> "(3) anything that needs their input or action. "
-        <> "Be specific — mention file names, key findings, open questions, blockers. "
-        <> "If the session is idle at a prompt, summarize what it accomplished before going idle. "
-        <> "2-4 sentences. No preamble."
+        "You are reporting on an AI coding session to a busy developer. "
+        <> "Format your response EXACTLY like this — use these headers, keep each section to 1 line:\n"
+        <> "**Done:** what was accomplished\n"
+        <> "**Needs input:** decisions or questions for the developer (or 'none')\n"
+        <> "**Next:** what the session will do next or 'idle — waiting for instructions'\n"
+        <> "Be specific. File names, ticket numbers, concrete questions. No filler."
       let user_prompt =
         "Session: " <> state.session_name
         <> " (" <> int.to_string(elapsed_min) <> " minutes elapsed)"
