@@ -166,3 +166,43 @@ channel = \"cm2\"
   cfg.vision_model |> should.equal("")
   cfg.vision_prompt |> should.equal("")
 }
+
+pub fn parse_domain_config_with_acp_test() {
+  let toml = "
+name = \"test\"
+description = \"Test\"
+cwd = \".\"
+tools = [\"discord\"]
+
+[discord]
+channel = \"test\"
+
+[acp]
+provider = \"generic\"
+binary = \"codex\"
+worktree = false
+"
+  let result = config.parse_domain(toml)
+  result |> should.be_ok
+  let cfg = result |> result.unwrap(config.default_domain())
+  cfg.acp_provider |> should.equal("generic")
+  cfg.acp_binary |> should.equal("codex")
+  cfg.acp_worktree |> should.equal(False)
+}
+
+pub fn parse_domain_config_acp_defaults_test() {
+  let toml = "
+name = \"test\"
+description = \"Test\"
+cwd = \".\"
+tools = [\"discord\"]
+
+[discord]
+channel = \"test\"
+"
+  let result = config.parse_domain(toml)
+  result |> should.be_ok
+  let cfg = result |> result.unwrap(config.default_domain())
+  cfg.acp_provider |> should.equal("claude-code")
+  cfg.acp_worktree |> should.equal(True)
+}

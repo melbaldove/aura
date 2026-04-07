@@ -60,6 +60,9 @@ pub type DomainConfig {
     acp_max_concurrent: Int,
     vision_model: String,
     vision_prompt: String,
+    acp_provider: String,
+    acp_binary: String,
+    acp_worktree: Bool,
   )
 }
 
@@ -98,6 +101,9 @@ pub fn default_domain() -> DomainConfig {
     acp_max_concurrent: 0,
     vision_model: "",
     vision_prompt: "",
+    acp_provider: "claude-code",
+    acp_binary: "",
+    acp_worktree: True,
   )
 }
 
@@ -259,6 +265,18 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     tom.get_string(doc, ["vision", "prompt"])
     |> result.unwrap("")
 
+  let acp_provider =
+    tom.get_string(doc, ["acp", "provider"])
+    |> result.unwrap("claude-code")
+
+  let acp_binary =
+    tom.get_string(doc, ["acp", "binary"])
+    |> result.unwrap("")
+
+  let acp_worktree =
+    tom.get_bool(doc, ["acp", "worktree"])
+    |> result.unwrap(True)
+
   Ok(DomainConfig(
     name: name,
     description: description,
@@ -270,6 +288,9 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     acp_max_concurrent: acp_max_concurrent,
     vision_model: vision_model,
     vision_prompt: vision_prompt,
+    acp_provider: acp_provider,
+    acp_binary: acp_binary,
+    acp_worktree: acp_worktree,
   ))
 }
 
