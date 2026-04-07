@@ -20,6 +20,7 @@ import aura/structured_memory
 import aura/validator
 import aura/vision
 import aura/xdg
+import gleam/dict
 import gleam/int
 import gleam/io
 import gleam/list
@@ -75,6 +76,7 @@ pub type BrainMessage {
   RegisterAcpSession(session: manager.ActiveSession)
   PostWelcome(channel_id: String)
   StoreExchange(channel_id: String, messages: List(llm.Message))
+  RegisterThread(thread_id: String, domain_name: String)
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
 }
 
@@ -115,6 +117,7 @@ pub type BrainState {
     self_subject: Option(process.Subject(BrainMessage)),
     global_config: config.GlobalConfig,
     domain_configs: List(#(String, config.DomainConfig)),
+    thread_domains: dict.Dict(String, String),
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
   )
 }
@@ -230,6 +233,7 @@ pub fn start(
       db_subject: brain_config.db_subject,
       built_in_tools: brain_tools.make_built_in_tools(),
       conversations: conversation.new(),
+      thread_domains: dict.new(),
       self_subject: None,
       global_config: brain_config.global,
       domain_configs: brain_config.domain_configs,
@@ -260,8 +264,17 @@ fn handle_message(
           Some(name)
         }
         NeedsClassification -> {
-          io.println("[brain] Route: #aura")
-          None
+          // Check if this is a thread belonging to a domain
+          case dict.get(state.thread_domains, msg.channel_id) {
+            Ok(name) -> {
+              io.println("[brain] Route: " <> name <> " (via thread)")
+              Some(name)
+            }
+            Error(_) -> {
+              io.println("[brain] Route: #aura")
+              None
+            }
+          }
         }
       }
       let subj = state.self_subject
@@ -357,6 +370,10 @@ fn handle_message(
       }
 
       actor.continue(BrainState(..state, conversations: final_convos))
+    }
+    RegisterThread(thread_id:, domain_name:) -> {
+      let new_threads = dict.insert(state.thread_domains, thread_id, domain_name)
+      actor.continue(BrainState(..state, thread_domains: new_threads))
     }
     SetScheduler(subject) -> {
       io.println("[brain] Scheduler connected")
@@ -569,6 +586,11 @@ fn handle_with_llm(
       case rest.create_thread_from_message(state.discord_token, msg.channel_id, msg.message_id, thread_name) {
         Ok(thread_id) -> {
           io.println("[brain] Created thread " <> thread_id <> " for message in " <> msg.channel_id)
+          // Register thread → domain mapping so subsequent messages route correctly
+          case brain_subject_opt, domain_name {
+            Some(subj), Some(name) -> process.send(subj, RegisterThread(thread_id: thread_id, domain_name: name))
+            _, _ -> Nil
+          }
           thread_id
         }
         Error(e) -> {
