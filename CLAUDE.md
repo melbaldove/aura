@@ -97,8 +97,12 @@ src/aura/
     rest.gleam          Discord REST API (send, edit, threads, typing)
     types.gleam         Discord event/embed types
   acp/
-    manager.gleam       ACP session orchestration
-    monitor.gleam       tmux session polling + status classification
+    manager.gleam       ACP session orchestration + persistence
+    monitor.gleam       tmux session polling + LLM status classification
+    provider.gleam      Provider-agnostic command builder (Claude Code, generic CLI)
+    session_store.gleam JSON file store for session persistence across restarts
+    tmux.gleam          tmux session lifecycle (create, capture, send, kill)
+    types.gleam         TaskSpec, SessionStatus, AcpReport types
 
 src/
   aura_ws_ffi.erl       Raw WebSocket (SSL + RFC 6455 framing)
@@ -213,10 +217,11 @@ When making any non-trivial change, check whether these need updating:
 
 1. Create the domain directory: `~/domains/<name>/` with `repos/`, `plans/`, `notes/` subdirs
 2. Create `config.toml` with name, description, cwd (domain root), tools, discord channel
-3. Create `AGENTS.md` with repo index, domain expertise, jira instance if applicable
-4. Create the Discord channel (if it doesn't exist)
-5. Add the domain path to `trustedDirectories` in `~/.claude/settings.json` on Eisenhower (both domain root and repo paths) — required for ACP sessions to start without the trust prompt
-6. Restart Aura to pick up the new domain
+3. Optionally add `[acp]` section for provider config (defaults: `provider = "claude-code"`, `worktree = true`)
+4. Create `AGENTS.md` with repo index, domain expertise, jira instance if applicable
+5. Create the Discord channel (if it doesn't exist)
+6. Trust repo directories for Claude Code: Aura auto-trusts on first ACP dispatch via tmux Enter keystroke
+7. Restart Aura to pick up the new domain
 
 ### Add a new Discord REST endpoint
 
