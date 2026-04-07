@@ -44,6 +44,7 @@ pub type MonitorState {
     started_at_ms: Int,
     last_progress_ms: Int,
     idle_checks: Int,
+    idle_surfaced: Bool,
     llm_config: Option(llm.LlmConfig),
     on_event: fn(AcpEvent) -> Nil,
     self_subject: process.Subject(MonitorMessage),
@@ -130,6 +131,7 @@ fn start_monitor_actor(
           started_at_ms: started_at,
           last_progress_ms: started_at,
           idle_checks: 0,
+              idle_surfaced: False,
           llm_config: llm_config,
           on_event: on_event,
           self_subject: subject,
@@ -220,23 +222,28 @@ fn handle_session_alive(
         False -> state.idle_checks + 1
       }
 
-      // Idle detection — never declares completion, only surfaces status
-      case new_idle_checks >= idle_surface_threshold && state.idle_checks < idle_surface_threshold {
+      // Reset idle_surfaced when output actually changes
+      let new_idle_surfaced = case output_changed {
+        True -> False
+        False -> state.idle_surfaced
+      }
+
+      // Idle detection — surface status ONCE, then shut up until output changes
+      case new_idle_checks >= idle_surface_threshold && !new_idle_surfaced {
         True -> {
-          // Just crossed idle threshold — surface status once
           io.println("[acp-monitor] Session " <> state.session_name <> " idle — surfacing status")
           let s = state
           let o = output
           process.spawn_unlinked(fn() { summarize_and_report(s, o) })
           process.send_after(state.self_subject, idle_check_interval_ms, CheckSession)
-          actor.continue(MonitorState(..state, last_output: cap_output(output), idle_checks: new_idle_checks))
+          actor.continue(MonitorState(..state, last_output: cap_output(output), idle_checks: new_idle_checks, idle_surfaced: True))
         }
         _ -> {
           case new_idle_checks >= idle_threshold {
             True -> {
-              // Already idle — back off to slow interval
+              // Already idle — back off to slow interval, no spam
               process.send_after(state.self_subject, idle_check_interval_ms, CheckSession)
-              actor.continue(MonitorState(..state, last_output: cap_output(output), idle_checks: new_idle_checks))
+              actor.continue(MonitorState(..state, last_output: cap_output(output), idle_checks: new_idle_checks, idle_surfaced: new_idle_surfaced))
             }
             False -> {
               // Active — classify if substantial new output
