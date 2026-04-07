@@ -229,26 +229,49 @@ fn handle_session_alive(
         False -> state.idle_checks + 1
       }
 
-      // Session completed: idle long enough = Claude finished and is waiting at prompt
+      // Session idle long enough — ask LLM if it's done or waiting for something
       case new_idle_checks >= idle_complete_threshold {
         True -> {
-          io.println("[acp-monitor] Session " <> state.session_name <> " idle for " <> int.to_string(new_idle_checks) <> " checks — completing")
-          // Ask LLM to summarize what happened
-          let summary = summarize_completion(state, output)
-          let report = types.AcpReport(
-            outcome: types.Clean,
-            files_changed: [],
-            decisions: "",
-            tests: "",
-            blockers: "",
-            anchor: summary,
-          )
-          state.on_event(AcpCompleted(
-            session_name: state.session_name,
-            domain: state.task_spec.domain,
-            report: report,
-          ))
-          actor.stop()
+          let idle_status = classify_idle(state, output)
+          case idle_status {
+            "COMPLETE" -> {
+              io.println("[acp-monitor] Session " <> state.session_name <> " classified as complete")
+              let summary = summarize_completion(state, output)
+              let report = types.AcpReport(
+                outcome: types.Clean,
+                files_changed: [],
+                decisions: "",
+                tests: "",
+                blockers: "",
+                anchor: summary,
+              )
+              state.on_event(AcpCompleted(
+                session_name: state.session_name,
+                domain: state.task_spec.domain,
+                report: report,
+              ))
+              actor.stop()
+            }
+            "WAITING" -> {
+              io.println("[acp-monitor] Session " <> state.session_name <> " is waiting for user action")
+              // Surface to user that the session needs attention
+              let tail = string.slice(output, string.length(output) - 500, 500)
+              state.on_event(AcpAlert(
+                session_name: state.session_name,
+                domain: state.task_spec.domain,
+                status: types.Blocked,
+                summary: "Session is waiting for user action:\n" <> tail,
+              ))
+              // Back off but keep monitoring
+              process.send_after(state.self_subject, idle_check_interval_ms, CheckSession)
+              actor.continue(MonitorState(..state, last_output: cap_output(output), idle_checks: 0))
+            }
+            _ -> {
+              // Unknown — treat as still running, back off
+              process.send_after(state.self_subject, idle_check_interval_ms, CheckSession)
+              actor.continue(MonitorState(..state, last_output: cap_output(output), idle_checks: 0))
+            }
+          }
         }
         False -> {
           // Active or recently idle — classify and report progress
@@ -319,6 +342,27 @@ fn check_timeout_and_continue(
 // ---------------------------------------------------------------------------
 // LLM classification
 // ---------------------------------------------------------------------------
+
+fn classify_idle(state: MonitorState, output: String) -> String {
+  case state.llm_config {
+    None -> "COMPLETE"
+    Some(config) -> {
+      let tail = string.slice(output, string.length(output) - 1000, 1000)
+      let system_prompt =
+        "You are monitoring an AI coding session that has gone idle. "
+        <> "Based on the last output, determine why it stopped. "
+        <> "Respond with exactly one word:\n"
+        <> "COMPLETE — if the task is finished and Claude is waiting at the prompt with nothing left to do\n"
+        <> "WAITING — if Claude is waiting for user action (authentication, approval, input, a URL to open, etc.)\n"
+        <> "STUCK — if Claude encountered an error or is stuck"
+      let user_prompt = "Session output:\n" <> tail
+      case llm.chat(config, [llm.SystemMessage(system_prompt), llm.UserMessage(user_prompt)]) {
+        Ok(response) -> string.trim(response) |> string.uppercase
+        Error(_) -> "COMPLETE"
+      }
+    }
+  }
+}
 
 fn summarize_completion(state: MonitorState, output: String) -> String {
   case state.llm_config {
