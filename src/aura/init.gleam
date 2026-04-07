@@ -370,6 +370,11 @@ type = \"valid_jsonl\"
 message = \"Anchor entries must be valid JSON\"
 
 [[rules]]
+path = \"domains/*/log.jsonl\"
+type = \"valid_jsonl\"
+message = \"Domain log entries must be valid JSON\"
+
+[[rules]]
 path = \"SOUL.md\"
 type = \"no_patterns\"
 patterns = [\"heartbeat\", \"interval\", \"cron\", \"timeout\", \"config.toml\"]

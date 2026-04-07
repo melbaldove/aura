@@ -46,24 +46,17 @@ pub fn append_event_test() {
   cleanup_paths(paths)
 }
 
-pub fn append_anchor_test() {
-  let paths = temp_paths("anchor-" <> test_helpers.random_suffix())
+pub fn append_domain_log_test() {
+  let paths = temp_paths("domlog-" <> test_helpers.random_suffix())
   workspace.scaffold(paths) |> should.be_ok
   workspace.scaffold_domain(paths, "cm2", "test", "cm2") |> should.be_ok
 
-  let anchor =
-    types.Anchor(
-      ts: "2026-03-25T14:30:00+08:00",
-      anchor_type: "decision",
-      domain: "cm2",
-      content: "Test decision",
-      context: "TEST-001",
-    )
-
-  memory.append_anchor(paths.data <> "/domains/cm2", anchor) |> should.be_ok
+  let domain_dir = paths.data <> "/domains/cm2"
+  memory.append_domain_log(domain_dir, "Test decision")
+  |> should.be_ok
 
   let content =
-    simplifile.read(paths.data <> "/domains/cm2/anchors.jsonl")
+    simplifile.read(domain_dir <> "/log.jsonl")
     |> should.be_ok
   content
   |> string.contains("Test decision")

@@ -1,6 +1,6 @@
+import aura/time
 import aura/types
 import gleam/json
-import gleam/list
 import gleam/result
 import gleam/string
 import simplifile
@@ -28,13 +28,22 @@ pub fn append_event(data_dir: String, event: types.Event) -> Result(Nil, String)
   append_jsonl(path, types.event_to_json(event))
 }
 
-/// Append an anchor to data_dir/domains/<domain>/anchors.jsonl
-pub fn append_anchor(
+/// Append a log entry to the domain's log.jsonl
+pub fn append_domain_log(
   domain_dir: String,
-  anchor: types.Anchor,
+  entry: String,
 ) -> Result(Nil, String) {
-  let path = domain_dir <> "/anchors.jsonl"
-  append_jsonl(path, types.anchor_to_json(anchor))
+  let path = domain_dir <> "/log.jsonl"
+  let line =
+    json.object([
+      #("timestamp", json.int(time.now_ms())),
+      #("entry", json.string(entry)),
+    ])
+    |> json.to_string
+  case simplifile.append(path, line <> "\n") {
+    Ok(_) -> Ok(Nil)
+    Error(e) -> Error("Failed to append to log: " <> string.inspect(e))
+  }
 }
 
 /// Append a JSON value to the daily log for a domain
@@ -52,25 +61,6 @@ pub fn append_log(
     }),
   )
   append_jsonl(path, json_value)
-}
-
-/// Read the last N anchors from the domain's anchors.jsonl
-pub fn read_anchors(
-  domain_dir: String,
-  limit: Int,
-) -> Result(List(String), String) {
-  let path = domain_dir <> "/anchors.jsonl"
-  use content <- result.try(read_file(path))
-  let lines =
-    content
-    |> string.split("\n")
-    |> list.filter(fn(line) { string.length(line) > 0 })
-  let count = list.length(lines)
-  let drop_count = case count - limit {
-    n if n > 0 -> n
-    _ -> 0
-  }
-  Ok(list.drop(lines, drop_count))
 }
 
 /// Read a daily log for a domain. Returns "" if missing.

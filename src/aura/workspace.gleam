@@ -140,6 +140,7 @@ pub fn scaffold_domain(
   use _ <- result.try(create_dir(domain_data_dir <> "/logs"))
   use _ <- result.try(create_dir(domain_data_dir <> "/summaries"))
   use _ <- result.try(write_if_missing(domain_data_dir <> "/anchors.jsonl", ""))
+  use _ <- result.try(write_if_missing(domain_data_dir <> "/log.jsonl", ""))
 
   Ok(Nil)
 }

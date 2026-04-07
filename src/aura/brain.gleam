@@ -11,6 +11,7 @@ import aura/db
 import aura/discord
 import aura/discord/rest
 import aura/llm
+import aura/memory
 import aura/models
 import aura/notification
 import aura/scheduler
@@ -409,6 +410,10 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
       handle_acp_completion(state, session_name, domain, msg, manager.TimedOut)
     }
     acp_monitor.AcpProgress(session_name, domain, summary) -> {
+      // Write to domain log
+      let domain_dir = xdg.domain_data_dir(state.paths, domain)
+      let _ = memory.append_domain_log(domain_dir, summary)
+      // Post to Discord
       let msg = "**ACP Progress** `" <> session_name <> "`\n" <> summary
       let channel = resolve_acp_channel(state, session_name, domain)
       process.spawn(fn() {
