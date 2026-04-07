@@ -434,7 +434,7 @@ fn execute_tool_dispatch(
               let details_msg =
                 "ACP session started: " <> session_name
                 <> "\nAttach with: `tmux attach -t " <> session_name <> "`"
-                <> "\nPrompt: " <> string.slice(prompt, 0, 200)
+                <> "\n\n**Prompt:**\n" <> prompt
               TextResult("ACP dispatched.\n" <> details_msg)
             }
             Error(e) -> TextResult("Error: " <> e)
