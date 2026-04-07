@@ -327,8 +327,8 @@ fn summarize_and_report(state: MonitorState, output: String) -> Nil {
       let tail = string.slice(output, string.length(output) - 3000, 3000)
       let elapsed_min = { time.now_ms() - state.started_at_ms } / 60_000
       let system_prompt =
-        "You are reporting on an AI coding session to a busy developer via Discord. "
-        <> "Use Discord markdown. Format EXACTLY like this:\n\n"
+        "You are reporting on an AI coding session to a busy developer. "
+        <> "Use markdown. Format EXACTLY like this:\n\n"
         <> "**Done:** what was accomplished\n"
         <> "**Needs input:** decisions or questions for the developer (or 'none')\n"
         <> "**Next:** what the session will do next or 'idle — waiting for instructions'\n\n"
