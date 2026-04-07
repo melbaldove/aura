@@ -279,6 +279,20 @@ fn execute_tool_dispatch(
           let old_text = get_arg(args, "old_text")
           let path = case target {
             "user" -> xdg.user_path(ctx.paths)
+            "state" -> {
+              case ctx.domain_cwd {
+                "" -> xdg.state_path(ctx.paths, "STATE.md")
+                "." -> xdg.state_path(ctx.paths, "STATE.md")
+                domain_dir -> domain_dir <> "/STATE.md"
+              }
+            }
+            "memory" -> {
+              case ctx.domain_cwd {
+                "" -> xdg.memory_path(ctx.paths)
+                "." -> xdg.memory_path(ctx.paths)
+                domain_dir -> domain_dir <> "/MEMORY.md"
+              }
+            }
             _ -> xdg.memory_path(ctx.paths)
           }
           case action {
@@ -759,7 +773,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "memory",
-      description: "Save durable information to persistent memory that survives across sessions. Memory is injected into future turns, so keep it compact and focused on facts that will still matter later. Save when: user corrects you or says 'remember this', user shares preferences/habits/personal details, you discover environment facts (OS, tools, project structure), you learn conventions or quirks. Priority: user preferences and corrections > environment facts > procedural knowledge. Do NOT save: task progress, session outcomes, completed-work logs, temporary TODO state, trivial or easily re-discovered facts.",
+      description: "Save information to persistent memory. Use 'state' for current domain status (active tickets, blockers, PRs — changes frequently). Use 'memory' for durable knowledge (decisions, patterns, conventions — changes rarely). Use 'user' for user profile (always global). State and memory are per-domain when in a domain channel.",
       parameters: [
         llm.ToolParam(
           name: "action",
@@ -770,7 +784,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         llm.ToolParam(
           name: "target",
           param_type: "string",
-          description: "'user' (who the user is: name, role, preferences, communication style) or 'memory' (agent notes: environment facts, project conventions, tool quirks, lessons learned)",
+          description: "'state' (current status: active tickets, blockers, PRs), 'memory' (durable knowledge: decisions, patterns, conventions), or 'user' (user profile — always global)",
           required: True,
         ),
         llm.ToolParam(
