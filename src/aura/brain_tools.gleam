@@ -29,7 +29,7 @@ import gleam/string
 // Types
 // ---------------------------------------------------------------------------
 
-/// Result of executing a tool — either plain text or a redirect to a channel.
+/// Result of executing a tool.
 pub type ToolResult {
   TextResult(String)
 }

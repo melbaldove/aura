@@ -72,7 +72,6 @@ pub type BrainMessage {
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
   RegisterAcpSession(session: manager.ActiveSession)
-  RecoverAcpSession(session: manager.ActiveSession)
   PostWelcome(channel_id: String)
   StoreExchange(channel_id: String, messages: List(llm.Message))
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
@@ -327,11 +326,8 @@ fn handle_message(
     }
     AcpEvent(event) -> handle_acp_event(state, event)
     RegisterAcpSession(session:) -> {
-      let new_manager = manager.register(state.acp_manager, session)
-      actor.continue(BrainState(..state, acp_manager: new_manager))
-    }
-    RecoverAcpSession(session:) -> {
-      let new_manager = manager.register(state.acp_manager, session)
+      // Add to in-memory list only — dispatch already persisted to disk
+      let new_manager = manager.AcpManager(..state.acp_manager, active_sessions: [session, ..state.acp_manager.active_sessions])
       actor.continue(BrainState(..state, acp_manager: new_manager))
     }
     StoreExchange(channel_id, messages) -> {
@@ -548,7 +544,10 @@ fn handle_with_llm(
           io.println("[brain] Created thread " <> thread_id <> " for message in " <> msg.channel_id)
           thread_id
         }
-        Error(_) -> msg.channel_id
+        Error(e) -> {
+          io.println("[brain] Failed to create thread: " <> e)
+          msg.channel_id
+        }
       }
     }
     False -> msg.channel_id
