@@ -43,7 +43,7 @@ Properties that must hold at all times. Violations are bugs.
 1. **A message is processed exactly once.** The system never processes the same incoming message twice. If it happens, it's a system bug, not an edge case to handle.
 2. **Domain context is self-contained.** Everything the LLM needs to operate in a domain is discoverable from the domain directory or system prompt. No assumed knowledge that isn't explicitly provided.
 3. **Every tool call produces a visible outcome.** Success or error — never silence. The LLM and the user can always see what happened.
-4. **An ACP session is always in exactly one state.** States: `starting` → `running` → `complete | failed | timed_out`. Every transition emits an event to Discord. No session exists without a state. No session changes state without notification.
+4. **An ACP session is always in exactly one state.** States: `starting` → `running` → `failed | timed_out`. Completion is declared by the user, not the system. Every transition emits an event to Discord. No session exists without a state. No session changes state without notification.
 5. **A session that stops is always accounted for.** If a tmux session disappears, the monitor detects it and reports why — completed with report, failed without report, or timed out. No silent disappearances.
 6. **One session per dispatch.** A dispatch creates exactly one tmux session and one monitor actor. The monitor dies when the session ends. No orphaned monitors, no zombie sessions.
 
@@ -51,7 +51,7 @@ Properties that must hold at all times. Violations are bugs.
 
 - Aura is one entity with domain knowledge partitions
 - Channels are context selectors, not capability boundaries
-- Each domain has: AGENTS.md (domain expertise), skills, anchors, logs, conversation history
+- Each domain has: AGENTS.md (instruction), STATE.md (current status), MEMORY.md (learned knowledge), log.jsonl (event history), skills, conversation history
 - Cross-domain access is allowed — the channel sets default context, not a wall
 - #aura is the meta-domain for cross-cutting and general work
 
@@ -61,7 +61,7 @@ A living list of end-to-end workflows that must always work. Verified before eve
 
 - [ ] Message any channel → response with full tool capabilities
 - [ ] Conversation context recalled across turns
-- [ ] Domain context (anchors, skills, AGENTS.md) loaded in domain channels
+- [ ] Domain context (AGENTS.md, STATE.md, MEMORY.md, skills) loaded in domain channels
 - [ ] Web search and fetch work
 - [ ] ACP dispatch and monitoring work
 - [ ] Learning loop saves skills and memory
