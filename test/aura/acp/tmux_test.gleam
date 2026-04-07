@@ -1,6 +1,5 @@
 import aura/acp/tmux
 import gleam/list
-import gleam/string
 import gleeunit/should
 
 pub fn build_session_name_test() {
@@ -32,13 +31,3 @@ pub fn build_has_session_command_test() {
   list.first(cmd.args) |> should.equal(Ok("has-session"))
 }
 
-pub fn build_claude_command_test() {
-  let cmd = tmux.build_claude_command("fix the bug", "~/repos/cm2")
-  cmd |> string.contains("cd ~/repos/cm2") |> should.be_true
-  cmd |> string.contains("claude --dangerously-skip-permissions") |> should.be_true
-}
-
-pub fn build_claude_command_escapes_single_quotes_test() {
-  let cmd = tmux.build_claude_command("it's broken", "/tmp")
-  cmd |> string.contains("'\\''") |> should.be_true
-}

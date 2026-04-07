@@ -1,3 +1,5 @@
+import aura/acp/provider
+
 pub type TaskSpec {
   TaskSpec(
     id: String,
@@ -6,6 +8,8 @@ pub type TaskSpec {
     cwd: String,
     timeout_ms: Int,
     acceptance_criteria: List(String),
+    provider: provider.AcpProvider,
+    worktree: Bool,
   )
 }
 

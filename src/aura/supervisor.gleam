@@ -1,5 +1,6 @@
 import aura/acp/manager
 import aura/acp/monitor as acp_monitor
+import aura/acp/provider
 import aura/acp/session_store
 import aura/acp/tmux
 import aura/acp/types as acp_types
@@ -278,6 +279,8 @@ fn recover_acp_sessions(
                 cwd: stored.cwd,
                 timeout_ms: 30 * 60_000,
                 acceptance_criteria: [],
+                provider: provider.ClaudeCode,
+                worktree: True,
               )
             case acp_monitor.start_recovery(task_spec, monitor_model, on_event) {
               Ok(_) ->

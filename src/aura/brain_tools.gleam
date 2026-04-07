@@ -1,5 +1,6 @@
 import aura/acp/manager
 import aura/acp/monitor as acp_monitor
+import aura/acp/provider
 import aura/acp/session_store
 import aura/acp/tmux as acp_tmux
 import aura/acp/types as acp_types
@@ -55,6 +56,9 @@ pub type ToolContext {
     monitor_model: String,
     domain_name: String,
     domain_cwd: String,
+    acp_provider: String,
+    acp_binary: String,
+    acp_worktree: Bool,
   )
 }
 
@@ -418,6 +422,8 @@ fn execute_tool_dispatch(
             cwd: cwd,
             timeout_ms: timeout_ms,
             acceptance_criteria: [],
+            provider: provider.parse_provider(ctx.acp_provider, ctx.acp_binary),
+            worktree: ctx.acp_worktree,
           )
           // Thread is already created by handle_with_llm — ctx.channel_id IS the thread
           let thread_id = ctx.channel_id
@@ -506,6 +512,8 @@ fn execute_tool_dispatch(
                       cwd: stored.cwd,
                       timeout_ms: 30 * 60_000,
                       acceptance_criteria: [],
+                      provider: provider.ClaudeCode,
+                      worktree: True,
                     )
                     let _ = acp_monitor.start_recovery(task_spec, ctx.monitor_model, ctx.on_acp_event)
                     io.println("[acp] Restarted monitor for " <> session_name)

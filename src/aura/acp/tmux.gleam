@@ -2,7 +2,6 @@ import aura/cmd
 import aura/time
 import gleam/erlang/process
 import gleam/int
-import gleam/string
 
 pub type Command {
   Command(program: String, args: List(String))
@@ -34,14 +33,6 @@ pub fn build_kill_command(session_name: String) -> Command {
 
 pub fn build_has_session_command(session_name: String) -> Command {
   Command(program: "tmux", args: ["has-session", "-t", session_name])
-}
-
-pub fn build_claude_command(prompt: String, cwd: String) -> String {
-  "cd " <> cwd <> " && claude --dangerously-skip-permissions '" <> shell_quote_inner(prompt) <> "'"
-}
-
-fn shell_quote_inner(s: String) -> String {
-  string.replace(s, "'", "'\\''")
 }
 
 // --- Effectful functions ---

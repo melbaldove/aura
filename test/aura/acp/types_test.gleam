@@ -1,3 +1,4 @@
+import aura/acp/provider
 import aura/acp/types
 import gleeunit/should
 
@@ -10,6 +11,8 @@ pub fn task_spec_test() {
       cwd: "~/repos/cm2",
       timeout_ms: 1_800_000,
       acceptance_criteria: ["Tests pass"],
+      provider: provider.ClaudeCode,
+      worktree: True,
     )
   spec.id |> should.equal("acp-cm2-cics967")
 }

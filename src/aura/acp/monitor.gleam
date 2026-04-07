@@ -1,3 +1,4 @@
+import aura/acp/provider
 import aura/acp/tmux
 import aura/acp/types
 import aura/llm
@@ -77,14 +78,23 @@ pub fn start(
   monitor_model: String,
   on_event: fn(AcpEvent) -> Nil,
 ) -> Result(process.Subject(MonitorMessage), String) {
+  // Trust the directory if using Claude Code provider
+  case task_spec.provider {
+    provider.ClaudeCode -> {
+      let _ = tmux.ensure_trusted(task_spec.cwd)
+      Nil
+    }
+    _ -> Nil
+  }
   let session_name =
     tmux.build_session_name(task_spec.domain, task_spec.id)
-
-  // Ensure the working directory is trusted by Claude Code
-  let _ = tmux.ensure_trusted(task_spec.cwd)
-
-  // Pass the task prompt directly — no report markers or structured output instructions
-  let shell_command = tmux.build_claude_command(task_spec.prompt, task_spec.cwd)
+  let shell_command = provider.build_command(
+    task_spec.provider,
+    task_spec.prompt,
+    task_spec.cwd,
+    session_name,
+    task_spec.worktree,
+  )
 
   // Create the tmux session
   case tmux.create_session(session_name, shell_command) {

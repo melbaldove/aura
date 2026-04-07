@@ -611,6 +611,15 @@ fn handle_with_llm(
     [llm.UserMessage(enriched_content)],
   ])
 
+  // Look up domain config once for cwd + provider settings
+  let #(domain_cwd, acp_provider, acp_binary, acp_worktree) = case domain_name {
+    Some(name) -> case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
+      Ok(#(_, cfg)) -> #(cfg.cwd, cfg.acp_provider, cfg.acp_binary, cfg.acp_worktree)
+      Error(_) -> #(".", "claude-code", "", True)
+    }
+    None -> #(".", "claude-code", "", True)
+  }
+
   let tool_ctx = brain_tools.ToolContext(
     data_dir: state.paths.data,
     discord_token: state.discord_token,
@@ -638,15 +647,10 @@ fn handle_with_llm(
     },
     monitor_model: state.global_config.models.monitor,
     domain_name: option.unwrap(domain_name, "aura"),
-    domain_cwd: case domain_name {
-      Some(name) -> {
-        case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
-          Ok(#(_, cfg)) -> cfg.cwd
-          Error(_) -> "."
-        }
-      }
-      None -> "."
-    },
+    domain_cwd: domain_cwd,
+    acp_provider: acp_provider,
+    acp_binary: acp_binary,
+    acp_worktree: acp_worktree,
   )
 
   let result = tool_loop_with_retry(state, tool_ctx, response_channel, initial_messages, 3)
