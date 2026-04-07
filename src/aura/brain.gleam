@@ -823,6 +823,8 @@ fn tool_loop_progressive(
               Ok(#(response.content, traces, msg_id, final_new_messages))
             }
             calls -> {
+              // Expand concatenated JSON tool calls from GLM-5.1
+              let calls = brain_tools.expand_tool_calls(calls)
               // Execute tool calls and continue the loop
               io.println("[brain] " <> int.to_string(list.length(calls)) <> " tool call(s)")
 

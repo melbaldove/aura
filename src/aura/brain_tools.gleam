@@ -566,6 +566,49 @@ pub fn tool_result_text(result: ToolResult) -> String {
 // Tool argument helpers
 // ---------------------------------------------------------------------------
 
+/// Expand concatenated JSON tool calls from GLM-5.1.
+/// When the model sends `{"name":"a","args":"x"}{"name":"b","args":"y"}` as a
+/// single ToolCall's arguments, this splits them into separate ToolCalls.
+/// Each split object may contain its own "name" field which overrides the
+/// outer call's name.
+pub fn expand_tool_calls(calls: List(llm.ToolCall)) -> List(llm.ToolCall) {
+  list.flat_map(calls, fn(call) {
+    case string.contains(call.arguments, "}{") {
+      False -> [call]
+      True -> {
+        // Split on }{ and reconstruct individual JSON objects
+        let parts = string.split(call.arguments, "}{")
+        let num_parts = list.length(parts)
+        list.index_map(parts, fn(part, idx) {
+          let json_str = case idx == 0, idx == num_parts - 1 {
+            True, True -> part
+            True, False -> part <> "}"
+            False, True -> "{" <> part
+            False, False -> "{" <> part <> "}"
+          }
+          // Try to extract a "name" field from the split object to allow
+          // each concatenated call to target a different tool.
+          let name = case
+            json.parse(json_str, decode.dict(decode.string, decode.string))
+          {
+            Ok(d) ->
+              case dict.get(d, "name") {
+                Ok(n) -> n
+                Error(_) -> call.name
+              }
+            Error(_) -> call.name
+          }
+          llm.ToolCall(
+            id: call.id <> "_" <> int.to_string(idx),
+            name: name,
+            arguments: json_str,
+          )
+        })
+      }
+    }
+  })
+}
+
 /// Parse a JSON string of tool arguments into a list of key-value pairs.
 /// Handles GLM-5.1's quirk of concatenating multiple JSON objects.
 pub fn parse_tool_args(json_str: String) -> List(#(String, String)) {
