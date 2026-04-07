@@ -32,7 +32,6 @@ import gleam/string
 /// Result of executing a tool — either plain text or a redirect to a channel.
 pub type ToolResult {
   TextResult(String)
-  RedirectResult(channel_id: String, text: String)
 }
 
 /// Subset of BrainState fields needed for tool execution.
@@ -52,6 +51,7 @@ pub type ToolContext {
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
     acp_manager: manager.AcpManager,
     on_acp_event: fn(acp_monitor.AcpEvent) -> Nil,
+    on_register_acp: fn(manager.ActiveSession) -> Nil,
     monitor_model: String,
     domain_name: String,
     domain_cwd: String,
@@ -419,48 +419,23 @@ fn execute_tool_dispatch(
             timeout_ms: timeout_ms,
             acceptance_criteria: [],
           )
-          // Check if we're already in an ACP thread — reuse it instead of creating nested thread
-          let existing_thread = list.find(
-            session_store.load(ctx.acp_manager.store_path),
-            fn(s) { s.thread_id == ctx.channel_id },
-          )
-          let thread_id = case existing_thread {
-            Ok(_) -> ctx.channel_id
-            Error(_) -> {
-              // Create a new thread from the user's message
-              let thread_name = "ACP: " <> string.slice(prompt, 0, 50)
-              case rest.create_thread_from_message(
-                ctx.discord_token,
-                ctx.channel_id,
-                ctx.message_id,
-                thread_name,
-              ) {
-                Ok(id) -> id
-                Error(_) -> ""
-              }
-            }
-          }
+          // Thread is already created by handle_with_llm — ctx.channel_id IS the thread
+          let thread_id = ctx.channel_id
           let session_name = acp_tmux.build_session_name(ctx.domain_name, task_id)
 
-          // manager.dispatch handles registration before starting the monitor
+          // manager.dispatch handles registration + persistence + monitor startup
           case manager.dispatch(ctx.acp_manager, task_spec, ctx.monitor_model, ctx.on_acp_event, thread_id) {
-            Ok(_) -> {
+            Ok(new_manager) -> {
+              // Notify brain actor so it can find the session for ACP events
+              case manager.get_session(new_manager, session_name) {
+                Ok(session) -> ctx.on_register_acp(session)
+                Error(_) -> Nil
+              }
               let details_msg =
                 "ACP session started: " <> session_name
                 <> "\nAttach with: `tmux attach -t " <> session_name <> "`"
                 <> "\nPrompt: " <> string.slice(prompt, 0, 200)
-              // Post details to the thread if we have one
-              case thread_id {
-                "" -> Nil
-                tid -> {
-                  let _ = rest.send_message(ctx.discord_token, tid, details_msg, [])
-                  Nil
-                }
-              }
-              case thread_id {
-                "" -> TextResult("ACP dispatched.")
-                id -> RedirectResult(channel_id: id, text: "ACP dispatched.")
-              }
+              TextResult("ACP dispatched.\n" <> details_msg)
             }
             Error(e) -> TextResult("Error: " <> e)
           }
@@ -554,7 +529,6 @@ fn execute_tool_dispatch(
 pub fn tool_result_text(result: ToolResult) -> String {
   case result {
     TextResult(text) -> text
-    RedirectResult(_, text) -> text
   }
 }
 

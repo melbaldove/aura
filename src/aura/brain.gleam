@@ -71,6 +71,7 @@ pub type BrainMessage {
   HeartbeatFinding(notification.Finding)
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
+  RegisterAcpSession(session: manager.ActiveSession)
   RecoverAcpSession(session: manager.ActiveSession)
   PostWelcome(channel_id: String)
   StoreExchange(channel_id: String, messages: List(llm.Message))
@@ -325,6 +326,10 @@ fn handle_message(
       }
     }
     AcpEvent(event) -> handle_acp_event(state, event)
+    RegisterAcpSession(session:) -> {
+      let new_manager = manager.register(state.acp_manager, session)
+      actor.continue(BrainState(..state, acp_manager: new_manager))
+    }
     RecoverAcpSession(session:) -> {
       let new_manager = manager.register(state.acp_manager, session)
       actor.continue(BrainState(..state, acp_manager: new_manager))
@@ -531,8 +536,26 @@ fn handle_with_llm(
 ) -> Nil {
   io.println("[brain] Processing message from " <> msg.author_name <> " in channel " <> msg.channel_id)
 
+  // Determine response channel: if this is a top-level domain channel, create a thread.
+  // If it's already a thread (or #aura), respond in the same channel.
+  let is_domain_channel = list.any(state.domains, fn(d) { d.channel_id == msg.channel_id })
+  let response_channel = case is_domain_channel {
+    True -> {
+      // Top-level domain message — create a thread
+      let thread_name = string.slice(msg.content, 0, 50)
+      case rest.create_thread_from_message(state.discord_token, msg.channel_id, msg.message_id, thread_name) {
+        Ok(thread_id) -> {
+          io.println("[brain] Created thread " <> thread_id <> " for message in " <> msg.channel_id)
+          thread_id
+        }
+        Error(_) -> msg.channel_id
+      }
+    }
+    False -> msg.channel_id
+  }
+
   // Start a typing indicator loop that refreshes every 8 seconds
-  let typing_stop = start_typing_loop(state.discord_token, msg.channel_id)
+  let typing_stop = start_typing_loop(state.discord_token, response_channel)
 
   let ws_names = list.map(state.domains, fn(d) { d.name })
   let memory_content = case structured_memory.format_for_display(xdg.memory_path(state.paths)) {
@@ -580,8 +603,8 @@ fn handle_with_llm(
 
     // Load conversation history (from memory or DB)
   let now_ts = time.now_ms()
-  let #(_, _, history) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", msg.channel_id, now_ts)
-  io.println("[brain] Loaded " <> int.to_string(list.length(history)) <> " history messages for " <> msg.channel_id)
+  let #(_, _, history) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", response_channel, now_ts)
+  io.println("[brain] Loaded " <> int.to_string(list.length(history)) <> " history messages for " <> response_channel)
 
   let initial_messages = list.flatten([
     [llm.SystemMessage(system_prompt)],
@@ -594,7 +617,7 @@ fn handle_with_llm(
     discord_token: state.discord_token,
     guild_id: state.guild_id,
     message_id: msg.message_id,
-    channel_id: msg.channel_id,
+    channel_id: response_channel,
     paths: state.paths,
     skill_infos: state.skill_infos,
     skills_dir: state.skills_dir,
@@ -605,6 +628,12 @@ fn handle_with_llm(
     on_acp_event: fn(event) {
       case brain_subject_opt {
         Some(subj) -> process.send(subj, AcpEvent(event))
+        None -> Nil
+      }
+    },
+    on_register_acp: fn(session) {
+      case brain_subject_opt {
+        Some(subj) -> process.send(subj, RegisterAcpSession(session))
         None -> Nil
       }
     },
@@ -621,17 +650,16 @@ fn handle_with_llm(
     },
   )
 
-  let result = tool_loop_with_retry(state, tool_ctx, msg.channel_id, initial_messages, 3)
+  let result = tool_loop_with_retry(state, tool_ctx, response_channel, initial_messages, 3)
 
   // Stop typing indicator before any final edits
   stop_typing_loop(typing_stop)
 
   let token = state.discord_token
-  let channel_id = msg.channel_id
+  let channel_id = response_channel
 
   case result {
-    Ok(#(response_text, traces, msg_id, new_messages, final_channel_id)) -> {
-      let channel_id = final_channel_id
+    Ok(#(response_text, traces, msg_id, new_messages)) -> {
       // Build the full turn: user message + tool chain + final response
       let user_msg = llm.UserMessage(enriched_content)
       let all_turn_messages = [user_msg, ..new_messages]
@@ -670,7 +698,7 @@ fn tool_loop_with_retry(
   channel_id: String,
   messages: List(llm.Message),
   retries_left: Int,
-) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message), String), String) {
+) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message)), String) {
   case tool_loop_progressive(state, tool_ctx, channel_id, messages, [], "", 0, []) {
     Ok(result) -> Ok(result)
     Error(err) -> {
@@ -695,7 +723,7 @@ fn tool_loop_progressive(
   message_id: String,
   iteration: Int,
   new_messages: List(llm.Message),
-) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message), String), String) {
+) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message)), String) {
   case iteration >= max_tool_iterations {
     True -> Error("Tool loop exceeded maximum iterations")
     False -> {
@@ -713,15 +741,15 @@ fn tool_loop_progressive(
             [] -> {
               // No tool calls — return the text response with accumulated traces
               let final_new_messages = list.reverse([llm.AssistantMessage(response.content), ..list.reverse(new_messages)])
-              Ok(#(response.content, traces, msg_id, final_new_messages, channel_id))
+              Ok(#(response.content, traces, msg_id, final_new_messages))
             }
             calls -> {
               // Execute tool calls and continue the loop
               io.println("[brain] " <> int.to_string(list.length(calls)) <> " tool call(s)")
 
-              // Execute each tool and build traces + result messages + redirect info
-              let #(rev_traces, rev_results, redirect) = list.fold(calls, #([], [], #(channel_id, message_id)), fn(acc, call) {
-                let #(acc_traces, acc_results, acc_redirect) = acc
+              // Execute each tool and build traces + result messages
+              let #(rev_traces, rev_results) = list.fold(calls, #([], []), fn(acc, call) {
+                let #(acc_traces, acc_results) = acc
                 io.println("[brain] Tool: " <> call.name <> " args: " <> call.arguments)
                 let #(tool_result, parsed_args) = brain_tools.execute_tool(tool_ctx, call)
                 let result_text = brain_tools.tool_result_text(tool_result)
@@ -735,16 +763,10 @@ fn tool_loop_progressive(
                   result: result_text,
                   is_error: is_error,
                 )
-                // Check for channel redirect
-                let new_redirect = case tool_result {
-                  brain_tools.RedirectResult(rid, _) -> #(rid, "")
-                  _ -> acc_redirect
-                }
-                #([trace, ..acc_traces], [llm.ToolResultMessage(call.id, result_text), ..acc_results], new_redirect)
+                #([trace, ..acc_traces], [llm.ToolResultMessage(call.id, result_text), ..acc_results])
               })
               let new_traces = list.flatten([traces, list.reverse(rev_traces)])
               let tool_results = list.reverse(rev_results)
-              let #(channel_id, message_id) = redirect
 
               // Format current traces for progressive display
               let progress_text = conversation.format_traces(new_traces) <> "\n\n*Thinking...*"
