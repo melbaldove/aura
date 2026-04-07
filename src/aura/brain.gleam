@@ -264,15 +264,42 @@ fn handle_message(
           Some(name)
         }
         NeedsClassification -> {
-          // Check if this is a thread belonging to a domain
+          // Check cache first, then Discord API for parent channel
           case dict.get(state.thread_domains, msg.channel_id) {
             Ok(name) -> {
-              io.println("[brain] Route: " <> name <> " (via thread)")
+              io.println("[brain] Route: " <> name <> " (via thread cache)")
               Some(name)
             }
             Error(_) -> {
-              io.println("[brain] Route: #aura")
-              None
+              // Look up parent channel from Discord — is this a thread?
+              case rest.get_channel_parent(state.discord_token, msg.channel_id) {
+                Ok("") -> {
+                  io.println("[brain] Route: #aura")
+                  None
+                }
+                Ok(parent_id) -> {
+                  // Check if parent is a domain channel
+                  case route_message(parent_id, state.domains) {
+                    DirectRoute(name) -> {
+                      io.println("[brain] Route: " <> name <> " (via thread parent)")
+                      // Cache it for next time
+                      case state.self_subject {
+                        Some(subj) -> process.send(subj, RegisterThread(thread_id: msg.channel_id, domain_name: name))
+                        None -> Nil
+                      }
+                      Some(name)
+                    }
+                    NeedsClassification -> {
+                      io.println("[brain] Route: #aura")
+                      None
+                    }
+                  }
+                }
+                Error(_) -> {
+                  io.println("[brain] Route: #aura")
+                  None
+                }
+              }
             }
           }
         }

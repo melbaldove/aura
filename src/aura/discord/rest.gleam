@@ -327,6 +327,26 @@ pub fn create_thread_from_message(
   }
 }
 
+/// GET /channels/{channel_id} — get the parent_id of a thread channel.
+/// Returns the parent channel ID, or empty string if not a thread.
+pub fn get_channel_parent(token: String, channel_id: String) -> Result(String, String) {
+  let url = api_url("/channels/" <> channel_id)
+  use req <- result.try(authed_request(url, http.Get, token))
+  use resp <- result.try(
+    httpc.send(req)
+    |> result.map_error(fn(_) { "HTTP request failed" }),
+  )
+  case resp.status {
+    200 -> {
+      case json.parse(resp.body, decode.at(["parent_id"], decode.string)) {
+        Ok(parent_id) -> Ok(parent_id)
+        Error(_) -> Ok("")
+      }
+    }
+    status -> Error(unexpected_status(status, "get channel"))
+  }
+}
+
 fn unexpected_status(status: Int, context: String) -> String {
   "Unexpected status " <> int.to_string(status) <> " from " <> context
 }
