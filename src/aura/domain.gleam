@@ -11,7 +11,8 @@ pub type DomainContext {
   DomainContext(
     agents_md: String,
     description: String,
-    recent_anchors: List(String),
+    state_md: String,
+    memory_md: String,
     todays_log: String,
     skill_descriptions: String,
   )
@@ -42,11 +43,31 @@ pub fn load_context(
 
   let domain_name = extract_domain_name(data_dir)
 
-  let recent_anchors = case memory.read_anchors(data_dir, 20) {
-    Ok(a) -> a
+  let state_md = case simplifile.read(data_dir <> "/STATE.md") {
+    Ok(content) -> content
+    Error(simplifile.Enoent) -> ""
     Error(e) -> {
-      io.println("[domain] Failed to read anchors for " <> domain_name <> ": " <> e)
-      []
+      io.println(
+        "[domain] Failed to read STATE.md for "
+        <> domain_name
+        <> ": "
+        <> string.inspect(e),
+      )
+      ""
+    }
+  }
+
+  let memory_md = case simplifile.read(data_dir <> "/MEMORY.md") {
+    Ok(content) -> content
+    Error(simplifile.Enoent) -> ""
+    Error(e) -> {
+      io.println(
+        "[domain] Failed to read MEMORY.md for "
+        <> domain_name
+        <> ": "
+        <> string.inspect(e),
+      )
+      ""
     }
   }
 
@@ -64,7 +85,8 @@ pub fn load_context(
   DomainContext(
     agents_md: agents_md,
     description: description,
-    recent_anchors: recent_anchors,
+    state_md: state_md,
+    memory_md: memory_md,
     todays_log: todays_log,
     skill_descriptions: skill_desc,
   )
@@ -78,7 +100,8 @@ pub fn build_domain_prompt(context: DomainContext) -> String {
       "" -> "No description."
       desc -> desc
     },
-    build_anchors_section(context.recent_anchors),
+    build_state_section(context.state_md),
+    build_memory_section(context.memory_md),
     build_log_section(context.todays_log),
     "## Skills\n" <> case context.skill_descriptions {
       "" -> "No skills available."
@@ -95,10 +118,17 @@ fn build_agents_section(agents_md: String) -> String {
   }
 }
 
-fn build_anchors_section(anchors: List(String)) -> String {
-  case anchors {
-    [] -> "## Recent Anchors\nNone."
-    _ -> "## Recent Anchors\n" <> string.join(anchors, "\n")
+fn build_state_section(state: String) -> String {
+  case string.trim(state) {
+    "" -> ""
+    content -> "## Current State\n" <> content
+  }
+}
+
+fn build_memory_section(mem: String) -> String {
+  case string.trim(mem) {
+    "" -> ""
+    content -> "## Domain Knowledge\n" <> content
   }
 }
 

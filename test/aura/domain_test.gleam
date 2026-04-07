@@ -44,7 +44,8 @@ pub fn build_domain_prompt_test() {
     domain.DomainContext(
       agents_md: "Use Swift. JIRA board is TP.",
       description: "Mobile app project",
-      recent_anchors: ["Decision: use SwiftUI"],
+      state_md: "Decision: use SwiftUI",
+      memory_md: "User prefers dark mode",
       todays_log: "",
       skill_descriptions: "- jira: JIRA integration",
     )
@@ -53,6 +54,7 @@ pub fn build_domain_prompt_test() {
   should.be_true(string.contains(prompt, "Mobile app project"))
   should.be_true(string.contains(prompt, "SwiftUI"))
   should.be_true(string.contains(prompt, "jira"))
+  should.be_true(string.contains(prompt, "dark mode"))
 }
 
 pub fn build_domain_prompt_empty_test() {
@@ -60,7 +62,8 @@ pub fn build_domain_prompt_empty_test() {
     domain.DomainContext(
       agents_md: "",
       description: "",
-      recent_anchors: [],
+      state_md: "",
+      memory_md: "",
       todays_log: "",
       skill_descriptions: "",
     )
