@@ -189,7 +189,8 @@ pub fn dispatch(
 /// Persist the in-memory active sessions list to disk.
 /// This is the single write path — no reads from disk needed.
 fn persist_sessions(mgr: AcpManager) -> Nil {
-  let stored =
+  // Convert active sessions to stored format
+  let active_stored =
     list.map(mgr.active_sessions, fn(s) {
       session_store.StoredSession(
         session_name: s.session_name,
@@ -202,6 +203,12 @@ fn persist_sessions(mgr: AcpManager) -> Nil {
         cwd: s.cwd,
       )
     })
-  let _ = session_store.save(mgr.store_path, stored)
+  // Merge with existing disk data — keep terminal sessions for history
+  let existing = session_store.load(mgr.store_path)
+  let active_names = list.map(active_stored, fn(s) { s.session_name })
+  let terminal = list.filter(existing, fn(s) {
+    session_store.is_terminal(s.state) && !list.contains(active_names, s.session_name)
+  })
+  let _ = session_store.save(mgr.store_path, list.append(active_stored, terminal))
   Nil
 }

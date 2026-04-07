@@ -452,15 +452,26 @@ fn resolve_domain_channel(state: BrainState, domain: String) -> String {
   }
 }
 
-/// Resolve the channel for ACP events: use the session's thread if available,
-/// otherwise fall back to the domain channel.
+/// Resolve the channel for ACP events: check in-memory manager first,
+/// then persisted store, then fall back to the domain channel.
 fn resolve_acp_channel(state: BrainState, session_name: String, domain: String) -> String {
+  // Try in-memory manager first
   case manager.get_session(state.acp_manager, session_name) {
     Ok(session) -> case session.thread_id {
       "" -> resolve_domain_channel(state, domain)
       id -> id
     }
-    Error(_) -> resolve_domain_channel(state, domain)
+    Error(_) -> {
+      // Fall back to persisted store
+      let stored = session_store.load(state.acp_manager.store_path)
+      case list.find(stored, fn(s) { s.session_name == session_name }) {
+        Ok(s) -> case s.thread_id {
+          "" -> resolve_domain_channel(state, domain)
+          id -> id
+        }
+        Error(_) -> resolve_domain_channel(state, domain)
+      }
+    }
   }
 }
 
