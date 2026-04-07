@@ -9,8 +9,8 @@ pub fn match_exact_path_test() {
 
 pub fn match_glob_path_test() {
   validator.path_matches(
-    "domains/cm2/anchors.jsonl",
-    "domains/*/anchors.jsonl",
+    "domains/cm2/log.jsonl",
+    "domains/*/log.jsonl",
   )
   |> should.be_true
   validator.path_matches(
@@ -48,7 +48,7 @@ pub fn validate_valid_toml_test() {
 pub fn validate_valid_jsonl_test() {
   let rule =
     validator.Rule(
-      path: "anchors.jsonl",
+      path: "log.jsonl",
       rule_type: validator.ValidJsonl,
       message: "must be valid JSONL",
     )

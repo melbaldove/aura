@@ -277,55 +277,54 @@ fn execute_tool_dispatch(
           let target = get_arg(args, "target")
           let content = get_arg(args, "content")
           let old_text = get_arg(args, "old_text")
-          let path = case target {
-            "user" -> xdg.user_path(ctx.paths)
-            "state" -> {
-              case ctx.domain_cwd {
-                "" -> xdg.state_path(ctx.paths, "STATE.md")
-                "." -> xdg.state_path(ctx.paths, "STATE.md")
-                domain_dir -> domain_dir <> "/STATE.md"
-              }
+          let path_result = case target {
+            "user" -> Ok(xdg.user_path(ctx.paths))
+            "state" -> case ctx.domain_name {
+              "aura" -> Ok(xdg.state_path(ctx.paths, "STATE.md"))
+              domain -> Ok(xdg.domain_data_dir(ctx.paths, domain) <> "/STATE.md")
             }
-            "memory" -> {
-              case ctx.domain_cwd {
-                "" -> xdg.memory_path(ctx.paths)
-                "." -> xdg.memory_path(ctx.paths)
-                domain_dir -> domain_dir <> "/MEMORY.md"
-              }
+            "memory" -> case ctx.domain_name {
+              "aura" -> Ok(xdg.memory_path(ctx.paths))
+              domain -> Ok(xdg.domain_data_dir(ctx.paths, domain) <> "/MEMORY.md")
             }
-            _ -> xdg.memory_path(ctx.paths)
+            unknown -> Error("Error: unknown target '" <> unknown <> "'. Use 'state', 'memory', or 'user'.")
           }
-          case action {
-            "add" -> {
-              case structured_memory.add(path, content) {
-                Ok(_) -> TextResult("Memory saved.")
-                Error(e) -> TextResult("Error: " <> e)
+          case path_result {
+            Error(e) -> TextResult(e)
+            Ok(path) -> {
+              case action {
+                "add" -> {
+                  case structured_memory.add(path, content) {
+                    Ok(_) -> TextResult("Memory saved.")
+                    Error(e) -> TextResult("Error: " <> e)
+                  }
+                }
+                "replace" -> {
+                  case structured_memory.replace(path, old_text, content) {
+                    Ok(_) -> TextResult("Memory updated.")
+                    Error(e) -> TextResult("Error: " <> e)
+                  }
+                }
+                "remove" -> {
+                  case structured_memory.remove(path, old_text) {
+                    Ok(_) -> TextResult("Memory entry removed.")
+                    Error(e) -> TextResult("Error: " <> e)
+                  }
+                }
+                "read" -> {
+                  case structured_memory.format_for_display(path) {
+                    Ok(display) -> TextResult(display)
+                    Error(e) -> TextResult("Error: " <> e)
+                  }
+                }
+                _ ->
+                  TextResult(
+                    "Error: Unknown action "
+                    <> action
+                    <> ". Use add, replace, remove, or read.",
+                  )
               }
             }
-            "replace" -> {
-              case structured_memory.replace(path, old_text, content) {
-                Ok(_) -> TextResult("Memory updated.")
-                Error(e) -> TextResult("Error: " <> e)
-              }
-            }
-            "remove" -> {
-              case structured_memory.remove(path, old_text) {
-                Ok(_) -> TextResult("Memory entry removed.")
-                Error(e) -> TextResult("Error: " <> e)
-              }
-            }
-            "read" -> {
-              case structured_memory.format_for_display(path) {
-                Ok(display) -> TextResult(display)
-                Error(e) -> TextResult("Error: " <> e)
-              }
-            }
-            _ ->
-              TextResult(
-                "Error: Unknown action "
-                <> action
-                <> ". Use add, replace, remove, or read.",
-              )
           }
         }
       }
@@ -631,7 +630,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "write_file",
-      description: "Write content to a workspace file. Logs, anchors, events, MEMORY.md write immediately. Config and identity files require propose() first.",
+      description: "Write content to a workspace file. Logs, domain logs, events, MEMORY.md, STATE.md write immediately. Config and identity files require propose() first.",
       parameters: [
         llm.ToolParam(
           name: "path",

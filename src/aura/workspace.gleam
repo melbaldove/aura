@@ -16,7 +16,9 @@ const meta_md = "# META.md - What Goes Where
 - domains/<name>/config.toml: Per-domain config (cwd, tools, discord channel)
 - domains/<name>/logs/: Raw session logs
 - domains/<name>/summaries/: Compressed session summaries
-- domains/<name>/anchors.jsonl: Persistent context anchors for this domain
+- domains/<name>/STATE.md: Current domain state (goals, blockers, next steps)
+- domains/<name>/MEMORY.md: Domain-scoped long-term memory
+- domains/<name>/log.jsonl: Domain activity log
 - acp/sessions/: Active agent coordination protocol sessions
 - acp/completed/: Completed ACP sessions
 - events.jsonl: Global event log
@@ -139,7 +141,8 @@ pub fn scaffold_domain(
   use _ <- result.try(create_dir(domain_data_dir))
   use _ <- result.try(create_dir(domain_data_dir <> "/logs"))
   use _ <- result.try(create_dir(domain_data_dir <> "/summaries"))
-  use _ <- result.try(write_if_missing(domain_data_dir <> "/anchors.jsonl", ""))
+  use _ <- result.try(write_if_missing(domain_data_dir <> "/STATE.md", ""))
+  use _ <- result.try(write_if_missing(domain_data_dir <> "/MEMORY.md", ""))
   use _ <- result.try(write_if_missing(domain_data_dir <> "/log.jsonl", ""))
 
   Ok(Nil)

@@ -412,7 +412,10 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
     acp_monitor.AcpProgress(session_name, domain, summary) -> {
       // Write to domain log
       let domain_dir = xdg.domain_data_dir(state.paths, domain)
-      let _ = memory.append_domain_log(domain_dir, summary)
+      case memory.append_domain_log(domain_dir, summary) {
+        Ok(_) -> Nil
+        Error(e) -> io.println("[brain] Failed to write domain log: " <> e)
+      }
       // Post to Discord
       let msg = "**ACP Progress** `" <> session_name <> "`\n" <> summary
       let channel = resolve_acp_channel(state, session_name, domain)

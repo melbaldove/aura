@@ -3,10 +3,11 @@ import gleeunit/should
 
 pub fn tier1_paths_test() {
   tier.for_path("domains/cm2/logs/2026-03-30.jsonl") |> should.equal(tier.Autonomous)
-  tier.for_path("domains/cm2/anchors.jsonl") |> should.equal(tier.Autonomous)
   tier.for_path("domains/cm2/log.jsonl") |> should.equal(tier.Autonomous)
   tier.for_path("events.jsonl") |> should.equal(tier.Autonomous)
   tier.for_path("MEMORY.md") |> should.equal(tier.Autonomous)
+  tier.for_path("STATE.md") |> should.equal(tier.Autonomous)
+  tier.for_path("domains/cm2/STATE.md") |> should.equal(tier.Autonomous)
 }
 
 pub fn tier2_paths_test() {

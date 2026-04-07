@@ -20,20 +20,3 @@ pub fn event_to_json_test() {
   )
 }
 
-pub fn anchor_to_json_test() {
-  let anchor =
-    types.Anchor(
-      ts: "2026-03-25T14:30:00+08:00",
-      anchor_type: "decision",
-      domain: "cm2",
-      content: "Chose separate ACK format for RETURN files",
-      context: "CICS-967",
-    )
-
-  anchor
-  |> types.anchor_to_json
-  |> json.to_string
-  |> should.equal(
-    "{\"ts\":\"2026-03-25T14:30:00+08:00\",\"type\":\"decision\",\"anchor\":true,\"domain\":\"cm2\",\"content\":\"Chose separate ACK format for RETURN files\",\"context\":\"CICS-967\"}",
-  )
-}

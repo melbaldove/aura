@@ -18,20 +18,30 @@ pub type DomainContext {
   )
 }
 
+/// Read a file that may or may not exist, logging errors.
+fn read_optional_file(path: String, label: String, domain: String) -> String {
+  case simplifile.read(path) {
+    Ok(content) -> content
+    Error(simplifile.Enoent) -> ""
+    Error(e) -> {
+      io.println(
+        "[domain] Failed to read " <> label <> " for "
+        <> domain <> ": " <> string.inspect(e),
+      )
+      ""
+    }
+  }
+}
+
 /// Load domain context from config and data directories.
 pub fn load_context(
   config_dir: String,
   data_dir: String,
   skills: List(skill.SkillInfo),
 ) -> DomainContext {
-  let agents_md = case simplifile.read(config_dir <> "/AGENTS.md") {
-    Ok(content) -> content
-    Error(simplifile.Enoent) -> ""
-    Error(e) -> {
-      io.println("[domain] Failed to read AGENTS.md: " <> string.inspect(e))
-      ""
-    }
-  }
+  let domain_name = extract_domain_name(data_dir)
+
+  let agents_md = read_optional_file(config_dir <> "/AGENTS.md", "AGENTS.md", domain_name)
 
   let description = case load_description(config_dir) {
     Ok(desc) -> desc
@@ -41,35 +51,8 @@ pub fn load_context(
     }
   }
 
-  let domain_name = extract_domain_name(data_dir)
-
-  let state_md = case simplifile.read(data_dir <> "/STATE.md") {
-    Ok(content) -> content
-    Error(simplifile.Enoent) -> ""
-    Error(e) -> {
-      io.println(
-        "[domain] Failed to read STATE.md for "
-        <> domain_name
-        <> ": "
-        <> string.inspect(e),
-      )
-      ""
-    }
-  }
-
-  let memory_md = case simplifile.read(data_dir <> "/MEMORY.md") {
-    Ok(content) -> content
-    Error(simplifile.Enoent) -> ""
-    Error(e) -> {
-      io.println(
-        "[domain] Failed to read MEMORY.md for "
-        <> domain_name
-        <> ": "
-        <> string.inspect(e),
-      )
-      ""
-    }
-  }
+  let state_md = read_optional_file(data_dir <> "/STATE.md", "STATE.md", domain_name)
+  let memory_md = read_optional_file(data_dir <> "/MEMORY.md", "MEMORY.md", domain_name)
 
   let date = time.today_date_string()
   let todays_log = case memory.read_daily_log(data_dir, date) {

@@ -365,11 +365,6 @@ type = \"valid_toml\"
 message = \"TOML files must parse without errors\"
 
 [[rules]]
-path = \"domains/*/anchors.jsonl\"
-type = \"valid_jsonl\"
-message = \"Anchor entries must be valid JSON\"
-
-[[rules]]
 path = \"domains/*/log.jsonl\"
 type = \"valid_jsonl\"
 message = \"Domain log entries must be valid JSON\"

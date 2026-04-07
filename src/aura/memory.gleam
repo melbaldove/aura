@@ -34,16 +34,12 @@ pub fn append_domain_log(
   entry: String,
 ) -> Result(Nil, String) {
   let path = domain_dir <> "/log.jsonl"
-  let line =
+  let value =
     json.object([
       #("timestamp", json.int(time.now_ms())),
       #("entry", json.string(entry)),
     ])
-    |> json.to_string
-  case simplifile.append(path, line <> "\n") {
-    Ok(_) -> Ok(Nil)
-    Error(e) -> Error("Failed to append to log: " <> string.inspect(e))
-  }
+  append_jsonl(path, value)
 }
 
 /// Append a JSON value to the daily log for a domain
