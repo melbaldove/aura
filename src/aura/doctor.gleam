@@ -42,8 +42,8 @@ pub fn run() -> Nil {
   })
 
   io.println("")
-  io.println("Workspace:")
-  let workspace_checks = [
+  io.println("Directories:")
+  let directory_checks = [
     #("  Config dir", fn() {
       case simplifile.is_directory(paths.config) {
         Ok(True) -> Ok(paths.config)
@@ -63,7 +63,7 @@ pub fn run() -> Nil {
       }
     }),
   ]
-  let workspace_results = list.map(workspace_checks, fn(c) {
+  let directory_results = list.map(directory_checks, fn(c) {
     let #(label, checker) = c
     check(label, checker)
   })
@@ -143,7 +143,7 @@ pub fn run() -> Nil {
   let results =
     list.flatten([
       dep_results,
-      workspace_results,
+      directory_results,
       cred_results,
       config_results,
       identity_results,

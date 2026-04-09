@@ -1,23 +1,20 @@
-import aura/acp/monitor
+import aura/acp/monitor as acp_monitor
+import aura/acp/provider
 import aura/acp/session_store
 import aura/acp/tmux
 import aura/acp/types
 import aura/time
+import gleam/dict.{type Dict}
 import gleam/int
 import gleam/io
 import gleam/list
+import gleam/otp/actor
+import gleam/erlang/process
+import gleam/string
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-pub type AcpManager {
-  AcpManager(
-    max_concurrent: Int,
-    active_sessions: List(ActiveSession),
-    store_path: String,
-  )
-}
 
 pub type SessionState {
   Starting
@@ -40,91 +37,90 @@ pub type ActiveSession {
   )
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+pub type AcpMessage {
+  Dispatch(
+    reply_to: process.Subject(Result(String, String)),
+    task_spec: types.TaskSpec,
+    thread_id: String,
+  )
+  Kill(
+    reply_to: process.Subject(Result(Nil, String)),
+    session_name: String,
+  )
+  GetSession(
+    reply_to: process.Subject(Result(ActiveSession, Nil)),
+    session_name: String,
+  )
+  ListSessions(
+    reply_to: process.Subject(List(ActiveSession)),
+  )
+  SendInput(
+    reply_to: process.Subject(Result(Nil, String)),
+    session_name: String,
+    input: String,
+  )
+  MonitorEvent(acp_monitor.AcpEvent)
+  SetBrainCallback(on_brain_event: fn(acp_monitor.AcpEvent) -> Nil)
+}
 
-pub fn new(max_concurrent: Int, store_path: String) -> AcpManager {
-  AcpManager(
-    max_concurrent: max_concurrent,
-    active_sessions: [],
-    store_path: store_path,
+pub type AcpActorState {
+  AcpActorState(
+    sessions: Dict(String, ActiveSession),
+    max_concurrent: Int,
+    store_path: String,
+    monitor_model: String,
+    on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
+    self_subject: process.Subject(AcpMessage),
   )
 }
 
-pub fn can_start(manager: AcpManager) -> Bool {
-  list.length(manager.active_sessions) < manager.max_concurrent
+// ---------------------------------------------------------------------------
+// Public API (convenience wrappers around process.call)
+// ---------------------------------------------------------------------------
+
+pub fn dispatch(
+  subject: process.Subject(AcpMessage),
+  task_spec: types.TaskSpec,
+  thread_id: String,
+) -> Result(String, String) {
+  process.call(subject, 30_000, fn(reply_to) {
+    Dispatch(reply_to: reply_to, task_spec: task_spec, thread_id: thread_id)
+  })
 }
 
-pub fn register(
-  manager: AcpManager,
-  session: ActiveSession,
-) -> AcpManager {
-  let new_manager =
-    AcpManager(..manager, active_sessions: [session, ..manager.active_sessions])
-  persist_sessions(new_manager)
-  new_manager
-}
-
-pub fn unregister(
-  manager: AcpManager,
+pub fn kill(
+  subject: process.Subject(AcpMessage),
   session_name: String,
-  terminal_state: SessionState,
-) -> AcpManager {
-  // Update in-memory state to terminal, then persist, then remove from active list.
-  // The persist step writes the terminal state to disk for history.
-  let marked =
-    list.map(manager.active_sessions, fn(s) {
-      case s.session_name == session_name {
-        True -> ActiveSession(..s, state: terminal_state)
-        False -> s
-      }
-    })
-  let marked_manager = AcpManager(..manager, active_sessions: marked)
-  persist_sessions(marked_manager)
-  // Remove from in-memory active list
-  let remaining =
-    list.filter(manager.active_sessions, fn(s) {
-      s.session_name != session_name
-    })
-  AcpManager(..manager, active_sessions: remaining)
+) -> Result(Nil, String) {
+  process.call(subject, 10_000, fn(reply_to) {
+    Kill(reply_to: reply_to, session_name: session_name)
+  })
 }
 
-/// Update a session's state and log the transition.
-pub fn update_state(
-  manager: AcpManager,
-  session_name: String,
-  new_state: SessionState,
-) -> AcpManager {
-  let new_sessions =
-    list.map(manager.active_sessions, fn(s) {
-      case s.session_name == session_name {
-        True -> {
-          io.println(
-            "[acp] Session "
-            <> session_name
-            <> " state: "
-            <> session_state_to_string(s.state)
-            <> " → "
-            <> session_state_to_string(new_state),
-          )
-          ActiveSession(..s, state: new_state)
-        }
-        False -> s
-      }
-    })
-  let new_manager = AcpManager(..manager, active_sessions: new_sessions)
-  persist_sessions(new_manager)
-  new_manager
-}
-
-/// Look up a session by name.
 pub fn get_session(
-  manager: AcpManager,
+  subject: process.Subject(AcpMessage),
   session_name: String,
 ) -> Result(ActiveSession, Nil) {
-  list.find(manager.active_sessions, fn(s) {
-    s.session_name == session_name
+  process.call(subject, 5000, fn(reply_to) {
+    GetSession(reply_to: reply_to, session_name: session_name)
+  })
+}
+
+pub fn list_sessions(
+  subject: process.Subject(AcpMessage),
+) -> List(ActiveSession) {
+  process.call(subject, 5000, fn(reply_to) {
+    ListSessions(reply_to: reply_to)
+  })
+}
+
+pub fn send_input(
+  subject: process.Subject(AcpMessage),
+  session_name: String,
+  input: String,
+) -> Result(Nil, String) {
+  process.call(subject, 10_000, fn(reply_to) {
+    SendInput(reply_to: reply_to, session_name: session_name, input: input)
   })
 }
 
@@ -139,29 +135,108 @@ pub fn session_state_to_string(state: SessionState) -> String {
   }
 }
 
-pub fn dispatch(
-  manager: AcpManager,
-  task_spec: types.TaskSpec,
+// ---------------------------------------------------------------------------
+// Actor lifecycle
+// ---------------------------------------------------------------------------
+
+pub fn start(
+  max_concurrent: Int,
+  store_path: String,
   monitor_model: String,
-  on_event: fn(monitor.AcpEvent) -> Nil,
+  on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
+) -> Result(process.Subject(AcpMessage), String) {
+  let builder =
+    actor.new_with_initialiser(10_000, fn(self_subject) {
+      // Recovery: load persisted sessions, check tmux, start monitors
+      let sessions =
+        recover_sessions(self_subject, store_path, monitor_model, on_brain_event)
+
+      let state =
+        AcpActorState(
+          sessions: sessions,
+          max_concurrent: max_concurrent,
+          store_path: store_path,
+          monitor_model: monitor_model,
+          on_brain_event: on_brain_event,
+          self_subject: self_subject,
+        )
+      Ok(actor.initialised(state) |> actor.returning(self_subject))
+    })
+    |> actor.on_message(handle_message)
+
+  case actor.start(builder) {
+    Ok(started) -> Ok(started.data)
+    Error(err) ->
+      Error("Failed to start ACP manager actor: " <> string.inspect(err))
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Message handler
+// ---------------------------------------------------------------------------
+
+fn handle_message(
+  state: AcpActorState,
+  message: AcpMessage,
+) -> actor.Next(AcpActorState, AcpMessage) {
+  case message {
+    Dispatch(reply_to:, task_spec:, thread_id:) -> {
+      let #(new_state, result) = handle_dispatch(state, task_spec, thread_id)
+      process.send(reply_to, result)
+      actor.continue(new_state)
+    }
+    Kill(reply_to:, session_name:) -> {
+      let #(new_state, result) = handle_kill(state, session_name)
+      process.send(reply_to, result)
+      actor.continue(new_state)
+    }
+    GetSession(reply_to:, session_name:) -> {
+      process.send(reply_to, dict.get(state.sessions, session_name))
+      actor.continue(state)
+    }
+    ListSessions(reply_to:) -> {
+      process.send(reply_to, dict.values(state.sessions))
+      actor.continue(state)
+    }
+    SendInput(reply_to:, session_name:, input:) -> {
+      let result = handle_send_input(state, session_name, input)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+    MonitorEvent(event) -> {
+      let new_state = handle_monitor_event(state, event)
+      actor.continue(new_state)
+    }
+    SetBrainCallback(on_brain_event:) -> {
+      actor.continue(AcpActorState(..state, on_brain_event: on_brain_event))
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+fn handle_dispatch(
+  state: AcpActorState,
+  task_spec: types.TaskSpec,
   thread_id: String,
-) -> Result(AcpManager, String) {
-  case can_start(manager) {
-    False ->
+) -> #(AcpActorState, Result(String, String)) {
+  case dict.size(state.sessions) < state.max_concurrent {
+    False -> #(
+      state,
       Error(
         "ACP concurrency limit reached ("
-        <> int.to_string(manager.max_concurrent)
+        <> int.to_string(state.max_concurrent)
         <> ")",
-      )
+      ),
+    )
     True -> {
-      // Register session BEFORE starting monitor — monitor emits AcpStarted
-      // during init, and the brain needs to find the session to resolve the thread_id
+      let session_name =
+        tmux.build_session_name(task_spec.domain, task_spec.id)
       let session =
         ActiveSession(
-          session_name: tmux.build_session_name(
-            task_spec.domain,
-            task_spec.id,
-          ),
+          session_name: session_name,
           domain: task_spec.domain,
           task_id: task_spec.id,
           state: Starting,
@@ -170,28 +245,198 @@ pub fn dispatch(
           prompt: task_spec.prompt,
           cwd: task_spec.cwd,
         )
-      let new_manager =
-        register(manager, session)
-      case monitor.start(task_spec, monitor_model, on_event) {
-        Ok(_subject) -> {
-          Ok(new_manager)
+
+      // Insert and persist BEFORE starting tmux/monitor
+      let new_sessions = dict.insert(state.sessions, session_name, session)
+      let new_state = AcpActorState(..state, sessions: new_sessions)
+      persist(new_state)
+
+      // Trust directory if Claude Code provider
+      case task_spec.provider {
+        provider.ClaudeCode -> {
+          let _ = tmux.ensure_trusted(task_spec.cwd)
+          Nil
         }
-        Error(err) -> Error(err)
+        _ -> Nil
+      }
+
+      // Build shell command and start tmux
+      let shell_command =
+        provider.build_command(
+          task_spec.provider,
+          task_spec.prompt,
+          task_spec.cwd,
+          session_name,
+          task_spec.worktree,
+        )
+      case tmux.create_session(session_name, shell_command) {
+        Error(reason) -> {
+          // Clean up: remove from state and persist
+          let rolled_back = dict.delete(new_sessions, session_name)
+          let rolled_state = AcpActorState(..state, sessions: rolled_back)
+          persist(rolled_state)
+          #(rolled_state, Error("Failed to create tmux session: " <> reason))
+        }
+        Ok(Nil) -> {
+          // Start monitor — events route back to this actor
+          let on_event = fn(event) {
+            process.send(state.self_subject, MonitorEvent(event))
+          }
+          case
+            acp_monitor.start_monitor_only(
+              task_spec,
+              session_name,
+              state.monitor_model,
+              on_event,
+              True,
+            )
+          {
+            Ok(_) -> #(new_state, Ok(session_name))
+            Error(err) -> {
+              // tmux started but monitor failed — kill tmux, clean up
+              let _ = tmux.kill_session(session_name)
+              let rolled_back = dict.delete(new_sessions, session_name)
+              let rolled_state = AcpActorState(..state, sessions: rolled_back)
+              persist(rolled_state)
+              #(rolled_state, Error("Monitor start failed: " <> err))
+            }
+          }
+        }
       }
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Kill
 // ---------------------------------------------------------------------------
 
-/// Persist the in-memory active sessions list to disk.
-/// This is the single write path — no reads from disk needed.
-fn persist_sessions(mgr: AcpManager) -> Nil {
-  // Convert active sessions to stored format
+fn handle_kill(
+  state: AcpActorState,
+  session_name: String,
+) -> #(AcpActorState, Result(Nil, String)) {
+  case tmux.kill_session(session_name) {
+    Ok(_) -> Nil
+    Error(e) -> io.println("[acp] tmux kill failed for " <> session_name <> ": " <> e)
+  }
+  let new_state = unregister(state, session_name, Failed("killed"))
+  #(new_state, Ok(Nil))
+}
+
+// ---------------------------------------------------------------------------
+// Send input
+// ---------------------------------------------------------------------------
+
+fn handle_send_input(
+  state: AcpActorState,
+  session_name: String,
+  input: String,
+) -> Result(Nil, String) {
+  case dict.get(state.sessions, session_name) {
+    Error(_) -> {
+      // Check if tmux session exists even if not in our state
+      case tmux.session_exists(session_name) {
+        True -> tmux.send_input(session_name, input)
+        False -> Error("Session not found: " <> session_name)
+      }
+    }
+    Ok(_) -> tmux.send_input(session_name, input)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Monitor events
+// ---------------------------------------------------------------------------
+
+fn handle_monitor_event(
+  state: AcpActorState,
+  event: acp_monitor.AcpEvent,
+) -> AcpActorState {
+  let new_state = case event {
+    acp_monitor.AcpStarted(session_name, _, _) ->
+      update_session_state(state, session_name, Running)
+    acp_monitor.AcpTimedOut(session_name, _) ->
+      unregister(state, session_name, TimedOut)
+    acp_monitor.AcpCompleted(session_name, _, _) ->
+      unregister(state, session_name, Complete)
+    acp_monitor.AcpFailed(session_name, _, reason) ->
+      unregister(state, session_name, Failed(reason))
+    // Progress and Alert don't change state
+    acp_monitor.AcpProgress(_, _, _) -> state
+    acp_monitor.AcpAlert(_, _, _, _) -> state
+  }
+  // Forward ALL events to the brain for Discord notifications
+  state.on_brain_event(event)
+  new_state
+}
+
+// ---------------------------------------------------------------------------
+// State helpers
+// ---------------------------------------------------------------------------
+
+fn update_session_state(
+  state: AcpActorState,
+  session_name: String,
+  new_session_state: SessionState,
+) -> AcpActorState {
+  case dict.get(state.sessions, session_name) {
+    Error(_) -> {
+      io.println(
+        "[acp] Warning: state update for unknown session " <> session_name,
+      )
+      state
+    }
+    Ok(session) -> {
+      io.println(
+        "[acp] Session "
+        <> session_name
+        <> " state: "
+        <> session_state_to_string(session.state)
+        <> " -> "
+        <> session_state_to_string(new_session_state),
+      )
+      let updated = ActiveSession(..session, state: new_session_state)
+      let new_sessions = dict.insert(state.sessions, session_name, updated)
+      let new_state = AcpActorState(..state, sessions: new_sessions)
+      persist(new_state)
+      new_state
+    }
+  }
+}
+
+fn unregister(
+  state: AcpActorState,
+  session_name: String,
+  terminal_state: SessionState,
+) -> AcpActorState {
+  // First persist the terminal state (for history)
+  let state_with_terminal = case dict.get(state.sessions, session_name) {
+    Ok(session) -> {
+      io.println(
+        "[acp] Session "
+        <> session_name
+        <> " -> "
+        <> session_state_to_string(terminal_state),
+      )
+      let updated = ActiveSession(..session, state: terminal_state)
+      let new_sessions = dict.insert(state.sessions, session_name, updated)
+      AcpActorState(..state, sessions: new_sessions)
+    }
+    Error(_) -> state
+  }
+  persist(state_with_terminal)
+  // Then remove from active
+  let new_sessions = dict.delete(state_with_terminal.sessions, session_name)
+  AcpActorState(..state_with_terminal, sessions: new_sessions)
+}
+
+// ---------------------------------------------------------------------------
+// Persistence
+// ---------------------------------------------------------------------------
+
+fn persist(state: AcpActorState) -> Nil {
   let active_stored =
-    list.map(mgr.active_sessions, fn(s) {
+    list.map(dict.values(state.sessions), fn(s) {
       session_store.StoredSession(
         session_name: s.session_name,
         domain: s.domain,
@@ -203,12 +448,122 @@ fn persist_sessions(mgr: AcpManager) -> Nil {
         cwd: s.cwd,
       )
     })
-  // Merge with existing disk data — keep terminal sessions for history
-  let existing = session_store.load(mgr.store_path)
+  // Merge: active sessions + terminal sessions from disk
+  let existing = session_store.load(state.store_path)
   let active_names = list.map(active_stored, fn(s) { s.session_name })
-  let terminal = list.filter(existing, fn(s) {
-    session_store.is_terminal(s.state) && !list.contains(active_names, s.session_name)
-  })
-  let _ = session_store.save(mgr.store_path, list.append(active_stored, terminal))
-  Nil
+  let terminal =
+    list.filter(existing, fn(s) {
+      session_store.is_terminal(s.state)
+      && !list.contains(active_names, s.session_name)
+    })
+  case session_store.save(state.store_path, list.append(active_stored, terminal)) {
+    Ok(_) -> Nil
+    Error(e) -> io.println("[acp] Persist failed: " <> e)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Recovery
+// ---------------------------------------------------------------------------
+
+fn recover_sessions(
+  self_subject: process.Subject(AcpMessage),
+  store_path: String,
+  monitor_model: String,
+  on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
+) -> Dict(String, ActiveSession) {
+  let stored = session_store.load(store_path)
+  let active =
+    list.filter(stored, fn(s) { !session_store.is_terminal(s.state) })
+
+  case active {
+    [] -> dict.new()
+    _ -> {
+      io.println(
+        "[acp] Recovering "
+        <> int.to_string(list.length(active))
+        <> " session(s)...",
+      )
+      let pairs =
+        list.filter_map(active, fn(s) {
+          case tmux.session_exists(s.session_name) {
+            True -> {
+              io.println(
+                "[acp] Recovering alive session: " <> s.session_name,
+              )
+              let session =
+                ActiveSession(
+                  session_name: s.session_name,
+                  domain: s.domain,
+                  task_id: s.task_id,
+                  state: Running,
+                  started_at_ms: s.started_at_ms,
+                  thread_id: s.thread_id,
+                  prompt: s.prompt,
+                  cwd: s.cwd,
+                )
+              // Start monitor for this session
+              let task_spec =
+                types.TaskSpec(
+                  id: s.task_id,
+                  domain: s.domain,
+                  prompt: s.prompt,
+                  cwd: s.cwd,
+                  timeout_ms: 30 * 60_000,
+                  acceptance_criteria: [],
+                  provider: provider.ClaudeCode,
+                  worktree: True,
+                )
+              let on_event = fn(event) {
+                process.send(self_subject, MonitorEvent(event))
+              }
+              case
+                acp_monitor.start_monitor_only(
+                  task_spec,
+                  s.session_name,
+                  monitor_model,
+                  on_event,
+                  False,
+                )
+              {
+                Ok(_) ->
+                  io.println(
+                    "[acp] Monitor re-attached: " <> s.session_name,
+                  )
+                Error(e) ->
+                  io.println(
+                    "[acp] Failed to re-attach monitor for "
+                    <> s.session_name
+                    <> ": "
+                    <> e,
+                  )
+              }
+              Ok(#(s.session_name, session))
+            }
+            False -> {
+              io.println(
+                "[acp] Session dead, marking failed: " <> s.session_name,
+              )
+              // Update on disk
+              let _ =
+                session_store.upsert(
+                  store_path,
+                  session_store.StoredSession(
+                    ..s,
+                    state: "failed(restart-dead)",
+                  ),
+                )
+              // Notify brain
+              on_brain_event(acp_monitor.AcpFailed(
+                s.session_name,
+                s.domain,
+                "tmux session disappeared during restart",
+              ))
+              Error(Nil)
+            }
+          }
+        })
+      dict.from_list(pairs)
+    }
+  }
 }

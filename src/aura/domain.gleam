@@ -37,9 +37,10 @@ fn read_optional_file(path: String, label: String, domain: String) -> String {
 pub fn load_context(
   config_dir: String,
   data_dir: String,
+  state_dir: String,
   skills: List(skill.SkillInfo),
 ) -> DomainContext {
-  let domain_name = extract_domain_name(data_dir)
+  let domain_name = extract_domain_name(config_dir)
 
   let agents_md = read_optional_file(config_dir <> "/AGENTS.md", "AGENTS.md", domain_name)
 
@@ -51,7 +52,7 @@ pub fn load_context(
     }
   }
 
-  let state_md = read_optional_file(data_dir <> "/STATE.md", "STATE.md", domain_name)
+  let state_md = read_optional_file(state_dir <> "/STATE.md", "STATE.md", domain_name)
   let memory_md = read_optional_file(data_dir <> "/MEMORY.md", "MEMORY.md", domain_name)
 
   let date = time.today_date_string()

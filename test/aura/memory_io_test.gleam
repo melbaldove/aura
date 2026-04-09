@@ -1,6 +1,6 @@
 import aura/memory
 import aura/test_helpers
-import aura/workspace
+import aura/scaffold
 import aura/xdg
 import gleam/json
 import gleam/string
@@ -18,7 +18,6 @@ fn temp_paths(suffix: String) -> xdg.Paths {
     config: base <> "/config",
     data: base <> "/data",
     state: base <> "/state",
-    domains: base <> "/domains",
   )
 }
 
@@ -29,8 +28,8 @@ fn cleanup_paths(paths: xdg.Paths) -> Nil {
 
 pub fn append_domain_log_test() {
   let paths = temp_paths("domlog-" <> test_helpers.random_suffix())
-  workspace.scaffold(paths) |> should.be_ok
-  workspace.scaffold_domain(paths, "test-ws", "Test domain", "test-ws")
+  scaffold.scaffold(paths) |> should.be_ok
+  scaffold.scaffold_domain(paths, "test-ws", "Test domain", "test-ws")
   |> should.be_ok
 
   let domain_dir = paths.data <> "/domains/test-ws"
@@ -50,8 +49,8 @@ pub fn append_domain_log_test() {
 
 pub fn append_and_read_daily_log_test() {
   let paths = temp_paths("log-" <> test_helpers.random_suffix())
-  workspace.scaffold(paths) |> should.be_ok
-  workspace.scaffold_domain(paths, "test-ws", "Test", "test-ws")
+  scaffold.scaffold(paths) |> should.be_ok
+  scaffold.scaffold_domain(paths, "test-ws", "Test", "test-ws")
   |> should.be_ok
 
   let entry =
@@ -75,8 +74,8 @@ pub fn append_and_read_daily_log_test() {
 
 pub fn append_log_creates_directory_test() {
   let paths = temp_paths("logdir-" <> test_helpers.random_suffix())
-  workspace.scaffold(paths) |> should.be_ok
-  workspace.scaffold_domain(paths, "test-ws", "Test", "test-ws")
+  scaffold.scaffold(paths) |> should.be_ok
+  scaffold.scaffold_domain(paths, "test-ws", "Test", "test-ws")
   |> should.be_ok
 
   // Append to a date that has no log file yet — directory creation is implicit
@@ -104,8 +103,8 @@ pub fn read_daily_log_missing_test() {
 
 pub fn append_multiple_log_entries_test() {
   let paths = temp_paths("multilog-" <> test_helpers.random_suffix())
-  workspace.scaffold(paths) |> should.be_ok
-  workspace.scaffold_domain(paths, "ws1", "WS One", "ws1")
+  scaffold.scaffold(paths) |> should.be_ok
+  scaffold.scaffold_domain(paths, "ws1", "WS One", "ws1")
   |> should.be_ok
 
   let e1 = json.object([#("msg", json.string("first entry"))])

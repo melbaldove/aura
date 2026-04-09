@@ -1,87 +1,127 @@
+import gleam/dict.{type Dict}
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import simplifile
-
-const delimiter = "\n§\n"
 
 const memory_char_limit = 2200
 
 const user_char_limit = 1375
 
-/// Read all entries from a memory file. Returns empty list if file doesn't exist.
-pub fn read_entries(path: String) -> Result(List(String), String) {
+/// A keyed entry in a memory file.
+pub type Entry {
+  Entry(key: String, content: String)
+}
+
+/// Parse a keyed memory file into a list of entries.
+/// Format: `§ key\ncontent\n` blocks. Content before the first `§` is ignored.
+pub fn read_entries(path: String) -> Result(List(Entry), String) {
   case simplifile.read(path) {
     Error(_) -> Ok([])
-    Ok(content) -> {
-      let trimmed = string.trim(content)
-      case trimmed {
-        "" -> Ok([])
-        _ -> {
-          let entries =
-            string.split(trimmed, "§")
-            |> list.map(string.trim)
-            |> list.filter(fn(e) { e != "" })
-          Ok(entries)
+    Ok(raw) -> Ok(parse_entries(raw))
+  }
+}
+
+fn parse_entries(raw: String) -> List(Entry) {
+  let lines = string.split(raw, "\n")
+  parse_lines(lines, None, [], [])
+}
+
+fn parse_lines(
+  lines: List(String),
+  current_key: Option(String),
+  current_lines: List(String),
+  acc: List(Entry),
+) -> List(Entry) {
+  case lines {
+    [] -> list.reverse(finalize_entry(current_key, current_lines, acc))
+    [line, ..rest] -> {
+      case string.starts_with(line, "§ ") {
+        True -> {
+          let new_key = string.trim(string.drop_start(line, 2))
+          let new_acc = finalize_entry(current_key, current_lines, acc)
+          parse_lines(rest, Some(new_key), [], new_acc)
         }
+        // Prepend (O(1)) instead of append (O(n)), reverse in finalize
+        False -> parse_lines(rest, current_key, [line, ..current_lines], acc)
       }
     }
   }
 }
 
-/// Add an entry to a memory file. Scans for security threats first.
-/// Enforces character limits per target type.
-pub fn add(path: String, content: String) -> Result(Nil, String) {
-  use _ <- result.try(security_scan(content))
-  use entries <- result.try(read_entries(path))
-  let new_entries = list.append(entries, [content])
-  let limit = char_limit_for_path(path)
-  use _ <- result.try(check_char_limit(new_entries, limit))
-  write_entries(path, new_entries)
+fn finalize_entry(
+  key: Option(String),
+  lines: List(String),
+  acc: List(Entry),
+) -> List(Entry) {
+  case key {
+    None -> acc
+    Some(k) -> {
+      let content = string.trim(string.join(list.reverse(lines), "\n"))
+      case content {
+        "" -> acc
+        // Prepend to acc (reversed at the end of parse_lines)
+        _ -> [Entry(key: k, content: content), ..acc]
+      }
+    }
+  }
 }
 
-/// Remove an entry that contains the given substring.
-pub fn remove(path: String, substring: String) -> Result(Nil, String) {
+/// Upsert an entry by key. Creates if new, replaces if exists.
+/// Scans for security threats and enforces char limits.
+pub fn set(path: String, key: String, content: String) -> Result(Nil, String) {
+  use _ <- result.try(security_scan(content))
   use entries <- result.try(read_entries(path))
-  let filtered = list.filter(entries, fn(e) { !string.contains(e, substring) })
+  let exists = list.any(entries, fn(e) { e.key == key })
+  let updated = case exists {
+    True -> list.map(entries, fn(e) {
+      case e.key == key {
+        True -> Entry(key: key, content: content)
+        False -> e
+      }
+    })
+    False -> list.append(entries, [Entry(key: key, content: content)])
+  }
+  let limit = char_limit_for_path(path)
+  use _ <- result.try(check_char_limit(updated, limit))
+  write_entries(path, updated)
+}
+
+/// Remove an entry by key.
+pub fn remove(path: String, key: String) -> Result(Nil, String) {
+  use entries <- result.try(read_entries(path))
+  let filtered = list.filter(entries, fn(e) { e.key != key })
   case list.length(filtered) == list.length(entries) {
-    True -> Error("No entry found containing: " <> substring)
+    True -> {
+      let keys = list.map(entries, fn(e) { e.key })
+      Error("No entry with key '" <> key <> "'. Existing keys: " <> string.join(keys, ", "))
+    }
     False -> write_entries(path, filtered)
   }
 }
 
-/// Replace an entry containing old_text with new content.
-pub fn replace(
-  path: String,
-  old_text: String,
-  new_content: String,
-) -> Result(Nil, String) {
-  use _ <- result.try(security_scan(new_content))
-  use entries <- result.try(read_entries(path))
-  let updated =
-    list.map(entries, fn(e) {
-      case string.contains(e, old_text) {
-        True -> new_content
-        False -> e
-      }
-    })
-  case updated == entries {
-    True -> Error("No entry found containing: " <> old_text)
-    False -> write_entries(path, updated)
-  }
-}
-
-/// Format all entries for display.
+/// Format all entries for display (used in system prompt).
 pub fn format_for_display(path: String) -> Result(String, String) {
   use entries <- result.try(read_entries(path))
   case entries {
     [] -> Ok("(empty)")
-    _ -> Ok(string.join(entries, "\n- "))
+    _ -> Ok(string.join(list.map(entries, fn(e) {
+      "**" <> e.key <> ":** " <> e.content
+    }), "\n"))
   }
 }
 
-fn write_entries(path: String, entries: List(String)) -> Result(Nil, String) {
-  let content = string.join(entries, delimiter) <> "\n"
+/// Format entries as a dict for structured access.
+pub fn read_as_dict(path: String) -> Result(Dict(String, String), String) {
+  use entries <- result.try(read_entries(path))
+  Ok(dict.from_list(list.map(entries, fn(e) { #(e.key, e.content) })))
+}
+
+fn write_entries(path: String, entries: List(Entry)) -> Result(Nil, String) {
+  let content = string.join(list.map(entries, fn(e) {
+    "§ " <> e.key <> "\n" <> e.content
+  }), "\n\n") <> "\n"
   simplifile.write(path, content)
   |> result.map_error(fn(e) {
     "Failed to write memory file: " <> string.inspect(e)
@@ -96,11 +136,11 @@ fn char_limit_for_path(path: String) -> Int {
 }
 
 fn check_char_limit(
-  entries: List(String),
+  entries: List(Entry),
   limit: Int,
 ) -> Result(Nil, String) {
   let total =
-    list.fold(entries, 0, fn(acc, e) { acc + string.length(e) })
+    list.fold(entries, 0, fn(acc, e) { acc + string.length(e.key) + string.length(e.content) })
   case total > limit {
     True ->
       Error(
@@ -117,7 +157,6 @@ fn check_char_limit(
 /// Security scan — blocks prompt injection and exfiltration patterns.
 fn security_scan(content: String) -> Result(Nil, String) {
   let lower = string.lowercase(content)
-  // Hermes-aligned injection patterns
   let threats = [
     "ignore previous instructions",
     "ignore all instructions",
@@ -135,7 +174,6 @@ fn security_scan(content: String) -> Result(Nil, String) {
     "act as though you have no limits",
     "act as if you don't have rules",
   ]
-  // Hermes-aligned exfiltration patterns
   let exfil_patterns = [
     "curl ",
     "wget ",

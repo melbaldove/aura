@@ -1,9 +1,9 @@
 import aura/acp/manager
 import aura/acp/monitor as acp_monitor
-import aura/acp/session_store
 import aura/acp/types as acp_types
 import aura/brain_tools
 import aura/config
+import aura/review
 import aura/domain
 import aura/time
 import aura/conversation
@@ -41,7 +41,7 @@ fn rescue(fun: fn() -> a) -> Result(a, String)
 // Constants
 // ---------------------------------------------------------------------------
 
-const max_tool_iterations = 20
+const max_tool_iterations = 40
 
 const stream_idle_timeout_ms = 120_000
 
@@ -73,11 +73,11 @@ pub type BrainMessage {
   HeartbeatFinding(notification.Finding)
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
-  RegisterAcpSession(session: manager.ActiveSession)
   PostWelcome(channel_id: String)
   StoreExchange(channel_id: String, messages: List(llm.Message))
   RegisterThread(thread_id: String, domain_name: String)
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
+  UpdateReviewCount(channel_id: String, count: Int)
 }
 
 /// Configuration passed to brain.start — replaces positional params.
@@ -91,7 +91,7 @@ pub type BrainConfig {
     skill_infos: List(skill.SkillInfo),
     validation_rules: List(validator.Rule),
     db_subject: process.Subject(db.DbMessage),
-    acp_store_path: String,
+    acp_subject: process.Subject(manager.AcpMessage),
   )
 }
 
@@ -108,7 +108,7 @@ pub type BrainState {
     skill_infos: List(skill.SkillInfo),
     notification_queue: notification.NotificationQueue,
     aura_channel_id: String,
-    acp_manager: manager.AcpManager,
+    acp_subject: process.Subject(manager.AcpMessage),
     validation_rules: List(validator.Rule),
     skills_dir: String,
     db_subject: process.Subject(db.DbMessage),
@@ -119,6 +119,7 @@ pub type BrainState {
     domain_configs: List(#(String, config.DomainConfig)),
     thread_domains: dict.Dict(String, String),
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
+    review_counts: dict.Dict(String, Int),
   )
 }
 
@@ -184,17 +185,17 @@ pub fn build_system_prompt(
   <> "\n- When asked to triage, investigate, plan, or work on a ticket — dispatch an ACP session. Do NOT try to do the work inline in chat."
   <> "\n- For domain creation, use the propose tool to request approval."
   <> "\n\nMemory guidance:"
-  <> "\nYou have three types of persistent memory:"
-  <> "\n- **state** — current domain status. Update after significant actions: ticket status changes, PRs created/merged, blockers found/resolved. Keep it current — replace stale entries."
-  <> "\n- **memory** — durable domain knowledge. Save decisions, patterns, conventions discovered during work. Only save facts that will still matter later."
+  <> "\nYou have three types of persistent memory, all keyed by topic:"
+  <> "\n- **state** — current domain status. What's in flight right now: active tickets, PRs, blockers. Upsert by key (e.g. key='HY-5195', key='pr-216')."
+  <> "\n- **memory** — durable domain knowledge. Decisions, patterns, conventions. Upsert by key (e.g. key='jira-patterns', key='branch-workflow')."
   <> "\n- **user** — user profile (global). Preferences, communication style, role."
+  <> "\nAll entries are keyed. Use `set` to create or update, `remove` to delete. No need to read before writing — set is an upsert."
   <> "\nState and memory are per-domain. When in a domain channel, they target that domain's files. In #aura, they target global files."
-  <> "\nYou MUST update state and memory after significant actions. This is not optional. Examples:"
-  <> "\n- Closing/completing an ACP session → save to state what was done (PR merged, ticket status) and to memory what was learned (patterns, decisions)"
-  <> "\n- Dispatching an ACP session → save to state that it's in progress"
-  <> "\n- Ticket status change → update state"
-  <> "\n- Discovering a codebase pattern → save to memory"
-  <> "\nDo NOT save: completed-work logs, temporary TODO items, trivial or easily re-discovered facts."
+  <> "\nUpdate state and memory after significant actions:"
+  <> "\n- Closing/completing an ACP session → set state for what was done, set memory for what was learned"
+  <> "\n- Dispatching an ACP session → set state that it's in progress"
+  <> "\n- Ticket status change → set state"
+  <> "\n- Discovering a codebase pattern → set memory"
   <> "\n\nSkills guidance:"
   <> "\nBefore using run_skill, call view_skill first to read the skill's full instructions. The instructions contain exact commands, argument format, and examples. Never guess CLI syntax."
   <> "\nAfter completing a complex task (3+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with create_skill so you can reuse it next time."
@@ -223,10 +224,7 @@ pub fn start(
 
       notification_queue: notification.new_queue(),
       aura_channel_id: "",
-      acp_manager: manager.new(
-        config.acp_global_max_concurrent,
-        brain_config.acp_store_path,
-      ),
+      acp_subject: brain_config.acp_subject,
       validation_rules: brain_config.validation_rules,
       skill_infos: brain_config.skill_infos,
       skills_dir: xdg.skills_dir(brain_config.paths),
@@ -238,6 +236,7 @@ pub fn start(
       global_config: brain_config.global,
       domain_configs: brain_config.domain_configs,
       scheduler_subject: None,
+      review_counts: dict.new(),
     )
 
   actor.new_with_initialiser(10_000, fn(self_subject) {
@@ -326,7 +325,7 @@ fn handle_message(
         True -> {
           // Post urgent findings immediately
           let channel = resolve_finding_channel(state, finding)
-          process.spawn(fn() {
+          process.spawn_unlinked(fn() {
             send_discord_response(state.discord_token, channel, "**URGENT** [" <> finding.source <> "] " <> finding.summary)
           })
           actor.continue(state)
@@ -351,7 +350,7 @@ fn handle_message(
               Nil
             }
             _ -> {
-              process.spawn(fn() {
+              process.spawn_unlinked(fn() {
                 send_discord_response(state.discord_token, channel, digest)
               })
               Nil
@@ -365,7 +364,7 @@ fn handle_message(
       case list.is_empty(state.domains) {
         True -> {
           let msg = "Aura is online. No domains configured yet. Tell me about your first project and I'll set one up."
-          process.spawn(fn() {
+          process.spawn_unlinked(fn() {
             send_discord_response(state.discord_token, channel_id, msg)
           })
           actor.continue(BrainState(..state, aura_channel_id: channel_id))
@@ -374,11 +373,6 @@ fn handle_message(
       }
     }
     AcpEvent(event) -> handle_acp_event(state, event)
-    RegisterAcpSession(session:) -> {
-      // Add to in-memory list only — dispatch already persisted to disk
-      let new_manager = manager.AcpManager(..state.acp_manager, active_sessions: [session, ..state.acp_manager.active_sessions])
-      actor.continue(BrainState(..state, acp_manager: new_manager))
-    }
     StoreExchange(channel_id, messages) -> {
       // DB write already done by the spawned process before Discord delivery.
       // This handler only updates the in-memory cache.
@@ -406,56 +400,71 @@ fn handle_message(
       io.println("[brain] Scheduler connected")
       actor.continue(BrainState(..state, scheduler_subject: Some(subject)))
     }
+    UpdateReviewCount(channel_id:, count:) -> {
+      let new_counts = dict.insert(state.review_counts, channel_id, count)
+      actor.continue(BrainState(..state, review_counts: new_counts))
+    }
   }
 }
 
 fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Next(BrainState, BrainMessage) {
   case event {
     acp_monitor.AcpStarted(session_name, domain, task_id) -> {
-      // Transition: Starting → Running
-      let new_manager =
-        manager.update_state(state.acp_manager, session_name, manager.Running)
       let msg =
-        "**ACP Started** — "
+        "**ACP Started** -- "
         <> task_id
         <> "\n`tmux attach -t "
         <> session_name
         <> "`"
       let channel = resolve_acp_channel(state, session_name, domain)
-      process.spawn(fn() {
+      process.spawn_unlinked(fn() {
         send_discord_response(state.discord_token, channel, msg)
       })
-      actor.continue(BrainState(..state, acp_manager: new_manager))
+      actor.continue(state)
     }
     acp_monitor.AcpAlert(session_name, domain, status, summary) -> {
-      // Alerts are informational — state stays Running
       let status_str = acp_types.status_to_string(status)
       let msg =
         "**ACP Alert** ["
         <> status_str
-        <> "] — "
+        <> "] -- "
         <> summary
         <> "\n`tmux attach -t "
         <> session_name
         <> "`"
       let channel = resolve_acp_channel(state, session_name, domain)
-      process.spawn(fn() {
+      process.spawn_unlinked(fn() {
         send_discord_response(state.discord_token, channel, msg)
       })
       actor.continue(state)
     }
     acp_monitor.AcpCompleted(session_name, domain, report) -> {
       let outcome = acp_types.outcome_to_string(report.outcome)
-      let msg =
-        "**ACP Complete** [" <> outcome <> "] — " <> report.anchor
-      handle_acp_completion(state, session_name, domain, msg, manager.Complete)
+      let msg = "**ACP Complete** [" <> outcome <> "] -- " <> report.anchor
+      let channel = resolve_acp_channel(state, session_name, domain)
+      process.spawn_unlinked(fn() {
+        send_discord_response(state.discord_token, channel, msg)
+      })
+      actor.continue(state)
     }
     acp_monitor.AcpTimedOut(session_name, domain) -> {
       let msg =
-        "**ACP Timeout** — Session still alive. `tmux attach -t "
+        "**ACP Timeout** -- Session still alive. `tmux attach -t "
         <> session_name
         <> "`"
-      handle_acp_completion(state, session_name, domain, msg, manager.TimedOut)
+      let channel = resolve_acp_channel(state, session_name, domain)
+      process.spawn_unlinked(fn() {
+        send_discord_response(state.discord_token, channel, msg)
+      })
+      actor.continue(state)
+    }
+    acp_monitor.AcpFailed(session_name, domain, error) -> {
+      let msg = "**ACP Failed** -- " <> error
+      let channel = resolve_acp_channel(state, session_name, domain)
+      process.spawn_unlinked(fn() {
+        send_discord_response(state.discord_token, channel, msg)
+      })
+      actor.continue(state)
     }
     acp_monitor.AcpProgress(session_name, domain, summary) -> {
       // Write to domain log
@@ -467,42 +476,12 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
       // Post to Discord
       let msg = "**ACP Progress** `" <> session_name <> "`\n" <> summary
       let channel = resolve_acp_channel(state, session_name, domain)
-      process.spawn(fn() {
+      process.spawn_unlinked(fn() {
         send_discord_response(state.discord_token, channel, msg)
       })
       actor.continue(state)
     }
-    acp_monitor.AcpFailed(session_name, domain, error) -> {
-      let msg = "**ACP Failed** — " <> error
-      handle_acp_completion(
-        state,
-        session_name,
-        domain,
-        msg,
-        manager.Failed(error),
-      )
-    }
   }
-}
-
-fn handle_acp_completion(
-  state: BrainState,
-  session_name: String,
-  domain: String,
-  msg: String,
-  terminal_state: manager.SessionState,
-) -> actor.Next(BrainState, BrainMessage) {
-  // Resolve channel BEFORE unregistering so we can still find the thread_id
-  let channel = resolve_acp_channel(state, session_name, domain)
-  process.spawn(fn() {
-    send_discord_response(state.discord_token, channel, msg)
-  })
-  // Set terminal state, then unregister
-  let new_manager =
-    manager.update_state(state.acp_manager, session_name, terminal_state)
-  let new_manager =
-    manager.unregister(new_manager, session_name, terminal_state)
-  actor.continue(BrainState(..state, acp_manager: new_manager))
 }
 
 fn resolve_domain_channel(state: BrainState, domain: String) -> String {
@@ -512,26 +491,13 @@ fn resolve_domain_channel(state: BrainState, domain: String) -> String {
   }
 }
 
-/// Resolve the channel for ACP events: check in-memory manager first,
-/// then persisted store, then fall back to the domain channel.
 fn resolve_acp_channel(state: BrainState, session_name: String, domain: String) -> String {
-  // Try in-memory manager first
-  case manager.get_session(state.acp_manager, session_name) {
+  case manager.get_session(state.acp_subject, session_name) {
     Ok(session) -> case session.thread_id {
       "" -> resolve_domain_channel(state, domain)
       id -> id
     }
-    Error(_) -> {
-      // Fall back to persisted store
-      let stored = session_store.load(state.acp_manager.store_path)
-      case list.find(stored, fn(s) { s.session_name == session_name }) {
-        Ok(s) -> case s.thread_id {
-          "" -> resolve_domain_channel(state, domain)
-          id -> id
-        }
-        Error(_) -> resolve_domain_channel(state, domain)
-      }
-    }
+    Error(_) -> resolve_domain_channel(state, domain)
   }
 }
 
@@ -566,15 +532,20 @@ fn send_or_edit(
   msg_id: String,
   content: String,
 ) -> String {
+  // Discord message limit is 2000 chars
+  let safe_content = case string.length(content) > 1990 {
+    True -> string.slice(content, 0, 1990) <> " ..."
+    False -> content
+  }
   case msg_id {
     "" -> {
-      case rest.send_message(token, channel_id, content, []) {
+      case rest.send_message(token, channel_id, safe_content, []) {
         Ok(id) -> id
         Error(_) -> ""
       }
     }
     existing -> {
-      let _ = rest.edit_message(token, channel_id, existing, content)
+      let _ = rest.edit_message(token, channel_id, existing, safe_content)
       existing
     }
   }
@@ -586,7 +557,12 @@ fn stop_typing_loop(pid: process.Pid) -> Nil {
 
 fn send_discord_response(token: String, channel_id: String, content: String) -> Nil {
   io.println("[brain] Sending to channel " <> channel_id <> ": " <> string.slice(content, 0, 100))
-  case rest.send_message(token, channel_id, content, []) {
+  // Discord message limit is 2000 chars
+  let safe_content = case string.length(content) > 1990 {
+    True -> string.slice(content, 0, 1990) <> " ..."
+    False -> content
+  }
+  case rest.send_message(token, channel_id, safe_content, []) {
     Ok(_) -> Nil
     Error(err) -> {
       io.println("[brain] Failed to send message: " <> err)
@@ -648,7 +624,8 @@ fn handle_with_llm(
     Some(name) -> {
       let config_dir = xdg.domain_config_dir(state.paths, name)
       let data_dir = xdg.domain_data_dir(state.paths, name)
-      let ctx = domain.load_context(config_dir, data_dir, state.skill_infos)
+      let state_dir = xdg.domain_state_dir(state.paths, name)
+      let ctx = domain.load_context(config_dir, data_dir, state_dir, state.skill_infos)
       "\n\n" <> domain.build_domain_prompt(ctx)
     }
     None -> ""
@@ -657,14 +634,14 @@ fn handle_with_llm(
 
   // Inject ACP session context if this message is in an ACP thread
   let acp_context = case list.find(
-    session_store.load(state.acp_manager.store_path),
+    manager.list_sessions(state.acp_subject),
     fn(s) { s.thread_id == msg.channel_id },
   ) {
     Ok(session) -> {
       "\n\n## Active ACP Session"
       <> "\nYou are in an ACP session thread."
       <> "\nSession: " <> session.session_name
-      <> "\nState: " <> session.state
+      <> "\nState: " <> manager.session_state_to_string(session.state)
       <> "\nDomain: " <> session.domain
       <> "\nTask: " <> string.slice(session.prompt, 0, 300)
       <> "\n\nUse acp_status to check progress, acp_prompt to send instructions, acp_list to see all sessions."
@@ -708,20 +685,7 @@ fn handle_with_llm(
     validation_rules: state.validation_rules,
     db_subject: state.db_subject,
     scheduler_subject: state.scheduler_subject,
-    acp_manager: state.acp_manager,
-    on_acp_event: fn(event) {
-      case brain_subject_opt {
-        Some(subj) -> process.send(subj, AcpEvent(event))
-        None -> Nil
-      }
-    },
-    on_register_acp: fn(session) {
-      case brain_subject_opt {
-        Some(subj) -> process.send(subj, RegisterAcpSession(session))
-        None -> Nil
-      }
-    },
-    monitor_model: state.global_config.models.monitor,
+    acp_subject: state.acp_subject,
     domain_name: option.unwrap(domain_name, "aura"),
     domain_cwd: domain_cwd,
     acp_provider: acp_provider,
@@ -761,6 +725,37 @@ fn handle_with_llm(
       // Update in-memory cache (async via actor mailbox — not blocking)
       case brain_subject_opt {
         Some(subj) -> process.send(subj, StoreExchange(channel_id, all_turn_messages))
+        None -> Nil
+      }
+
+      // Post-response memory review
+      let review_count = case dict.get(state.review_counts, response_channel) {
+        Ok(c) -> c
+        Error(_) -> 0
+      }
+      let domain_for_review = option.unwrap(domain_name, "aura")
+      let new_review_count =
+        review.maybe_spawn_review(
+          state.global_config.memory.review_interval,
+          state.global_config.memory.notify_on_review,
+          domain_for_review,
+          response_channel,
+          state.discord_token,
+          list.flatten([history, all_turn_messages]),
+          review_count,
+          state.paths,
+          state.global_config.models.monitor,
+        )
+      // Update review count via actor mailbox
+      case brain_subject_opt {
+        Some(subj) ->
+          process.send(
+            subj,
+            UpdateReviewCount(
+              channel_id: response_channel,
+              count: new_review_count,
+            ),
+          )
         None -> Nil
       }
     }
@@ -950,7 +945,10 @@ fn parse_streaming_result(content: String, tool_calls_json: String) -> llm.LlmRe
       // Parse tool calls from JSON: [{"id":"...","name":"...","arguments":"..."}]
       case llm.parse_flat_tool_calls_json(json_str) {
         Ok(calls) -> llm.LlmResponse(content: content, tool_calls: calls)
-        Error(_) -> llm.LlmResponse(content: content, tool_calls: [])
+        Error(_) -> {
+          io.println("[brain] Failed to parse tool calls JSON: " <> string.slice(json_str, 0, 200))
+          llm.LlmResponse(content: content, tool_calls: [])
+        }
       }
     }
   }

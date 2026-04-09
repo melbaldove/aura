@@ -1,7 +1,7 @@
 import aura/memory
 import aura/test_helpers
 import aura/types
-import aura/workspace
+import aura/scaffold
 import aura/xdg
 import gleam/string
 import gleeunit/should
@@ -13,7 +13,6 @@ fn temp_paths(suffix: String) -> xdg.Paths {
     config: base <> "/config",
     data: base <> "/data",
     state: base <> "/state",
-    domains: base <> "/domains",
   )
 }
 
@@ -24,7 +23,7 @@ fn cleanup_paths(paths: xdg.Paths) -> Nil {
 
 pub fn append_event_test() {
   let paths = temp_paths("event-" <> test_helpers.random_suffix())
-  workspace.scaffold(paths) |> should.be_ok
+  scaffold.scaffold(paths) |> should.be_ok
 
   let event =
     types.Event(
@@ -48,8 +47,8 @@ pub fn append_event_test() {
 
 pub fn append_domain_log_test() {
   let paths = temp_paths("domlog-" <> test_helpers.random_suffix())
-  workspace.scaffold(paths) |> should.be_ok
-  workspace.scaffold_domain(paths, "cm2", "test", "cm2") |> should.be_ok
+  scaffold.scaffold(paths) |> should.be_ok
+  scaffold.scaffold_domain(paths, "cm2", "test", "cm2") |> should.be_ok
 
   let domain_dir = paths.data <> "/domains/cm2"
   memory.append_domain_log(domain_dir, "Test decision")
@@ -68,7 +67,7 @@ pub fn append_domain_log_test() {
 
 pub fn read_identity_files_test() {
   let paths = temp_paths("identity-" <> test_helpers.random_suffix())
-  workspace.scaffold(paths) |> should.be_ok
+  scaffold.scaffold(paths) |> should.be_ok
 
   let soul = memory.read_file(paths.config <> "/SOUL.md") |> should.be_ok
   soul

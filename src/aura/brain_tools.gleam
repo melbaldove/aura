@@ -1,7 +1,5 @@
 import aura/acp/manager
-import aura/acp/monitor as acp_monitor
 import aura/acp/provider
-import aura/acp/session_store
 import aura/acp/tmux as acp_tmux
 import aura/acp/types as acp_types
 import aura/db
@@ -50,10 +48,7 @@ pub type ToolContext {
     validation_rules: List(validator.Rule),
     db_subject: process.Subject(db.DbMessage),
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
-    acp_manager: manager.AcpManager,
-    on_acp_event: fn(acp_monitor.AcpEvent) -> Nil,
-    on_register_acp: fn(manager.ActiveSession) -> Nil,
-    monitor_model: String,
+    acp_subject: process.Subject(manager.AcpMessage),
     domain_name: String,
     domain_cwd: String,
     acp_provider: String,
@@ -160,7 +155,19 @@ fn execute_tool_dispatch(
       case require_arg(args, "path") {
         Error(e) -> TextResult(e)
         Ok(path) -> {
-          case tools.list_directory(ctx.data_dir, path) {
+          // Resolve "domains" and "domains/..." against the config domains dir
+          let #(base_dir, resolved_path) = case string.starts_with(path, "domains") {
+            True -> {
+              let domains_root = ctx.paths.config <> "/domains"
+              case string.drop_start(path, 7) {
+                "" -> #(domains_root, ".")
+                "/" <> rest -> #(domains_root, rest)
+                _ -> #(ctx.data_dir, path)
+              }
+            }
+            False -> #(ctx.data_dir, path)
+          }
+          case tools.list_directory(base_dir, resolved_path) {
             Ok(listing) -> TextResult(listing)
             Error(e) -> TextResult("Error: " <> e)
           }
@@ -275,40 +282,34 @@ fn execute_tool_dispatch(
         Error(e) -> TextResult(e)
         Ok(action) -> {
           let target = get_arg(args, "target")
+          let key = get_arg(args, "key")
           let content = get_arg(args, "content")
-          let old_text = get_arg(args, "old_text")
           let path_result = case target {
             "user" -> Ok(xdg.user_path(ctx.paths))
-            "state" -> case ctx.domain_name {
-              "aura" -> Ok(xdg.state_path(ctx.paths, "STATE.md"))
-              domain -> Ok(xdg.domain_data_dir(ctx.paths, domain) <> "/STATE.md")
-            }
-            "memory" -> case ctx.domain_name {
-              "aura" -> Ok(xdg.memory_path(ctx.paths))
-              domain -> Ok(xdg.domain_data_dir(ctx.paths, domain) <> "/MEMORY.md")
-            }
+            "state" -> Ok(xdg.domain_state_path(ctx.paths, ctx.domain_name))
+            "memory" -> Ok(xdg.domain_memory_path(ctx.paths, ctx.domain_name))
             unknown -> Error("Error: unknown target '" <> unknown <> "'. Use 'state', 'memory', or 'user'.")
           }
           case path_result {
             Error(e) -> TextResult(e)
             Ok(path) -> {
               case action {
-                "add" -> {
-                  case structured_memory.add(path, content) {
-                    Ok(_) -> TextResult("Memory saved.")
-                    Error(e) -> TextResult("Error: " <> e)
-                  }
-                }
-                "replace" -> {
-                  case structured_memory.replace(path, old_text, content) {
-                    Ok(_) -> TextResult("Memory updated.")
-                    Error(e) -> TextResult("Error: " <> e)
+                "set" -> {
+                  case key {
+                    "" -> TextResult("Error: 'key' is required for set action.")
+                    _ -> case structured_memory.set(path, key, content) {
+                      Ok(_) -> TextResult("Saved [" <> key <> "] to " <> target <> ".")
+                      Error(e) -> TextResult("Error: " <> e)
+                    }
                   }
                 }
                 "remove" -> {
-                  case structured_memory.remove(path, old_text) {
-                    Ok(_) -> TextResult("Memory entry removed.")
-                    Error(e) -> TextResult("Error: " <> e)
+                  case key {
+                    "" -> TextResult("Error: 'key' is required for remove action.")
+                    _ -> case structured_memory.remove(path, key) {
+                      Ok(_) -> TextResult("Removed [" <> key <> "] from " <> target <> ".")
+                      Error(e) -> TextResult("Error: " <> e)
+                    }
                   }
                 }
                 "read" -> {
@@ -319,9 +320,9 @@ fn execute_tool_dispatch(
                 }
                 _ ->
                   TextResult(
-                    "Error: Unknown action "
+                    "Error: Unknown action '"
                     <> action
-                    <> ". Use add, replace, remove, or read.",
+                    <> "'. Use set, remove, or read.",
                   )
               }
             }
@@ -422,43 +423,34 @@ fn execute_tool_dispatch(
         Ok(prompt) -> case require_arg(args, "repo") {
           Error(e) -> TextResult(e)
           Ok(repo) -> {
-          let task_id = "t" <> int.to_string(time.now_ms())
-          let cwd = ctx.domain_cwd <> "/" <> repo
-          let timeout_ms = case int.parse(get_arg(args, "timeout_minutes")) {
-            Ok(m) -> m * 60_000
-            Error(_) -> 30 * 60_000
-          }
-          let task_spec = acp_types.TaskSpec(
-            id: task_id,
-            domain: ctx.domain_name,
-            prompt: prompt,
-            cwd: cwd,
-            timeout_ms: timeout_ms,
-            acceptance_criteria: [],
-            provider: provider.parse_provider(ctx.acp_provider, ctx.acp_binary),
-            worktree: ctx.acp_worktree,
-          )
-          // Thread is already created by handle_with_llm — ctx.channel_id IS the thread
-          let thread_id = ctx.channel_id
-          let session_name = acp_tmux.build_session_name(ctx.domain_name, task_id)
-
-          // manager.dispatch handles registration + persistence + monitor startup
-          case manager.dispatch(ctx.acp_manager, task_spec, ctx.monitor_model, ctx.on_acp_event, thread_id) {
-            Ok(new_manager) -> {
-              // Notify brain actor so it can find the session for ACP events
-              case manager.get_session(new_manager, session_name) {
-                Ok(session) -> ctx.on_register_acp(session)
-                Error(_) -> Nil
-              }
-              let details_msg =
-                "ACP session started: " <> session_name
-                <> "\nAttach with: `tmux attach -t " <> session_name <> "`"
-                <> "\n\n**Prompt:**\n" <> prompt
-              TextResult("ACP dispatched.\n" <> details_msg)
+            let task_id = "t" <> int.to_string(time.now_ms())
+            let cwd = ctx.domain_cwd <> "/" <> repo
+            let timeout_ms = case int.parse(get_arg(args, "timeout_minutes")) {
+              Ok(m) -> m * 60_000
+              Error(_) -> 30 * 60_000
             }
-            Error(e) -> TextResult("Error: " <> e)
+            let task_spec = acp_types.TaskSpec(
+              id: task_id,
+              domain: ctx.domain_name,
+              prompt: prompt,
+              cwd: cwd,
+              timeout_ms: timeout_ms,
+              acceptance_criteria: [],
+              provider: provider.parse_provider(ctx.acp_provider, ctx.acp_binary),
+              worktree: ctx.acp_worktree,
+            )
+            let thread_id = ctx.channel_id
+            case manager.dispatch(ctx.acp_subject, task_spec, thread_id) {
+              Ok(session_name) -> {
+                let details_msg =
+                  "ACP session started: " <> session_name
+                  <> "\nAttach with: `tmux attach -t " <> session_name <> "`"
+                  <> "\n\n**Prompt:**\n" <> prompt
+                TextResult("ACP dispatched.\n" <> details_msg)
+              }
+              Error(e) -> TextResult("Error: " <> e)
+            }
           }
-        }
         }
       }
     }
@@ -466,12 +458,11 @@ fn execute_tool_dispatch(
       case require_arg(args, "session_name") {
         Error(e) -> TextResult(e)
         Ok(session_name) -> {
-          let sessions = session_store.load(ctx.acp_manager.store_path)
-          let state_str = case list.find(sessions, fn(s) { s.session_name == session_name }) {
+          let state_str = case manager.get_session(ctx.acp_subject, session_name) {
             Ok(session) -> {
               let elapsed_ms = time.now_ms() - session.started_at_ms
               let elapsed_min = elapsed_ms / 60_000
-              " [" <> session.state <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
+              " [" <> manager.session_state_to_string(session.state) <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
             }
             Error(_) -> " [unknown]"
           }
@@ -489,15 +480,15 @@ fn execute_tool_dispatch(
       }
     }
     "acp_list" -> {
-      let sessions = session_store.load(ctx.acp_manager.store_path)
+      let sessions = manager.list_sessions(ctx.acp_subject)
       case sessions {
-        [] -> TextResult("No ACP sessions.")
+        [] -> TextResult("No active ACP sessions.")
         _ -> {
           list.map(sessions, fn(s) {
             let elapsed_ms = time.now_ms() - s.started_at_ms
             let elapsed_min = elapsed_ms / 60_000
             s.session_name
-            <> " [" <> s.state <> "]"
+            <> " [" <> manager.session_state_to_string(s.state) <> "]"
             <> " domain=" <> s.domain
             <> " (started " <> int.to_string(elapsed_min) <> "m ago)"
           })
@@ -512,30 +503,8 @@ fn execute_tool_dispatch(
         Ok(session_name) -> case require_arg(args, "message") {
           Error(e) -> TextResult(e)
           Ok(message) -> {
-            case acp_tmux.send_input(session_name, message) {
-              Ok(_) -> {
-                // Restart monitor so we observe the result
-                let sessions = session_store.load(ctx.acp_manager.store_path)
-                case list.find(sessions, fn(s) { s.session_name == session_name }) {
-                  Ok(stored) -> {
-                    let task_spec = acp_types.TaskSpec(
-                      id: stored.task_id,
-                      domain: stored.domain,
-                      prompt: stored.prompt,
-                      cwd: stored.cwd,
-                      timeout_ms: 30 * 60_000,
-                      acceptance_criteria: [],
-                      provider: provider.ClaudeCode,
-                      worktree: True,
-                    )
-                    let _ = acp_monitor.start_recovery(task_spec, ctx.monitor_model, ctx.on_acp_event)
-                    io.println("[acp] Restarted monitor for " <> session_name)
-                    Nil
-                  }
-                  Error(_) -> Nil
-                }
-                TextResult("Sent to " <> session_name <> " (monitoring restarted)")
-              }
+            case manager.send_input(ctx.acp_subject, session_name, message) {
+              Ok(_) -> TextResult("Sent to " <> session_name)
               Error(e) -> TextResult("Error: " <> e)
             }
           }
@@ -546,12 +515,31 @@ fn execute_tool_dispatch(
       case require_arg(args, "session_name") {
         Error(e) -> TextResult(e)
         Ok(session_name) -> {
-          let _ = acp_tmux.kill_session(session_name)
-          TextResult("Session killed: " <> session_name)
+          case manager.kill(ctx.acp_subject, session_name) {
+            Ok(_) -> TextResult("Session killed: " <> session_name)
+            Error(e) -> TextResult("Error: " <> e)
+          }
         }
       }
     }
-    _ -> TextResult("Error: Unknown tool " <> name)
+    _ -> {
+      // GLM-5.1 sometimes uses the skill name directly as the tool name
+      // instead of "run_skill". If the unknown tool name matches a known skill,
+      // redirect to run_skill execution.
+      let is_skill = list.any(ctx.skill_infos, fn(s) { s.name == name })
+      case is_skill {
+        True -> {
+          io.println("[brain] Redirecting unknown tool '" <> name <> "' to run_skill (matches skill name)")
+          case
+            tools.run_skill(ctx.skill_infos, name, get_arg(args, "args"))
+          {
+            Ok(output) -> TextResult(output)
+            Error(e) -> TextResult("Error: " <> e)
+          }
+        }
+        False -> TextResult("Error: Unknown tool " <> name)
+      }
+    }
   }
 }
 
@@ -670,7 +658,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
   [
     llm.ToolDefinition(
       name: "read_file",
-      description: "Read a file from the Aura workspace",
+      description: "Read a file from the Aura data",
       parameters: [
         llm.ToolParam(
           name: "path",
@@ -682,7 +670,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "write_file",
-      description: "Write content to a workspace file. Logs, domain logs, events, MEMORY.md, STATE.md write immediately. Config and identity files require propose() first.",
+      description: "Write content to a data file. Logs, domain logs, events, MEMORY.md, STATE.md write immediately. Config and identity files require propose() first.",
       parameters: [
         llm.ToolParam(
           name: "path",
@@ -700,7 +688,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "append_file",
-      description: "Append content to a workspace file. Same rules as write_file.",
+      description: "Append content to a data file. Same rules as write_file.",
       parameters: [
         llm.ToolParam(
           name: "path",
@@ -718,7 +706,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "list_directory",
-      description: "List contents of a workspace directory",
+      description: "List contents of a data directory",
       parameters: [
         llm.ToolParam(
           name: "path",
@@ -824,30 +812,30 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "memory",
-      description: "Save information to persistent memory. Use 'state' for current domain status (active tickets, blockers, PRs — changes frequently). Use 'memory' for durable knowledge (decisions, patterns, conventions — changes rarely). Use 'user' for user profile (always global). State and memory are per-domain when in a domain channel.",
+      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use 'state' for current domain status (active tickets, blockers, PRs). Use 'memory' for durable knowledge (decisions, patterns, conventions). Use 'user' for user profile (always global). State and memory are per-domain when in a domain channel.",
       parameters: [
         llm.ToolParam(
           name: "action",
           param_type: "string",
-          description: "One of: add, replace, remove, read",
+          description: "One of: set, remove, read",
           required: True,
         ),
         llm.ToolParam(
           name: "target",
           param_type: "string",
-          description: "'state' (current status: active tickets, blockers, PRs), 'memory' (durable knowledge: decisions, patterns, conventions), or 'user' (user profile — always global)",
+          description: "'state' (current status), 'memory' (durable knowledge), or 'user' (user profile — always global)",
           required: True,
+        ),
+        llm.ToolParam(
+          name: "key",
+          param_type: "string",
+          description: "Entry key (for set/remove). Use descriptive keys like 'pr-215', 'jira-patterns', 'timezone'.",
+          required: False,
         ),
         llm.ToolParam(
           name: "content",
           param_type: "string",
-          description: "Entry text (for add/replace)",
-          required: False,
-        ),
-        llm.ToolParam(
-          name: "old_text",
-          param_type: "string",
-          description: "Substring to match (for replace/remove)",
+          description: "Entry content (for set)",
           required: False,
         ),
       ],

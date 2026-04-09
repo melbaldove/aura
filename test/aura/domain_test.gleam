@@ -20,7 +20,7 @@ pub fn load_context_with_agents_md_test() {
       "# Test Project\nUse Swift. JIRA board is TP.",
     )
 
-  let ctx = domain.load_context(config_dir, data_dir, [])
+  let ctx = domain.load_context(config_dir, data_dir, data_dir, [])
   should.be_true(string.contains(ctx.agents_md, "Use Swift"))
 
   let _ = simplifile.delete(dir)
@@ -33,7 +33,7 @@ pub fn load_context_no_agents_md_test() {
   let _ = simplifile.create_directory_all(config_dir)
   let _ = simplifile.create_directory_all(data_dir)
 
-  let ctx = domain.load_context(config_dir, data_dir, [])
+  let ctx = domain.load_context(config_dir, data_dir, data_dir, [])
   should.equal(ctx.agents_md, "")
 
   let _ = simplifile.delete(dir)

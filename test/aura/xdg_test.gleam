@@ -31,13 +31,19 @@ pub fn data_subpath_test() {
 pub fn domain_config_path_test() {
   let paths = xdg.resolve_with_home("/home/testuser")
   xdg.domain_config_path(paths, "cm2")
-  |> should.equal("/home/testuser/domains/cm2/config.toml")
+  |> should.equal("/home/testuser/.config/aura/domains/cm2/config.toml")
 }
 
 pub fn domain_data_dir_test() {
   let paths = xdg.resolve_with_home("/home/testuser")
   xdg.domain_data_dir(paths, "cm2")
-  |> should.equal("/home/testuser/domains/cm2")
+  |> should.equal("/home/testuser/.local/share/aura/domains/cm2")
+}
+
+pub fn domain_state_dir_test() {
+  let paths = xdg.resolve_with_home("/home/testuser")
+  xdg.domain_state_dir(paths, "cm2")
+  |> should.equal("/home/testuser/.local/state/aura/domains/cm2")
 }
 
 pub fn env_path_test() {
@@ -56,7 +62,7 @@ pub fn memory_path_test() {
   |> should.equal("/home/testuser/.local/state/aura/MEMORY.md")
 }
 
-pub fn workspace_exists_false_test() {
+pub fn is_initialized_false_test() {
   let paths = xdg.resolve_with_home("/nonexistent/path")
-  xdg.workspace_exists(paths) |> should.equal(False)
+  xdg.is_initialized(paths) |> should.equal(False)
 }

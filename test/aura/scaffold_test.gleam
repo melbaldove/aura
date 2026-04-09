@@ -1,5 +1,5 @@
 import aura/test_helpers
-import aura/workspace
+import aura/scaffold
 import aura/xdg
 import gleeunit/should
 import simplifile
@@ -10,7 +10,6 @@ fn temp_paths(suffix: String) -> xdg.Paths {
     config: base <> "/config",
     data: base <> "/data",
     state: base <> "/state",
-    domains: base <> "/domains",
   )
 }
 
@@ -21,10 +20,10 @@ fn cleanup_paths(paths: xdg.Paths) -> Nil {
   Nil
 }
 
-pub fn scaffold_workspace_test() {
+pub fn scaffold_test() {
   let paths = temp_paths("workspace-" <> test_helpers.random_suffix())
 
-  workspace.scaffold(paths)
+  scaffold.scaffold(paths)
   |> should.be_ok
 
   // Config files should exist
@@ -59,7 +58,7 @@ pub fn scaffold_domain_test() {
   let _ = simplifile.create_directory_all(paths.config <> "/domains")
   let _ = simplifile.create_directory_all(paths.data <> "/domains")
 
-  workspace.scaffold_domain(paths, "test-project", "A test domain", "test-project")
+  scaffold.scaffold_domain(paths, "test-project", "A test domain", "test-project")
   |> should.be_ok
 
   simplifile.is_file(paths.config <> "/domains/test-project/config.toml") |> should.be_ok

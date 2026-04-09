@@ -156,10 +156,34 @@ pub fn chat_with_options(
   messages: List(Message),
   temperature: Option(Float),
 ) -> Result(String, String) {
-  let url = config.base_url <> "/chat/completions"
-  io.println("[llm] Calling " <> config.model <> " at " <> url)
   let body =
     build_request_body(config.model, messages, temperature) |> json.to_string
+  use resp <- result.try(post_chat(config, body, ""))
+  parse_response(resp)
+}
+
+/// Make a non-streaming chat completion request with tool definitions.
+/// Returns the full LlmResponse (content + tool_calls).
+pub fn chat_with_tools(
+  config: LlmConfig,
+  messages: List(Message),
+  tools: List(ToolDefinition),
+) -> Result(LlmResponse, String) {
+  let body =
+    build_request_body_with_tools(config.model, messages, tools, None)
+    |> json.to_string
+  use resp <- result.try(post_chat(config, body, " (with tools)"))
+  parse_response_with_tools(resp)
+}
+
+/// Shared HTTP POST for chat completions. Returns the response body on 200.
+fn post_chat(
+  config: LlmConfig,
+  body: String,
+  label: String,
+) -> Result(String, String) {
+  let url = config.base_url <> "/chat/completions"
+  io.println("[llm] Calling " <> config.model <> " at " <> url <> label)
   use parsed_uri <- result.try(
     uri.parse(url)
     |> result.map_error(fn(_) { "Failed to parse URL: " <> url }),
@@ -171,10 +195,7 @@ pub fn chat_with_options(
   let req =
     req
     |> request.set_method(http.Post)
-    |> request.set_header(
-      "authorization",
-      "Bearer " <> config.api_key,
-    )
+    |> request.set_header("authorization", "Bearer " <> config.api_key)
     |> request.set_header("content-type", "application/json")
     |> request.set_body(body)
   use resp <- result.try(
@@ -184,13 +205,11 @@ pub fn chat_with_options(
     |> result.map_error(fn(e) { "HTTP request failed: " <> string.inspect(e) }),
   )
   case resp.status {
-    200 -> parse_response(resp.body)
+    200 -> Ok(resp.body)
     status -> {
       io.println("[llm] Error from " <> config.model <> ": status " <> int.to_string(status))
       Error(
-        "Unexpected status "
-        <> int.to_string(status)
-        <> ": "
+        "LLM API error (status " <> int.to_string(status) <> "): "
         <> string.slice(resp.body, 0, 200),
       )
     }

@@ -36,6 +36,14 @@ pub type NotificationsConfig {
   )
 }
 
+/// Controls automatic post-response memory review.
+pub type MemoryConfig {
+  MemoryConfig(
+    review_interval: Int,
+    notify_on_review: Bool,
+  )
+}
+
 /// Top-level configuration loaded from the global `config.toml`.
 pub type GlobalConfig {
   GlobalConfig(
@@ -43,6 +51,7 @@ pub type GlobalConfig {
     models: ModelsConfig,
     notifications: NotificationsConfig,
     vision: VisionConfig,
+    memory: MemoryConfig,
     acp_global_max_concurrent: Int,
   )
 }
@@ -84,6 +93,7 @@ pub fn default_global() -> GlobalConfig {
       urgent_bypass: False,
     ),
     vision: VisionConfig(prompt: ""),
+    memory: MemoryConfig(review_interval: 10, notify_on_review: True),
     acp_global_max_concurrent: 0,
   )
 }
@@ -188,6 +198,14 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     tom.get_string(doc, ["vision", "prompt"])
     |> result.unwrap("")
 
+  let review_interval =
+    tom.get_int(doc, ["memory", "review_interval"])
+    |> result.unwrap(10)
+
+  let notify_on_review =
+    tom.get_bool(doc, ["memory", "notify_on_review"])
+    |> result.unwrap(True)
+
   Ok(GlobalConfig(
     discord: DiscordConfig(
       token: token,
@@ -208,6 +226,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
       urgent_bypass: urgent_bypass,
     ),
     vision: VisionConfig(prompt: vision_prompt),
+    memory: MemoryConfig(review_interval: review_interval, notify_on_review: notify_on_review),
     acp_global_max_concurrent: global_max_concurrent,
   ))
 }

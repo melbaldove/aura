@@ -1,9 +1,4 @@
 import aura/acp/manager
-import aura/acp/monitor as acp_monitor
-import aura/acp/provider
-import aura/acp/session_store
-import aura/acp/tmux
-import aura/acp/types as acp_types
 import aura/brain
 import aura/config
 import aura/db
@@ -15,7 +10,7 @@ import aura/notification
 import aura/poller
 import aura/skill
 import aura/validator
-import aura/workspace
+import aura/scaffold
 import aura/xdg
 import gleam/erlang/process
 import gleam/int
@@ -81,7 +76,7 @@ pub fn start(
   }
 
   // 5. Load domain configs (no actors — brain handles all channels directly)
-  let #(brain_domains, domain_configs) = case workspace.list_domains(paths) {
+  let #(brain_domains, domain_configs) = case scaffold.list_domains(paths) {
     Ok(names) -> {
       let results = list.filter_map(names, fn(name) {
         let config_path = xdg.domain_config_path(paths, name)
@@ -151,8 +146,19 @@ pub fn start(
     }
   }
 
-  // 6. Start brain
+  // 5b. Start ACP manager actor (with placeholder callback — brain not started yet)
   let acp_store_path = xdg.data_path(paths, "acp-sessions.json")
+  use acp_subject <- result.try(
+    manager.start(
+      global_config.acp_global_max_concurrent,
+      acp_store_path,
+      global_config.models.monitor,
+      fn(_event) { Nil },
+    ),
+  )
+  io.println("[supervisor] ACP manager started")
+
+  // 6. Start brain (with acp_subject)
   use brain_subject <- result.try(
     brain.start(brain.BrainConfig(
       global: global_config,
@@ -163,17 +169,15 @@ pub fn start(
       skill_infos: all_skills,
       validation_rules: validation_rules,
       db_subject: db_subject,
-      acp_store_path: acp_store_path,
+      acp_subject: acp_subject,
     )),
   )
   io.println("[supervisor] Brain started")
 
-  // 6b. Recover persisted ACP sessions
-  recover_acp_sessions(
-    acp_store_path,
-    global_config.models.monitor,
-    brain_subject,
-  )
+  // 6b. Wire ACP events to brain
+  process.send(acp_subject, manager.SetBrainCallback(fn(event) {
+    process.send(brain_subject, brain.AcpEvent(event))
+  }))
 
   // 7. Start scheduler
   let schedules_path = xdg.config_path(paths, "schedules.toml")
@@ -221,105 +225,4 @@ fn migrate_dir(from: String, to: String, label: String) -> Nil {
   }
 }
 
-/// Recover ACP sessions that survived in tmux across a restart.
-/// For each persisted non-terminal session, check if its tmux session
-/// is still alive and re-attach a monitor if so.
-fn recover_acp_sessions(
-  store_path: String,
-  monitor_model: String,
-  brain_subject: process.Subject(brain.BrainMessage),
-) -> Nil {
-  let sessions = session_store.load(store_path)
-  let active_sessions =
-    list.filter(sessions, fn(s) { !session_store.is_terminal(s.state) })
-
-  case active_sessions {
-    [] -> Nil
-    _ -> {
-      io.println(
-        "[supervisor] Recovering "
-        <> int.to_string(list.length(active_sessions))
-        <> " ACP session(s)...",
-      )
-
-      let on_event = fn(event: acp_monitor.AcpEvent) {
-        process.send(brain_subject, brain.AcpEvent(event))
-      }
-
-      list.each(active_sessions, fn(stored) {
-        case tmux.session_exists(stored.session_name) {
-          True -> {
-            io.println(
-              "[supervisor] Recovering alive session: "
-              <> stored.session_name,
-            )
-            // Re-register the session with the brain
-            let session =
-              manager.ActiveSession(
-                session_name: stored.session_name,
-                domain: stored.domain,
-                task_id: stored.task_id,
-                state: manager.Running,
-                started_at_ms: stored.started_at_ms,
-                thread_id: stored.thread_id,
-                prompt: stored.prompt,
-                cwd: stored.cwd,
-              )
-            process.send(
-              brain_subject,
-              brain.RegisterAcpSession(session: session),
-            )
-
-            // Start a new monitor for the surviving tmux session
-            let task_spec =
-              acp_types.TaskSpec(
-                id: stored.task_id,
-                domain: stored.domain,
-                prompt: stored.prompt,
-                cwd: stored.cwd,
-                timeout_ms: 30 * 60_000,
-                acceptance_criteria: [],
-                provider: provider.ClaudeCode,
-                worktree: True,
-              )
-            case acp_monitor.start_recovery(task_spec, monitor_model, on_event) {
-              Ok(_) ->
-                io.println(
-                  "[supervisor] Monitor re-attached: "
-                  <> stored.session_name,
-                )
-              Error(e) ->
-                io.println(
-                  "[supervisor] Failed to re-attach monitor for "
-                  <> stored.session_name
-                  <> ": "
-                  <> e,
-                )
-            }
-          }
-          False -> {
-            io.println(
-              "[supervisor] Session dead, marking failed: "
-              <> stored.session_name,
-            )
-            // Mark as failed in store
-            let updated_sessions =
-              list.map(sessions, fn(s) {
-                case s.session_name == stored.session_name {
-                  True ->
-                    session_store.StoredSession(
-                      ..s,
-                      state: "failed(restart-dead)",
-                    )
-                  False -> s
-                }
-              })
-            let _ = session_store.save(store_path, updated_sessions)
-            Nil
-          }
-        }
-      })
-    }
-  }
-}
 

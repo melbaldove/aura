@@ -26,7 +26,7 @@ fn run_start() {
   let paths = xdg.resolve()
 
   // First-run detection
-  case xdg.workspace_exists(paths) {
+  case xdg.is_initialized(paths) {
     False -> {
       case init.run(paths) {
         Ok(Nil) -> Nil

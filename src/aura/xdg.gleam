@@ -2,7 +2,7 @@ import aura/env
 import simplifile
 
 pub type Paths {
-  Paths(config: String, data: String, state: String, domains: String)
+  Paths(config: String, data: String, state: String)
 }
 
 pub fn resolve() -> Paths {
@@ -26,12 +26,7 @@ pub fn resolve() -> Paths {
     Error(_) -> home <> "/.local/state/aura"
   }
 
-  let domains = case env.get_env("AURA_DOMAINS_DIR") {
-    Ok(v) -> v
-    Error(_) -> home <> "/domains"
-  }
-
-  Paths(config: config, data: data, state: state, domains: domains)
+  Paths(config: config, data: data, state: state)
 }
 
 pub fn resolve_with_home(home: String) -> Paths {
@@ -39,7 +34,6 @@ pub fn resolve_with_home(home: String) -> Paths {
     config: home <> "/.config/aura",
     data: home <> "/.local/share/aura",
     state: home <> "/.local/state/aura",
-    domains: home <> "/domains",
   )
 }
 
@@ -88,18 +82,46 @@ pub fn skills_dir(paths: Paths) -> String {
 }
 
 pub fn domain_config_path(paths: Paths, name: String) -> String {
-  paths.domains <> "/" <> name <> "/config.toml"
+  paths.config <> "/domains/" <> name <> "/config.toml"
 }
 
 pub fn domain_config_dir(paths: Paths, name: String) -> String {
-  paths.domains <> "/" <> name
+  paths.config <> "/domains/" <> name
 }
 
 pub fn domain_data_dir(paths: Paths, name: String) -> String {
-  paths.domains <> "/" <> name
+  paths.data <> "/domains/" <> name
 }
 
-pub fn workspace_exists(paths: Paths) -> Bool {
+pub fn domain_state_dir(paths: Paths, name: String) -> String {
+  paths.state <> "/domains/" <> name
+}
+
+/// Resolve the STATE.md path for a domain (or global if "aura").
+pub fn domain_state_path(paths: Paths, domain_name: String) -> String {
+  case domain_name {
+    "aura" -> state_path(paths, "STATE.md")
+    name -> domain_state_dir(paths, name) <> "/STATE.md"
+  }
+}
+
+/// Resolve the MEMORY.md path for a domain (or global if "aura").
+pub fn domain_memory_path(paths: Paths, domain_name: String) -> String {
+  case domain_name {
+    "aura" -> memory_path(paths)
+    name -> domain_data_dir(paths, name) <> "/MEMORY.md"
+  }
+}
+
+/// Resolve the log directory for a domain (or global data dir if "aura").
+pub fn domain_log_dir(paths: Paths, domain_name: String) -> String {
+  case domain_name {
+    "aura" -> paths.data
+    name -> domain_data_dir(paths, name)
+  }
+}
+
+pub fn is_initialized(paths: Paths) -> Bool {
   let config_toml = paths.config <> "/config.toml"
   simplifile.is_file(config_toml) == Ok(True)
 }

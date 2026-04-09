@@ -1,4 +1,5 @@
 import gleam/dynamic/decode
+import gleam/io
 import gleam/json
 import gleam/list
 import gleam/string
@@ -35,7 +36,10 @@ pub fn load(path: String) -> List(StoredSession) {
         trimmed ->
           case json.parse(trimmed, decode.list(session_decoder())) {
             Ok(sessions) -> sessions
-            Error(_) -> []
+            Error(_) -> {
+              io.println("[session_store] Failed to parse: " <> path)
+              []
+            }
           }
       }
     }

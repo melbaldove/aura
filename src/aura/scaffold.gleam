@@ -11,17 +11,26 @@ Define your assistant's personality, tone, and boundaries here.
 
 const meta_md = "# META.md - What Goes Where
 
-- SOUL.md: Core identity rules, personality, and behavioral boundaries
-- USER.md: User profile, preferences, schedule, cognitive profile
+## Config (~/.config/aura/)
+- SOUL.md: Core identity, personality, behavioral boundaries
+- USER.md: User profile, preferences, timezone
+- config.toml: Global config (models, discord, ACP limits)
 - domains/<name>/config.toml: Per-domain config (cwd, tools, discord channel)
-- domains/<name>/logs/: Raw session logs
-- domains/<name>/summaries/: Compressed session summaries
-- domains/<name>/STATE.md: Current domain state (goals, blockers, next steps)
-- domains/<name>/MEMORY.md: Domain-scoped long-term memory
-- domains/<name>/log.jsonl: Domain activity log
-- acp/sessions/: Active agent coordination protocol sessions
-- acp/completed/: Completed ACP sessions
+- domains/<name>/AGENTS.md: Domain instructions and expertise
+
+## Data (~/.local/share/aura/)
+- aura.db: Conversation history (SQLite)
 - events.jsonl: Global event log
+- skills/: Installed skills
+- acp-sessions.json: ACP session persistence
+- domains/<name>/MEMORY.md: Durable domain knowledge
+- domains/<name>/log.jsonl: Domain activity log
+- domains/<name>/repos/: Project repositories
+- domains/<name>/logs/: Raw session logs
+
+## State (~/.local/state/aura/)
+- MEMORY.md: Global cross-domain memory
+- domains/<name>/STATE.md: Current domain status
 
 Golden rule: If it belongs to one domain, put it in that domain's directory.
 "
@@ -140,16 +149,20 @@ pub fn scaffold_domain(
   let domain_data_dir = paths.data <> "/domains/" <> name
   use _ <- result.try(create_dir(domain_data_dir))
   use _ <- result.try(create_dir(domain_data_dir <> "/logs"))
-  use _ <- result.try(create_dir(domain_data_dir <> "/summaries"))
-  use _ <- result.try(write_if_missing(domain_data_dir <> "/STATE.md", ""))
+  use _ <- result.try(create_dir(domain_data_dir <> "/repos"))
   use _ <- result.try(write_if_missing(domain_data_dir <> "/MEMORY.md", ""))
   use _ <- result.try(write_if_missing(domain_data_dir <> "/log.jsonl", ""))
+
+  // State dir for domain
+  let domain_state_dir = paths.state <> "/domains/" <> name
+  use _ <- result.try(create_dir(domain_state_dir))
+  use _ <- result.try(write_if_missing(domain_state_dir <> "/STATE.md", ""))
 
   Ok(Nil)
 }
 
 pub fn list_domains(paths: xdg.Paths) -> Result(List(String), String) {
-  let domains_dir = paths.domains
+  let domains_dir = paths.config <> "/domains"
   use entries <- result.try(
     simplifile.read_directory(domains_dir)
     |> result.map_error(fn(e) {

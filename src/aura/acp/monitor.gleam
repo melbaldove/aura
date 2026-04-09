@@ -1,4 +1,3 @@
-import aura/acp/provider
 import aura/acp/tmux
 import aura/acp/types
 import aura/llm
@@ -73,47 +72,17 @@ const idle_surface_threshold = 6
 // Public API
 // ---------------------------------------------------------------------------
 
-pub fn start(
+/// Start a monitor actor for an existing tmux session.
+/// Unlike `start`, this does NOT create a tmux session.
+/// `emit_started` controls whether AcpStarted is emitted.
+pub fn start_monitor_only(
   task_spec: types.TaskSpec,
+  session_name: String,
   monitor_model: String,
   on_event: fn(AcpEvent) -> Nil,
+  emit_started: Bool,
 ) -> Result(process.Subject(MonitorMessage), String) {
-  // Trust the directory if using Claude Code provider
-  case task_spec.provider {
-    provider.ClaudeCode -> {
-      let _ = tmux.ensure_trusted(task_spec.cwd)
-      Nil
-    }
-    _ -> Nil
-  }
-  let session_name =
-    tmux.build_session_name(task_spec.domain, task_spec.id)
-  let shell_command = provider.build_command(
-    task_spec.provider,
-    task_spec.prompt,
-    task_spec.cwd,
-    session_name,
-    task_spec.worktree,
-  )
-
-  // Create the tmux session
-  case tmux.create_session(session_name, shell_command) {
-    Error(reason) -> Error("Failed to create tmux session: " <> reason)
-    Ok(Nil) ->
-      start_monitor_actor(task_spec, session_name, monitor_model, on_event, True)
-  }
-}
-
-/// Start a monitor for an existing tmux session (recovery after restart).
-/// Unlike `start`, this does NOT create a tmux session or emit AcpStarted.
-pub fn start_recovery(
-  task_spec: types.TaskSpec,
-  monitor_model: String,
-  on_event: fn(AcpEvent) -> Nil,
-) -> Result(process.Subject(MonitorMessage), String) {
-  let session_name =
-    tmux.build_session_name(task_spec.domain, task_spec.id)
-  start_monitor_actor(task_spec, session_name, monitor_model, on_event, False)
+  start_monitor_actor(task_spec, session_name, monitor_model, on_event, emit_started)
 }
 
 /// Shared actor creation for both start and start_recovery.

@@ -130,7 +130,10 @@ pub fn get_or_load_db(
           let new_buffers = dict.insert(buffers, cache_key, messages)
           #(new_buffers, convo_id, messages)
         }
-        Error(_) -> #(buffers, cache_key, [])
+        Error(e) -> {
+          io.println("[conversation] Failed to load from DB for " <> cache_key <> ": " <> e)
+          #(buffers, cache_key, [])
+        }
       }
     }
     existing -> #(buffers, platform <> ":" <> platform_id, existing)
