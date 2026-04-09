@@ -2,6 +2,7 @@ import aura/discord/rest
 import aura/llm
 import aura/memory
 import aura/models
+import aura/skill
 import aura/structured_memory
 import aura/time
 import aura/xdg
@@ -254,6 +255,102 @@ pub fn flush_before_compression(
             <> e,
           )
           Nil
+        }
+      }
+    }
+  }
+}
+
+/// Build the prompt for background skill review. MECE-aware: instructs the
+/// reviewer to check existing skills before creating, avoid overlap, and
+/// define clear scope boundaries.
+pub fn build_skill_review_prompt(skill_index: String) -> String {
+  "Review the conversation above. Was a non-trivial approach used that required trial and error? Did the user expect a different method? Was a multi-step workflow discovered that could be reused?\n\n"
+  <> "Existing skills:\n"
+  <> skill_index
+  <> "\n\n"
+  <> "Before creating a new skill:\n"
+  <> "1. Check if the approach is already covered by an existing skill — if so, update it with create_skill rather than creating a duplicate.\n"
+  <> "2. Check for overlap with existing skills — merge into the existing skill or split both into non-overlapping scopes with clear boundaries.\n"
+  <> "3. When creating a new skill, define its scope explicitly — what it covers AND what it doesn't (boundary with adjacent skills).\n\n"
+  <> "Use list_skills to see current skills, then create_skill to create or update.\n\n"
+  <> "If nothing worth capturing as a skill, say \"Nothing to save.\" and stop."
+}
+
+/// Tool definitions for the skill review agent.
+pub fn skill_tool_definitions() -> List(llm.ToolDefinition) {
+  [
+    llm.ToolDefinition(
+      name: "list_skills",
+      description: "List all available skills with names and descriptions.",
+      parameters: [],
+    ),
+    llm.ToolDefinition(
+      name: "create_skill",
+      description: "Create or update a skill. Writes SKILL.md to the skills directory.",
+      parameters: [
+        llm.ToolParam(
+          name: "name",
+          param_type: "string",
+          description: "Skill name (lowercase, hyphens, underscores). Max 64 chars.",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "content",
+          param_type: "string",
+          description: "Full SKILL.md content with title, description, and instructions.",
+          required: True,
+        ),
+      ],
+    ),
+  ]
+}
+
+/// Check if a skill review should be spawned based on accumulated tool calls.
+/// Returns the new tool call count (0 if review spawned, count + tool_calls otherwise).
+/// If skill_review_interval is 0, reviews are disabled.
+pub fn maybe_spawn_skill_review(
+  skill_review_interval: Int,
+  domain_name: String,
+  channel_id: String,
+  discord_token: String,
+  conversation_history: List(llm.Message),
+  tool_call_count: Int,
+  new_tool_calls: Int,
+  paths: xdg.Paths,
+  monitor_model: String,
+  skills_dir: String,
+) -> Int {
+  case skill_review_interval {
+    0 -> tool_call_count + new_tool_calls
+    interval -> {
+      let new_count = tool_call_count + new_tool_calls
+      case new_count >= interval {
+        False -> new_count
+        True -> {
+          case models.build_llm_config(monitor_model) {
+            Error(e) -> {
+              io.println(
+                "[review] Failed to build LLM config for skill review: " <> e,
+              )
+              0
+            }
+            Ok(llm_config) -> {
+              process.spawn_unlinked(fn() {
+                run_skill_review(
+                  llm_config,
+                  conversation_history,
+                  domain_name,
+                  channel_id,
+                  discord_token,
+                  skills_dir,
+                  paths,
+                )
+              })
+              io.println("[review] Spawned skill review for " <> domain_name)
+              0
+            }
+          }
         }
       }
     }
@@ -520,6 +617,150 @@ fn execute_memory_action(
       "Error: unknown action '" <> action <> "'. Use set or remove.",
       None,
     )
+  }
+}
+
+fn run_skill_review(
+  llm_config: llm.LlmConfig,
+  conversation_history: List(llm.Message),
+  domain_name: String,
+  channel_id: String,
+  discord_token: String,
+  skills_dir: String,
+  paths: xdg.Paths,
+) -> Nil {
+  let skill_index = case skill.list_with_details(skills_dir) {
+    Ok(listing) -> listing
+    Error(_) -> "No skills installed."
+  }
+
+  let review_prompt = build_skill_review_prompt(skill_index)
+  let messages =
+    list.append(conversation_history, [llm.UserMessage(review_prompt)])
+  let tools = skill_tool_definitions()
+
+  let tool_executor = fn(call: llm.ToolCall) -> #(
+    String,
+    Option(#(String, String)),
+  ) { execute_skill_tool(call, skills_dir) }
+
+  let log_dir = xdg.domain_log_dir(paths, domain_name)
+
+  case review_tool_loop(llm_config, messages, tools, tool_executor, 0, []) {
+    Ok(written) -> {
+      let count = list.length(written)
+      // Log to JSONL
+      let log_entry =
+        json.object([
+          #("type", json.string("skill_review_completed")),
+          #("domain", json.string(domain_name)),
+          #("skills_written", json.int(count)),
+          #(
+            "names",
+            json.array(list.map(written, fn(e) { e.0 }), json.string),
+          ),
+          #("ts", json.int(time.now_ms())),
+        ])
+      case memory.append_domain_log(log_dir, json.to_string(log_entry)) {
+        Ok(_) -> Nil
+        Error(e) -> io.println("[review] Failed to write log: " <> e)
+      }
+
+      case count > 0 {
+        True -> {
+          io.println(
+            "[review] skill review for "
+            <> domain_name
+            <> ": "
+            <> int.to_string(count)
+            <> " skill(s) created/updated",
+          )
+          let entries_text =
+            list.map(written, fn(e) {
+              "**" <> e.0 <> ":** " <> string.slice(e.1, 0, 100)
+            })
+            |> string.join("\n")
+          let msg = "\u{1F4BE} Skill updated:\n" <> entries_text
+          case rest.send_message(discord_token, channel_id, msg, []) {
+            Ok(_) -> Nil
+            Error(e) ->
+              io.println("[review] Discord notification failed: " <> e)
+          }
+        }
+        False ->
+          io.println(
+            "[review] skill review for "
+            <> domain_name
+            <> ": nothing to capture",
+          )
+      }
+      Nil
+    }
+    Error(e) -> {
+      let log_entry =
+        json.object([
+          #("type", json.string("skill_review_failed")),
+          #("domain", json.string(domain_name)),
+          #("error", json.string(e)),
+          #("ts", json.int(time.now_ms())),
+        ])
+      case memory.append_domain_log(log_dir, json.to_string(log_entry)) {
+        Ok(_) -> Nil
+        Error(log_err) ->
+          io.println("[review] Failed to write error log: " <> log_err)
+      }
+      io.println(
+        "[review] skill review failed for " <> domain_name <> ": " <> e,
+      )
+      Nil
+    }
+  }
+}
+
+fn execute_skill_tool(
+  call: llm.ToolCall,
+  skills_dir: String,
+) -> #(String, Option(#(String, String))) {
+  case parse_args(call.arguments) {
+    Error(_) -> #("Error: failed to parse tool arguments", None)
+    Ok(args) -> {
+      case call.name {
+        "list_skills" -> {
+          case skill.list_with_details(skills_dir) {
+            Ok(listing) -> #(listing, None)
+            Error(e) -> #("Error: " <> e, None)
+          }
+        }
+        "create_skill" -> {
+          let name = get_arg(args, "name")
+          let content = get_arg(args, "content")
+          case name {
+            "" -> #("Error: name is required", None)
+            _ -> {
+              // Try create first, fall back to update if exists
+              case skill.create(skills_dir, name, content) {
+                Ok(_) -> #("Skill created: " <> name, Some(#(name, content)))
+                Error(e) -> {
+                  case string.contains(e, "already exists") {
+                    True -> {
+                      case skill.update(skills_dir, name, content) {
+                        Ok(_) -> #(
+                          "Skill updated: " <> name,
+                          Some(#(name, content)),
+                        )
+                        Error(e2) -> #("Error: " <> e2, None)
+                      }
+                    }
+                    False -> #("Error: " <> e, None)
+                  }
+                }
+              }
+            }
+          }
+        }
+        unknown -> #("Error: unknown tool '" <> unknown <> "'", None)
+      }
+    }
   }
 }
 
