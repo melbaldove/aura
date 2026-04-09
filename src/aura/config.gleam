@@ -41,6 +41,7 @@ pub type MemoryConfig {
   MemoryConfig(
     review_interval: Int,
     notify_on_review: Bool,
+    skill_review_interval: Int,
   )
 }
 
@@ -94,7 +95,7 @@ pub fn default_global() -> GlobalConfig {
       urgent_bypass: False,
     ),
     vision: VisionConfig(prompt: ""),
-    memory: MemoryConfig(review_interval: 10, notify_on_review: True),
+    memory: MemoryConfig(review_interval: 10, notify_on_review: True, skill_review_interval: 30),
     acp_global_max_concurrent: 0,
     brain_context: 0,
   )
@@ -154,12 +155,10 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     tom.get_string(doc, ["models", "brain"])
     |> result.map_error(fn(_) { "Missing models.brain" }),
   )
-  // "domain" is the canonical key; fall back to legacy "workstream" for
-  // existing config files that have not been updated yet.
   use models_domain <- result.try(
     tom.get_string(doc, ["models", "domain"])
     |> result.try_recover(fn(_) { tom.get_string(doc, ["models", "workstream"]) })
-    |> result.map_error(fn(_) { "Missing models.domain (or legacy models.workstream)" }),
+    |> result.map_error(fn(_) { "Missing models.domain" }),
   )
   use models_acp <- result.try(
     tom.get_string(doc, ["models", "acp"])
@@ -208,6 +207,10 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     tom.get_bool(doc, ["memory", "notify_on_review"])
     |> result.unwrap(True)
 
+  let skill_review_interval =
+    tom.get_int(doc, ["memory", "skill_review_interval"])
+    |> result.unwrap(30)
+
   let brain_context =
     tom.get_int(doc, ["models", "brain_context"])
     |> result.unwrap(0)
@@ -232,14 +235,18 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
       urgent_bypass: urgent_bypass,
     ),
     vision: VisionConfig(prompt: vision_prompt),
-    memory: MemoryConfig(review_interval: review_interval, notify_on_review: notify_on_review),
+    memory: MemoryConfig(
+      review_interval: review_interval,
+      notify_on_review: notify_on_review,
+      skill_review_interval: skill_review_interval,
+    ),
     acp_global_max_concurrent: global_max_concurrent,
     brain_context: brain_context,
   ))
 }
 
 /// Parse a TOML string into a `DomainConfig`. Optional fields
-/// (`model.domain` or legacy `model.workstream`, `acp.timeout`,
+/// Optional fields (`model.domain`, `acp.timeout`,
 /// `acp.max_concurrent`) fall back to sensible defaults when absent.
 pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
   use doc <- result.try(
@@ -269,7 +276,6 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     |> result.map_error(fn(_) { "Missing discord.channel" }),
   )
 
-  // "domain" is the canonical key; fall back to legacy "workstream".
   let model_domain =
     tom.get_string(doc, ["model", "domain"])
     |> result.try_recover(fn(_) { tom.get_string(doc, ["model", "workstream"]) })
