@@ -722,7 +722,7 @@ fn execute_skill_tool(
   skills_dir: String,
 ) -> #(String, Option(#(String, String))) {
   case parse_args(call.arguments) {
-    Error(_) -> #("Error: failed to parse tool arguments", None)
+    Error(_) -> #("Error: failed to parse tool arguments as JSON: " <> string.slice(call.arguments, 0, 100), None)
     Ok(args) -> {
       case call.name {
         "list_skills" -> {
@@ -736,7 +736,9 @@ fn execute_skill_tool(
           let content = get_arg(args, "content")
           case name {
             "" -> #("Error: name is required", None)
-            _ -> {
+            _ -> case content {
+              "" -> #("Error: content is required", None)
+              _ -> {
               // Try create first, fall back to update if exists
               case skill.create(skills_dir, name, content) {
                 Ok(_) -> #("Skill created: " <> name, Some(#(name, content)))
@@ -755,6 +757,7 @@ fn execute_skill_tool(
                   }
                 }
               }
+            }
             }
           }
         }
