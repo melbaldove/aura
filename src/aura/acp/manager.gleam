@@ -362,7 +362,7 @@ fn handle_monitor_event(
     acp_monitor.AcpFailed(session_name, _, reason) ->
       unregister(state, session_name, Failed(reason))
     // Progress and Alert don't change state
-    acp_monitor.AcpProgress(_, _, _) -> state
+    acp_monitor.AcpProgress(_, _, _, _, _, _) -> state
     acp_monitor.AcpAlert(_, _, _, _) -> state
   }
   // Forward ALL events to the brain for Discord notifications

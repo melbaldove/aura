@@ -53,6 +53,7 @@ pub type GlobalConfig {
     vision: VisionConfig,
     memory: MemoryConfig,
     acp_global_max_concurrent: Int,
+    brain_context: Int,
   )
 }
 
@@ -95,6 +96,7 @@ pub fn default_global() -> GlobalConfig {
     vision: VisionConfig(prompt: ""),
     memory: MemoryConfig(review_interval: 10, notify_on_review: True),
     acp_global_max_concurrent: 0,
+    brain_context: 0,
   )
 }
 
@@ -206,6 +208,10 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     tom.get_bool(doc, ["memory", "notify_on_review"])
     |> result.unwrap(True)
 
+  let brain_context =
+    tom.get_int(doc, ["models", "brain_context"])
+    |> result.unwrap(0)
+
   Ok(GlobalConfig(
     discord: DiscordConfig(
       token: token,
@@ -228,6 +234,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     vision: VisionConfig(prompt: vision_prompt),
     memory: MemoryConfig(review_interval: review_interval, notify_on_review: notify_on_review),
     acp_global_max_concurrent: global_max_concurrent,
+    brain_context: brain_context,
   ))
 }
 

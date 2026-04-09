@@ -2,6 +2,7 @@ import aura/acp/manager
 import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
 import aura/brain_tools
+import aura/compressor
 import aura/config
 import aura/review
 import aura/domain
@@ -29,6 +30,7 @@ import gleam/otp/actor
 import gleam/erlang/process
 import gleam/result
 import gleam/string
+import simplifile
 
 // ---------------------------------------------------------------------------
 // FFI
@@ -74,7 +76,8 @@ pub type BrainMessage {
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
   PostWelcome(channel_id: String)
-  StoreExchange(channel_id: String, messages: List(llm.Message))
+  StoreExchange(channel_id: String, messages: List(llm.Message), domain_name: String, prompt_tokens: Int)
+  CompressionComplete(channel_id: String, new_history: List(llm.Message), new_comp_state: conversation.CompressorState, snapshot_len: Int)
   RegisterThread(thread_id: String, domain_name: String)
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
   UpdateReviewCount(channel_id: String, count: Int)
@@ -120,6 +123,8 @@ pub type BrainState {
     thread_domains: dict.Dict(String, String),
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
     review_counts: dict.Dict(String, Int),
+    compressor_states: dict.Dict(String, conversation.CompressorState),
+    brain_context: Int,
   )
 }
 
@@ -213,6 +218,18 @@ pub fn start(
   // Build LLM config from brain model spec
   use llm_config <- result.try(models.build_llm_config(config.models.brain))
 
+  // Resolve context length for compression thresholds
+  let brain_context = case models.resolve_context_length(
+    config.models.brain,
+    config.brain_context,
+  ) {
+    Ok(len) -> len
+    Error(e) -> {
+      io.println("[brain] Warning: " <> e <> ", defaulting to 128000")
+      128_000
+    }
+  }
+
   let base_state =
     BrainState(
       discord_token: config.discord.token,
@@ -237,6 +254,8 @@ pub fn start(
       domain_configs: brain_config.domain_configs,
       scheduler_subject: None,
       review_counts: dict.new(),
+      compressor_states: dict.new(),
+      brain_context: brain_context,
     )
 
   actor.new_with_initialiser(10_000, fn(self_subject) {
@@ -373,24 +392,82 @@ fn handle_message(
       }
     }
     AcpEvent(event) -> handle_acp_event(state, event)
-    StoreExchange(channel_id, messages) -> {
-      // DB write already done by the spawned process before Discord delivery.
-      // This handler only updates the in-memory cache.
+    StoreExchange(channel_id, messages, dn, prompt_tok) -> {
       let now = time.now_ms()
       let cache_key = "discord:" <> channel_id
       let #(hydrated, _, _) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", channel_id, now)
       let new_convos = conversation.append_messages(hydrated, cache_key, messages)
 
-      // Compress if needed
-      let final_convos = case conversation.needs_compression(new_convos, cache_key, 200_000) {
-        True -> {
-          io.println("[brain] Compressing conversation for " <> cache_key)
-          conversation.compress_buffer(new_convos, cache_key, state.llm_config)
-        }
-        False -> new_convos
+      let comp_state = case dict.get(state.compressor_states, cache_key) {
+        Ok(s) -> s
+        Error(_) -> conversation.new_compressor_state()
+      }
+      // Update compressor state with real token count from API
+      let comp_state = case prompt_tok > 0 {
+        True -> conversation.CompressorState(..comp_state, last_prompt_tokens: prompt_tok)
+        False -> comp_state
       }
 
-      actor.continue(BrainState(..state, conversations: final_convos))
+      let history = conversation.get_history(new_convos, cache_key)
+      case conversation.needs_full_compression(history, state.brain_context, comp_state.last_prompt_tokens) {
+        True -> {
+          io.println("[brain] Full compression triggered for " <> cache_key)
+          let snapshot_len = list.length(history)
+          let llm_config = state.llm_config
+          let db_subject = state.db_subject
+          let brain_subject = state.self_subject
+          let paths = state.paths
+          let brain_context = state.brain_context
+          process.spawn_unlinked(fn() {
+            // Read domain files in the spawned process, not the actor
+            let #(a_md, s_md) = load_domain_context_files(paths, dn)
+            let #(new_history, new_comp_state) = conversation.compress_history(
+              history, llm_config, comp_state, dn, a_md, s_md, db_subject, cache_key, brain_context,
+            )
+            case brain_subject {
+              Some(subj) -> process.send(subj, CompressionComplete(cache_key, new_history, new_comp_state, snapshot_len))
+              None -> Nil
+            }
+          })
+          actor.continue(BrainState(..state, conversations: new_convos))
+        }
+        False -> {
+          let #(final_convos, new_comp_state) = case conversation.needs_tool_pruning(history, state.brain_context, comp_state.last_prompt_tokens) {
+            True -> {
+              let #(pruned, count) = compressor.prune_tool_outputs(history, compressor.min_tail_messages)
+              case count > 0 {
+                True -> io.println("[brain] Tool pruning: cleared " <> int.to_string(count) <> " output(s) for " <> cache_key)
+                False -> Nil
+              }
+              #(dict.insert(new_convos, cache_key, pruned), comp_state)
+            }
+            False -> #(new_convos, comp_state)
+          }
+          let new_comp_states = dict.insert(state.compressor_states, cache_key, new_comp_state)
+          actor.continue(BrainState(..state, conversations: final_convos, compressor_states: new_comp_states))
+        }
+      }
+    }
+    CompressionComplete(channel_id, compressed_history, new_comp_state, snapshot_len) -> {
+      // Merge: compressed history + any messages that arrived during compression
+      let current = conversation.get_history(state.conversations, channel_id)
+      let current_len = list.length(current)
+      let merged = case current_len > snapshot_len {
+        True -> {
+          // New messages arrived — append the delta to compressed history
+          let delta = list.drop(current, snapshot_len)
+          let delta_len = list.length(delta)
+          io.println("[brain] Compression complete for " <> channel_id <> " (merging " <> int.to_string(delta_len) <> " new messages)")
+          list.append(compressed_history, delta)
+        }
+        False -> {
+          io.println("[brain] Compression complete for " <> channel_id)
+          compressed_history
+        }
+      }
+      let new_convos = dict.insert(state.conversations, channel_id, merged)
+      let new_comp_states = dict.insert(state.compressor_states, channel_id, new_comp_state)
+      actor.continue(BrainState(..state, conversations: new_convos, compressor_states: new_comp_states))
     }
     RegisterThread(thread_id:, domain_name:) -> {
       let new_threads = dict.insert(state.thread_domains, thread_id, domain_name)
@@ -424,14 +501,34 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
     }
     acp_monitor.AcpAlert(session_name, domain, status, summary) -> {
       let status_str = acp_types.status_to_string(status)
-      let msg =
-        "**ACP Alert** ["
-        <> status_str
-        <> "] -- "
-        <> summary
-        <> "\n`tmux attach -t "
-        <> session_name
-        <> "`"
+      let title = extract_summary_field(summary, "Title:")
+      let title_display = case title { "" -> session_name _ -> title }
+
+      let elapsed_str = case manager.get_session(state.acp_subject, session_name) {
+        Ok(session) -> {
+          let elapsed_min = { time.now_ms() - session.started_at_ms } / 60_000
+          int.to_string(elapsed_min) <> "m elapsed"
+        }
+        Error(_) -> ""
+      }
+
+      let header = "\u{26A0}\u{FE0F} **" <> title_display <> "** \u{00B7} " <> elapsed_str <> " \u{00B7} " <> status_str
+        <> "\n`" <> session_name <> "`"
+
+      let done = extract_summary_field(summary, "Done:")
+      let current = extract_summary_field(summary, "Current:")
+      let needs = extract_summary_field(summary, "Needs input:")
+      let next = extract_summary_field(summary, "Next:")
+      let parts = [
+        "**Status:** " <> status_str,
+        case done { "" -> "" _ -> "**Done:** " <> done },
+        case current { "" -> "" _ -> "**Current:** " <> current },
+        case needs { "" | "none" | "None" -> "" _ -> "**Needs input:** " <> needs },
+        case next { "" -> "" _ -> "**Next:** " <> next },
+      ]
+      let body = list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
+      let msg = header <> "\n\n" <> body
+
       let channel = resolve_acp_channel(state, session_name, domain)
       process.spawn_unlinked(fn() {
         send_discord_response(state.discord_token, channel, msg)
@@ -466,15 +563,63 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
       })
       actor.continue(state)
     }
-    acp_monitor.AcpProgress(session_name, domain, summary) -> {
+    acp_monitor.AcpProgress(session_name, domain, title, status, summary, is_idle) -> {
       // Write to domain log
       let domain_dir = xdg.domain_data_dir(state.paths, domain)
       case memory.append_domain_log(domain_dir, summary) {
         Ok(_) -> Nil
         Error(e) -> io.println("[brain] Failed to write domain log: " <> e)
       }
-      // Post to Discord
-      let msg = "**ACP Progress** `" <> session_name <> "`\n" <> summary
+
+      // Build elapsed time from session
+      let elapsed_str = case manager.get_session(state.acp_subject, session_name) {
+        Ok(session) -> {
+          let elapsed_min = { time.now_ms() - session.started_at_ms } / 60_000
+          int.to_string(elapsed_min) <> "m elapsed"
+        }
+        Error(_) -> ""
+      }
+
+      // Format Discord message
+      let icon = case is_idle { True -> "\u{23F8}\u{FE0F}" False -> "\u{1F4CB}" }
+      let title_display = case title { "" -> session_name _ -> title }
+      let idle_suffix = case is_idle { True -> " \u{00B7} idle" False -> "" }
+
+      let header = icon <> " **" <> title_display <> "** \u{00B7} " <> elapsed_str <> idle_suffix
+        <> "\n`" <> session_name <> "`"
+
+      // Build body from structured fields
+      let body = case is_idle {
+        True -> {
+          // Idle: show Done + Needs input + nudge
+          let done = extract_summary_field(summary, "Done:")
+          let needs = extract_summary_field(summary, "Needs input:")
+          let parts = [
+            case done { "" -> "" _ -> "**Done:** " <> done },
+            case needs { "" | "none" | "None" -> "" _ -> "**Needs input:** " <> needs },
+          ]
+          let body_text = list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
+          body_text <> "\n\nWant me to check on this? Reply in this thread."
+        }
+        False -> {
+          // Active: show Status + Done + Current + Needs input + Next
+          let status_line = case status { "" -> "" _ -> "**Status:** " <> status }
+          let done = extract_summary_field(summary, "Done:")
+          let current = extract_summary_field(summary, "Current:")
+          let needs = extract_summary_field(summary, "Needs input:")
+          let next = extract_summary_field(summary, "Next:")
+          let parts = [
+            status_line,
+            case done { "" -> "" _ -> "**Done:** " <> done },
+            case current { "" -> "" _ -> "**Current:** " <> current },
+            case needs { "" | "none" | "None" -> "" _ -> "**Needs input:** " <> needs },
+            case next { "" -> "" _ -> "**Next:** " <> next },
+          ]
+          list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
+        }
+      }
+
+      let msg = header <> "\n\n" <> body
       let channel = resolve_acp_channel(state, session_name, domain)
       process.spawn_unlinked(fn() {
         send_discord_response(state.discord_token, channel, msg)
@@ -503,6 +648,20 @@ fn resolve_acp_channel(state: BrainState, session_name: String, domain: String) 
 
 fn resolve_finding_channel(state: BrainState, finding: notification.Finding) -> String {
   resolve_domain_channel(state, finding.domain)
+}
+
+/// Extract a field from a structured summary.
+/// Given "Done: fixed the bug\nCurrent: running tests", extract_summary_field(text, "Done:") returns "fixed the bug".
+fn extract_summary_field(text: String, field: String) -> String {
+  case string.split(text, "\n") {
+    [] -> ""
+    lines -> {
+      case list.find(lines, fn(line) { string.starts_with(string.trim(line), field) }) {
+        Ok(line) -> string.trim(string.drop_start(string.trim(line), string.length(field)))
+        Error(_) -> ""
+      }
+    }
+  }
 }
 
 /// Spawn a process that sends typing indicators every 8 seconds.
@@ -702,7 +861,7 @@ fn handle_with_llm(
   let channel_id = response_channel
 
   case result {
-    Ok(#(response_text, traces, msg_id, new_messages)) -> {
+    Ok(#(response_text, traces, msg_id, new_messages, prompt_tokens)) -> {
       // Build the full turn: user message + tool chain + final response
       let user_msg = llm.UserMessage(enriched_content)
       let all_turn_messages = [user_msg, ..new_messages]
@@ -724,7 +883,10 @@ fn handle_with_llm(
 
       // Update in-memory cache (async via actor mailbox — not blocking)
       case brain_subject_opt {
-        Some(subj) -> process.send(subj, StoreExchange(channel_id, all_turn_messages))
+        Some(subj) -> {
+          let dn = option.unwrap(domain_name, "aura")
+          process.send(subj, StoreExchange(channel_id, all_turn_messages, dn, prompt_tokens))
+        }
         None -> Nil
       }
 
@@ -772,17 +934,32 @@ fn tool_loop_with_retry(
   channel_id: String,
   messages: List(llm.Message),
   retries_left: Int,
-) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message)), String) {
+) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message), Int), String) {
   case tool_loop_progressive(state, tool_ctx, channel_id, messages, [], "", 0, []) {
     Ok(result) -> Ok(result)
     Error(err) -> {
-      case retries_left > 0 && string.contains(err, "timeout") {
+      // Auto-probe: if context overflow, halve brain_context and retry
+      let is_context_overflow =
+        string.contains(err, "context_length") ||
+        string.contains(err, "maximum context") ||
+        string.contains(err, "token limit") ||
+        string.contains(err, "too many tokens") ||
+        string.contains(err, "context window")
+      case is_context_overflow && retries_left > 0 {
         True -> {
-          io.println("[brain] Stream timeout, retrying (" <> int.to_string(retries_left) <> " left)...")
-          process.sleep(2000)
-          tool_loop_with_retry(state, tool_ctx, channel_id, messages, retries_left - 1)
+          let new_context = state.brain_context / 2
+          io.println("[brain] Context overflow detected, halving brain_context to " <> int.to_string(new_context))
+          let new_state = BrainState(..state, brain_context: new_context)
+          tool_loop_with_retry(new_state, tool_ctx, channel_id, messages, retries_left - 1)
         }
-        False -> Error(err)
+        False -> case retries_left > 0 && string.contains(err, "timeout") {
+          True -> {
+            io.println("[brain] Stream timeout, retrying (" <> int.to_string(retries_left) <> " left)...")
+            process.sleep(2000)
+            tool_loop_with_retry(state, tool_ctx, channel_id, messages, retries_left - 1)
+          }
+          False -> Error(err)
+        }
       }
     }
   }
@@ -797,10 +974,24 @@ fn tool_loop_progressive(
   message_id: String,
   iteration: Int,
   new_messages: List(llm.Message),
-) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message)), String) {
+) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message), Int), String) {
   case iteration >= max_tool_iterations {
     True -> Error("Tool loop exceeded maximum iterations")
     False -> {
+      // Pre-flight: if messages exceed context, prune tool outputs inline
+      let messages = case compressor.estimate_messages_tokens(messages) > state.brain_context {
+        True -> {
+          io.println("[brain] Pre-flight: messages exceed context, pruning tool outputs")
+          let #(pruned, count) = compressor.prune_tool_outputs(messages, compressor.min_tail_messages)
+          case count > 0 {
+            True -> io.println("[brain] Pre-flight: pruned " <> int.to_string(count) <> " tool output(s)")
+            False -> Nil
+          }
+          pruned
+        }
+        False -> messages
+      }
+
       // Spawn streaming LLM call with tools
       let self_pid = process.self()
       let _ = process.spawn_unlinked(fn() {
@@ -809,13 +1000,13 @@ fn tool_loop_progressive(
 
       // Collect the streaming response (content + tool calls)
       case collect_stream_response(state.discord_token, channel_id, message_id, traces, stream_idle_timeout_ms) {
-        Ok(#(content, tool_calls_json, msg_id)) -> {
+        Ok(#(content, tool_calls_json, msg_id, prompt_tokens)) -> {
           let response = parse_streaming_result(content, tool_calls_json)
           case response.tool_calls {
             [] -> {
               // No tool calls — return the text response with accumulated traces
               let final_new_messages = list.reverse([llm.AssistantMessage(response.content), ..list.reverse(new_messages)])
-              Ok(#(response.content, traces, msg_id, final_new_messages))
+              Ok(#(response.content, traces, msg_id, final_new_messages, prompt_tokens))
             }
             calls -> {
               // Expand concatenated JSON tool calls from GLM-5.1
@@ -871,14 +1062,14 @@ fn tool_loop_progressive(
 }
 
 /// Collect a streaming LLM response, progressively editing Discord.
-/// Returns (content, tool_calls_json, message_id).
+/// Returns (content, tool_calls_json, message_id, prompt_tokens).
 fn collect_stream_response(
   token: String,
   channel_id: String,
   message_id: String,
   traces: List(conversation.ToolTrace),
   timeout_ms: Int,
-) -> Result(#(String, String, String), String) {
+) -> Result(#(String, String, String, Int), String) {
   collect_stream_loop(token, channel_id, message_id, traces, "", 0, timeout_ms)
 }
 
@@ -890,7 +1081,7 @@ fn collect_stream_loop(
   accumulated: String,
   last_edit_len: Int,
   remaining_ms: Int,
-) -> Result(#(String, String, String), String) {
+) -> Result(#(String, String, String, Int), String) {
   case remaining_ms <= 0 {
     True -> Error("Stream timeout")
     False -> {
@@ -913,7 +1104,7 @@ fn collect_stream_loop(
           // GLM-5.1 thinking — stream is alive, reset idle timeout
           collect_stream_loop(token, channel_id, msg_id, traces, accumulated, last_edit_len, stream_idle_timeout_ms)
         }
-        StreamComplete(content, tool_calls_json) -> {
+        StreamComplete(content, tool_calls_json, prompt_tokens) -> {
           // Stream finished — do final Discord edit if we have content
           let final_msg_id = case string.length(content) > 0 && string.length(content) != last_edit_len {
             True -> {
@@ -922,11 +1113,11 @@ fn collect_stream_loop(
             }
             False -> msg_id
           }
-          Ok(#(content, tool_calls_json, final_msg_id))
+          Ok(#(content, tool_calls_json, final_msg_id, prompt_tokens))
         }
         StreamDone -> {
           // Legacy done signal — treat as complete with no tool calls
-          Ok(#(accumulated, "[]", msg_id))
+          Ok(#(accumulated, "[]", msg_id, 0))
         }
         StreamError(err) -> Error("Stream error: " <> err)
         StreamTimeout -> {
@@ -954,6 +1145,35 @@ fn parse_streaming_result(content: String, tool_calls_json: String) -> llm.LlmRe
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Domain context helpers
+// ---------------------------------------------------------------------------
+
+fn load_domain_context_files(paths: xdg.Paths, domain_name: String) -> #(String, String) {
+  case domain_name {
+    "aura" -> #("", "")
+    name -> {
+      let agents_path = xdg.domain_config_dir(paths, name) <> "/AGENTS.md"
+      let state_path = xdg.domain_state_path(paths, name)
+      let a_md = case simplifile.read(agents_path) {
+        Ok(c) -> c
+        Error(e) -> {
+          io.println("[brain] Failed to read AGENTS.md for " <> name <> ": " <> string.inspect(e))
+          ""
+        }
+      }
+      let s_md = case simplifile.read(state_path) {
+        Ok(c) -> c
+        Error(e) -> {
+          io.println("[brain] Failed to read STATE.md for " <> name <> ": " <> string.inspect(e))
+          ""
+        }
+      }
+      #(a_md, s_md)
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Vision preprocessing
@@ -1033,25 +1253,23 @@ fn describe_image(
 type StreamEvent {
   StreamDelta(String)
   StreamReasoning
-  StreamComplete(String, String)
+  StreamComplete(content: String, tool_calls_json: String, prompt_tokens: Int)
   StreamDone
   StreamError(String)
   StreamTimeout
 }
 
 /// Receive a stream event from the process mailbox.
-/// The Erlang FFI returns {<<"delta">>, Bin} | {<<"done">>, <<>>} |
-/// {<<"error">>, Bin} | {<<"timeout">>, <<>>}.
 @external(erlang, "aura_stream_ffi", "receive_stream_message")
-fn receive_stream_message_ffi(timeout_ms: Int) -> #(String, String, String)
+fn receive_stream_message_ffi(timeout_ms: Int) -> #(String, String, String, Int)
 
 fn receive_stream_message(timeout_ms: Int) -> StreamEvent {
   case receive_stream_message_ffi(timeout_ms) {
-    #("delta", text, _) -> StreamDelta(text)
-    #("reasoning", _, _) -> StreamReasoning
-    #("complete", content, tc_json) -> StreamComplete(content, tc_json)
-    #("done", _, _) -> StreamDone
-    #("error", err, _) -> StreamError(err)
+    #("delta", text, _, _) -> StreamDelta(text)
+    #("reasoning", _, _, _) -> StreamReasoning
+    #("complete", content, tc_json, prompt_tokens) -> StreamComplete(content, tc_json, prompt_tokens)
+    #("done", _, _, _) -> StreamDone
+    #("error", err, _, _) -> StreamError(err)
     _ -> StreamTimeout
   }
 }

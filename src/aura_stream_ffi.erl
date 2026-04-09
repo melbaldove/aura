@@ -32,7 +32,7 @@ chat_stream(Url, ApiKey, _Model, BodyJson, CallbackPid) ->
             %% State: {AccContent, ToolCalls}
             %% ToolCalls = #{Index => {Id, Name, ArgsAcc}}
             try
-                stream_loop(RequestId, CallbackPid, <<>>, <<>>, #{})
+                stream_loop(RequestId, CallbackPid, <<>>, <<>>, #{}, 0)
             catch
                 _:Reason ->
                     httpc:cancel_request(RequestId),
@@ -45,28 +45,29 @@ chat_stream(Url, ApiKey, _Model, BodyJson, CallbackPid) ->
             nil
     end.
 
-stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls) ->
+%% State now includes PromptTokens accumulator for usage tracking
+stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls, PromptTokens) ->
     receive
         {http, {RequestId, stream_start, _Headers}} ->
-            stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls);
+            stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls, PromptTokens);
 
         {http, {RequestId, stream, BinBodyPart}} ->
             NewBuffer = <<Buffer/binary, BinBodyPart/binary>>,
             {Remainder, Events} = parse_sse_lines(NewBuffer),
-            {NewContent, NewToolCalls, IsDone} =
-                process_events(Events, AccContent, ToolCalls, CallbackPid),
+            {NewContent, NewToolCalls, NewPromptTokens, IsDone} =
+                process_events(Events, AccContent, ToolCalls, PromptTokens, CallbackPid),
             case IsDone of
                 true ->
                     TcJson = tool_calls_to_json(NewToolCalls),
-                    CallbackPid ! {stream_complete, NewContent, TcJson};
+                    CallbackPid ! {stream_complete, NewContent, TcJson, NewPromptTokens};
                 false ->
                     stream_loop(RequestId, CallbackPid, Remainder,
-                                NewContent, NewToolCalls)
+                                NewContent, NewToolCalls, NewPromptTokens)
             end;
 
         {http, {RequestId, stream_end, _Headers}} ->
             TcJson = tool_calls_to_json(ToolCalls),
-            CallbackPid ! {stream_complete, AccContent, TcJson};
+            CallbackPid ! {stream_complete, AccContent, TcJson, PromptTokens};
 
         {http, {RequestId, {error, Reason}}} ->
             Msg = iolist_to_binary(
@@ -77,26 +78,28 @@ stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls) ->
         CallbackPid ! {stream_error, <<"Stream timeout">>}
     end.
 
-%% Process parsed SSE events, updating content and tool call accumulators
-process_events([], Content, ToolCalls, _Pid) ->
-    {Content, ToolCalls, false};
-process_events([done | _], Content, ToolCalls, _Pid) ->
-    {Content, ToolCalls, true};
-process_events([Event | Rest], Content, ToolCalls, Pid) ->
+%% Process parsed SSE events, updating content, tool call, and usage accumulators
+process_events([], Content, ToolCalls, PromptTokens, _Pid) ->
+    {Content, ToolCalls, PromptTokens, false};
+process_events([done | _], Content, ToolCalls, PromptTokens, _Pid) ->
+    {Content, ToolCalls, PromptTokens, true};
+process_events([Event | Rest], Content, ToolCalls, PromptTokens, Pid) ->
     case Event of
         {delta, <<>>} ->
-            process_events(Rest, Content, ToolCalls, Pid);
+            process_events(Rest, Content, ToolCalls, PromptTokens, Pid);
         {delta, Text} ->
             Pid ! {stream_delta, Text},
-            process_events(Rest, <<Content/binary, Text/binary>>, ToolCalls, Pid);
+            process_events(Rest, <<Content/binary, Text/binary>>, ToolCalls, PromptTokens, Pid);
         {reasoning, _} ->
             Pid ! stream_reasoning,
-            process_events(Rest, Content, ToolCalls, Pid);
+            process_events(Rest, Content, ToolCalls, PromptTokens, Pid);
         {tool_call_delta, Index, Id, Name, Args} ->
             NewTC = update_tool_call(ToolCalls, Index, Id, Name, Args),
-            process_events(Rest, Content, NewTC, Pid);
+            process_events(Rest, Content, NewTC, PromptTokens, Pid);
+        {usage, NewPromptTokens} ->
+            process_events(Rest, Content, ToolCalls, NewPromptTokens, Pid);
         _ ->
-            process_events(Rest, Content, ToolCalls, Pid)
+            process_events(Rest, Content, ToolCalls, PromptTokens, Pid)
     end.
 
 %% Update tool call accumulator. First delta for an index has id+name,
@@ -185,8 +188,17 @@ parse_delta(Json) ->
                 error ->
                     %% Check tool_calls
                     case binary:match(Json, <<"\"tool_calls\"">>) of
-                        nomatch -> {delta, <<>>};
-                        _ -> parse_tool_call_delta(Json)
+                        {_, _} -> parse_tool_call_delta(Json);
+                        nomatch ->
+                            %% Check usage (final chunk only — no content, no tools)
+                            case binary:match(Json, <<"\"usage\"">>) of
+                                {_, _} ->
+                                    case extract_json_int_field(Json, <<"\"prompt_tokens\"">>) of
+                                        {ok, PromptTokens} -> {usage, PromptTokens};
+                                        error -> {delta, <<>>}
+                                    end;
+                                nomatch -> {delta, <<>>}
+                            end
                     end
             end
     end.
@@ -275,11 +287,11 @@ extract_json_string(<<>>, _Acc) ->
 
 receive_stream_message(TimeoutMs) ->
     receive
-        {stream_delta, Delta}               -> {<<"delta">>, Delta, <<>>};
-        stream_reasoning                    -> {<<"reasoning">>, <<>>, <<>>};
-        {stream_complete, Content, TcJson}  -> {<<"complete">>, Content, TcJson};
-        {stream_error, Err}                 -> {<<"error">>, Err, <<>>};
-        stream_done                         -> {<<"done">>, <<>>, <<>>}
+        {stream_delta, Delta}                          -> {<<"delta">>, Delta, <<>>, 0};
+        stream_reasoning                               -> {<<"reasoning">>, <<>>, <<>>, 0};
+        {stream_complete, Content, TcJson, PromptTok}  -> {<<"complete">>, Content, TcJson, PromptTok};
+        {stream_error, Err}                            -> {<<"error">>, Err, <<>>, 0};
+        stream_done                                    -> {<<"done">>, <<>>, <<>>, 0}
     after TimeoutMs ->
-        {<<"timeout">>, <<>>, <<>>}
+        {<<"timeout">>, <<>>, <<>>, 0}
     end.

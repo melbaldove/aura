@@ -38,11 +38,15 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [007](007-hermes-aligned-learning-loop.md) | Hermes-aligned learning loop | Accepted |
 | [008](008-chars-over-4-token-estimation.md) | chars/4 token estimation | Accepted |
 | [009](009-no-honcho-integration.md) | No Honcho integration | Accepted |
-| [010](010-context-compression.md) | LLM-based context compression | Accepted |
+| [010](010-context-compression.md) | LLM-based context compression | Superseded by ADR-014 |
+| [011](011-acp-manager-actor.md) | ACP Manager as OTP actor | Accepted |
+| [012](012-keyed-memory-entries.md) | Keyed memory entries (set/remove by key) | Accepted |
+| [013](013-active-memory-review.md) | Active memory review (Hermes-inspired) | Accepted |
+| [014](014-tiered-runtime-compression.md) | Tiered runtime compression | Accepted |
 
 ## Adding a new ADR
 
 1. Copy the template above
-2. Number sequentially (next is 011)
+2. Number sequentially (next is 015)
 3. Add to the index in this README
 4. Commit with the code change it relates to

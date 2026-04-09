@@ -88,6 +88,10 @@ pub type DbMessage {
     conversation_id: String,
     domain: String,
   )
+  GetCompactionSummary(
+    reply_to: process.Subject(Result(String, String)),
+    conversation_id: String,
+  )
   HasMessages(
     reply_to: process.Subject(Result(Bool, String)),
   )
@@ -225,6 +229,19 @@ pub fn update_compaction_summary(
   })
 }
 
+/// Get the compaction summary for a conversation.
+pub fn get_compaction_summary(
+  subject: process.Subject(DbMessage),
+  conversation_id: String,
+) -> Result(String, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetCompactionSummary(
+      reply_to: reply_to,
+      conversation_id: conversation_id,
+    )
+  })
+}
+
 /// Update the `last_active_at` timestamp (ms since epoch) for a conversation.
 pub fn update_last_active(
   subject: process.Subject(DbMessage),
@@ -333,6 +350,12 @@ fn handle_message(
 
     UpdateCompactionSummary(reply_to:, conversation_id:, summary:) -> {
       let result = do_update_compaction_summary(state.conn, conversation_id, summary)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetCompactionSummary(reply_to:, conversation_id:) -> {
+      let result = do_get_compaction_summary(state.conn, conversation_id)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -531,6 +554,28 @@ fn do_update_compaction_summary(
   |> result.map_error(fn(err) {
     "Failed to update compaction summary: " <> string.inspect(err)
   })
+}
+
+fn do_get_compaction_summary(
+  conn: sqlight.Connection,
+  conversation_id: String,
+) -> Result(String, String) {
+  let result =
+    sqlight.query(
+      "SELECT COALESCE(compaction_summary, '') FROM conversations WHERE id = ?",
+      on: conn,
+      with: [sqlight.text(conversation_id)],
+      expecting: decode.at([0], decode.string),
+    )
+  case result {
+    Ok([summary]) -> Ok(summary)
+    Ok([]) -> Ok("")
+    Ok(_) -> Ok("")
+    Error(e) ->
+      Error(
+        "Failed to get compaction summary: " <> string.inspect(e),
+      )
+  }
 }
 
 fn do_update_last_active(

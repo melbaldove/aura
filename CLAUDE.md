@@ -8,7 +8,7 @@ Aura (Autonomous Unified Runtime Agent) is a local-first executive assistant fra
 
 ```bash
 gleam build          # Compile
-gleam test           # Run all tests (184 tests)
+gleam test           # Run all tests (292 tests)
 gleam run -- start   # Start the agent
 gleam run -- init    # First-run setup wizard
 ```
@@ -34,10 +34,10 @@ erlc -o . ../src/esqlite3.erl ../src/esqlite3_nif.erl
 supervisor (OneForOne)
 ├── db          SQLite actor — serializes all DB reads/writes
 ├── poller      Discord gateway WebSocket
-├── brain       Routes messages, LLM tool loop, progressive streaming
+├── acp_manager ACP session lifecycle actor — dispatch, monitor, persist
+├── brain       Routes messages, LLM tool loop, progressive streaming, review
 ├── (domains loaded as context, not actors)
-├── scheduler   Config-driven cron + interval schedules
-└── acp         One actor per Claude Code session
+└── scheduler   Config-driven cron + interval schedules
 ```
 
 ### Message flow
@@ -62,7 +62,7 @@ Two-model pipeline: vision model as preprocessor, orchestrator model for tool lo
 ### Key abstractions
 
 - **Domain** — a knowledge partition representing an area of the user's life (job, project, responsibility). Has its own config, AGENTS.md, anchors, logs, skills, conversation history. One Discord channel per domain.
-- **Conversation** — per-channel message history. In-memory buffer (hot cache) backed by SQLite. Auto-compresses when token count exceeds 50% of context window.
+- **Conversation** — per-channel message history. In-memory buffer (hot cache) backed by SQLite. Tiered auto-compression: tool pruning at 50%, LLM summarization at 70% of context window.
 - **Skill** — a directory with a SKILL.md and optional CLI entrypoint. Instruction-only skills teach the LLM; external skills are invoked as subprocesses.
 - **Tool** — primitive operation the LLM can call. 16 built-in tools (filesystem, Discord, skills, memory, search, web, schedules).
 - **Schedule** — a config-driven periodic task defined in `schedules.toml`. Supports fixed intervals ("15m") and cron expressions ("0 9 * * *"). Each schedule invokes a skill, classifies urgency via LLM, and emits findings.
@@ -78,8 +78,10 @@ src/aura/
   db.gleam              SQLite actor (serialized writes, FTS5 search)
   db_schema.gleam       DDL, indexes, FTS5 triggers, schema versioning
   db_migration.gleam    One-time JSONL → SQLite migration
-  compressor.gleam      LLM-based context compression (Hermes-inspired)
-  structured_memory.gleam  MEMORY.md/USER.md with add/replace/remove + security scan
+  compressor.gleam      Tiered context compression — tool pruning, domain-aware LLM summarization, iterative updates
+  review.gleam          Post-response memory review — auto-persists state + knowledge every N turns
+  scaffold.gleam        First-run scaffolding (directory structure, template files, domain creation)
+  structured_memory.gleam  Keyed entry memory (§ key/content) with set/remove + security scan
   llm.gleam             OpenAI-compatible chat + streaming + tool calling
   tools.gleam           Built-in tool implementations
   web.gleam             Web search (Brave) and URL fetching with HTML stripping
@@ -97,7 +99,7 @@ src/aura/
     rest.gleam          Discord REST API (send, edit, threads, typing)
     types.gleam         Discord event/embed types
   acp/
-    manager.gleam       ACP session orchestration + persistence
+    manager.gleam       ACP session lifecycle actor — dispatch, monitor, state, persistence
     monitor.gleam       tmux session polling + LLM status classification
     provider.gleam      Provider-agnostic command builder (Claude Code, generic CLI)
     session_store.gleam JSON file store for session persistence across restarts
@@ -135,7 +137,7 @@ src/
 - Use `gleeunit` + `should` assertions
 - Test pure functions directly. Test actors via their public convenience functions.
 - Temp files in `/tmp/aura-*-test`, clean up after
-- 190 tests currently. Don't regress.
+- 292 tests currently. Don't regress.
 
 ### Database
 
@@ -177,10 +179,22 @@ src/
 
 ### Memory
 
-- `MEMORY.md` — agent notes, max 2200 chars, `§` delimited entries
-- `USER.md` — user profile, max 1375 chars, `§` delimited entries
+- Keyed entry format: `§ key\ncontent` blocks, upserted by key (set/remove)
+- Three targets: `state` (per-domain STATE.md), `memory` (per-domain MEMORY.md), `user` (global USER.md)
+- XDG paths: STATE.md in `~/.local/state/aura/`, MEMORY.md in `~/.local/share/aura/`, USER.md in `~/.config/aura/`
 - Security scan blocks prompt injection and exfiltration patterns
-- Both loaded into system prompt on every turn
+- Active memory review: every 10 turns, spawns background processes to auto-persist state + knowledge
+- Both global memory and user profile loaded into system prompt on every turn
+
+### Compression
+
+- Tiered: tool output pruning at 50% of context window (free), full LLM summarization at 70%
+- Domain-aware structured summaries using AGENTS.md + STATE.md context
+- Iterative updates: subsequent compressions update the previous summary, not re-summarize
+- Token-budget tail protection (~20% of context window), tool pair sanitization
+- Summaries persisted in DB `compaction_summary` column, restored on session reload
+- Pre-flight check prunes tool outputs before sending oversized requests
+- Auto-probe: halves context length on overflow error and retries
 
 ## Engineering practice
 
@@ -215,13 +229,18 @@ When making any non-trivial change, check whether these need updating:
 
 ### Add a new domain
 
-1. Create the domain directory: `~/domains/<name>/` with `repos/`, `plans/`, `notes/` subdirs
-2. Create `config.toml` with name, description, cwd (domain root), tools, discord channel
-3. Optionally add `[acp]` section for provider config (defaults: `provider = "claude-code"`, `worktree = true`)
-4. Create `AGENTS.md` with repo index, domain expertise, jira instance if applicable
+Domains follow XDG Base Directory layout:
+- Config: `~/.config/aura/domains/<name>/` — AGENTS.md, config.toml
+- Data: `~/.local/share/aura/domains/<name>/` — MEMORY.md, log.jsonl, repos/, logs/
+- State: `~/.local/state/aura/domains/<name>/` — STATE.md
+
+Steps:
+1. Create config: `~/.config/aura/domains/<name>/config.toml` with name, description, cwd, tools, discord channel
+2. Optionally add `[acp]` section for provider config (defaults: `provider = "claude-code"`, `worktree = true`)
+3. Create `~/.config/aura/domains/<name>/AGENTS.md` with repo index, domain expertise, jira instance if applicable
+4. Create data/state dirs (or use `scaffold.scaffold_domain`)
 5. Create the Discord channel (if it doesn't exist)
-6. Trust repo directories for Claude Code: Aura auto-trusts on first ACP dispatch via tmux Enter keystroke
-7. Restart Aura to pick up the new domain
+6. Restart Aura to pick up the new domain
 
 ### Add a new Discord REST endpoint
 
@@ -247,11 +266,12 @@ When making any non-trivial change, check whether these need updating:
 
 - `AURA_DISCORD_TOKEN` — Discord bot token
 - `ZAI_API_KEY` — z.ai/GLM API key
-- `ANTHROPIC_API_KEY` — Anthropic API key (for ACP)
+- `ANTHROPIC_API_KEY` — Anthropic API key (for ACP, optional if using CLAUDE_CODE_OAUTH_TOKEN)
+- `CLAUDE_CODE_OAUTH_TOKEN` — Claude Code auth token for headless ACP sessions (from `claude setup-token`)
 - `BRAVE_API_KEY` — Brave Search API key (optional, for web_search tool)
 - `HOME` — used for XDG path resolution
 
-Stored in `~/.config/aura/.env`, sourced by the launchd service plist.
+Configured in the launchd plist (`~/Library/LaunchAgents/com.aura.agent.plist`) on macOS.
 
 ## Architecture Decision Records
 
@@ -265,7 +285,7 @@ When making a change that involves choosing between approaches (e.g., "should we
 
 ADRs are immutable once accepted. If a decision is reversed, write a new ADR that supersedes the old one.
 
-Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression.
+Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression (superseded), ACP manager actor, keyed memory entries, active memory review, tiered runtime compression.
 
 ## Known limitations
 

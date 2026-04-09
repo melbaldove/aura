@@ -16,7 +16,7 @@ Aura's edge: OTP fault tolerance, domain model (knowledge partitions), ACP dispa
 
 ### P0: Active Memory (closes biggest gap with Hermes)
 
-**Status:** Brainstorming
+**Status:** Shipped (April 9, 2026)
 
 **Problem:** Aura's memory is passive — only saves when the LLM decides to call the memory tool. Hermes has a closed learning loop with a periodic nudge that spawns a background review agent every 10 turns.
 
@@ -71,7 +71,7 @@ Aura's edge: OTP fault tolerance, domain model (knowledge partitions), ACP dispa
 
 ### P3: Better Monitor UX
 
-**Status:** Not started
+**Status:** Shipped (April 9, 2026)
 
 **Problem:** Idle sessions take 6 minutes to surface. No structured progress. No proactive user nudges. Progress summaries are unreadable.
 
@@ -128,3 +128,11 @@ Aura's edge: OTP fault tolerance, domain model (knowledge partitions), ACP dispa
 - [x] Claude Code auth — setup-token in launchd plist, no more daily logouts
 - [x] scaffold_domain XDG fix — STATE.md in state dir, MEMORY.md in data dir, repos/ dir
 - [x] META.md template updated to reflect current XDG layout
+- [x] Active memory review (P0) — post-response review spawns parallel state + memory processes every 10 turns
+- [x] chat_with_tools added to llm.gleam — non-streaming LLM call with tool definitions
+- [x] MemoryConfig — configurable review_interval and notify_on_review in [memory] section
+- [x] Domain path helpers — domain_state_path, domain_memory_path, domain_log_dir centralized in xdg.gleam
+- [x] LLM HTTP boilerplate extracted to shared post_chat helper
+- [x] structured_memory parse_lines O(n²) → O(n) with reverse accumulation
+- [x] Hermes Agent code audit — documented learning loop, memory architecture, skill self-improvement
+- [x] ROADMAP.md created — competitive analysis, priority fixes, friction points

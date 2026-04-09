@@ -1,14 +1,20 @@
 import aura/compressor
 import aura/db
 import aura/llm
+import aura/time
 import gleam/dict
 import gleam/erlang/process
+import gleam/int
 import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+
+const protect_tail_count = 20
+
+const compression_cooldown_ms = 600_000
 
 /// Conversation buffers keyed by channel_id
 pub type Buffers =
@@ -17,6 +23,26 @@ pub type Buffers =
 /// A tool trace for display
 pub type ToolTrace {
   ToolTrace(name: String, args: String, result: String, is_error: Bool)
+}
+
+/// Per-channel compressor state for tiered runtime compression.
+pub type CompressorState {
+  CompressorState(
+    previous_summary: Option(String),
+    last_prompt_tokens: Int,
+    compression_count: Int,
+    cooldown_until: Int,
+  )
+}
+
+/// Create a new default compressor state.
+pub fn new_compressor_state() -> CompressorState {
+  CompressorState(
+    previous_summary: None,
+    last_prompt_tokens: 0,
+    compression_count: 0,
+    cooldown_until: 0,
+  )
 }
 
 /// Return an empty buffer dict.
@@ -59,7 +85,13 @@ pub fn load_from_db(
       _ -> llm.UserMessage(m.content)
     }
   })
-  Ok(#(convo_id, messages))
+  // Restore compaction summary if present
+  let messages_with_summary = case db.get_compaction_summary(db_subject, convo_id) {
+    Ok("") -> messages
+    Ok(summary) -> [llm.SystemMessage(summary), ..messages]
+    Error(_) -> messages
+  }
+  Ok(#(convo_id, messages_with_summary))
 }
 
 /// Save a full exchange (user message + tool calls + results + final response)
@@ -171,6 +203,34 @@ pub fn needs_compression(
   tokens > context_window / 2
 }
 
+/// Estimate token count: use real API value if available, otherwise rough estimate.
+pub fn estimate_tokens(messages: List(llm.Message), last_prompt_tokens: Int) -> Int {
+  case last_prompt_tokens > 0 {
+    True -> last_prompt_tokens
+    False -> compressor.estimate_messages_tokens(messages)
+  }
+}
+
+/// Check if tier 1 (tool pruning) should fire — 50% of context window.
+pub fn needs_tool_pruning(
+  messages: List(llm.Message),
+  context_length: Int,
+  last_prompt_tokens: Int,
+) -> Bool {
+  let tokens = estimate_tokens(messages, last_prompt_tokens)
+  tokens > context_length / 2
+}
+
+/// Check if tier 2 (full compression) should fire — 70% of context window.
+pub fn needs_full_compression(
+  messages: List(llm.Message),
+  context_length: Int,
+  last_prompt_tokens: Int,
+) -> Bool {
+  let tokens = estimate_tokens(messages, last_prompt_tokens)
+  tokens > context_length * 7 / 10
+}
+
 /// Extract the existing compaction summary from a buffer, if any.
 fn get_existing_summary(history: List(llm.Message)) -> Option(String) {
   case history {
@@ -184,43 +244,94 @@ fn get_existing_summary(history: List(llm.Message)) -> Option(String) {
   }
 }
 
-/// Compress old messages and return updated buffer.
-/// Protects first 3 messages (head) and last ~20 messages (tail).
-/// Compresses the middle into a structured summary via LLM.
+/// Compress conversation buffer. Delegates to compress_history and wraps result in buffers.
 pub fn compress_buffer(
   buffers: Buffers,
   channel_id: String,
   llm_config: llm.LlmConfig,
-) -> Buffers {
+  compressor_state: CompressorState,
+  domain_name: String,
+  agents_md: String,
+  state_md: String,
+  db_subject: process.Subject(db.DbMessage),
+  convo_id: String,
+  context_length: Int,
+) -> #(Buffers, CompressorState) {
   let history = get_history(buffers, channel_id)
-  let total = list.length(history)
-  let protect_tail = 20
+  let #(new_history, new_state) = compress_history(
+    history, llm_config, compressor_state, domain_name, agents_md, state_md, db_subject, convo_id, context_length,
+  )
+  #(dict.insert(buffers, channel_id, new_history), new_state)
+}
 
-  case total > protect_tail + 3 {
-    False -> buffers
+/// Compress a message list directly (for use in spawned processes).
+/// Returns the compressed history and new compressor state.
+pub fn compress_history(
+  history: List(llm.Message),
+  llm_config: llm.LlmConfig,
+  compressor_state: CompressorState,
+  domain_name: String,
+  agents_md: String,
+  state_md: String,
+  db_subject: process.Subject(db.DbMessage),
+  convo_id: String,
+  context_length: Int,
+) -> #(List(llm.Message), CompressorState) {
+  let total = list.length(history)
+
+  case total > protect_tail_count + 3 {
+    False -> #(history, compressor_state)
     True -> {
-      // Head: first 3 messages (system prompt + initial exchange)
-      // But if first message is a compaction summary, protect first 1
-      let existing = get_existing_summary(history)
+      let #(pruned_history, prune_count) =
+        compressor.prune_tool_outputs(history, protect_tail_count)
+      case prune_count > 0 {
+        True -> io.println("[conversation] Pruned " <> int.to_string(prune_count) <> " tool output(s)")
+        False -> Nil
+      }
+
+      let existing = get_existing_summary(pruned_history)
       let head_count = case existing {
         Some(_) -> 1
         None -> 3
       }
-      let tail = list.drop(history, total - protect_tail)
-      let middle = list.drop(history, head_count) |> list.take(total - head_count - protect_tail)
+      // Token-budget tail protection: walk backward by ~20% of context window
+      let tail_start = compressor.find_tail_boundary(pruned_history, head_count, context_length)
+      let tail = list.drop(pruned_history, tail_start)
+      let middle = list.drop(pruned_history, head_count) |> list.take(tail_start - head_count)
 
-      case compressor.compress(llm_config, middle, existing) {
-        Ok(summary_text) -> {
-          io.println("[conversation] Compressed " <> string.inspect(list.length(middle)) <> " messages into summary")
-          let summary_msg = llm.SystemMessage(summary_text)
-          let new_history = [summary_msg, ..tail]
-          dict.insert(buffers, channel_id, new_history)
+      let now = time.now_ms()
+      case now < compressor_state.cooldown_until {
+        True -> {
+          io.println("[conversation] Compression in cooldown, pruning only")
+          #(pruned_history, compressor_state)
         }
-        Error(e) -> {
-          // Compression failed — fall back to hard drop (keep last 40)
-          io.println("[conversation] Compression failed: " <> e <> ", falling back to hard drop")
-          let capped = list.drop(history, total - 40)
-          dict.insert(buffers, channel_id, capped)
+        False -> {
+          let summary_input = case existing {
+            Some(s) -> Some(s)
+            None -> compressor_state.previous_summary
+          }
+          case compressor.compress(llm_config, middle, summary_input, domain_name, agents_md, state_md) {
+            Ok(summary_text) -> {
+              io.println("[conversation] Compressed " <> int.to_string(list.length(middle)) <> " messages into summary")
+              let summary_msg = llm.SystemMessage(summary_text)
+              let new_history = compressor.sanitize_tool_pairs([summary_msg, ..tail])
+              case db.update_compaction_summary(db_subject, convo_id, summary_text) {
+                Ok(_) -> Nil
+                Error(e) -> io.println("[conversation] Failed to persist compaction summary: " <> e)
+              }
+              let new_state = CompressorState(
+                previous_summary: Some(compressor.strip_summary_prefix(summary_text)),
+                last_prompt_tokens: compressor_state.last_prompt_tokens,
+                compression_count: compressor_state.compression_count + 1,
+                cooldown_until: 0,
+              )
+              #(new_history, new_state)
+            }
+            Error(e) -> {
+              io.println("[conversation] Compression failed: " <> e <> ", cooldown 10 minutes")
+              #(pruned_history, CompressorState(..compressor_state, cooldown_until: now + compression_cooldown_ms))
+            }
+          }
         }
       }
     }

@@ -71,8 +71,8 @@ pub fn serialize_skips_system_messages_test() {
   ]
   let result = compressor.serialize_messages(messages)
   should.be_false(string.contains(result, "secret system prompt"))
-  should.be_true(string.contains(result, "[user]: hello"))
-  should.be_true(string.contains(result, "[assistant]: hi"))
+  should.be_true(string.contains(result, "[USER]: hello"))
+  should.be_true(string.contains(result, "[ASSISTANT]: hi"))
 }
 
 pub fn serialize_includes_tool_results_test() {
@@ -80,16 +80,15 @@ pub fn serialize_includes_tool_results_test() {
     llm.ToolResultMessage("call_1", "file contents here"),
   ]
   let result = compressor.serialize_messages(messages)
-  should.be_true(string.contains(result, "[tool]: file contents here"))
+  should.be_true(string.contains(result, "[TOOL RESULT call_1]: file contents here"))
 }
 
 pub fn serialize_truncates_long_content_test() {
-  let long_msg = string.repeat("x", 1000)
+  let long_msg = string.repeat("x", 7000)
   let messages = [llm.UserMessage(long_msg)]
   let result = compressor.serialize_messages(messages)
-  // Should be truncated to 500 chars + "..."
-  should.be_true(string.length(result) < 600)
-  should.be_true(string.contains(result, "..."))
+  // Should be smart-truncated (4000 head + marker + 1500 tail)
+  should.be_true(string.contains(result, "...[truncated]..."))
 }
 
 pub fn serialize_tool_call_message_test() {
@@ -108,18 +107,18 @@ pub fn serialize_tool_call_message_test() {
 // ---------------------------------------------------------------------------
 
 pub fn build_first_compression_prompt_test() {
-  let serialized = "[user]: Hello\n[assistant]: Hi"
-  let result = compressor.build_compression_prompt(serialized, option.None)
-  should.be_true(string.contains(result, "Create a structured handoff summary"))
+  let serialized = "[USER]: Hello\n[ASSISTANT]: Hi"
+  let result = compressor.build_compression_prompt(serialized, option.None, "test-domain", "", "")
+  should.be_true(string.contains(result, "structured handoff summary"))
   should.be_true(string.contains(result, "Goal"))
   should.be_true(string.contains(result, "Key Decisions"))
   should.be_true(string.contains(result, serialized))
 }
 
 pub fn build_iterative_update_prompt_test() {
-  let serialized = "[user]: new stuff"
+  let serialized = "[USER]: new stuff"
   let existing = "## Goal\nHelp with accounting"
-  let result = compressor.build_compression_prompt(serialized, option.Some(existing))
+  let result = compressor.build_compression_prompt(serialized, option.Some(existing), "test-domain", "", "")
   should.be_true(string.contains(result, "updating a context compaction summary"))
   should.be_true(string.contains(result, "PRESERVE all existing"))
   should.be_true(string.contains(result, existing))

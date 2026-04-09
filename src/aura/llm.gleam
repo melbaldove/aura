@@ -327,7 +327,7 @@ pub fn parse_response_with_tools(body: String) -> Result(LlmResponse, String) {
 /// The Erlang FFI sends events to callback_pid:
 ///   {stream_delta, Content}        — text content chunk
 ///   stream_reasoning               — GLM-5.1 thinking token
-///   {stream_complete, Content, ToolCallsJson} — final result
+///   {stream_complete, Content, ToolCallsJson, PromptTokens} — final result
 ///   {stream_error, Reason}         — fatal error
 /// This function blocks until the stream completes (run in a spawned process).
 pub fn chat_streaming_with_tools(
@@ -342,6 +342,7 @@ pub fn chat_streaming_with_tools(
     #("model", json.string(config.model)),
     #("messages", json.array(messages, message_to_json)),
     #("stream", json.bool(True)),
+    #("stream_options", json.object([#("include_usage", json.bool(True))])),
   ]
   let fields = case tools {
     [] -> base_fields

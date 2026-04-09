@@ -6,6 +6,7 @@ import aura/time
 import gleam/erlang/process
 import gleam/int
 import gleam/io
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/string
@@ -29,11 +30,19 @@ pub type AcpEvent {
   )
   AcpTimedOut(session_name: String, domain: String)
   AcpFailed(session_name: String, domain: String, error: String)
-  AcpProgress(session_name: String, domain: String, summary: String)
+  AcpProgress(
+    session_name: String,
+    domain: String,
+    title: String,
+    status: String,
+    summary: String,
+    is_idle: Bool,
+  )
 }
 
 pub type MonitorMessage {
   CheckSession
+  UpdateSummary(summary: String)
 }
 
 pub type MonitorState {
@@ -45,6 +54,7 @@ pub type MonitorState {
     last_progress_ms: Int,
     idle_checks: Int,
     idle_surfaced: Bool,
+    last_summary: String,
     llm_config: Option(llm.LlmConfig),
     on_event: fn(AcpEvent) -> Nil,
     self_subject: process.Subject(MonitorMessage),
@@ -65,8 +75,8 @@ const progress_interval_ms = 120_000
 
 const max_output_size = 50_000
 
-/// Number of consecutive idle checks before declaring session complete
-const idle_surface_threshold = 6
+/// Number of consecutive idle checks before surfacing idle status
+const idle_surface_threshold = 3
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -94,9 +104,13 @@ fn start_monitor_actor(
   on_event: fn(AcpEvent) -> Nil,
   emit_started: Bool,
 ) -> Result(process.Subject(MonitorMessage), String) {
-  let llm_config =
-    models.build_llm_config(monitor_model)
-    |> option.from_result
+  let llm_config = case models.build_llm_config(monitor_model) {
+    Ok(config) -> Some(config)
+    Error(e) -> {
+      io.println("[acp-monitor] No LLM config for " <> monitor_model <> ": " <> e <> " — progress updates disabled")
+      None
+    }
+  }
 
   let started_at = time.now_ms()
 
@@ -110,7 +124,8 @@ fn start_monitor_actor(
           started_at_ms: started_at,
           last_progress_ms: started_at,
           idle_checks: 0,
-              idle_surfaced: False,
+          idle_surfaced: False,
+          last_summary: "",
           llm_config: llm_config,
           on_event: on_event,
           self_subject: subject,
@@ -159,6 +174,9 @@ fn handle_message(
 ) -> actor.Next(MonitorState, MonitorMessage) {
   case message {
     CheckSession -> handle_check(state)
+    UpdateSummary(summary) -> {
+      actor.continue(MonitorState(..state, last_summary: summary))
+    }
   }
 }
 
@@ -211,12 +229,9 @@ fn handle_session_alive(
       case new_idle_checks >= idle_surface_threshold && !new_idle_surfaced {
         True -> {
           io.println("[acp-monitor] Session " <> state.session_name <> " idle — surfacing status")
-          let tail = string.slice(output, string.length(output) - 500, 500)
-          state.on_event(AcpProgress(
-            session_name: state.session_name,
-            domain: state.task_spec.domain,
-            summary: "**idle** — waiting at prompt\n```\n" <> tail <> "\n```",
-          ))
+          let s = state
+          let o = output
+          process.spawn_unlinked(fn() { generate_progress_update(s, o, True) })
           process.send_after(state.self_subject, idle_check_interval_ms, CheckSession)
           actor.continue(MonitorState(..state, last_output: cap_output(output), idle_checks: new_idle_checks, idle_surfaced: True))
         }
@@ -228,26 +243,15 @@ fn handle_session_alive(
               actor.continue(MonitorState(..state, last_output: cap_output(output), idle_checks: new_idle_checks, idle_surfaced: new_idle_surfaced))
             }
             False -> {
-              // Active — classify if substantial new output
+              // Active — generate progress update if enough time passed or substantial output change
+              let now = time.now_ms()
               let diff_len = string.length(output) - string.length(state.last_output)
               let abs_diff = case diff_len < 0 { True -> 0 - diff_len False -> diff_len }
-              case abs_diff > 100 {
+              let new_progress_ms = case now - state.last_progress_ms >= progress_interval_ms || abs_diff > 500 {
                 True -> {
                   let s = state
                   let o = output
-                  process.spawn_unlinked(fn() { classify_and_alert(s, o) })
-                  Nil
-                }
-                False -> Nil
-              }
-
-              // Progress update if enough time passed
-              let now = time.now_ms()
-              let new_progress_ms = case now - state.last_progress_ms >= progress_interval_ms {
-                True -> {
-                  let s = state
-                  let o = output
-                  process.spawn_unlinked(fn() { summarize_and_report(s, o) })
+                  process.spawn_unlinked(fn() { generate_progress_update(s, o, False) })
                   now
                 }
                 False -> state.last_progress_ms
@@ -289,89 +293,106 @@ fn check_timeout_and_continue(
 // LLM classification
 // ---------------------------------------------------------------------------
 
-fn summarize_and_report(state: MonitorState, output: String) -> Nil {
+/// Generate a structured progress update using one LLM call.
+/// Replaces the old separate classify_and_alert + summarize_and_report.
+fn generate_progress_update(state: MonitorState, output: String, is_idle: Bool) -> Nil {
   case state.llm_config {
     None -> Nil
     Some(config) -> {
       let tail = string.slice(output, string.length(output) - 3000, 3000)
       let elapsed_min = { time.now_ms() - state.started_at_ms } / 60_000
-      let system_prompt =
-        "You are reporting on an AI coding session to a busy developer. "
-        <> "Use markdown. Format EXACTLY like this:\n\n"
-        <> "**Done:** what was accomplished\n"
-        <> "**Needs input:** decisions or questions for the developer (or 'none')\n"
-        <> "**Next:** what the session will do next or 'idle — waiting for instructions'\n\n"
-        <> "Keep each section to 1-2 lines max. Use bullet points if multiple items. "
-        <> "Be specific — file names, ticket numbers, concrete questions. No filler."
-      let user_prompt =
-        "Session: " <> state.session_name
-        <> " (" <> int.to_string(elapsed_min) <> " minutes elapsed)"
-        <> "\n\nLatest output:\n" <> tail
-      let messages = [
-        llm.SystemMessage(system_prompt),
-        llm.UserMessage(user_prompt),
-      ]
-      case llm.chat(config, messages) {
-        Ok(summary) -> {
-          state.on_event(AcpProgress(
-            session_name: state.session_name,
-            domain: state.task_spec.domain,
-            summary: string.trim(summary),
-          ))
-        }
-        Error(_) -> Nil
-      }
-    }
-  }
-}
 
-fn classify_and_alert(state: MonitorState, output: String) -> Nil {
-  case state.llm_config {
-    None -> Nil
-    Some(config) -> {
-      let tail = string.slice(output, string.length(output) - 500, 500)
+      let previous_section = case state.last_summary {
+        "" -> ""
+        prev -> "\n\nPrevious update:\n" <> prev <> "\n\nUpdate the summary. Accumulate Done items — don't drop previous accomplishments."
+      }
+
+      let idle_hint = case is_idle {
+        True -> "\nThe session output has not changed — it appears idle or waiting for input. Set Status to 'Idle' or 'Needs input' as appropriate."
+        False -> ""
+      }
+
       let system_prompt =
-        "You are monitoring an AI coding session. "
-        <> "Based on the latest output, classify the session status. "
-        <> "Respond with exactly one word: PROGRESSING, STUCK, BLOCKED, or DANGEROUS."
+        "You are reporting on an AI coding session. The developer is busy and needs to understand the session state at a glance.\n\n"
+        <> "Respond with EXACTLY this format (no other text):\n\n"
+        <> "Title: [one-line description of what this session is doing]\n"
+        <> "Status: [Working | Stuck | Blocked | Idle | Needs input | Dangerous]\n"
+        <> "Done: [what was accomplished — file names, ticket numbers, concrete results]\n"
+        <> "Current: [what's happening right now based on the output]\n"
+        <> "Needs input: [decisions or questions for the developer, or 'none']\n"
+        <> "Next: [what the session will do next, or 'idle — waiting for instructions']"
+
       let user_prompt =
-        "Session: "
-        <> state.session_name
-        <> "\n\nLatest output:\n"
-        <> tail
+        "Task: " <> state.task_spec.prompt
+        <> "\nElapsed: " <> int.to_string(elapsed_min) <> " minutes"
+        <> idle_hint
+        <> previous_section
+        <> "\n\nLatest output:\n" <> tail
+
       let messages = [
         llm.SystemMessage(system_prompt),
         llm.UserMessage(user_prompt),
       ]
       case llm.chat(config, messages) {
         Ok(response) -> {
-          let status = parse_status(response)
-          case status {
-            types.Running -> Nil
-            _ -> {
+          let trimmed = string.trim(response)
+
+          // Send summary back to monitor actor for continuity
+          process.send(state.self_subject, UpdateSummary(trimmed))
+
+          let title = extract_field(trimmed, "Title:")
+          let status = extract_field(trimmed, "Status:")
+
+          // Determine alert status for non-normal statuses
+          let parsed_status = case string.uppercase(string.trim(status)) {
+            "STUCK" -> Some(types.Stuck)
+            "BLOCKED" -> Some(types.Blocked)
+            "DANGEROUS" -> Some(types.Dangerous)
+            _ -> None
+          }
+
+          // Emit alert for non-normal statuses
+          case parsed_status {
+            Some(alert_status) -> {
               state.on_event(AcpAlert(
                 session_name: state.session_name,
                 domain: state.task_spec.domain,
-                status: status,
-                summary: string.slice(tail, 0, 200),
+                status: alert_status,
+                summary: trimmed,
               ))
             }
+            None -> Nil
           }
+
+          // Always emit progress
+          state.on_event(AcpProgress(
+            session_name: state.session_name,
+            domain: state.task_spec.domain,
+            title: title,
+            status: status,
+            summary: trimmed,
+            is_idle: is_idle,
+          ))
         }
-        Error(_) -> Nil
+        Error(e) -> {
+          io.println("[acp-monitor] Progress LLM call failed for " <> state.session_name <> ": " <> e)
+        }
       }
     }
   }
 }
 
-fn parse_status(response: String) -> types.SessionStatus {
-  let trimmed = string.trim(response) |> string.uppercase
-  case trimmed {
-    "PROGRESSING" -> types.Running
-    "STUCK" -> types.Stuck
-    "BLOCKED" -> types.Blocked
-    "DANGEROUS" -> types.Dangerous
-    _ -> types.Running
+/// Extract a field value from structured LLM response.
+/// Given "Title: Fix the bug\nStatus: Working\n...", extract_field(text, "Title:") returns "Fix the bug".
+fn extract_field(text: String, field: String) -> String {
+  case string.split(text, "\n") {
+    [] -> ""
+    lines -> {
+      case list.find(lines, fn(line) { string.starts_with(string.trim(line), field) }) {
+        Ok(line) -> string.trim(string.drop_start(string.trim(line), string.length(field)))
+        Error(_) -> ""
+      }
+    }
   }
 }
 
