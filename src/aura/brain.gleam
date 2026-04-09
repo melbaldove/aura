@@ -7,6 +7,7 @@ import aura/config
 import aura/review
 import aura/domain
 import aura/time
+import aura/tools
 import aura/conversation
 import aura/db
 import aura/discord
@@ -81,6 +82,13 @@ pub type BrainMessage {
   RegisterThread(thread_id: String, domain_name: String)
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
   UpdateReviewCount(channel_id: String, count: Int)
+  HandleInteraction(
+    interaction_id: String,
+    interaction_token: String,
+    custom_id: String,
+    channel_id: String,
+  )
+  RegisterProposal(proposal: brain_tools.PendingProposal)
 }
 
 /// Configuration passed to brain.start — replaces positional params.
@@ -125,6 +133,7 @@ pub type BrainState {
     review_counts: dict.Dict(String, Int),
     compressor_states: dict.Dict(String, conversation.CompressorState),
     brain_context: Int,
+    pending_proposals: dict.Dict(String, brain_tools.PendingProposal),
   )
 }
 
@@ -151,7 +160,7 @@ pub fn build_system_prompt(
   memory_content: String,
   user_content: String,
 ) -> String {
-  let ws_section = case domain_names {
+  let domain_section = case domain_names {
     [] -> "\n\nNo domains configured yet."
     names -> "\n\nActive domains: " <> string.join(names, ", ")
   }
@@ -177,7 +186,7 @@ pub fn build_system_prompt(
   "You are responding in a Discord server. Stay in character.\n\n"
   <> soul_content
   <> "\n\nKeep responses concise and direct. Use Discord markdown where appropriate."
-  <> ws_section
+  <> domain_section
   <> skills_section
   <> memory_section
   <> user_section
@@ -256,6 +265,7 @@ pub fn start(
       review_counts: dict.new(),
       compressor_states: dict.new(),
       brain_context: brain_context,
+      pending_proposals: dict.new(),
     )
 
   actor.new_with_initialiser(10_000, fn(self_subject) {
@@ -418,9 +428,19 @@ fn handle_message(
           let brain_subject = state.self_subject
           let paths = state.paths
           let brain_context = state.brain_context
+          let monitor_model = state.global_config.models.monitor
           process.spawn_unlinked(fn() {
             // Read domain files in the spawned process, not the actor
             let #(a_md, s_md) = load_domain_context_files(paths, dn)
+            // Flush memories before compression discards messages
+            case models.build_llm_config(monitor_model) {
+              Ok(monitor_llm_config) ->
+                review.flush_before_compression(monitor_llm_config, history, dn, paths)
+              Error(e) -> {
+                io.println("[brain] Flush skipped — monitor LLM config failed: " <> e)
+                Nil
+              }
+            }
             let #(new_history, new_comp_state) = conversation.compress_history(
               history, llm_config, comp_state, dn, a_md, s_md, db_subject, cache_key, brain_context,
             )
@@ -480,6 +500,152 @@ fn handle_message(
     UpdateReviewCount(channel_id:, count:) -> {
       let new_counts = dict.insert(state.review_counts, channel_id, count)
       actor.continue(BrainState(..state, review_counts: new_counts))
+    }
+    HandleInteraction(interaction_id:, interaction_token:, custom_id:, channel_id: _) -> {
+      // Acknowledge immediately (must respond within 3 seconds)
+      process.spawn_unlinked(fn() {
+        case rest.send_interaction_response(interaction_id, interaction_token) {
+          Ok(_) -> Nil
+          Error(e) -> io.println("[brain] Failed to ack interaction: " <> e)
+        }
+      })
+
+      // Parse action and proposal_id from custom_id
+      case string.split_once(custom_id, ":") {
+        Error(_) -> actor.continue(state)
+        Ok(#(action, proposal_id)) -> {
+          case dict.get(state.pending_proposals, proposal_id) {
+            Error(_) -> {
+              io.println("[brain] Unknown proposal: " <> proposal_id)
+              actor.continue(state)
+            }
+            Ok(proposal) -> {
+              // Check timeout (15 minutes = 900_000ms)
+              let now = time.now_ms()
+              let expired = now - proposal.requested_at_ms > 900_000
+              case expired {
+                True -> {
+                  io.println("[brain] Proposal expired: " <> proposal_id)
+                  process.send(proposal.reply_to, brain_tools.Expired)
+                  process.spawn_unlinked(fn() {
+                    let _ =
+                      rest.edit_message(
+                        state.discord_token,
+                        proposal.channel_id,
+                        proposal.message_id,
+                        "**Expired** -- proposal timed out after 15 minutes.",
+                      )
+                    Nil
+                  })
+                  let new_proposals =
+                    dict.delete(state.pending_proposals, proposal_id)
+                  actor.continue(
+                    BrainState(..state, pending_proposals: new_proposals),
+                  )
+                }
+                False -> {
+                  case action {
+                    "approve" -> {
+                      let new_proposals = dict.delete(state.pending_proposals, proposal_id)
+                      // Execute the write with validation (approved = True bypasses tier)
+                      case
+                        tools.write_file(
+                          proposal.path,
+                          state.paths.data,
+                          proposal.content,
+                          state.validation_rules,
+                          True,
+                        )
+                      {
+                        Ok(_) -> {
+                          // Notify the blocked propose tool that it's approved
+                          process.send(proposal.reply_to, brain_tools.Approved)
+                          process.spawn_unlinked(fn() {
+                            let _ =
+                              rest.edit_message(
+                                state.discord_token,
+                                proposal.channel_id,
+                                proposal.message_id,
+                                "**Approved** -- wrote `" <> proposal.path <> "`",
+                              )
+                            Nil
+                          })
+                        }
+                        Error(e) -> {
+                          // Write failed (validation error) — still notify the tool
+                          process.send(proposal.reply_to, brain_tools.Rejected)
+                          process.spawn_unlinked(fn() {
+                            let _ =
+                              rest.edit_message(
+                                state.discord_token,
+                                proposal.channel_id,
+                                proposal.message_id,
+                                "**Failed** -- " <> e,
+                              )
+                            Nil
+                          })
+                        }
+                      }
+                      actor.continue(
+                        BrainState(..state, pending_proposals: new_proposals),
+                      )
+                    }
+                    "reject" -> {
+                      let new_proposals = dict.delete(state.pending_proposals, proposal_id)
+                      process.send(proposal.reply_to, brain_tools.Rejected)
+                      process.spawn_unlinked(fn() {
+                        let _ =
+                          rest.edit_message(
+                            state.discord_token,
+                            proposal.channel_id,
+                            proposal.message_id,
+                            "**Rejected**",
+                          )
+                        Nil
+                      })
+                      actor.continue(
+                        BrainState(..state, pending_proposals: new_proposals),
+                      )
+                    }
+                    unknown -> {
+                      io.println("[brain] Unknown interaction action: " <> unknown <> " for proposal " <> proposal_id)
+                      actor.continue(state)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    RegisterProposal(proposal:) -> {
+      // One per channel -- supersede existing
+      let new_proposals = case
+        list.find(dict.values(state.pending_proposals), fn(p) {
+          p.channel_id == proposal.channel_id
+        })
+      {
+        Ok(old) -> {
+          process.send(old.reply_to, brain_tools.Expired)
+          process.spawn_unlinked(fn() {
+            let _ =
+              rest.edit_message(
+                state.discord_token,
+                old.channel_id,
+                old.message_id,
+                "~~Superseded~~",
+              )
+            Nil
+          })
+          dict.delete(state.pending_proposals, old.id)
+        }
+        Error(_) -> state.pending_proposals
+      }
+      let new_proposals = dict.insert(new_proposals, proposal.id, proposal)
+      actor.continue(
+        BrainState(..state, pending_proposals: new_proposals),
+      )
     }
   }
 }
@@ -767,7 +933,7 @@ fn handle_with_llm(
   // Start a typing indicator loop that refreshes every 8 seconds
   let typing_stop = start_typing_loop(state.discord_token, response_channel)
 
-  let ws_names = list.map(state.domains, fn(d) { d.name })
+  let domain_names = list.map(state.domains, fn(d) { d.name })
   let memory_content = case structured_memory.format_for_display(xdg.memory_path(state.paths)) {
     Ok(c) -> c
     Error(_) -> ""
@@ -776,7 +942,7 @@ fn handle_with_llm(
     Ok(c) -> c
     Error(_) -> ""
   }
-  let system_prompt = build_system_prompt(state.soul, ws_names, state.skill_infos, memory_content, user_content)
+  let system_prompt = build_system_prompt(state.soul, domain_names, state.skill_infos, memory_content, user_content)
 
   // Load domain context if routed to a domain
   let domain_prompt = case domain_name {
@@ -789,7 +955,38 @@ fn handle_with_llm(
     }
     None -> ""
   }
-  let system_prompt = system_prompt <> domain_prompt
+  let fs_section =
+    "\n\n## File System\n"
+    <> "You can read any file. Use ~ for home directory.\n"
+    <> "\nAura directories:"
+    <> "\n  Config: ~/.config/aura/"
+    <> "\n  Data: ~/.local/share/aura/"
+    <> "\n  State: ~/.local/state/aura/"
+    <> case domain_name {
+      Some(name) ->
+        "\n\nCurrent domain: "
+        <> name
+        <> "\n  Instructions: ~/.config/aura/domains/"
+        <> name
+        <> "/AGENTS.md"
+        <> "\n  Config: ~/.config/aura/domains/"
+        <> name
+        <> "/config.toml"
+        <> "\n  Memory: ~/.local/share/aura/domains/"
+        <> name
+        <> "/MEMORY.md"
+        <> "\n  State: ~/.local/state/aura/domains/"
+        <> name
+        <> "/STATE.md"
+        <> "\n  Repos: ~/.local/share/aura/domains/"
+        <> name
+        <> "/repos/"
+      None -> ""
+    }
+    <> "\n\nWrites to logs, memory, state, and skills are autonomous."
+    <> "\nAll other writes require approval -- use propose(path, content, description)."
+
+  let system_prompt = system_prompt <> domain_prompt <> fs_section
 
   // Inject ACP session context if this message is in an ACP thread
   let acp_context = case list.find(
@@ -832,8 +1029,13 @@ fn handle_with_llm(
     None -> #(".", "claude-code", "", True)
   }
 
+  let base_dir = case domain_name {
+    Some(_) -> domain_cwd
+    None -> state.paths.data
+  }
+
   let tool_ctx = brain_tools.ToolContext(
-    data_dir: state.paths.data,
+    base_dir: base_dir,
     discord_token: state.discord_token,
     guild_id: state.guild_id,
     message_id: msg.message_id,
@@ -850,6 +1052,12 @@ fn handle_with_llm(
     acp_provider: acp_provider,
     acp_binary: acp_binary,
     acp_worktree: acp_worktree,
+    on_propose: fn(proposal) {
+      case brain_subject_opt {
+        Some(subj) -> process.send(subj, RegisterProposal(proposal: proposal))
+        None -> Nil
+      }
+    },
   )
 
   let result = tool_loop_with_retry(state, tool_ctx, response_channel, initial_messages, 3)
