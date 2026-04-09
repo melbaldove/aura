@@ -26,7 +26,7 @@ pub fn start(
   global_config: config.GlobalConfig,
   paths: xdg.Paths,
 ) -> Result(process.Pid, String) {
-  // 0. Migrate workstreams/ → domains/ if needed
+  // 0. Migrate legacy workstreams/ → domains/ if needed
   migrate_directories(paths)
 
   // 1. Load SOUL.md

@@ -34,5 +34,22 @@ docs/superpowers/
 # User skills (personal, not for open source)
 skills/
 
+# Node.js
+node_modules/
+
+# Erlang/rebar3
+_build/
+
+# Compiled native objects
+*.o
+*.so
+*.dylib
+
+# Logs
+*.log
+
+# Local runtime data
+.local/
+
 # Temporary test files
 /tmp/

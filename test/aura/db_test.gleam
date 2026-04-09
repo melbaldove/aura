@@ -33,7 +33,7 @@ pub fn append_and_load_messages_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "chan1", 1_711_843_200_000)
 
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "hello", "user123", "melbs", 1_711_843_200_000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "hello", "user123", "testuser", 1_711_843_200_000)
   let assert Ok(_) = db.append_message(subject, convo_id, "assistant", "hi there", "", "aura", 1_711_843_200_001)
 
   let assert Ok(messages) = db.load_messages(subject, convo_id, 50)
@@ -51,9 +51,9 @@ pub fn search_messages_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "chan1", 1_711_843_200_000)
 
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "tell me about receipts", "u1", "melbs", 1_711_843_200_000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "tell me about receipts", "u1", "testuser", 1_711_843_200_000)
   let assert Ok(_) = db.append_message(subject, convo_id, "assistant", "here are the receipt totals", "", "aura", 1_711_843_200_001)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "what about the weather", "u1", "melbs", 1_711_843_200_002)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "what about the weather", "u1", "testuser", 1_711_843_200_002)
 
   let assert Ok(results) = db.search(subject, "receipts", 10)
   should.equal(list.length(results), 2)
@@ -69,8 +69,8 @@ pub fn cross_conversation_search_test() {
   let assert Ok(c1) = db.resolve_conversation(subject, "discord", "chan1", 1_711_843_200_000)
   let assert Ok(c2) = db.resolve_conversation(subject, "telegram", "chat99", 1_711_843_200_000)
 
-  let assert Ok(_) = db.append_message(subject, c1, "user", "deploy the app", "u1", "melbs", 1_711_843_200_000)
-  let assert Ok(_) = db.append_message(subject, c2, "user", "deploy the service", "u1", "melbs", 1_711_843_200_001)
+  let assert Ok(_) = db.append_message(subject, c1, "user", "deploy the app", "u1", "testuser", 1_711_843_200_000)
+  let assert Ok(_) = db.append_message(subject, c2, "user", "deploy the service", "u1", "testuser", 1_711_843_200_001)
 
   let assert Ok(results) = db.search(subject, "deploy", 10)
   should.equal(list.length(results), 2)
@@ -83,7 +83,7 @@ pub fn conversation_db_roundtrip_test() {
   let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "roundtrip-chan", 1_000_000)
 
   // Save via db.append_message directly
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "hello world", "user1", "melbs", 1_000_000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "hello world", "user1", "testuser", 1_000_000)
   let assert Ok(_) = db.append_message(subject, convo_id, "assistant", "hi back", "", "aura", 1_000_001)
 
   // Load via conversation module
@@ -145,7 +145,7 @@ pub fn tool_message_roundtrip_test() {
 pub fn get_or_load_db_caches_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "cache-chan", 1_000_000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "cached msg", "u1", "melbs", 1_000_000)
+  let assert Ok(_) = db.append_message(subject, convo_id, "user", "cached msg", "u1", "testuser", 1_000_000)
 
   let buffers = conversation.new()
   // First call: loads from DB

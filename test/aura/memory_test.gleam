@@ -28,9 +28,9 @@ pub fn append_event_test() {
   let event =
     types.Event(
       ts: "2026-03-25T14:30:00+08:00",
-      domain: "cm2",
+      domain: "backend",
       event_type: "pr_merged",
-      ref: "CICS-967",
+      ref: "TASK-456",
       summary: "Fixed ACK receipt format",
     )
 
@@ -38,7 +38,7 @@ pub fn append_event_test() {
 
   let content = simplifile.read(paths.data <> "/events.jsonl") |> should.be_ok
   content
-  |> string.contains("CICS-967")
+  |> string.contains("TASK-456")
   |> should.be_true
 
   // Cleanup
@@ -48,9 +48,9 @@ pub fn append_event_test() {
 pub fn append_domain_log_test() {
   let paths = temp_paths("domlog-" <> test_helpers.random_suffix())
   scaffold.scaffold(paths) |> should.be_ok
-  scaffold.scaffold_domain(paths, "cm2", "test", "cm2") |> should.be_ok
+  scaffold.scaffold_domain(paths, "backend", "test", "backend") |> should.be_ok
 
-  let domain_dir = paths.data <> "/domains/cm2"
+  let domain_dir = paths.data <> "/domains/backend"
   memory.append_domain_log(domain_dir, "Test decision")
   |> should.be_ok
 

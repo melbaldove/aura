@@ -21,13 +21,13 @@ pub fn incoming_from_received_test() {
       id: "123",
       channel_id: "456",
       guild_id: option.Some("789"),
-      author: discord_types.User(id: "111", username: "melbs", bot: False),
+      author: discord_types.User(id: "111", username: "testuser", bot: False),
       content: "hello aura",
       attachments: [],
     )
   let incoming = discord.from_received(received, option.Some("cm2"))
   incoming.channel_name |> should.equal(option.Some("cm2"))
-  incoming.author_name |> should.equal("melbs")
+  incoming.author_name |> should.equal("testuser")
   incoming.content |> should.equal("hello aura")
   incoming.is_bot |> should.equal(False)
 }

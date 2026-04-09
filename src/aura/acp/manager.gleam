@@ -34,6 +34,7 @@ pub type ActiveSession {
     thread_id: String,
     prompt: String,
     cwd: String,
+    idle_surfaced: Bool,
   )
 }
 
@@ -244,6 +245,7 @@ fn handle_dispatch(
           thread_id: thread_id,
           prompt: task_spec.prompt,
           cwd: task_spec.cwd,
+          idle_surfaced: False,
         )
 
       // Insert and persist BEFORE starting tmux/monitor
@@ -289,6 +291,7 @@ fn handle_dispatch(
               state.monitor_model,
               on_event,
               True,
+              False,
             )
           {
             Ok(_) -> #(new_state, Ok(session_name))
@@ -361,8 +364,13 @@ fn handle_monitor_event(
       unregister(state, session_name, Complete)
     acp_monitor.AcpFailed(session_name, _, reason) ->
       unregister(state, session_name, Failed(reason))
-    // Progress and Alert don't change state
-    acp_monitor.AcpProgress(_, _, _, _, _, _) -> state
+    // Track idle_surfaced from progress events for persistence
+    acp_monitor.AcpProgress(session_name, _, _, _, _, is_idle) -> {
+      case is_idle {
+        True -> update_idle_surfaced(state, session_name, True)
+        False -> update_idle_surfaced(state, session_name, False)
+      }
+    }
     acp_monitor.AcpAlert(_, _, _, _) -> state
   }
   // Forward ALL events to the brain for Discord notifications
@@ -430,6 +438,28 @@ fn unregister(
   AcpActorState(..state_with_terminal, sessions: new_sessions)
 }
 
+fn update_idle_surfaced(
+  state: AcpActorState,
+  session_name: String,
+  idle_surfaced: Bool,
+) -> AcpActorState {
+  case dict.get(state.sessions, session_name) {
+    Ok(session) -> {
+      case session.idle_surfaced == idle_surfaced {
+        True -> state
+        False -> {
+          let updated = ActiveSession(..session, idle_surfaced: idle_surfaced)
+          let new_sessions = dict.insert(state.sessions, session_name, updated)
+          let new_state = AcpActorState(..state, sessions: new_sessions)
+          persist(new_state)
+          new_state
+        }
+      }
+    }
+    Error(_) -> state
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
@@ -446,6 +476,7 @@ fn persist(state: AcpActorState) -> Nil {
         state: session_state_to_string(s.state),
         prompt: s.prompt,
         cwd: s.cwd,
+        idle_surfaced: s.idle_surfaced,
       )
     })
   // Merge: active sessions + terminal sessions from disk
@@ -501,6 +532,7 @@ fn recover_sessions(
                   thread_id: s.thread_id,
                   prompt: s.prompt,
                   cwd: s.cwd,
+                  idle_surfaced: s.idle_surfaced,
                 )
               // Start monitor for this session
               let task_spec =
@@ -524,6 +556,7 @@ fn recover_sessions(
                   monitor_model,
                   on_event,
                   False,
+                  s.idle_surfaced,
                 )
               {
                 Ok(_) ->

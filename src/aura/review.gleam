@@ -149,7 +149,7 @@ pub fn build_review_prompt(
       <> current_content
       <> "\n\n"
       <> "Focus on: what changed? Active tickets, PRs opened/merged/closed, ACP sessions started/completed, blockers found/resolved, deployments.\n\n"
-      <> "Use the memory tool with target \"state\" to update entries. Use descriptive keys like \"pr-216\", \"HY-5339\", \"acp-session\".\n\n"
+      <> "Use the memory tool with target \"state\" to update entries. Use descriptive keys like \"pr-216\", \"PROJ-123\", \"acp-session\".\n\n"
       <> "If nothing changed, say \"Nothing to save.\" and stop."
     "memory" ->
       "Review the conversation above and consider saving durable knowledge.\n\n"

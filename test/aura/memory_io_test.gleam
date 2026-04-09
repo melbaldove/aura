@@ -56,7 +56,7 @@ pub fn append_and_read_daily_log_test() {
   let entry =
     json.object([
       #("ts", json.string("2026-03-30")),
-      #("user", json.string("melbs")),
+      #("user", json.string("testuser")),
       #("content", json.string("test message")),
     ])
   memory.append_log(paths.data <> "/domains/test-ws", "2026-03-30", entry)

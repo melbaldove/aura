@@ -1,3 +1,4 @@
+import aura/env
 import aura/skill
 import aura/tier
 import aura/validator
@@ -10,59 +11,84 @@ import gleam/result
 import gleam/string
 import simplifile
 
-/// Read the file at `path` relative to `data_dir`. Returns the file contents
-/// or an error string if the file is not found.
-pub fn read_file(data_dir: String, path: String) -> Result(String, String) {
-  let full_path = data_dir <> "/" <> path
-  simplifile.read(full_path)
+/// Resolve a file path to an absolute path.
+/// - Absolute paths (/...) -> used as-is
+/// - Home-relative (~/ or bare ~) -> expand ~ to $HOME
+/// - Relative -> resolve against base_dir
+pub fn resolve_path(path: String, base_dir: String) -> String {
+  case path {
+    "/" <> _ -> path
+    "~/" <> rest -> {
+      let home = case env.get_env("HOME") {
+        Ok(h) -> h
+        Error(_) -> "/root"
+      }
+      home <> "/" <> rest
+    }
+    "~" -> {
+      case env.get_env("HOME") {
+        Ok(h) -> h
+        Error(_) -> "/root"
+      }
+    }
+    _ -> base_dir <> "/" <> path
+  }
+}
+
+/// Read a file at `path`, resolved against `base_dir`. Returns the file
+/// contents or an error string if the file is not found.
+pub fn read_file(path: String, base_dir: String) -> Result(String, String) {
+  let resolved = resolve_path(path, base_dir)
+  simplifile.read(resolved)
   |> result.map_error(fn(_) { "File not found: " <> path })
 }
 
-/// Write `content` to `path` (relative to `data_dir`), enforcing tier-based
-/// write permissions and validator rules. `approved` bypasses tier restrictions
-/// for paths that normally require explicit approval.
+/// Write `content` to `path` (resolved against `base_dir`), enforcing
+/// tier-based write permissions and validator rules on the resolved absolute
+/// path. `approved` bypasses tier restrictions for paths that have already
+/// been approved via the propose flow.
 pub fn write_file(
-  data_dir: String,
   path: String,
+  base_dir: String,
   content: String,
   rules: List(validator.Rule),
   approved: Bool,
 ) -> Result(Nil, String) {
-  use _ <- result.try(check_tier(path, approved))
+  let resolved = resolve_path(path, base_dir)
+  use _ <- result.try(check_tier(resolved, approved))
   use _ <- result.try(validator.validate(path, content, rules))
-  let full_path = data_dir <> "/" <> path
-  ensure_parent_dir(full_path)
-  io.println("[tools] write_file: " <> path)
-  simplifile.write(full_path, content)
-  |> result.map_error(fn(e) { "Failed to write " <> path <> ": " <> string.inspect(e) })
+  ensure_parent_dir(resolved)
+  io.println("[tools] write_file: " <> resolved)
+  simplifile.write(resolved, content)
+  |> result.map_error(fn(e) {
+    "Failed to write " <> path <> ": " <> string.inspect(e)
+  })
 }
 
-/// Append `content` to `path` (relative to `data_dir`), subject to the same
-/// tier and validation checks as `write_file`.
+/// Append `content` to `path` (resolved against `base_dir`), subject to the
+/// same tier and validation checks as `write_file`.
 pub fn append_file(
-  data_dir: String,
   path: String,
+  base_dir: String,
   content: String,
   rules: List(validator.Rule),
   approved: Bool,
 ) -> Result(Nil, String) {
-  use _ <- result.try(check_tier(path, approved))
+  let resolved = resolve_path(path, base_dir)
+  use _ <- result.try(check_tier(resolved, approved))
   use _ <- result.try(validator.validate(path, content, rules))
-  let full_path = data_dir <> "/" <> path
-  ensure_parent_dir(full_path)
-  io.println("[tools] append_file: " <> path)
-  simplifile.append(to: full_path, contents: content)
-  |> result.map_error(fn(e) { "Failed to append to " <> path <> ": " <> string.inspect(e) })
+  ensure_parent_dir(resolved)
+  io.println("[tools] append_file: " <> resolved)
+  simplifile.append(to: resolved, contents: content)
+  |> result.map_error(fn(e) {
+    "Failed to append to " <> path <> ": " <> string.inspect(e)
+  })
 }
 
-/// List entries of a directory at `path` relative to `data_dir`.
-/// Pass `"."` to list the data directory itself.
-pub fn list_directory(data_dir: String, path: String) -> Result(String, String) {
-  let full_path = case path {
-    "." -> data_dir
-    _ -> data_dir <> "/" <> path
-  }
-  case simplifile.read_directory(full_path) {
+/// List entries of a directory at `path`, resolved against `base_dir`.
+pub fn list_directory(path: String, base_dir: String) -> Result(String, String) {
+  let resolved = resolve_path(path, base_dir)
+  case simplifile.read_directory(resolved) {
     Ok(entries) -> Ok(string.join(entries, "\n"))
     Error(_) -> Error("Directory not found: " <> path)
   }
@@ -104,23 +130,13 @@ pub fn run_skill(
   }
 }
 
-/// Placeholder for the propose workflow (not yet implemented).
-/// Currently returns a message directing the user to handle the action manually.
-pub fn propose(description: String, _details: String) -> Result(String, String) {
-  io.println("[tools] propose: " <> description)
-  Ok(
-    "Propose is not yet implemented. Description: "
-    <> description
-    <> ". Please handle this manually.",
-  )
-}
-
 fn check_tier(path: String, approved: Bool) -> Result(Nil, String) {
   case tier.can_write_without_approval(path) || approved {
     True -> Ok(Nil)
     False ->
       Error(
-        "This path requires approval. Use propose() first. Path: " <> path,
+        "This path requires approval. Call propose(path, content, description) to request it. Path: "
+        <> path,
       )
   }
 }

@@ -13,5 +13,5 @@ Switch to keyed entries: `§ key\ncontent` format. Operations are `set` (upsert 
 - No more `old_text` guessing — the key is the identifier
 - Parallel-agent safe — each agent writes its own keys
 - Simpler mental model — the tool is self-evident from its interface
-- Existing files migrated to keyed format on Eisenhower
+- Existing files migrated to keyed format on the deployment host
 - The `§` delimiter is preserved but now prefixes a key name instead of being a bare separator

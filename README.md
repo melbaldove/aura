@@ -163,12 +163,12 @@ Aura can also create and update skills automatically through the skill review sy
 Tell Aura to fix a bug or implement a feature. It spawns Claude Code in a tmux session with worktree isolation, monitors progress, and reports structured updates back to Discord.
 
 ```
-You (in #my-project): investigate and fix the login timeout bug HY-5339
+You (in #my-project): investigate and fix the login timeout bug PROJ-123
 Aura: ACP dispatched.
       ACP session started: acp-my-project-t1775618752766
       Attach with: tmux attach -t acp-my-project-t1775618752766
 
-      📋 **Investigate login timeout HY-5339** · 8m elapsed
+      📋 **Investigate login timeout PROJ-123** · 8m elapsed
       `acp-my-project-t1775618752766`
 
       **Status:** Working

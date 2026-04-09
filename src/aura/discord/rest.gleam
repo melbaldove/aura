@@ -90,7 +90,10 @@ pub fn edit_message(
   let url =
     api_url("/channels/" <> channel_id <> "/messages/" <> message_id)
   let body =
-    json.object([#("content", json.string(content))]) |> json.to_string()
+    json.object([
+      #("content", json.string(content)),
+      #("components", json.array([], fn(x) { x })),
+    ]) |> json.to_string()
   use req <- result.try(authed_request(url, http.Patch, token))
   let req =
     req
@@ -344,6 +347,81 @@ pub fn get_channel_parent(token: String, channel_id: String) -> Result(String, S
       }
     }
     status -> Error(unexpected_status(status, "get channel"))
+  }
+}
+
+/// POST /channels/{channel_id}/messages with button components.
+pub fn send_message_with_components(
+  token: String,
+  channel_id: String,
+  content: String,
+  components: json.Json,
+) -> Result(String, String) {
+  io.println("[discord] Sending message with components to " <> channel_id)
+  let url = api_url("/channels/" <> channel_id <> "/messages")
+  let body =
+    json.object([
+      #("content", json.string(content)),
+      #("components", components),
+    ])
+    |> json.to_string()
+  use req <- result.try(authed_request(url, http.Post, token))
+  let req =
+    req
+    |> request.set_header("content-type", "application/json")
+    |> request.set_body(body)
+  use resp <- result.try(
+    httpc.send(req)
+    |> result.map_error(fn(_) { "HTTP request failed" }),
+  )
+  case resp.status {
+    200 | 201 -> {
+      case json.parse(resp.body, decode.at(["id"], decode.string)) {
+        Ok(id) -> Ok(id)
+        Error(_) -> Ok("")
+      }
+    }
+    status -> Error(unexpected_status(status, "send message with components"))
+  }
+}
+
+/// POST /interactions/{id}/{token}/callback -- acknowledge a button interaction.
+/// Response type 6 = deferred update message (no visible response, just ack).
+/// Note: interaction responses do NOT use the bot token -- the
+/// interaction_token in the URL is the auth.
+pub fn send_interaction_response(
+  interaction_id: String,
+  interaction_token: String,
+) -> Result(Nil, String) {
+  let url =
+    "https://discord.com/api/v10/interactions/"
+    <> interaction_id
+    <> "/"
+    <> interaction_token
+    <> "/callback"
+  let body =
+    json.object([#("type", json.int(6))])
+    |> json.to_string()
+  use parsed_uri <- result.try(
+    uri.parse(url)
+    |> result.map_error(fn(_) { "Failed to parse URL" }),
+  )
+  use req <- result.try(
+    request.from_uri(parsed_uri)
+    |> result.map_error(fn(_) { "Failed to build request" }),
+  )
+  let req =
+    req
+    |> request.set_method(http.Post)
+    |> request.set_header("content-type", "application/json")
+    |> request.set_body(body)
+  use resp <- result.try(
+    httpc.send(req)
+    |> result.map_error(fn(_) { "HTTP request failed" }),
+  )
+  case resp.status {
+    200 | 204 -> Ok(Nil)
+    status -> Error(unexpected_status(status, "interaction response"))
   }
 }
 

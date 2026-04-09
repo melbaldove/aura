@@ -3,7 +3,7 @@ import gleam/result
 import gleam/string
 import sqlight
 
-const current_version = 1
+const current_version = 2
 
 /// Create all tables, indexes, FTS5 virtual table, and triggers if they do not
 /// already exist, then run any pending schema migrations.
@@ -23,7 +23,7 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
       platform TEXT NOT NULL,
       platform_id TEXT NOT NULL,
       parent_id TEXT,
-      workstream TEXT,
+      domain TEXT,
       title TEXT,
       last_active_at INTEGER NOT NULL,
       compaction_summary TEXT,
@@ -58,10 +58,8 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
     CREATE INDEX IF NOT EXISTS idx_conversations_platform
       ON conversations(platform, platform_id)
   "))
-  use _ <- result.try(exec(conn, "
-    CREATE INDEX IF NOT EXISTS idx_conversations_workstream
-      ON conversations(workstream)
-  "))
+  // idx_conversations_domain is created by migration v2 (renames workstream → domain)
+  // For fresh DBs, the column is already named `domain` and the migration creates the index
 
   use _ <- result.try(exec(conn, "
     CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
@@ -118,13 +116,22 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
   use version <- result.try(get_version(conn))
   case version {
     0 -> {
-      // Fresh database — set initial version
+      // Fresh database — create domain index and set version
+      use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_conversations_domain ON conversations(domain)"))
       exec(conn, "INSERT INTO schema_version (version) VALUES (" <> string.inspect(current_version) <> ")")
     }
     v if v == current_version -> Ok(Nil)
     v if v < current_version -> {
-      // Future: run migration steps from v to current_version
-      // For now, just update the version number
+      // Run migrations step by step
+      use _ <- result.try(case v < 2 {
+        True -> {
+          // v1 → v2: rename workstream column to domain
+          use _ <- result.try(exec(conn, "ALTER TABLE conversations RENAME COLUMN workstream TO domain"))
+          use _ <- result.try(exec(conn, "DROP INDEX IF EXISTS idx_conversations_workstream"))
+          exec(conn, "CREATE INDEX IF NOT EXISTS idx_conversations_domain ON conversations(domain)")
+        }
+        False -> Ok(Nil)
+      })
       exec(conn, "UPDATE schema_version SET version = " <> string.inspect(current_version))
     }
     _ -> {

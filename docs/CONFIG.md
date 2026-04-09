@@ -103,7 +103,7 @@ Free-form key-value pairs for domain context. Common fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `jira_instance` | string | Jira instance key (e.g., `"HY"`, `"CM2"`). |
+| `jira_instance` | string | Jira instance key (e.g., `"PROJ"`, `"TEAM"`). |
 | `jira_url` | string | Jira base URL. |
 | `github_org` | string | GitHub organization name. |
 
@@ -120,7 +120,7 @@ Each schedule is a `[[schedule]]` entry:
 | `name` | string | yes | — | Unique schedule identifier. |
 | `type` | string | yes | — | `"interval"` or `"cron"`. |
 | `skill` | string | yes | — | Skill to invoke (e.g., `"jira"`, `"google"`). |
-| `args` | string | yes | — | JSON array of arguments (e.g., `'["--instance", "HY", "tickets", "assigned"]'`). |
+| `args` | string | yes | — | JSON array of arguments (e.g., `'["--instance", "PROJ", "tickets", "assigned"]'`). |
 | `domains` | array of strings | yes | — | Which domains this schedule reports to. Empty = global. |
 | `model` | string | yes | — | LLM model for classifying findings. |
 | `enabled` | bool | yes | — | Whether the schedule is active. |

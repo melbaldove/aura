@@ -64,5 +64,5 @@ pub fn schema_version_is_set_test() {
 
   db_schema.get_version(conn)
   |> should.be_ok
-  |> should.equal(1)
+  |> should.equal(2)
 }

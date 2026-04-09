@@ -91,8 +91,9 @@ pub fn start_monitor_only(
   monitor_model: String,
   on_event: fn(AcpEvent) -> Nil,
   emit_started: Bool,
+  idle_surfaced: Bool,
 ) -> Result(process.Subject(MonitorMessage), String) {
-  start_monitor_actor(task_spec, session_name, monitor_model, on_event, emit_started)
+  start_monitor_actor(task_spec, session_name, monitor_model, on_event, emit_started, idle_surfaced)
 }
 
 /// Shared actor creation for both start and start_recovery.
@@ -103,6 +104,7 @@ fn start_monitor_actor(
   monitor_model: String,
   on_event: fn(AcpEvent) -> Nil,
   emit_started: Bool,
+  idle_surfaced: Bool,
 ) -> Result(process.Subject(MonitorMessage), String) {
   let llm_config = case models.build_llm_config(monitor_model) {
     Ok(config) -> Some(config)
@@ -116,15 +118,24 @@ fn start_monitor_actor(
 
   let builder =
     actor.new_with_initialiser(5000, fn(subject) {
+      // For recovery: pre-load current tmux output so first check doesn't see a false change
+      let initial_output = case emit_started {
+        True -> ""
+        False -> case tmux.capture_pane(session_name) {
+          Ok(o) -> cap_output(o)
+          Error(_) -> ""
+        }
+      }
+
       let state =
         MonitorState(
           task_spec: task_spec,
           session_name: session_name,
-          last_output: "",
+          last_output: initial_output,
           started_at_ms: started_at,
           last_progress_ms: started_at,
           idle_checks: 0,
-          idle_surfaced: False,
+          idle_surfaced: idle_surfaced,
           last_summary: "",
           llm_config: llm_config,
           on_event: on_event,
@@ -212,7 +223,8 @@ fn handle_session_alive(
       schedule_next(state.self_subject)
       actor.continue(state)
     }
-    Ok(output) -> {
+    Ok(raw_output) -> {
+      let output = cap_output(raw_output)
       let output_changed = output != state.last_output
       let new_idle_checks = case output_changed {
         True -> 0
@@ -233,14 +245,14 @@ fn handle_session_alive(
           let o = output
           process.spawn_unlinked(fn() { generate_progress_update(s, o, True) })
           process.send_after(state.self_subject, idle_check_interval_ms, CheckSession)
-          actor.continue(MonitorState(..state, last_output: cap_output(output), idle_checks: new_idle_checks, idle_surfaced: True))
+          actor.continue(MonitorState(..state, last_output: output, idle_checks: new_idle_checks, idle_surfaced: True))
         }
         _ -> {
           case new_idle_checks >= idle_threshold {
             True -> {
               // Already idle — back off to slow interval, no spam
               process.send_after(state.self_subject, idle_check_interval_ms, CheckSession)
-              actor.continue(MonitorState(..state, last_output: cap_output(output), idle_checks: new_idle_checks, idle_surfaced: new_idle_surfaced))
+              actor.continue(MonitorState(..state, last_output: output, idle_checks: new_idle_checks, idle_surfaced: new_idle_surfaced))
             }
             False -> {
               // Active — generate progress update if enough time passed or substantial output change
@@ -284,7 +296,7 @@ fn check_timeout_and_continue(
     }
     False -> {
       schedule_next(state.self_subject)
-      actor.continue(MonitorState(..state, last_output: cap_output(output)))
+      actor.continue(MonitorState(..state, last_output: output))
     }
   }
 }
@@ -313,14 +325,15 @@ fn generate_progress_update(state: MonitorState, output: String, is_idle: Bool) 
       }
 
       let system_prompt =
-        "You are reporting on an AI coding session. The developer is busy and needs to understand the session state at a glance.\n\n"
+        "You are reporting on an AI coding session to a busy developer via Discord. Keep it scannable.\n\n"
         <> "Respond with EXACTLY this format (no other text):\n\n"
         <> "Title: [one-line description of what this session is doing]\n"
         <> "Status: [Working | Stuck | Blocked | Idle | Needs input | Dangerous]\n"
-        <> "Done: [what was accomplished — file names, ticket numbers, concrete results]\n"
+        <> "Done: [what was accomplished — file names, ticket numbers, concrete results. Use bullet points if multiple items.]\n"
         <> "Current: [what's happening right now based on the output]\n"
         <> "Needs input: [decisions or questions for the developer, or 'none']\n"
-        <> "Next: [what the session will do next, or 'idle — waiting for instructions']"
+        <> "Next: [what the session will do next, or 'idle — waiting for instructions']\n\n"
+        <> "Use markdown: `file paths`, `commands`, `ticket numbers` in backticks. URLs as links. Bullet points for multiple items. Be specific and concise."
 
       let user_prompt =
         "Task: " <> state.task_spec.prompt

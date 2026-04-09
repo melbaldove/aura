@@ -5,11 +5,13 @@ import aura/acp/types as acp_types
 import aura/db
 import aura/time
 import aura/discord/rest
+import aura/discord/types as discord_types
 import aura/llm
 import aura/memory
 import aura/scheduler
 import aura/skill
 import aura/structured_memory
+import aura/tier
 import aura/tools
 import aura/validator
 import aura/web
@@ -33,11 +35,32 @@ pub type ToolResult {
   TextResult(String)
 }
 
+/// A pending write proposal awaiting user approval via Discord buttons.
+pub type ProposalResult {
+  Approved
+  Rejected
+  Expired
+}
+
+pub type PendingProposal {
+  PendingProposal(
+    id: String,
+    path: String,
+    content: String,
+    description: String,
+    channel_id: String,
+    message_id: String,
+    tier: Int,
+    requested_at_ms: Int,
+    reply_to: process.Subject(ProposalResult),
+  )
+}
+
 /// Subset of BrainState fields needed for tool execution.
 /// Avoids a circular dependency between brain and brain_tools.
 pub type ToolContext {
   ToolContext(
-    data_dir: String,
+    base_dir: String,
     discord_token: String,
     guild_id: String,
     message_id: String,
@@ -54,6 +77,7 @@ pub type ToolContext {
     acp_provider: String,
     acp_binary: String,
     acp_worktree: Bool,
+    on_propose: fn(PendingProposal) -> Nil,
   )
 }
 
@@ -98,7 +122,7 @@ fn execute_tool_dispatch(
       case require_arg(args, "path") {
         Error(e) -> TextResult(e)
         Ok(path) -> {
-          case tools.read_file(ctx.data_dir, path) {
+          case tools.read_file(path, ctx.base_dir) {
             Ok(content) -> TextResult(content)
             Error(e) -> TextResult("Error: " <> e)
           }
@@ -114,8 +138,8 @@ fn execute_tool_dispatch(
             Ok(content) -> {
               case
                 tools.write_file(
-                  ctx.data_dir,
                   path,
+                  ctx.base_dir,
                   content,
                   ctx.validation_rules,
                   False,
@@ -137,8 +161,8 @@ fn execute_tool_dispatch(
             Ok(content) -> {
               case
                 tools.append_file(
-                  ctx.data_dir,
                   path,
+                  ctx.base_dir,
                   content,
                   ctx.validation_rules,
                   False,
@@ -155,19 +179,7 @@ fn execute_tool_dispatch(
       case require_arg(args, "path") {
         Error(e) -> TextResult(e)
         Ok(path) -> {
-          // Resolve "domains" and "domains/..." against the config domains dir
-          let #(base_dir, resolved_path) = case string.starts_with(path, "domains") {
-            True -> {
-              let domains_root = ctx.paths.config <> "/domains"
-              case string.drop_start(path, 7) {
-                "" -> #(domains_root, ".")
-                "/" <> rest -> #(domains_root, rest)
-                _ -> #(ctx.data_dir, path)
-              }
-            }
-            False -> #(ctx.data_dir, path)
-          }
-          case tools.list_directory(base_dir, resolved_path) {
+          case tools.list_directory(path, ctx.base_dir) {
             Ok(listing) -> TextResult(listing)
             Error(e) -> TextResult("Error: " <> e)
           }
@@ -204,11 +216,78 @@ fn execute_tool_dispatch(
       }
     }
     "propose" -> {
-      case
-        tools.propose(get_arg(args, "description"), get_arg(args, "details"))
-      {
-        Ok(output) -> TextResult(output)
-        Error(e) -> TextResult("Error: " <> e)
+      case require_arg(args, "path") {
+        Error(e) -> TextResult(e)
+        Ok(path) ->
+          case require_arg(args, "content") {
+            Error(e) -> TextResult(e)
+            Ok(content) -> {
+              let description = get_arg(args, "description")
+              let resolved = tools.resolve_path(path, ctx.base_dir)
+              let tier_val = case tier.for_path(resolved) {
+                tier.NeedsApprovalWithPreview -> 3
+                tier.NeedsApproval -> 2
+                tier.Autonomous -> 1
+              }
+              // Generate proposal ID
+              let proposal_id = "p" <> int.to_string(time.now_ms())
+
+              // Build Discord message with buttons
+              let preview = case tier_val {
+                3 -> content
+                _ ->
+                  case string.length(content) > 1500 {
+                    True ->
+                      string.slice(content, 0, 1500) <> "\n...(truncated)"
+                    False -> content
+                  }
+              }
+              let msg_content =
+                "**Proposal:** "
+                <> description
+                <> "\n\n**Path:** `"
+                <> path
+                <> "`\n\n**Content:**\n```\n"
+                <> preview
+                <> "\n```"
+
+              let buttons = discord_types.approve_reject_buttons(proposal_id)
+              case
+                rest.send_message_with_components(
+                  ctx.discord_token,
+                  ctx.channel_id,
+                  msg_content,
+                  buttons,
+                )
+              {
+                Ok(message_id) -> {
+                  // Create a subject to receive the approval result
+                  let reply_subject = process.new_subject()
+                  let proposal =
+                    PendingProposal(
+                      id: proposal_id,
+                      path: resolved,
+                      content: content,
+                      description: description,
+                      channel_id: ctx.channel_id,
+                      message_id: message_id,
+                      tier: tier_val,
+                      requested_at_ms: time.now_ms(),
+                      reply_to: reply_subject,
+                    )
+                  ctx.on_propose(proposal)
+                  // Block until user clicks approve/reject (15 min timeout)
+                  case process.receive(reply_subject, 900_000) {
+                    Ok(Approved) -> TextResult("Approved. File written to `" <> path <> "`.")
+                    Ok(Rejected) -> TextResult("Rejected by user.")
+                    Ok(Expired) -> TextResult("Proposal expired (15 minute timeout).")
+                    Error(_) -> TextResult("Proposal timed out waiting for approval.")
+                  }
+                }
+                Error(e) -> TextResult("Error posting proposal: " <> e)
+              }
+            }
+          }
       }
     }
     "list_threads" -> {
@@ -392,10 +471,11 @@ fn execute_tool_dispatch(
                   <> ")"
                 _ -> "Delete schedule: " <> get_arg(args, "name")
               }
-              case tools.propose(description, string.inspect(args)) {
-                Ok(output) -> TextResult(output)
-                Error(e) -> TextResult("Error: " <> e)
-              }
+              TextResult(
+                "Schedule management requires approval. "
+                <> description
+                <> ". Use propose() to request this change.",
+              )
             }
             _ -> {
               case ctx.scheduler_subject {
@@ -658,24 +738,24 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
   [
     llm.ToolDefinition(
       name: "read_file",
-      description: "Read a file from the Aura data",
+      description: "Read any file. Accepts absolute paths (/...), home-relative (~/...), or relative paths (resolved against domain cwd).",
       parameters: [
         llm.ToolParam(
           name: "path",
           param_type: "string",
-          description: "Relative file path",
+          description: "File path (absolute, ~/..., or relative to domain cwd)",
           required: True,
         ),
       ],
     ),
     llm.ToolDefinition(
       name: "write_file",
-      description: "Write content to a data file. Logs, domain logs, events, MEMORY.md, STATE.md write immediately. Config and identity files require propose() first.",
+      description: "Write content to a file. Logs, memory, state, and skills write immediately. All other paths require approval -- use propose() first.",
       parameters: [
         llm.ToolParam(
           name: "path",
           param_type: "string",
-          description: "Relative file path",
+          description: "File path (absolute, ~/..., or relative to domain cwd)",
           required: True,
         ),
         llm.ToolParam(
@@ -688,12 +768,12 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "append_file",
-      description: "Append content to a data file. Same rules as write_file.",
+      description: "Append content to a file. Same permission rules as write_file.",
       parameters: [
         llm.ToolParam(
           name: "path",
           param_type: "string",
-          description: "Relative file path",
+          description: "File path (absolute, ~/..., or relative to domain cwd)",
           required: True,
         ),
         llm.ToolParam(
@@ -706,12 +786,12 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "list_directory",
-      description: "List contents of a data directory",
+      description: "List contents of a directory. Accepts absolute paths (/...), home-relative (~/...), or relative paths.",
       parameters: [
         llm.ToolParam(
           name: "path",
           param_type: "string",
-          description: "Directory path (use '.' for root)",
+          description: "Directory path (absolute, ~/..., or relative to domain cwd)",
           required: True,
         ),
       ],
@@ -748,18 +828,24 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "propose",
-      description: "Propose a change requiring user approval",
+      description: "Request approval to write a file that requires permission. Posts a proposal with Approve/Reject buttons. Use this for config files, identity files, and any path outside Aura's autonomous write zones.",
       parameters: [
         llm.ToolParam(
-          name: "description",
+          name: "path",
           param_type: "string",
-          description: "What you want to do",
+          description: "File path to write (absolute, ~/..., or relative to domain cwd)",
           required: True,
         ),
         llm.ToolParam(
-          name: "details",
+          name: "content",
           param_type: "string",
-          description: "Details of the change",
+          description: "Full file content to write on approval",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "description",
+          param_type: "string",
+          description: "Brief description of what this change does and why",
           required: True,
         ),
       ],

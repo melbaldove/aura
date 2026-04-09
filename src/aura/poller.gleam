@@ -53,6 +53,32 @@ fn start(
               }
             }
           }
+          discord_types.InteractionCreate(
+            interaction_id,
+            interaction_token,
+            custom_id,
+            channel_id,
+            user_id,
+            _message_id,
+          ) -> {
+            io.println(
+              "[poller] Interaction from "
+              <> user_id
+              <> " in "
+              <> channel_id
+              <> ": "
+              <> custom_id,
+            )
+            process.send(
+              brain_subject,
+              brain.HandleInteraction(
+                interaction_id: interaction_id,
+                interaction_token: interaction_token,
+                custom_id: custom_id,
+                channel_id: channel_id,
+              ),
+            )
+          }
           discord_types.Ready(_) -> {
             io.println("[poller] Bot is ready!")
           }

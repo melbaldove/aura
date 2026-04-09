@@ -8,14 +8,14 @@ pub fn embed_to_json_test() {
   let embed =
     types.Embed(
       title: Some("ACP Started"),
-      description: Some("CICS-967: Fix ACK receipt format"),
+      description: Some("TASK-456: Fix ACK receipt format"),
       color: Some(0x00FF00),
       fields: [],
       footer: None,
     )
   let json_str = embed |> types.embed_to_json |> json.to_string
   json_str |> string.contains("ACP Started") |> should.be_true
-  json_str |> string.contains("CICS-967") |> should.be_true
+  json_str |> string.contains("TASK-456") |> should.be_true
 }
 
 pub fn embed_field_to_json_test() {

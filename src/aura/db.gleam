@@ -601,7 +601,7 @@ fn do_set_domain(
   domain: String,
 ) -> Result(Nil, String) {
   sqlight.query(
-    "UPDATE conversations SET workstream = ? WHERE id = ?",
+    "UPDATE conversations SET domain = ? WHERE id = ?",
     on: conn,
     with: [sqlight.text(domain), sqlight.text(conversation_id)],
     expecting: decode.success(Nil),

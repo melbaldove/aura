@@ -65,6 +65,14 @@ pub type GatewayEvent {
   Hello(HelloPayload)
   Ready(ReadyPayload)
   MessageCreate(ReceivedMessage)
+  InteractionCreate(
+    interaction_id: String,
+    interaction_token: String,
+    custom_id: String,
+    channel_id: String,
+    user_id: String,
+    message_id: String,
+  )
   HeartbeatAck
   Reconnect
   InvalidSession(resumable: Bool)
@@ -178,4 +186,36 @@ pub fn resume_payload(
       ]),
     ),
   ])
+}
+
+/// Build an action row with Approve and Reject buttons for a proposal.
+pub fn approve_reject_buttons(proposal_id: String) -> json.Json {
+  json.array(
+    [
+      json.object([
+        #("type", json.int(1)),
+        #(
+          "components",
+          json.array(
+            [
+              json.object([
+                #("type", json.int(2)),
+                #("style", json.int(3)),
+                #("label", json.string("Approve")),
+                #("custom_id", json.string("approve:" <> proposal_id)),
+              ]),
+              json.object([
+                #("type", json.int(2)),
+                #("style", json.int(4)),
+                #("label", json.string("Reject")),
+                #("custom_id", json.string("reject:" <> proposal_id)),
+              ]),
+            ],
+            fn(x) { x },
+          ),
+        ),
+      ]),
+    ],
+    fn(x) { x },
+  )
 }

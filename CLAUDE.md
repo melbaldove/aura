@@ -8,7 +8,7 @@ Aura (Autonomous Unified Runtime Agent) is a local-first executive assistant fra
 
 ```bash
 gleam build          # Compile
-gleam test           # Run all tests (292 tests)
+gleam test           # Run all tests (316 tests)
 gleam run -- start   # Start the agent
 gleam run -- init    # First-run setup wizard
 ```
@@ -43,7 +43,7 @@ supervisor (OneForOne)
 ### Message flow
 
 ```
-Discord → Gateway → Poller → Brain → Workstream → LLM → Brain → Discord
+Discord → Gateway → Poller → Brain → Domain → LLM → Brain → Discord
                                    ↘ (direct) → LLM with tools → Discord
 ```
 
@@ -137,7 +137,7 @@ src/
 - Use `gleeunit` + `should` assertions
 - Test pure functions directly. Test actors via their public convenience functions.
 - Temp files in `/tmp/aura-*-test`, clean up after
-- 292 tests currently. Don't regress.
+- 316 tests currently. Don't regress.
 
 ### Database
 
@@ -213,7 +213,7 @@ When making any non-trivial change, check whether these need updating:
 - [ ] **Environment variables** — new credentials need: CLAUDE.md, README.md, init.gleam onboarding, .env template
 - [ ] **Tool count** — adding/removing tools? Update the count in CLAUDE.md and README.md.
 - [ ] **Onboarding** — new required config? Update `init.gleam` first-run wizard.
-- [ ] **Eisenhower deploy** — did you deploy the change? Update the launchd plist if env vars changed.
+- [ ] **Production deploy** — did you deploy the change? Update the launchd plist if env vars changed.
 
 ## Common tasks
 

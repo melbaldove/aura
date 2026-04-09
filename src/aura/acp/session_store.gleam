@@ -19,6 +19,7 @@ pub type StoredSession {
     state: String,
     prompt: String,
     cwd: String,
+    idle_surfaced: Bool,
   )
 }
 
@@ -86,6 +87,7 @@ pub fn session_to_json(session: StoredSession) -> json.Json {
     #("state", json.string(session.state)),
     #("prompt", json.string(session.prompt)),
     #("cwd", json.string(session.cwd)),
+    #("idle_surfaced", json.bool(session.idle_surfaced)),
   ])
 }
 
@@ -102,6 +104,7 @@ pub fn session_decoder() -> decode.Decoder(StoredSession) {
   use state <- decode.field("state", decode.string)
   use prompt <- decode.field("prompt", decode.string)
   use cwd <- decode.field("cwd", decode.string)
+  use idle_surfaced <- decode.optional_field("idle_surfaced", False, decode.bool)
   decode.success(StoredSession(
     session_name: session_name,
     domain: domain,
@@ -111,6 +114,7 @@ pub fn session_decoder() -> decode.Decoder(StoredSession) {
     state: state,
     prompt: prompt,
     cwd: cwd,
+    idle_surfaced: idle_surfaced,
   ))
 }
 

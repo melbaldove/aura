@@ -306,6 +306,7 @@ fn handle_dispatch(
   case event_name {
     Some("READY") -> handle_ready(state, raw_text)
     Some("MESSAGE_CREATE") -> handle_message_create(state, raw_text)
+    Some("INTERACTION_CREATE") -> handle_interaction_create(state, raw_text)
     Some(name) -> {
       state.on_event(types.UnknownEvent(name: name))
       actor.continue(state)
@@ -407,6 +408,53 @@ fn parse_message_create(
 /// Public wrapper for testing parse_message_create
 pub fn parse_message_create_public(text: String) -> Result(types.ReceivedMessage, json.DecodeError) {
   parse_message_create(text)
+}
+
+fn handle_interaction_create(
+  state: GatewayState,
+  raw_text: String,
+) -> actor.Next(GatewayState, GatewayMessage) {
+  case parse_interaction(raw_text) {
+    Ok(interaction) -> {
+      state.on_event(interaction)
+      actor.continue(state)
+    }
+    Error(_) -> actor.continue(state)
+  }
+}
+
+fn parse_interaction(
+  raw_text: String,
+) -> Result(types.GatewayEvent, Nil) {
+  let decoder = {
+    use interaction_id <- decode.subfield(["d", "id"], decode.string)
+    use interaction_token <- decode.subfield(["d", "token"], decode.string)
+    use custom_id <- decode.subfield(
+      ["d", "data", "custom_id"],
+      decode.string,
+    )
+    use channel_id <- decode.subfield(["d", "channel_id"], decode.string)
+    use user_id <- decode.subfield(
+      ["d", "member", "user", "id"],
+      decode.string,
+    )
+    use message_id <- decode.subfield(
+      ["d", "message", "id"],
+      decode.string,
+    )
+    decode.success(types.InteractionCreate(
+      interaction_id: interaction_id,
+      interaction_token: interaction_token,
+      custom_id: custom_id,
+      channel_id: channel_id,
+      user_id: user_id,
+      message_id: message_id,
+    ))
+  }
+  case json.parse(raw_text, decoder) {
+    Ok(event) -> Ok(event)
+    Error(_) -> Error(Nil)
+  }
 }
 
 fn parse_invalid_session(text: String) -> Bool {

@@ -211,7 +211,7 @@ pub fn build_system_prompt(
   <> "\n- For domain creation, use the propose tool to request approval."
   <> "\n\nMemory guidance:"
   <> "\nYou have three types of persistent memory, all keyed by topic:"
-  <> "\n- **state** — current domain status. What's in flight right now: active tickets, PRs, blockers. Upsert by key (e.g. key='HY-5195', key='pr-216')."
+  <> "\n- **state** — current domain status. What's in flight right now: active tickets, PRs, blockers. Upsert by key (e.g. key='PROJ-101', key='pr-42')."
   <> "\n- **memory** — durable domain knowledge. Decisions, patterns, conventions. Upsert by key (e.g. key='jira-patterns', key='branch-workflow')."
   <> "\n- **user** — user profile (global). Preferences, communication style, role."
   <> "\nAll entries are keyed. Use `set` to create or update, `remove` to delete. No need to read before writing — set is an upsert."

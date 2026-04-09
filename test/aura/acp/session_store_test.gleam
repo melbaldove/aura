@@ -22,6 +22,7 @@ fn sample_session(name: String) -> session_store.StoredSession {
     state: "running",
     prompt: "fix the bug",
     cwd: "/home/user/repos/test",
+    idle_surfaced: False,
   )
 }
 
