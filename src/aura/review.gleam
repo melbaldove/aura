@@ -208,14 +208,15 @@ fn run_review(
 
   // Run the tool loop
   let tool = memory_tool_definition()
+  let tool_executor = fn(call: llm.ToolCall) -> #(String, Option(#(String, String))) {
+    execute_memory_tool(call, target_path, domain_name, paths)
+  }
   case
     review_tool_loop(
       llm_config,
       messages,
       [tool],
-      target_path,
-      domain_name,
-      paths,
+      tool_executor,
       0,
       [],
     )
@@ -298,15 +299,14 @@ fn run_review(
   }
 }
 
-/// Mini tool loop: call LLM, execute memory tool calls, repeat until no tool
-/// calls or max iterations. Returns list of #(key, content) pairs written.
+/// Mini tool loop: call LLM, execute tool calls via the provided executor,
+/// repeat until no tool calls or max iterations. Returns list of #(key, content)
+/// pairs written.
 fn review_tool_loop(
   llm_config: llm.LlmConfig,
   messages: List(llm.Message),
   tools: List(llm.ToolDefinition),
-  target_path: String,
-  domain_name: String,
-  paths: xdg.Paths,
+  tool_executor: fn(llm.ToolCall) -> #(String, Option(#(String, String))),
   iteration: Int,
   written: List(#(String, String)),
 ) -> Result(List(#(String, String)), String) {
@@ -329,7 +329,7 @@ fn review_tool_loop(
             list.fold(calls, #(written, []), fn(acc, call) {
               let #(acc_written, acc_results) = acc
               let #(result_text, entry) =
-                execute_memory_tool(call, target_path, domain_name, paths)
+                tool_executor(call)
               let new_written = case entry {
                 Some(e) -> [e, ..acc_written]
                 None -> acc_written
@@ -352,9 +352,7 @@ fn review_tool_loop(
             llm_config,
             updated_messages,
             tools,
-            target_path,
-            domain_name,
-            paths,
+            tool_executor,
             iteration + 1,
             new_written,
           )
