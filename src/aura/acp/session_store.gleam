@@ -14,6 +14,7 @@ pub type StoredSession {
     session_name: String,
     domain: String,
     task_id: String,
+    run_id: String,
     thread_id: String,
     started_at_ms: Int,
     state: String,
@@ -82,6 +83,7 @@ pub fn session_to_json(session: StoredSession) -> json.Json {
     #("session_name", json.string(session.session_name)),
     #("domain", json.string(session.domain)),
     #("task_id", json.string(session.task_id)),
+    #("run_id", json.string(session.run_id)),
     #("thread_id", json.string(session.thread_id)),
     #("started_at_ms", json.int(session.started_at_ms)),
     #("state", json.string(session.state)),
@@ -99,6 +101,7 @@ pub fn session_decoder() -> decode.Decoder(StoredSession) {
   use session_name <- decode.field("session_name", decode.string)
   use domain <- decode.field("domain", decode.string)
   use task_id <- decode.field("task_id", decode.string)
+  use run_id <- decode.optional_field("run_id", "", decode.string)
   use thread_id <- decode.field("thread_id", decode.string)
   use started_at_ms <- decode.field("started_at_ms", decode.int)
   use state <- decode.field("state", decode.string)
@@ -109,6 +112,7 @@ pub fn session_decoder() -> decode.Decoder(StoredSession) {
     session_name: session_name,
     domain: domain,
     task_id: task_id,
+    run_id: run_id,
     thread_id: thread_id,
     started_at_ms: started_at_ms,
     state: state,

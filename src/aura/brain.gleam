@@ -1303,7 +1303,7 @@ fn handle_with_llm(
     ])
 
   // Look up domain config once for cwd + provider settings
-  let #(domain_cwd, acp_provider, acp_binary, acp_worktree) = case domain_name {
+  let #(domain_cwd, acp_provider, acp_binary, acp_worktree, acp_server_url, acp_agent_name) = case domain_name {
     Some(name) ->
       case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
         Ok(#(_, cfg)) -> #(
@@ -1311,10 +1311,12 @@ fn handle_with_llm(
           cfg.acp_provider,
           cfg.acp_binary,
           cfg.acp_worktree,
+          cfg.acp_server_url,
+          cfg.acp_agent_name,
         )
-        Error(_) -> #(".", "claude-code", "", True)
+        Error(_) -> #(".", "claude-code", "", True, "", "")
       }
-    None -> #(".", "claude-code", "", True)
+    None -> #(".", "claude-code", "", True, "", "")
   }
 
   let base_dir = case domain_name {
@@ -1341,6 +1343,8 @@ fn handle_with_llm(
       acp_provider: acp_provider,
       acp_binary: acp_binary,
       acp_worktree: acp_worktree,
+      acp_server_url: acp_server_url,
+      acp_agent_name: acp_agent_name,
       on_propose: fn(proposal) {
         case brain_subject_opt {
           Some(subj) -> process.send(subj, RegisterProposal(proposal: proposal))

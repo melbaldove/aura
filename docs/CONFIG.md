@@ -45,6 +45,8 @@
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `global_max_concurrent` | int | yes | — | Max concurrent ACP sessions across all domains. |
+| `server_url` | string | no | `""` | ACP server URL (e.g., `http://localhost:8000`). Empty = use tmux fallback. |
+| `agent_name` | string | no | `"claude-code"` | Agent name to dispatch to on the ACP server. |
 
 ### [memory]
 

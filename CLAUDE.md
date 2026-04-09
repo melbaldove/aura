@@ -100,10 +100,12 @@ src/aura/
     types.gleam         Discord event/embed types
   acp/
     manager.gleam       ACP session lifecycle actor — dispatch, monitor, state, persistence
-    monitor.gleam       tmux session polling + LLM status classification
-    provider.gleam      Provider-agnostic command builder (Claude Code, generic CLI)
+    client.gleam        ACP HTTP client (create_run, get_run, cancel, resume, subscribe_events)
+    sse.gleam           SSE event stream wrapper for ACP real-time events
+    monitor.gleam       tmux session polling + LLM status classification (legacy fallback)
+    provider.gleam      Provider-agnostic command builder (legacy tmux path)
     session_store.gleam JSON file store for session persistence across restarts
-    tmux.gleam          tmux session lifecycle (create, capture, send, kill)
+    tmux.gleam          tmux session lifecycle (legacy fallback)
     types.gleam         TaskSpec, SessionStatus, AcpReport types
 
 src/
@@ -285,7 +287,7 @@ When making a change that involves choosing between approaches (e.g., "should we
 
 ADRs are immutable once accepted. If a decision is reversed, write a new ADR that supersedes the old one.
 
-Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression (superseded), ACP manager actor, keyed memory entries, active memory review, tiered runtime compression.
+Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression (superseded), ACP manager actor, keyed memory entries, active memory review, tiered runtime compression, ACP protocol for agent dispatch.
 
 ## Known limitations
 

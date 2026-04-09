@@ -117,9 +117,15 @@ tools = ["linear", "google"]
 channel = "my-project"
 ```
 
-## ACP (Autonomous Code Protocol)
+## ACP ([Agent Communication Protocol](https://agentcommunicationprotocol.dev))
 
-Dispatch coding agents into isolated worktrees. A.U.R.A. monitors progress and reports structured updates.
+A.U.R.A. is an ACP client. It dispatches coding agents via the open standard, monitors progress through SSE event streams, and reports structured updates. Any ACP-compatible agent works — Claude Code, Codex, Gemini CLI.
+
+You can interact with the same session from multiple interfaces:
+- **Discord** — structured progress updates via A.U.R.A.
+- **Zed** — direct editor integration
+- **`acpx`** — terminal CLI access
+- **tmux** — legacy fallback when no ACP server is configured
 
 ```
 You (in #my-project): investigate and fix the login timeout bug PROJ-123

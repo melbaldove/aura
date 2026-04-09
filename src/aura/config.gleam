@@ -54,6 +54,8 @@ pub type GlobalConfig {
     vision: VisionConfig,
     memory: MemoryConfig,
     acp_global_max_concurrent: Int,
+    acp_server_url: String,
+    acp_agent_name: String,
     brain_context: Int,
   )
 }
@@ -74,6 +76,8 @@ pub type DomainConfig {
     acp_provider: String,
     acp_binary: String,
     acp_worktree: Bool,
+    acp_server_url: String,
+    acp_agent_name: String,
   )
 }
 
@@ -97,6 +101,8 @@ pub fn default_global() -> GlobalConfig {
     vision: VisionConfig(prompt: ""),
     memory: MemoryConfig(review_interval: 10, notify_on_review: True, skill_review_interval: 30),
     acp_global_max_concurrent: 0,
+    acp_server_url: "",
+    acp_agent_name: "claude-code",
     brain_context: 0,
   )
 }
@@ -117,6 +123,8 @@ pub fn default_domain() -> DomainConfig {
     acp_provider: "claude-code",
     acp_binary: "",
     acp_worktree: True,
+    acp_server_url: "",
+    acp_agent_name: "",
   )
 }
 
@@ -215,6 +223,14 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     tom.get_int(doc, ["models", "brain_context"])
     |> result.unwrap(0)
 
+  let acp_server_url =
+    tom.get_string(doc, ["acp", "server_url"])
+    |> result.unwrap("")
+
+  let acp_agent_name =
+    tom.get_string(doc, ["acp", "agent_name"])
+    |> result.unwrap("claude-code")
+
   Ok(GlobalConfig(
     discord: DiscordConfig(
       token: token,
@@ -241,6 +257,8 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
       skill_review_interval: skill_review_interval,
     ),
     acp_global_max_concurrent: global_max_concurrent,
+    acp_server_url: acp_server_url,
+    acp_agent_name: acp_agent_name,
     brain_context: brain_context,
   ))
 }
@@ -309,6 +327,14 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     tom.get_bool(doc, ["acp", "worktree"])
     |> result.unwrap(True)
 
+  let acp_server_url =
+    tom.get_string(doc, ["acp", "server_url"])
+    |> result.unwrap("")
+
+  let acp_agent_name =
+    tom.get_string(doc, ["acp", "agent_name"])
+    |> result.unwrap("")
+
   Ok(DomainConfig(
     name: name,
     description: description,
@@ -323,6 +349,8 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     acp_provider: acp_provider,
     acp_binary: acp_binary,
     acp_worktree: acp_worktree,
+    acp_server_url: acp_server_url,
+    acp_agent_name: acp_agent_name,
   ))
 }
 

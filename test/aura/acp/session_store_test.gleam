@@ -17,6 +17,7 @@ fn sample_session(name: String) -> session_store.StoredSession {
     session_name: name,
     domain: "test-domain",
     task_id: "t123",
+    run_id: "",
     thread_id: "thread-456",
     started_at_ms: 1_000_000,
     state: "running",

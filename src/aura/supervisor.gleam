@@ -154,6 +154,8 @@ pub fn start(
       acp_store_path,
       global_config.models.monitor,
       fn(_event) { Nil },
+      global_config.acp_server_url,
+      global_config.acp_agent_name,
     ),
   )
   io.println("[supervisor] ACP manager started")

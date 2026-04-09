@@ -77,6 +77,8 @@ pub type ToolContext {
     acp_provider: String,
     acp_binary: String,
     acp_worktree: Bool,
+    acp_server_url: String,
+    acp_agent_name: String,
     on_propose: fn(PendingProposal) -> Nil,
   )
 }
@@ -538,23 +540,33 @@ fn execute_tool_dispatch(
       case require_arg(args, "session_name") {
         Error(e) -> TextResult(e)
         Ok(session_name) -> {
-          let state_str = case manager.get_session(ctx.acp_subject, session_name) {
+          case manager.get_session(ctx.acp_subject, session_name) {
             Ok(session) -> {
               let elapsed_ms = time.now_ms() - session.started_at_ms
               let elapsed_min = elapsed_ms / 60_000
-              " [" <> manager.session_state_to_string(session.state) <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
-            }
-            Error(_) -> " [unknown]"
-          }
-          case acp_tmux.capture_pane(session_name) {
-            Ok(output) -> {
-              let tail = case string.length(output) > 500 {
-                True -> "...\n" <> string.slice(output, string.length(output) - 500, 500)
-                False -> output
+              let state_str = " [" <> manager.session_state_to_string(session.state) <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
+              // ACP sessions (run_id set) don't have tmux panes
+              case session.run_id {
+                "" -> {
+                  // tmux session — capture pane output
+                  case acp_tmux.capture_pane(session_name) {
+                    Ok(output) -> {
+                      let tail = case string.length(output) > 500 {
+                        True -> "...\n" <> string.slice(output, string.length(output) - 500, 500)
+                        False -> output
+                      }
+                      TextResult("Session: " <> session_name <> state_str <> "\n\n" <> tail)
+                    }
+                    Error(_) -> TextResult("Session: " <> session_name <> state_str <> "\n\n(tmux pane not available)")
+                  }
+                }
+                run_id -> {
+                  // ACP session — show run status
+                  TextResult("Session: " <> session_name <> state_str <> "\nACP run: " <> run_id <> "\nDomain: " <> session.domain <> "\nPrompt: " <> string.slice(session.prompt, 0, 200))
+                }
               }
-              TextResult("Session: " <> session_name <> state_str <> "\n\n" <> tail)
             }
-            Error(_) -> TextResult("Session not found or not running: " <> session_name)
+            Error(_) -> TextResult("Session not found: " <> session_name)
           }
         }
       }

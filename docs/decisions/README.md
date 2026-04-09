@@ -43,6 +43,7 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [012](012-keyed-memory-entries.md) | Keyed memory entries (set/remove by key) | Accepted |
 | [013](013-active-memory-review.md) | Active memory review (Hermes-inspired) | Accepted |
 | [014](014-tiered-runtime-compression.md) | Tiered runtime compression | Accepted |
+| [015](015-acp-protocol.md) | ACP protocol for agent dispatch | Accepted |
 
 ## Adding a new ADR
 
