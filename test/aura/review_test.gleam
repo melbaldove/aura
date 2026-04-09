@@ -112,9 +112,8 @@ pub fn build_skill_review_prompt_empty_test() {
 
 pub fn skill_tool_definitions_test() {
   let tools = review.skill_tool_definitions()
-  list.length(tools) |> should.equal(2)
+  list.length(tools) |> should.equal(1)
   let names = list.map(tools, fn(t) { t.name })
-  should.be_true(list.contains(names, "list_skills"))
   should.be_true(list.contains(names, "create_skill"))
 }
 

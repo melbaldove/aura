@@ -30,7 +30,11 @@ pub fn discover(skills_dir: String) -> Result(List(SkillInfo), String) {
           case simplifile.read(skill_md_path) {
             Ok(content) -> {
               let description = extract_description(content)
-              Ok(SkillInfo(name: entry, description: description, path: skill_path))
+              Ok(SkillInfo(
+                name: entry,
+                description: description,
+                path: skill_path,
+              ))
             }
             Error(_) -> Error(Nil)
           }
@@ -167,7 +171,9 @@ pub fn create(
         }),
       )
       simplifile.write(skill_path <> "/SKILL.md", content)
-      |> result.map_error(fn(e) { "Failed to write SKILL.md: " <> string.inspect(e) })
+      |> result.map_error(fn(e) {
+        "Failed to write SKILL.md: " <> string.inspect(e)
+      })
     }
   }
 }
@@ -184,9 +190,48 @@ pub fn update(
   case simplifile.is_directory(skill_path) {
     Ok(True) -> {
       simplifile.write(skill_path <> "/SKILL.md", content)
-      |> result.map_error(fn(e) { "Failed to write SKILL.md: " <> string.inspect(e) })
+      |> result.map_error(fn(e) {
+        "Failed to write SKILL.md: " <> string.inspect(e)
+      })
     }
     _ -> Error("Skill not found: " <> name)
+  }
+}
+
+/// Create or update a skill. Creates if new, updates if exists.
+pub fn upsert(
+  skills_dir: String,
+  name: String,
+  content: String,
+) -> Result(String, String) {
+  use _ <- result.try(validate_name(name))
+
+  let skill_path = skills_dir <> "/" <> name
+  case simplifile.is_directory(skill_path) {
+    Ok(True) -> {
+      use _ <- result.try(
+        simplifile.write(skill_path <> "/SKILL.md", content)
+        |> result.map_error(fn(e) {
+          "Failed to write SKILL.md: " <> string.inspect(e)
+        }),
+      )
+      Ok("updated")
+    }
+    _ -> {
+      use _ <- result.try(
+        simplifile.create_directory_all(skill_path)
+        |> result.map_error(fn(e) {
+          "Failed to create skill directory: " <> string.inspect(e)
+        }),
+      )
+      use _ <- result.try(
+        simplifile.write(skill_path <> "/SKILL.md", content)
+        |> result.map_error(fn(e) {
+          "Failed to write SKILL.md: " <> string.inspect(e)
+        }),
+      )
+      Ok("created")
+    }
   }
 }
 

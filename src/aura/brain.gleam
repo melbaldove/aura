@@ -4,31 +4,31 @@ import aura/acp/types as acp_types
 import aura/brain_tools
 import aura/compressor
 import aura/config
-import aura/review
-import aura/domain
-import aura/time
-import aura/tools
 import aura/conversation
 import aura/db
 import aura/discord
 import aura/discord/rest
+import aura/domain
 import aura/llm
 import aura/memory
 import aura/models
 import aura/notification
+import aura/review
 import aura/scheduler
 import aura/skill
 import aura/structured_memory
+import aura/time
+import aura/tools
 import aura/validator
 import aura/vision
 import aura/xdg
 import gleam/dict
+import gleam/erlang/process
 import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
-import gleam/erlang/process
 import gleam/result
 import gleam/string
 import simplifile
@@ -77,8 +77,18 @@ pub type BrainMessage {
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
   PostWelcome(channel_id: String)
-  StoreExchange(channel_id: String, messages: List(llm.Message), domain_name: String, prompt_tokens: Int)
-  CompressionComplete(channel_id: String, new_history: List(llm.Message), new_comp_state: conversation.CompressorState, snapshot_len: Int)
+  StoreExchange(
+    channel_id: String,
+    messages: List(llm.Message),
+    domain_name: String,
+    prompt_tokens: Int,
+  )
+  CompressionComplete(
+    channel_id: String,
+    new_history: List(llm.Message),
+    new_comp_state: conversation.CompressorState,
+    snapshot_len: Int,
+  )
   RegisterThread(thread_id: String, domain_name: String)
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
   UpdateReviewCount(channel_id: String, count: Int)
@@ -167,9 +177,8 @@ pub fn build_system_prompt(
     names -> "\n\nActive domains: " <> string.join(names, ", ")
   }
 
-  let skill_lines = list.map(skill_infos, fn(s) {
-    "- " <> s.name <> ": " <> s.description
-  })
+  let skill_lines =
+    list.map(skill_infos, fn(s) { "- " <> s.name <> ": " <> s.description })
   let skills_section = case skill_lines {
     [] -> "\nNo skills installed."
     lines -> "\nInstalled skills:\n" <> string.join(lines, "\n")
@@ -229,10 +238,9 @@ pub fn start(
   use llm_config <- result.try(models.build_llm_config(config.models.brain))
 
   // Resolve context length for compression thresholds
-  let brain_context = case models.resolve_context_length(
-    config.models.brain,
-    config.brain_context,
-  ) {
+  let brain_context = case
+    models.resolve_context_length(config.models.brain, config.brain_context)
+  {
     Ok(len) -> len
     Error(e) -> {
       io.println("[brain] Warning: " <> e <> ", defaulting to 128000")
@@ -248,7 +256,6 @@ pub fn start(
       paths: brain_config.paths,
       domains: brain_config.domains,
       soul: brain_config.soul,
-
       notification_queue: notification.new_queue(),
       aura_channel_id: "",
       acp_subject: brain_config.acp_subject,
@@ -302,7 +309,9 @@ fn handle_message(
             }
             Error(_) -> {
               // Look up parent channel from Discord — is this a thread?
-              case rest.get_channel_parent(state.discord_token, msg.channel_id) {
+              case
+                rest.get_channel_parent(state.discord_token, msg.channel_id)
+              {
                 Ok("") -> {
                   io.println("[brain] Route: #aura")
                   None
@@ -311,10 +320,19 @@ fn handle_message(
                   // Check if parent is a domain channel
                   case route_message(parent_id, state.domains) {
                     DirectRoute(name) -> {
-                      io.println("[brain] Route: " <> name <> " (via thread parent)")
+                      io.println(
+                        "[brain] Route: " <> name <> " (via thread parent)",
+                      )
                       // Cache it for next time
                       case state.self_subject {
-                        Some(subj) -> process.send(subj, RegisterThread(thread_id: msg.channel_id, domain_name: name))
+                        Some(subj) ->
+                          process.send(
+                            subj,
+                            RegisterThread(
+                              thread_id: msg.channel_id,
+                              domain_name: name,
+                            ),
+                          )
                         None -> Nil
                       }
                       Some(name)
@@ -340,7 +358,13 @@ fn handle_message(
           Ok(_) -> Nil
           Error(reason) -> {
             io.println("[brain] CRASH in handle_with_llm: " <> reason)
-            let _ = rest.send_message(state.discord_token, msg.channel_id, "Sorry, I crashed while processing your message. Check the logs.", [])
+            let _ =
+              rest.send_message(
+                state.discord_token,
+                msg.channel_id,
+                "Sorry, I crashed while processing your message. Check the logs.",
+                [],
+              )
             Nil
           }
         }
@@ -348,7 +372,11 @@ fn handle_message(
       actor.continue(state)
     }
     UpdateDomains(domains) -> {
-      io.println("[brain] Updated domains: " <> string.inspect(list.length(domains)) <> " entries")
+      io.println(
+        "[brain] Updated domains: "
+        <> string.inspect(list.length(domains))
+        <> " entries",
+      )
       actor.continue(BrainState(..state, domains: domains))
     }
     HeartbeatFinding(finding) -> {
@@ -357,13 +385,18 @@ fn handle_message(
           // Post urgent findings immediately
           let channel = resolve_finding_channel(state, finding)
           process.spawn_unlinked(fn() {
-            send_discord_response(state.discord_token, channel, "**URGENT** [" <> finding.source <> "] " <> finding.summary)
+            send_discord_response(
+              state.discord_token,
+              channel,
+              "**URGENT** [" <> finding.source <> "] " <> finding.summary,
+            )
           })
           actor.continue(state)
         }
         False -> {
           // Queue for digest
-          let new_queue = notification.enqueue(state.notification_queue, finding)
+          let new_queue =
+            notification.enqueue(state.notification_queue, finding)
           actor.continue(BrainState(..state, notification_queue: new_queue))
         }
       }
@@ -377,7 +410,9 @@ fn handle_message(
           let channel = state.aura_channel_id
           case channel {
             "" -> {
-              io.println("[brain] No #aura channel configured for digest delivery")
+              io.println(
+                "[brain] No #aura channel configured for digest delivery",
+              )
               Nil
             }
             _ -> {
@@ -394,21 +429,31 @@ fn handle_message(
     PostWelcome(channel_id) -> {
       case list.is_empty(state.domains) {
         True -> {
-          let msg = "Aura is online. No domains configured yet. Tell me about your first project and I'll set one up."
+          let msg =
+            "Aura is online. No domains configured yet. Tell me about your first project and I'll set one up."
           process.spawn_unlinked(fn() {
             send_discord_response(state.discord_token, channel_id, msg)
           })
           actor.continue(BrainState(..state, aura_channel_id: channel_id))
         }
-        False -> actor.continue(BrainState(..state, aura_channel_id: channel_id))
+        False ->
+          actor.continue(BrainState(..state, aura_channel_id: channel_id))
       }
     }
     AcpEvent(event) -> handle_acp_event(state, event)
     StoreExchange(channel_id, messages, dn, prompt_tok) -> {
       let now = time.now_ms()
       let cache_key = "discord:" <> channel_id
-      let #(hydrated, _, _) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", channel_id, now)
-      let new_convos = conversation.append_messages(hydrated, cache_key, messages)
+      let #(hydrated, _, _) =
+        conversation.get_or_load_db(
+          state.conversations,
+          state.db_subject,
+          "discord",
+          channel_id,
+          now,
+        )
+      let new_convos =
+        conversation.append_messages(hydrated, cache_key, messages)
 
       let comp_state = case dict.get(state.compressor_states, cache_key) {
         Ok(s) -> s
@@ -416,12 +461,22 @@ fn handle_message(
       }
       // Update compressor state with real token count from API
       let comp_state = case prompt_tok > 0 {
-        True -> conversation.CompressorState(..comp_state, last_prompt_tokens: prompt_tok)
+        True ->
+          conversation.CompressorState(
+            ..comp_state,
+            last_prompt_tokens: prompt_tok,
+          )
         False -> comp_state
       }
 
       let history = conversation.get_history(new_convos, cache_key)
-      case conversation.needs_full_compression(history, state.brain_context, comp_state.last_prompt_tokens) {
+      case
+        conversation.needs_full_compression(
+          history,
+          state.brain_context,
+          comp_state.last_prompt_tokens,
+        )
+      {
         True -> {
           io.println("[brain] Full compression triggered for " <> cache_key)
           let snapshot_len = list.length(history)
@@ -437,40 +492,93 @@ fn handle_message(
             // Flush memories before compression discards messages
             case models.build_llm_config(monitor_model) {
               Ok(monitor_llm_config) ->
-                review.flush_before_compression(monitor_llm_config, history, dn, paths)
+                review.flush_before_compression(
+                  monitor_llm_config,
+                  history,
+                  dn,
+                  paths,
+                )
               Error(e) -> {
-                io.println("[brain] Flush skipped — monitor LLM config failed: " <> e)
+                io.println(
+                  "[brain] Flush skipped — monitor LLM config failed: " <> e,
+                )
                 Nil
               }
             }
-            let #(new_history, new_comp_state) = conversation.compress_history(
-              history, llm_config, comp_state, dn, a_md, s_md, db_subject, cache_key, brain_context,
-            )
+            let #(new_history, new_comp_state) =
+              conversation.compress_history(
+                history,
+                llm_config,
+                comp_state,
+                dn,
+                a_md,
+                s_md,
+                db_subject,
+                cache_key,
+                brain_context,
+              )
             case brain_subject {
-              Some(subj) -> process.send(subj, CompressionComplete(cache_key, new_history, new_comp_state, snapshot_len))
+              Some(subj) ->
+                process.send(
+                  subj,
+                  CompressionComplete(
+                    cache_key,
+                    new_history,
+                    new_comp_state,
+                    snapshot_len,
+                  ),
+                )
               None -> Nil
             }
           })
           actor.continue(BrainState(..state, conversations: new_convos))
         }
         False -> {
-          let #(final_convos, new_comp_state) = case conversation.needs_tool_pruning(history, state.brain_context, comp_state.last_prompt_tokens) {
+          let #(final_convos, new_comp_state) = case
+            conversation.needs_tool_pruning(
+              history,
+              state.brain_context,
+              comp_state.last_prompt_tokens,
+            )
+          {
             True -> {
-              let #(pruned, count) = compressor.prune_tool_outputs(history, compressor.min_tail_messages)
+              let #(pruned, count) =
+                compressor.prune_tool_outputs(
+                  history,
+                  compressor.min_tail_messages,
+                )
               case count > 0 {
-                True -> io.println("[brain] Tool pruning: cleared " <> int.to_string(count) <> " output(s) for " <> cache_key)
+                True ->
+                  io.println(
+                    "[brain] Tool pruning: cleared "
+                    <> int.to_string(count)
+                    <> " output(s) for "
+                    <> cache_key,
+                  )
                 False -> Nil
               }
               #(dict.insert(new_convos, cache_key, pruned), comp_state)
             }
             False -> #(new_convos, comp_state)
           }
-          let new_comp_states = dict.insert(state.compressor_states, cache_key, new_comp_state)
-          actor.continue(BrainState(..state, conversations: final_convos, compressor_states: new_comp_states))
+          let new_comp_states =
+            dict.insert(state.compressor_states, cache_key, new_comp_state)
+          actor.continue(
+            BrainState(
+              ..state,
+              conversations: final_convos,
+              compressor_states: new_comp_states,
+            ),
+          )
         }
       }
     }
-    CompressionComplete(channel_id, compressed_history, new_comp_state, snapshot_len) -> {
+    CompressionComplete(
+      channel_id,
+      compressed_history,
+      new_comp_state,
+      snapshot_len,
+    ) -> {
       // Merge: compressed history + any messages that arrived during compression
       let current = conversation.get_history(state.conversations, channel_id)
       let current_len = list.length(current)
@@ -479,7 +587,13 @@ fn handle_message(
           // New messages arrived — append the delta to compressed history
           let delta = list.drop(current, snapshot_len)
           let delta_len = list.length(delta)
-          io.println("[brain] Compression complete for " <> channel_id <> " (merging " <> int.to_string(delta_len) <> " new messages)")
+          io.println(
+            "[brain] Compression complete for "
+            <> channel_id
+            <> " (merging "
+            <> int.to_string(delta_len)
+            <> " new messages)",
+          )
           list.append(compressed_history, delta)
         }
         False -> {
@@ -488,11 +602,19 @@ fn handle_message(
         }
       }
       let new_convos = dict.insert(state.conversations, channel_id, merged)
-      let new_comp_states = dict.insert(state.compressor_states, channel_id, new_comp_state)
-      actor.continue(BrainState(..state, conversations: new_convos, compressor_states: new_comp_states))
+      let new_comp_states =
+        dict.insert(state.compressor_states, channel_id, new_comp_state)
+      actor.continue(
+        BrainState(
+          ..state,
+          conversations: new_convos,
+          compressor_states: new_comp_states,
+        ),
+      )
     }
     RegisterThread(thread_id:, domain_name:) -> {
-      let new_threads = dict.insert(state.thread_domains, thread_id, domain_name)
+      let new_threads =
+        dict.insert(state.thread_domains, thread_id, domain_name)
       actor.continue(BrainState(..state, thread_domains: new_threads))
     }
     SetScheduler(subject) -> {
@@ -507,7 +629,12 @@ fn handle_message(
       let new_counts = dict.insert(state.skill_review_counts, channel_id, count)
       actor.continue(BrainState(..state, skill_review_counts: new_counts))
     }
-    HandleInteraction(interaction_id:, interaction_token:, custom_id:, channel_id: _) -> {
+    HandleInteraction(
+      interaction_id:,
+      interaction_token:,
+      custom_id:,
+      channel_id: _,
+    ) -> {
       // Acknowledge immediately (must respond within 3 seconds)
       process.spawn_unlinked(fn() {
         case rest.send_interaction_response(interaction_id, interaction_token) {
@@ -552,7 +679,8 @@ fn handle_message(
                 False -> {
                   case action {
                     "approve" -> {
-                      let new_proposals = dict.delete(state.pending_proposals, proposal_id)
+                      let new_proposals =
+                        dict.delete(state.pending_proposals, proposal_id)
                       // Execute the write with validation (approved = True bypasses tier)
                       case
                         tools.write_file(
@@ -572,7 +700,9 @@ fn handle_message(
                                 state.discord_token,
                                 proposal.channel_id,
                                 proposal.message_id,
-                                "**Approved** -- wrote `" <> proposal.path <> "`",
+                                "**Approved** -- wrote `"
+                                  <> proposal.path
+                                  <> "`",
                               )
                             Nil
                           })
@@ -597,7 +727,8 @@ fn handle_message(
                       )
                     }
                     "reject" -> {
-                      let new_proposals = dict.delete(state.pending_proposals, proposal_id)
+                      let new_proposals =
+                        dict.delete(state.pending_proposals, proposal_id)
                       process.send(proposal.reply_to, brain_tools.Rejected)
                       process.spawn_unlinked(fn() {
                         let _ =
@@ -614,7 +745,12 @@ fn handle_message(
                       )
                     }
                     unknown -> {
-                      io.println("[brain] Unknown interaction action: " <> unknown <> " for proposal " <> proposal_id)
+                      io.println(
+                        "[brain] Unknown interaction action: "
+                        <> unknown
+                        <> " for proposal "
+                        <> proposal_id,
+                      )
                       actor.continue(state)
                     }
                   }
@@ -649,14 +785,15 @@ fn handle_message(
         Error(_) -> state.pending_proposals
       }
       let new_proposals = dict.insert(new_proposals, proposal.id, proposal)
-      actor.continue(
-        BrainState(..state, pending_proposals: new_proposals),
-      )
+      actor.continue(BrainState(..state, pending_proposals: new_proposals))
     }
   }
 }
 
-fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Next(BrainState, BrainMessage) {
+fn handle_acp_event(
+  state: BrainState,
+  event: acp_monitor.AcpEvent,
+) -> actor.Next(BrainState, BrainMessage) {
   case event {
     acp_monitor.AcpStarted(session_name, domain, task_id) -> {
       let msg =
@@ -674,9 +811,14 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
     acp_monitor.AcpAlert(session_name, domain, status, summary) -> {
       let status_str = acp_types.status_to_string(status)
       let title = extract_summary_field(summary, "Title:")
-      let title_display = case title { "" -> session_name _ -> title }
+      let title_display = case title {
+        "" -> session_name
+        _ -> title
+      }
 
-      let elapsed_str = case manager.get_session(state.acp_subject, session_name) {
+      let elapsed_str = case
+        manager.get_session(state.acp_subject, session_name)
+      {
         Ok(session) -> {
           let elapsed_min = { time.now_ms() - session.started_at_ms } / 60_000
           int.to_string(elapsed_min) <> "m elapsed"
@@ -684,8 +826,16 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
         Error(_) -> ""
       }
 
-      let header = "\u{26A0}\u{FE0F} **" <> title_display <> "** \u{00B7} " <> elapsed_str <> " \u{00B7} " <> status_str
-        <> "\n`" <> session_name <> "`"
+      let header =
+        "\u{26A0}\u{FE0F} **"
+        <> title_display
+        <> "** \u{00B7} "
+        <> elapsed_str
+        <> " \u{00B7} "
+        <> status_str
+        <> "\n`"
+        <> session_name
+        <> "`"
 
       let done = extract_summary_field(summary, "Done:")
       let current = extract_summary_field(summary, "Current:")
@@ -693,10 +843,22 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
       let next = extract_summary_field(summary, "Next:")
       let parts = [
         "**Status:** " <> status_str,
-        case done { "" -> "" _ -> "**Done:** " <> done },
-        case current { "" -> "" _ -> "**Current:** " <> current },
-        case needs { "" | "none" | "None" -> "" _ -> "**Needs input:** " <> needs },
-        case next { "" -> "" _ -> "**Next:** " <> next },
+        case done {
+          "" -> ""
+          _ -> "**Done:** " <> done
+        },
+        case current {
+          "" -> ""
+          _ -> "**Current:** " <> current
+        },
+        case needs {
+          "" | "none" | "None" -> ""
+          _ -> "**Needs input:** " <> needs
+        },
+        case next {
+          "" -> ""
+          _ -> "**Next:** " <> next
+        },
       ]
       let body = list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
       let msg = header <> "\n\n" <> body
@@ -735,7 +897,14 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
       })
       actor.continue(state)
     }
-    acp_monitor.AcpProgress(session_name, domain, title, status, summary, is_idle) -> {
+    acp_monitor.AcpProgress(
+      session_name,
+      domain,
+      title,
+      status,
+      summary,
+      is_idle,
+    ) -> {
       // Write to domain log
       let domain_dir = xdg.domain_data_dir(state.paths, domain)
       case memory.append_domain_log(domain_dir, summary) {
@@ -744,7 +913,9 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
       }
 
       // Build elapsed time from session
-      let elapsed_str = case manager.get_session(state.acp_subject, session_name) {
+      let elapsed_str = case
+        manager.get_session(state.acp_subject, session_name)
+      {
         Ok(session) -> {
           let elapsed_min = { time.now_ms() - session.started_at_ms } / 60_000
           int.to_string(elapsed_min) <> "m elapsed"
@@ -753,12 +924,29 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
       }
 
       // Format Discord message
-      let icon = case is_idle { True -> "\u{23F8}\u{FE0F}" False -> "\u{1F4CB}" }
-      let title_display = case title { "" -> session_name _ -> title }
-      let idle_suffix = case is_idle { True -> " \u{00B7} idle" False -> "" }
+      let icon = case is_idle {
+        True -> "\u{23F8}\u{FE0F}"
+        False -> "\u{1F4CB}"
+      }
+      let title_display = case title {
+        "" -> session_name
+        _ -> title
+      }
+      let idle_suffix = case is_idle {
+        True -> " \u{00B7} idle"
+        False -> ""
+      }
 
-      let header = icon <> " **" <> title_display <> "** \u{00B7} " <> elapsed_str <> idle_suffix
-        <> "\n`" <> session_name <> "`"
+      let header =
+        icon
+        <> " **"
+        <> title_display
+        <> "** \u{00B7} "
+        <> elapsed_str
+        <> idle_suffix
+        <> "\n`"
+        <> session_name
+        <> "`"
 
       // Build body from structured fields
       let body = case is_idle {
@@ -767,25 +955,47 @@ fn handle_acp_event(state: BrainState, event: acp_monitor.AcpEvent) -> actor.Nex
           let done = extract_summary_field(summary, "Done:")
           let needs = extract_summary_field(summary, "Needs input:")
           let parts = [
-            case done { "" -> "" _ -> "**Done:** " <> done },
-            case needs { "" | "none" | "None" -> "" _ -> "**Needs input:** " <> needs },
+            case done {
+              "" -> ""
+              _ -> "**Done:** " <> done
+            },
+            case needs {
+              "" | "none" | "None" -> ""
+              _ -> "**Needs input:** " <> needs
+            },
           ]
-          let body_text = list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
+          let body_text =
+            list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
           body_text <> "\n\nWant me to check on this? Reply in this thread."
         }
         False -> {
           // Active: show Status + Done + Current + Needs input + Next
-          let status_line = case status { "" -> "" _ -> "**Status:** " <> status }
+          let status_line = case status {
+            "" -> ""
+            _ -> "**Status:** " <> status
+          }
           let done = extract_summary_field(summary, "Done:")
           let current = extract_summary_field(summary, "Current:")
           let needs = extract_summary_field(summary, "Needs input:")
           let next = extract_summary_field(summary, "Next:")
           let parts = [
             status_line,
-            case done { "" -> "" _ -> "**Done:** " <> done },
-            case current { "" -> "" _ -> "**Current:** " <> current },
-            case needs { "" | "none" | "None" -> "" _ -> "**Needs input:** " <> needs },
-            case next { "" -> "" _ -> "**Next:** " <> next },
+            case done {
+              "" -> ""
+              _ -> "**Done:** " <> done
+            },
+            case current {
+              "" -> ""
+              _ -> "**Current:** " <> current
+            },
+            case needs {
+              "" | "none" | "None" -> ""
+              _ -> "**Needs input:** " <> needs
+            },
+            case next {
+              "" -> ""
+              _ -> "**Next:** " <> next
+            },
           ]
           list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
         }
@@ -808,17 +1018,25 @@ fn resolve_domain_channel(state: BrainState, domain: String) -> String {
   }
 }
 
-fn resolve_acp_channel(state: BrainState, session_name: String, domain: String) -> String {
+fn resolve_acp_channel(
+  state: BrainState,
+  session_name: String,
+  domain: String,
+) -> String {
   case manager.get_session(state.acp_subject, session_name) {
-    Ok(session) -> case session.thread_id {
-      "" -> resolve_domain_channel(state, domain)
-      id -> id
-    }
+    Ok(session) ->
+      case session.thread_id {
+        "" -> resolve_domain_channel(state, domain)
+        id -> id
+      }
     Error(_) -> resolve_domain_channel(state, domain)
   }
 }
 
-fn resolve_finding_channel(state: BrainState, finding: notification.Finding) -> String {
+fn resolve_finding_channel(
+  state: BrainState,
+  finding: notification.Finding,
+) -> String {
   resolve_domain_channel(state, finding.domain)
 }
 
@@ -828,8 +1046,13 @@ fn extract_summary_field(text: String, field: String) -> String {
   case string.split(text, "\n") {
     [] -> ""
     lines -> {
-      case list.find(lines, fn(line) { string.starts_with(string.trim(line), field) }) {
-        Ok(line) -> string.trim(string.drop_start(string.trim(line), string.length(field)))
+      case
+        list.find(lines, fn(line) {
+          string.starts_with(string.trim(line), field)
+        })
+      {
+        Ok(line) ->
+          string.trim(string.drop_start(string.trim(line), string.length(field)))
         Error(_) -> ""
       }
     }
@@ -838,19 +1061,11 @@ fn extract_summary_field(text: String, field: String) -> String {
 
 /// Spawn a process that sends typing indicators every 8 seconds.
 /// Returns the PID of the typing process. Kill it to stop.
-fn start_typing_loop(
-  token: String,
-  channel_id: String,
-) -> process.Pid {
-  process.spawn_unlinked(fn() {
-    typing_loop(token, channel_id)
-  })
+fn start_typing_loop(token: String, channel_id: String) -> process.Pid {
+  process.spawn_unlinked(fn() { typing_loop(token, channel_id) })
 }
 
-fn typing_loop(
-  token: String,
-  channel_id: String,
-) -> Nil {
+fn typing_loop(token: String, channel_id: String) -> Nil {
   let _ = rest.trigger_typing(token, channel_id)
   process.sleep(8000)
   typing_loop(token, channel_id)
@@ -886,8 +1101,17 @@ fn stop_typing_loop(pid: process.Pid) -> Nil {
   process.kill(pid)
 }
 
-fn send_discord_response(token: String, channel_id: String, content: String) -> Nil {
-  io.println("[brain] Sending to channel " <> channel_id <> ": " <> string.slice(content, 0, 100))
+fn send_discord_response(
+  token: String,
+  channel_id: String,
+  content: String,
+) -> Nil {
+  io.println(
+    "[brain] Sending to channel "
+    <> channel_id
+    <> ": "
+    <> string.slice(content, 0, 100),
+  )
   // Discord message limit is 2000 chars
   let safe_content = case string.length(content) > 1990 {
     True -> string.slice(content, 0, 1990) <> " ..."
@@ -908,21 +1132,43 @@ fn handle_with_llm(
   brain_subject_opt: Option(process.Subject(BrainMessage)),
   domain_name: Option(String),
 ) -> Nil {
-  io.println("[brain] Processing message from " <> msg.author_name <> " in channel " <> msg.channel_id)
+  io.println(
+    "[brain] Processing message from "
+    <> msg.author_name
+    <> " in channel "
+    <> msg.channel_id,
+  )
 
   // Determine response channel: if this is a top-level domain channel, create a thread.
   // If it's already a thread (or #aura), respond in the same channel.
-  let is_domain_channel = list.any(state.domains, fn(d) { d.channel_id == msg.channel_id })
+  let is_domain_channel =
+    list.any(state.domains, fn(d) { d.channel_id == msg.channel_id })
   let response_channel = case is_domain_channel {
     True -> {
       // Top-level domain message — create a thread
       let thread_name = string.slice(msg.content, 0, 50)
-      case rest.create_thread_from_message(state.discord_token, msg.channel_id, msg.message_id, thread_name) {
+      case
+        rest.create_thread_from_message(
+          state.discord_token,
+          msg.channel_id,
+          msg.message_id,
+          thread_name,
+        )
+      {
         Ok(thread_id) -> {
-          io.println("[brain] Created thread " <> thread_id <> " for message in " <> msg.channel_id)
+          io.println(
+            "[brain] Created thread "
+            <> thread_id
+            <> " for message in "
+            <> msg.channel_id,
+          )
           // Register thread → domain mapping so subsequent messages route correctly
           case brain_subject_opt, domain_name {
-            Some(subj), Some(name) -> process.send(subj, RegisterThread(thread_id: thread_id, domain_name: name))
+            Some(subj), Some(name) ->
+              process.send(
+                subj,
+                RegisterThread(thread_id: thread_id, domain_name: name),
+              )
             _, _ -> Nil
           }
           thread_id
@@ -940,15 +1186,26 @@ fn handle_with_llm(
   let typing_stop = start_typing_loop(state.discord_token, response_channel)
 
   let domain_names = list.map(state.domains, fn(d) { d.name })
-  let memory_content = case structured_memory.format_for_display(xdg.memory_path(state.paths)) {
+  let memory_content = case
+    structured_memory.format_for_display(xdg.memory_path(state.paths))
+  {
     Ok(c) -> c
     Error(_) -> ""
   }
-  let user_content = case structured_memory.format_for_display(xdg.user_path(state.paths)) {
+  let user_content = case
+    structured_memory.format_for_display(xdg.user_path(state.paths))
+  {
     Ok(c) -> c
     Error(_) -> ""
   }
-  let system_prompt = build_system_prompt(state.soul, domain_names, state.skill_infos, memory_content, user_content)
+  let system_prompt =
+    build_system_prompt(
+      state.soul,
+      domain_names,
+      state.skill_infos,
+      memory_content,
+      user_content,
+    )
 
   // Load domain context if routed to a domain
   let domain_prompt = case domain_name {
@@ -956,7 +1213,8 @@ fn handle_with_llm(
       let config_dir = xdg.domain_config_dir(state.paths, name)
       let data_dir = xdg.domain_data_dir(state.paths, name)
       let state_dir = xdg.domain_state_dir(state.paths, name)
-      let ctx = domain.load_context(config_dir, data_dir, state_dir, state.skill_infos)
+      let ctx =
+        domain.load_context(config_dir, data_dir, state_dir, state.skill_infos)
       "\n\n" <> domain.build_domain_prompt(ctx)
     }
     None -> ""
@@ -995,17 +1253,22 @@ fn handle_with_llm(
   let system_prompt = system_prompt <> domain_prompt <> fs_section
 
   // Inject ACP session context if this message is in an ACP thread
-  let acp_context = case list.find(
-    manager.list_sessions(state.acp_subject),
-    fn(s) { s.thread_id == msg.channel_id },
-  ) {
+  let acp_context = case
+    list.find(manager.list_sessions(state.acp_subject), fn(s) {
+      s.thread_id == msg.channel_id
+    })
+  {
     Ok(session) -> {
       "\n\n## Active ACP Session"
       <> "\nYou are in an ACP session thread."
-      <> "\nSession: " <> session.session_name
-      <> "\nState: " <> manager.session_state_to_string(session.state)
-      <> "\nDomain: " <> session.domain
-      <> "\nTask: " <> string.slice(session.prompt, 0, 300)
+      <> "\nSession: "
+      <> session.session_name
+      <> "\nState: "
+      <> manager.session_state_to_string(session.state)
+      <> "\nDomain: "
+      <> session.domain
+      <> "\nTask: "
+      <> string.slice(session.prompt, 0, 300)
       <> "\n\nUse acp_status to check progress, acp_prompt to send instructions, acp_list to see all sessions."
     }
     Error(_) -> ""
@@ -1015,23 +1278,42 @@ fn handle_with_llm(
   // Vision preprocessing — describe attached images before tool loop
   let enriched_content = preprocess_vision(state, msg, domain_name)
 
-    // Load conversation history (from memory or DB)
+  // Load conversation history (from memory or DB)
   let now_ts = time.now_ms()
-  let #(_, _, history) = conversation.get_or_load_db(state.conversations, state.db_subject, "discord", response_channel, now_ts)
-  io.println("[brain] Loaded " <> int.to_string(list.length(history)) <> " history messages for " <> response_channel)
+  let #(_, _, history) =
+    conversation.get_or_load_db(
+      state.conversations,
+      state.db_subject,
+      "discord",
+      response_channel,
+      now_ts,
+    )
+  io.println(
+    "[brain] Loaded "
+    <> int.to_string(list.length(history))
+    <> " history messages for "
+    <> response_channel,
+  )
 
-  let initial_messages = list.flatten([
-    [llm.SystemMessage(system_prompt)],
-    history,
-    [llm.UserMessage(enriched_content)],
-  ])
+  let initial_messages =
+    list.flatten([
+      [llm.SystemMessage(system_prompt)],
+      history,
+      [llm.UserMessage(enriched_content)],
+    ])
 
   // Look up domain config once for cwd + provider settings
   let #(domain_cwd, acp_provider, acp_binary, acp_worktree) = case domain_name {
-    Some(name) -> case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
-      Ok(#(_, cfg)) -> #(cfg.cwd, cfg.acp_provider, cfg.acp_binary, cfg.acp_worktree)
-      Error(_) -> #(".", "claude-code", "", True)
-    }
+    Some(name) ->
+      case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
+        Ok(#(_, cfg)) -> #(
+          cfg.cwd,
+          cfg.acp_provider,
+          cfg.acp_binary,
+          cfg.acp_worktree,
+        )
+        Error(_) -> #(".", "claude-code", "", True)
+      }
     None -> #(".", "claude-code", "", True)
   }
 
@@ -1040,33 +1322,35 @@ fn handle_with_llm(
     None -> state.paths.data
   }
 
-  let tool_ctx = brain_tools.ToolContext(
-    base_dir: base_dir,
-    discord_token: state.discord_token,
-    guild_id: state.guild_id,
-    message_id: msg.message_id,
-    channel_id: response_channel,
-    paths: state.paths,
-    skill_infos: state.skill_infos,
-    skills_dir: state.skills_dir,
-    validation_rules: state.validation_rules,
-    db_subject: state.db_subject,
-    scheduler_subject: state.scheduler_subject,
-    acp_subject: state.acp_subject,
-    domain_name: option.unwrap(domain_name, "aura"),
-    domain_cwd: domain_cwd,
-    acp_provider: acp_provider,
-    acp_binary: acp_binary,
-    acp_worktree: acp_worktree,
-    on_propose: fn(proposal) {
-      case brain_subject_opt {
-        Some(subj) -> process.send(subj, RegisterProposal(proposal: proposal))
-        None -> Nil
-      }
-    },
-  )
+  let tool_ctx =
+    brain_tools.ToolContext(
+      base_dir: base_dir,
+      discord_token: state.discord_token,
+      guild_id: state.guild_id,
+      message_id: msg.message_id,
+      channel_id: response_channel,
+      paths: state.paths,
+      skill_infos: state.skill_infos,
+      skills_dir: state.skills_dir,
+      validation_rules: state.validation_rules,
+      db_subject: state.db_subject,
+      scheduler_subject: state.scheduler_subject,
+      acp_subject: state.acp_subject,
+      domain_name: option.unwrap(domain_name, "aura"),
+      domain_cwd: domain_cwd,
+      acp_provider: acp_provider,
+      acp_binary: acp_binary,
+      acp_worktree: acp_worktree,
+      on_propose: fn(proposal) {
+        case brain_subject_opt {
+          Some(subj) -> process.send(subj, RegisterProposal(proposal: proposal))
+          None -> Nil
+        }
+      },
+    )
 
-  let result = tool_loop_with_retry(state, tool_ctx, response_channel, initial_messages, 3)
+  let result =
+    tool_loop_with_retry(state, tool_ctx, response_channel, initial_messages, 3)
 
   // Stop typing indicator before any final edits
   stop_typing_loop(typing_stop)
@@ -1082,14 +1366,34 @@ fn handle_with_llm(
 
       // Save to DB FIRST — before Discord delivery — so the next turn sees this exchange
       let now = time.now_ms()
-      case db.resolve_conversation(state.db_subject, "discord", channel_id, now) {
+      case
+        db.resolve_conversation(state.db_subject, "discord", channel_id, now)
+      {
         Ok(convo_id) -> {
-          case conversation.save_exchange_to_db(state.db_subject, convo_id, all_turn_messages, msg.author_id, msg.author_name, now) {
+          case
+            conversation.save_exchange_to_db(
+              state.db_subject,
+              convo_id,
+              all_turn_messages,
+              msg.author_id,
+              msg.author_name,
+              now,
+            )
+          {
             Ok(_) -> Nil
-            Error(e) -> io.println("[brain] DB save failed for " <> channel_id <> ": " <> e)
+            Error(e) ->
+              io.println(
+                "[brain] DB save failed for " <> channel_id <> ": " <> e,
+              )
           }
         }
-        Error(e) -> io.println("[brain] Failed to resolve conversation for " <> channel_id <> ": " <> e)
+        Error(e) ->
+          io.println(
+            "[brain] Failed to resolve conversation for "
+            <> channel_id
+            <> ": "
+            <> e,
+          )
       }
 
       let full = conversation.format_full_message(traces, response_text)
@@ -1099,17 +1403,22 @@ fn handle_with_llm(
       case brain_subject_opt {
         Some(subj) -> {
           let dn = option.unwrap(domain_name, "aura")
-          process.send(subj, StoreExchange(channel_id, all_turn_messages, dn, prompt_tokens))
+          process.send(
+            subj,
+            StoreExchange(channel_id, all_turn_messages, dn, prompt_tokens),
+          )
         }
         None -> Nil
       }
 
-      // Post-response memory review
+      // Post-response reviews
+      let domain_for_review = option.unwrap(domain_name, "aura")
+      let full_history = list.flatten([history, all_turn_messages])
+
       let review_count = case dict.get(state.review_counts, response_channel) {
         Ok(c) -> c
         Error(_) -> 0
       }
-      let domain_for_review = option.unwrap(domain_name, "aura")
       let new_review_count =
         review.maybe_spawn_review(
           state.global_config.memory.review_interval,
@@ -1117,7 +1426,7 @@ fn handle_with_llm(
           domain_for_review,
           response_channel,
           state.discord_token,
-          list.flatten([history, all_turn_messages]),
+          full_history,
           review_count,
           state.paths,
           state.global_config.models.monitor,
@@ -1136,7 +1445,9 @@ fn handle_with_llm(
       }
 
       // Post-response skill review
-      let skill_review_count = case dict.get(state.skill_review_counts, response_channel) {
+      let skill_review_count = case
+        dict.get(state.skill_review_counts, response_channel)
+      {
         Ok(c) -> c
         Error(_) -> 0
       }
@@ -1147,7 +1458,7 @@ fn handle_with_llm(
           domain_for_review,
           response_channel,
           state.discord_token,
-          list.flatten([history, all_turn_messages]),
+          full_history,
           skill_review_count,
           new_tool_calls,
           state.paths,
@@ -1168,43 +1479,75 @@ fn handle_with_llm(
     }
     Error(err) -> {
       io.println("[brain] Error: " <> err)
-      let _ = rest.send_message(token, channel_id, "Sorry, I encountered an error.", [])
+      let _ =
+        rest.send_message(
+          token,
+          channel_id,
+          "Sorry, I encountered an error.",
+          [],
+        )
       Nil
     }
   }
 }
+
 fn tool_loop_with_retry(
   state: BrainState,
   tool_ctx: brain_tools.ToolContext,
   channel_id: String,
   messages: List(llm.Message),
   retries_left: Int,
-) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message), Int), String) {
-  case tool_loop_progressive(state, tool_ctx, channel_id, messages, [], "", 0, []) {
+) -> Result(
+  #(String, List(conversation.ToolTrace), String, List(llm.Message), Int),
+  String,
+) {
+  case
+    tool_loop_progressive(state, tool_ctx, channel_id, messages, [], "", 0, [])
+  {
     Ok(result) -> Ok(result)
     Error(err) -> {
       // Auto-probe: if context overflow, halve brain_context and retry
       let is_context_overflow =
-        string.contains(err, "context_length") ||
-        string.contains(err, "maximum context") ||
-        string.contains(err, "token limit") ||
-        string.contains(err, "too many tokens") ||
-        string.contains(err, "context window")
+        string.contains(err, "context_length")
+        || string.contains(err, "maximum context")
+        || string.contains(err, "token limit")
+        || string.contains(err, "too many tokens")
+        || string.contains(err, "context window")
       case is_context_overflow && retries_left > 0 {
         True -> {
           let new_context = state.brain_context / 2
-          io.println("[brain] Context overflow detected, halving brain_context to " <> int.to_string(new_context))
+          io.println(
+            "[brain] Context overflow detected, halving brain_context to "
+            <> int.to_string(new_context),
+          )
           let new_state = BrainState(..state, brain_context: new_context)
-          tool_loop_with_retry(new_state, tool_ctx, channel_id, messages, retries_left - 1)
+          tool_loop_with_retry(
+            new_state,
+            tool_ctx,
+            channel_id,
+            messages,
+            retries_left - 1,
+          )
         }
-        False -> case retries_left > 0 && string.contains(err, "timeout") {
-          True -> {
-            io.println("[brain] Stream timeout, retrying (" <> int.to_string(retries_left) <> " left)...")
-            process.sleep(2000)
-            tool_loop_with_retry(state, tool_ctx, channel_id, messages, retries_left - 1)
+        False ->
+          case retries_left > 0 && string.contains(err, "timeout") {
+            True -> {
+              io.println(
+                "[brain] Stream timeout, retrying ("
+                <> int.to_string(retries_left)
+                <> " left)...",
+              )
+              process.sleep(2000)
+              tool_loop_with_retry(
+                state,
+                tool_ctx,
+                channel_id,
+                messages,
+                retries_left - 1,
+              )
+            }
+            False -> Error(err)
           }
-          False -> Error(err)
-        }
       }
     }
   }
@@ -1219,17 +1562,33 @@ fn tool_loop_progressive(
   message_id: String,
   iteration: Int,
   new_messages: List(llm.Message),
-) -> Result(#(String, List(conversation.ToolTrace), String, List(llm.Message), Int), String) {
+) -> Result(
+  #(String, List(conversation.ToolTrace), String, List(llm.Message), Int),
+  String,
+) {
   case iteration >= max_tool_iterations {
     True -> Error("Tool loop exceeded maximum iterations")
     False -> {
       // Pre-flight: if messages exceed context, prune tool outputs inline
-      let messages = case compressor.estimate_messages_tokens(messages) > state.brain_context {
+      let messages = case
+        compressor.estimate_messages_tokens(messages) > state.brain_context
+      {
         True -> {
-          io.println("[brain] Pre-flight: messages exceed context, pruning tool outputs")
-          let #(pruned, count) = compressor.prune_tool_outputs(messages, compressor.min_tail_messages)
+          io.println(
+            "[brain] Pre-flight: messages exceed context, pruning tool outputs",
+          )
+          let #(pruned, count) =
+            compressor.prune_tool_outputs(
+              messages,
+              compressor.min_tail_messages,
+            )
           case count > 0 {
-            True -> io.println("[brain] Pre-flight: pruned " <> int.to_string(count) <> " tool output(s)")
+            True ->
+              io.println(
+                "[brain] Pre-flight: pruned "
+                <> int.to_string(count)
+                <> " tool output(s)",
+              )
             False -> Nil
           }
           pruned
@@ -1239,64 +1598,118 @@ fn tool_loop_progressive(
 
       // Spawn streaming LLM call with tools
       let self_pid = process.self()
-      let _ = process.spawn_unlinked(fn() {
-        llm.chat_streaming_with_tools(state.llm_config, messages, state.built_in_tools, self_pid)
-      })
+      let _ =
+        process.spawn_unlinked(fn() {
+          llm.chat_streaming_with_tools(
+            state.llm_config,
+            messages,
+            state.built_in_tools,
+            self_pid,
+          )
+        })
 
       // Collect the streaming response (content + tool calls)
-      case collect_stream_response(state.discord_token, channel_id, message_id, traces, stream_idle_timeout_ms) {
+      case
+        collect_stream_response(
+          state.discord_token,
+          channel_id,
+          message_id,
+          traces,
+          stream_idle_timeout_ms,
+        )
+      {
         Ok(#(content, tool_calls_json, msg_id, prompt_tokens)) -> {
           let response = parse_streaming_result(content, tool_calls_json)
           case response.tool_calls {
             [] -> {
               // No tool calls — return the text response with accumulated traces
-              let final_new_messages = list.reverse([llm.AssistantMessage(response.content), ..list.reverse(new_messages)])
-              Ok(#(response.content, traces, msg_id, final_new_messages, prompt_tokens))
+              let final_new_messages =
+                list.reverse([
+                  llm.AssistantMessage(response.content),
+                  ..list.reverse(new_messages)
+                ])
+              Ok(#(
+                response.content,
+                traces,
+                msg_id,
+                final_new_messages,
+                prompt_tokens,
+              ))
             }
             calls -> {
               // Expand concatenated JSON tool calls from GLM-5.1
               let calls = brain_tools.expand_tool_calls(calls)
               // Execute tool calls and continue the loop
-              io.println("[brain] " <> int.to_string(list.length(calls)) <> " tool call(s)")
+              io.println(
+                "[brain] "
+                <> int.to_string(list.length(calls))
+                <> " tool call(s)",
+              )
 
               // Execute each tool and build traces + result messages
-              let #(rev_traces, rev_results) = list.fold(calls, #([], []), fn(acc, call) {
-                let #(acc_traces, acc_results) = acc
-                io.println("[brain] Tool: " <> call.name <> " args: " <> call.arguments)
-                let #(tool_result, parsed_args) = brain_tools.execute_tool(tool_ctx, call)
-                let result_text = brain_tools.tool_result_text(tool_result)
-                let result_preview = string.slice(result_text, 0, 100)
-                io.println("[brain] Result: " <> result_preview)
+              let #(rev_traces, rev_results) =
+                list.fold(calls, #([], []), fn(acc, call) {
+                  let #(acc_traces, acc_results) = acc
+                  io.println(
+                    "[brain] Tool: " <> call.name <> " args: " <> call.arguments,
+                  )
+                  let #(tool_result, parsed_args) =
+                    brain_tools.execute_tool(tool_ctx, call)
+                  let result_text = brain_tools.tool_result_text(tool_result)
+                  let result_preview = string.slice(result_text, 0, 100)
+                  io.println("[brain] Result: " <> result_preview)
 
-                let is_error = string.starts_with(result_text, "Error")
-                let trace = conversation.ToolTrace(
-                  name: call.name,
-                  args: brain_tools.format_tool_args(parsed_args),
-                  result: result_text,
-                  is_error: is_error,
-                )
-                #([trace, ..acc_traces], [llm.ToolResultMessage(call.id, result_text), ..acc_results])
-              })
+                  let is_error = string.starts_with(result_text, "Error")
+                  let trace =
+                    conversation.ToolTrace(
+                      name: call.name,
+                      args: brain_tools.format_tool_args(parsed_args),
+                      result: result_text,
+                      is_error: is_error,
+                    )
+                  #([trace, ..acc_traces], [
+                    llm.ToolResultMessage(call.id, result_text),
+                    ..acc_results
+                  ])
+                })
               let new_traces = list.flatten([traces, list.reverse(rev_traces)])
               let tool_results = list.reverse(rev_results)
 
               // Format current traces for progressive display
-              let progress_text = conversation.format_traces(new_traces) <> "\n\n*Thinking...*"
+              let progress_text =
+                conversation.format_traces(new_traces) <> "\n\n*Thinking...*"
 
               // Send or edit message with current trace progress
-              let new_message_id = send_or_edit(state.discord_token, channel_id, message_id, progress_text)
+              let new_message_id =
+                send_or_edit(
+                  state.discord_token,
+                  channel_id,
+                  message_id,
+                  progress_text,
+                )
 
               // Track new messages from this iteration: assistant tool call + tool results
               let iteration_messages = [
                 llm.AssistantToolCallMessage(response.content, calls),
                 ..tool_results
               ]
-              let updated_new_messages = list.flatten([new_messages, iteration_messages])
+              let updated_new_messages =
+                list.flatten([new_messages, iteration_messages])
 
               // Build full messages for the next LLM call: all prior messages + this iteration
-              let updated_messages = list.flatten([messages, iteration_messages])
+              let updated_messages =
+                list.flatten([messages, iteration_messages])
 
-              tool_loop_progressive(state, tool_ctx, channel_id, updated_messages, new_traces, new_message_id, iteration + 1, updated_new_messages)
+              tool_loop_progressive(
+                state,
+                tool_ctx,
+                channel_id,
+                updated_messages,
+                new_traces,
+                new_message_id,
+                iteration + 1,
+                updated_new_messages,
+              )
             }
           }
         }
@@ -1330,28 +1743,56 @@ fn collect_stream_loop(
   case remaining_ms <= 0 {
     True -> Error("Stream timeout")
     False -> {
-      let wait = case remaining_ms > stream_check_interval_ms { True -> stream_check_interval_ms False -> remaining_ms }
+      let wait = case remaining_ms > stream_check_interval_ms {
+        True -> stream_check_interval_ms
+        False -> remaining_ms
+      }
       case receive_stream_message(wait) {
         StreamDelta(delta) -> {
           let new_acc = accumulated <> delta
           // Progressive edit every 150 chars
-          let #(new_msg_id, new_edit_len) = case string.length(new_acc) - last_edit_len > progressive_edit_chars {
+          let #(new_msg_id, new_edit_len) = case
+            string.length(new_acc) - last_edit_len > progressive_edit_chars
+          {
             True -> {
-              let display = conversation.format_full_message(traces, new_acc <> " ...")
-              #(send_or_edit(token, channel_id, msg_id, display), string.length(new_acc))
+              let display =
+                conversation.format_full_message(traces, new_acc <> " ...")
+              #(
+                send_or_edit(token, channel_id, msg_id, display),
+                string.length(new_acc),
+              )
             }
             False -> #(msg_id, last_edit_len)
           }
           // Data received — reset idle timeout to 120s
-          collect_stream_loop(token, channel_id, new_msg_id, traces, new_acc, new_edit_len, stream_idle_timeout_ms)
+          collect_stream_loop(
+            token,
+            channel_id,
+            new_msg_id,
+            traces,
+            new_acc,
+            new_edit_len,
+            stream_idle_timeout_ms,
+          )
         }
         StreamReasoning -> {
           // GLM-5.1 thinking — stream is alive, reset idle timeout
-          collect_stream_loop(token, channel_id, msg_id, traces, accumulated, last_edit_len, stream_idle_timeout_ms)
+          collect_stream_loop(
+            token,
+            channel_id,
+            msg_id,
+            traces,
+            accumulated,
+            last_edit_len,
+            stream_idle_timeout_ms,
+          )
         }
         StreamComplete(content, tool_calls_json, prompt_tokens) -> {
           // Stream finished — do final Discord edit if we have content
-          let final_msg_id = case string.length(content) > 0 && string.length(content) != last_edit_len {
+          let final_msg_id = case
+            string.length(content) > 0
+            && string.length(content) != last_edit_len
+          {
             True -> {
               let display = conversation.format_full_message(traces, content)
               send_or_edit(token, channel_id, msg_id, display)
@@ -1366,7 +1807,15 @@ fn collect_stream_loop(
         }
         StreamError(err) -> Error("Stream error: " <> err)
         StreamTimeout -> {
-          collect_stream_loop(token, channel_id, msg_id, traces, accumulated, last_edit_len, remaining_ms - wait)
+          collect_stream_loop(
+            token,
+            channel_id,
+            msg_id,
+            traces,
+            accumulated,
+            last_edit_len,
+            remaining_ms - wait,
+          )
         }
       }
     }
@@ -1374,7 +1823,10 @@ fn collect_stream_loop(
 }
 
 /// Parse the streaming result into an LlmResponse.
-fn parse_streaming_result(content: String, tool_calls_json: String) -> llm.LlmResponse {
+fn parse_streaming_result(
+  content: String,
+  tool_calls_json: String,
+) -> llm.LlmResponse {
   case tool_calls_json {
     "[]" -> llm.LlmResponse(content: content, tool_calls: [])
     json_str -> {
@@ -1382,7 +1834,10 @@ fn parse_streaming_result(content: String, tool_calls_json: String) -> llm.LlmRe
       case llm.parse_flat_tool_calls_json(json_str) {
         Ok(calls) -> llm.LlmResponse(content: content, tool_calls: calls)
         Error(_) -> {
-          io.println("[brain] Failed to parse tool calls JSON: " <> string.slice(json_str, 0, 200))
+          io.println(
+            "[brain] Failed to parse tool calls JSON: "
+            <> string.slice(json_str, 0, 200),
+          )
           llm.LlmResponse(content: content, tool_calls: [])
         }
       }
@@ -1390,12 +1845,14 @@ fn parse_streaming_result(content: String, tool_calls_json: String) -> llm.LlmRe
   }
 }
 
-
 // ---------------------------------------------------------------------------
 // Domain context helpers
 // ---------------------------------------------------------------------------
 
-fn load_domain_context_files(paths: xdg.Paths, domain_name: String) -> #(String, String) {
+fn load_domain_context_files(
+  paths: xdg.Paths,
+  domain_name: String,
+) -> #(String, String) {
   case domain_name {
     "aura" -> #("", "")
     name -> {
@@ -1404,14 +1861,24 @@ fn load_domain_context_files(paths: xdg.Paths, domain_name: String) -> #(String,
       let a_md = case simplifile.read(agents_path) {
         Ok(c) -> c
         Error(e) -> {
-          io.println("[brain] Failed to read AGENTS.md for " <> name <> ": " <> string.inspect(e))
+          io.println(
+            "[brain] Failed to read AGENTS.md for "
+            <> name
+            <> ": "
+            <> string.inspect(e),
+          )
           ""
         }
       }
       let s_md = case simplifile.read(state_path) {
         Ok(c) -> c
         Error(e) -> {
-          io.println("[brain] Failed to read STATE.md for " <> name <> ": " <> string.inspect(e))
+          io.println(
+            "[brain] Failed to read STATE.md for "
+            <> name
+            <> ": "
+            <> string.inspect(e),
+          )
           ""
         }
       }
@@ -1447,7 +1914,8 @@ fn preprocess_vision(
             }
             None -> None
           }
-          let vision_config = vision.resolve_vision_config(state.global_config, domain_config)
+          let vision_config =
+            vision.resolve_vision_config(state.global_config, domain_config)
           case vision.is_enabled(vision_config) {
             False -> {
               io.println("[brain] Vision not configured, skipping image")
@@ -1457,7 +1925,10 @@ fn preprocess_vision(
               io.println("[brain] Processing image attachment: " <> first_url)
               case describe_image(vision_config, first_url) {
                 Ok(description) -> {
-                  io.println("[brain] Vision description: " <> string.slice(description, 0, 100))
+                  io.println(
+                    "[brain] Vision description: "
+                    <> string.slice(description, 0, 100),
+                  )
                   "[Image: " <> description <> "]\n\n" <> msg.content
                 }
                 Error(err) -> {
@@ -1478,9 +1949,7 @@ fn describe_image(
   vision_config: vision.ResolvedVisionConfig,
   image_url: String,
 ) -> Result(String, String) {
-  use llm_config <- result.try(
-    models.build_llm_config(vision_config.model_spec)
-  )
+  use llm_config <- result.try(models.build_llm_config(vision_config.model_spec))
   let messages = [
     llm.UserMessageWithImage(
       content: vision_config.prompt,
@@ -1512,10 +1981,10 @@ fn receive_stream_message(timeout_ms: Int) -> StreamEvent {
   case receive_stream_message_ffi(timeout_ms) {
     #("delta", text, _, _) -> StreamDelta(text)
     #("reasoning", _, _, _) -> StreamReasoning
-    #("complete", content, tc_json, prompt_tokens) -> StreamComplete(content, tc_json, prompt_tokens)
+    #("complete", content, tc_json, prompt_tokens) ->
+      StreamComplete(content, tc_json, prompt_tokens)
     #("done", _, _, _) -> StreamDone
     #("error", err, _, _) -> StreamError(err)
     _ -> StreamTimeout
   }
 }
-

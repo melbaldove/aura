@@ -201,19 +201,20 @@ pub fn flush_before_compression(
       let state_path = xdg.domain_state_path(paths, domain_name)
       let memory_path = xdg.domain_memory_path(paths, domain_name)
 
-      let state_content = case structured_memory.format_for_display(state_path) {
+      let state_content = case
+        structured_memory.format_for_display(state_path)
+      {
         Ok(c) -> c
         Error(_) -> "(empty)"
       }
-      let memory_content = case structured_memory.format_for_display(memory_path) {
+      let memory_content = case
+        structured_memory.format_for_display(memory_path)
+      {
         Ok(c) -> c
         Error(_) -> "(empty)"
       }
       let combined =
-        "**State:**\n"
-        <> state_content
-        <> "\n\n**Memory:**\n"
-        <> memory_content
+        "**State:**\n" <> state_content <> "\n\n**Memory:**\n" <> memory_content
 
       let flush_prompt = build_flush_prompt(combined)
       let messages = list.append(history, [llm.UserMessage(flush_prompt)])
@@ -226,7 +227,9 @@ pub fn flush_before_compression(
         execute_memory_tool(call, domain_name, paths)
       }
 
-      case review_tool_loop(llm_config, messages, [tool], tool_executor, 0, []) {
+      case
+        review_tool_loop(llm_config, messages, [tool], tool_executor, 0, [])
+      {
         Ok(written) -> {
           let count = list.length(written)
           case count > 0 {
@@ -273,18 +276,14 @@ pub fn build_skill_review_prompt(skill_index: String) -> String {
   <> "1. Check if the approach is already covered by an existing skill — if so, update it with create_skill rather than creating a duplicate.\n"
   <> "2. Check for overlap with existing skills — merge into the existing skill or split both into non-overlapping scopes with clear boundaries.\n"
   <> "3. When creating a new skill, define its scope explicitly — what it covers AND what it doesn't (boundary with adjacent skills).\n\n"
-  <> "Use list_skills to see current skills, then create_skill to create or update.\n\n"
+  <> "Use create_skill to create or update skills.\n\n"
   <> "If nothing worth capturing as a skill, say \"Nothing to save.\" and stop."
 }
 
-/// Tool definitions for the skill review agent.
+/// Tool definition for the skill review agent.
+/// Only create_skill — the skill index is already in the prompt.
 pub fn skill_tool_definitions() -> List(llm.ToolDefinition) {
   [
-    llm.ToolDefinition(
-      name: "list_skills",
-      description: "List all available skills with names and descriptions.",
-      parameters: [],
-    ),
     llm.ToolDefinition(
       name: "create_skill",
       description: "Create or update a skill. Writes SKILL.md to the skills directory.",
@@ -402,94 +401,24 @@ fn run_review(
 
   // Run the tool loop
   let tool = memory_tool_definition()
-  let tool_executor = fn(call: llm.ToolCall) -> #(String, Option(#(String, String))) {
+  let tool_executor = fn(call: llm.ToolCall) -> #(
+    String,
+    Option(#(String, String)),
+  ) {
     execute_memory_tool(call, domain_name, paths)
   }
-  case
-    review_tool_loop(
-      llm_config,
-      messages,
-      [tool],
-      tool_executor,
-      0,
-      [],
-    )
-  {
-    Ok(written_entries) -> {
-      let count = list.length(written_entries)
-      // Log success
-      let log_entry =
-        json.object([
-          #("type", json.string("review_completed")),
-          #("domain", json.string(domain_name)),
-          #("review_type", json.string(review_type)),
-          #("entries_written", json.int(count)),
-          #(
-            "keys",
-            json.array(list.map(written_entries, fn(e) { e.0 }), json.string),
-          ),
-          #("ts", json.int(time.now_ms())),
-        ])
-      case memory.append_domain_log(log_dir, json.to_string(log_entry)) {
-        Ok(_) -> Nil
-        Error(e) -> io.println("[review] Failed to write log: " <> e)
-      }
-      io.println(
-        "[review] "
-        <> review_type
-        <> " review for "
-        <> domain_name
-        <> ": "
-        <> int.to_string(count)
-        <> " entries written",
+  case review_tool_loop(llm_config, messages, [tool], tool_executor, 0, []) {
+    Ok(written) ->
+      log_and_notify(
+        log_dir,
+        domain_name,
+        review_type,
+        written,
+        discord_token,
+        channel_id,
+        notify,
       )
-
-      // Discord notification
-      case notify && count > 0 {
-        True -> {
-          let entries_text =
-            list.map(written_entries, fn(e) {
-              "**" <> e.0 <> ":** " <> string.slice(e.1, 0, 100)
-            })
-            |> string.join("\n")
-          let icon = case review_type {
-            "state" -> "State updated"
-            _ -> "Memory saved"
-          }
-          let msg = "\u{1F4BE} " <> icon <> ":\n" <> entries_text
-          case rest.send_message(discord_token, channel_id, msg, []) {
-            Ok(_) -> Nil
-            Error(e) ->
-              io.println("[review] Discord notification failed: " <> e)
-          }
-        }
-        False -> Nil
-      }
-    }
-    Error(e) -> {
-      // Log failure
-      let log_entry =
-        json.object([
-          #("type", json.string("review_failed")),
-          #("domain", json.string(domain_name)),
-          #("review_type", json.string(review_type)),
-          #("error", json.string(e)),
-          #("ts", json.int(time.now_ms())),
-        ])
-      case memory.append_domain_log(log_dir, json.to_string(log_entry)) {
-        Ok(_) -> Nil
-        Error(log_err) ->
-          io.println("[review] Failed to write error log: " <> log_err)
-      }
-      io.println(
-        "[review] "
-        <> review_type
-        <> " review failed for "
-        <> domain_name
-        <> ": "
-        <> e,
-      )
-    }
+    Error(e) -> log_review_error(log_dir, domain_name, review_type, e)
   }
 }
 
@@ -522,8 +451,7 @@ fn review_tool_loop(
           let #(new_written, result_messages) =
             list.fold(calls, #(written, []), fn(acc, call) {
               let #(acc_written, acc_results) = acc
-              let #(result_text, entry) =
-                tool_executor(call)
+              let #(result_text, entry) = tool_executor(call)
               let new_written = case entry {
                 Some(e) -> [e, ..acc_written]
                 None -> acc_written
@@ -564,7 +492,11 @@ fn execute_memory_tool(
   paths: xdg.Paths,
 ) -> #(String, Option(#(String, String))) {
   case parse_args(call.arguments) {
-    Error(_) -> #("Error: failed to parse tool arguments as JSON: " <> string.slice(call.arguments, 0, 100), None)
+    Error(_) -> #(
+      "Error: failed to parse tool arguments as JSON: "
+        <> string.slice(call.arguments, 0, 100),
+      None,
+    )
     Ok(args) -> {
       let action = get_arg(args, "action")
       let target = get_arg(args, "target")
@@ -575,7 +507,12 @@ fn execute_memory_tool(
       let path_result = case target {
         "state" -> Ok(xdg.domain_state_path(paths, domain_name))
         "memory" -> Ok(xdg.domain_memory_path(paths, domain_name))
-        unknown -> Error("Error: unknown target '" <> unknown <> "'. Use 'state' or 'memory'.")
+        unknown ->
+          Error(
+            "Error: unknown target '"
+            <> unknown
+            <> "'. Use 'state' or 'memory'.",
+          )
       }
 
       case path_result {
@@ -613,10 +550,7 @@ fn execute_memory_action(
           }
       }
     }
-    _ -> #(
-      "Error: unknown action '" <> action <> "'. Use set or remove.",
-      None,
-    )
+    _ -> #("Error: unknown action '" <> action <> "'. Use set or remove.", None)
   }
 }
 
@@ -642,78 +576,24 @@ fn run_skill_review(
   let tool_executor = fn(call: llm.ToolCall) -> #(
     String,
     Option(#(String, String)),
-  ) { execute_skill_tool(call, skills_dir) }
+  ) {
+    execute_skill_tool(call, skills_dir)
+  }
 
   let log_dir = xdg.domain_log_dir(paths, domain_name)
 
   case review_tool_loop(llm_config, messages, tools, tool_executor, 0, []) {
-    Ok(written) -> {
-      let count = list.length(written)
-      // Log to JSONL
-      let log_entry =
-        json.object([
-          #("type", json.string("skill_review_completed")),
-          #("domain", json.string(domain_name)),
-          #("skills_written", json.int(count)),
-          #(
-            "names",
-            json.array(list.map(written, fn(e) { e.0 }), json.string),
-          ),
-          #("ts", json.int(time.now_ms())),
-        ])
-      case memory.append_domain_log(log_dir, json.to_string(log_entry)) {
-        Ok(_) -> Nil
-        Error(e) -> io.println("[review] Failed to write log: " <> e)
-      }
-
-      case count > 0 {
-        True -> {
-          io.println(
-            "[review] skill review for "
-            <> domain_name
-            <> ": "
-            <> int.to_string(count)
-            <> " skill(s) created/updated",
-          )
-          let entries_text =
-            list.map(written, fn(e) {
-              "**" <> e.0 <> ":** " <> string.slice(e.1, 0, 100)
-            })
-            |> string.join("\n")
-          let msg = "\u{1F4BE} Skill updated:\n" <> entries_text
-          case rest.send_message(discord_token, channel_id, msg, []) {
-            Ok(_) -> Nil
-            Error(e) ->
-              io.println("[review] Discord notification failed: " <> e)
-          }
-        }
-        False ->
-          io.println(
-            "[review] skill review for "
-            <> domain_name
-            <> ": nothing to capture",
-          )
-      }
-      Nil
-    }
-    Error(e) -> {
-      let log_entry =
-        json.object([
-          #("type", json.string("skill_review_failed")),
-          #("domain", json.string(domain_name)),
-          #("error", json.string(e)),
-          #("ts", json.int(time.now_ms())),
-        ])
-      case memory.append_domain_log(log_dir, json.to_string(log_entry)) {
-        Ok(_) -> Nil
-        Error(log_err) ->
-          io.println("[review] Failed to write error log: " <> log_err)
-      }
-      io.println(
-        "[review] skill review failed for " <> domain_name <> ": " <> e,
+    Ok(written) ->
+      log_and_notify(
+        log_dir,
+        domain_name,
+        "skill",
+        written,
+        discord_token,
+        channel_id,
+        True,
       )
-      Nil
-    }
+    Error(e) -> log_review_error(log_dir, domain_name, "skill", e)
   }
 }
 
@@ -722,49 +602,123 @@ fn execute_skill_tool(
   skills_dir: String,
 ) -> #(String, Option(#(String, String))) {
   case parse_args(call.arguments) {
-    Error(_) -> #("Error: failed to parse tool arguments as JSON: " <> string.slice(call.arguments, 0, 100), None)
+    Error(_) -> #(
+      "Error: failed to parse tool arguments as JSON: "
+        <> string.slice(call.arguments, 0, 100),
+      None,
+    )
     Ok(args) -> {
       case call.name {
-        "list_skills" -> {
-          case skill.list_with_details(skills_dir) {
-            Ok(listing) -> #(listing, None)
-            Error(e) -> #("Error: " <> e, None)
-          }
-        }
         "create_skill" -> {
           let name = get_arg(args, "name")
           let content = get_arg(args, "content")
           case name {
             "" -> #("Error: name is required", None)
-            _ -> case content {
-              "" -> #("Error: content is required", None)
-              _ -> {
-              // Try create first, fall back to update if exists
-              case skill.create(skills_dir, name, content) {
-                Ok(_) -> #("Skill created: " <> name, Some(#(name, content)))
-                Error(e) -> {
-                  case string.contains(e, "already exists") {
-                    True -> {
-                      case skill.update(skills_dir, name, content) {
-                        Ok(_) -> #(
-                          "Skill updated: " <> name,
-                          Some(#(name, content)),
-                        )
-                        Error(e2) -> #("Error: " <> e2, None)
-                      }
-                    }
-                    False -> #("Error: " <> e, None)
+            _ ->
+              case content {
+                "" -> #("Error: content is required", None)
+                _ -> {
+                  case skill.upsert(skills_dir, name, content) {
+                    Ok(action) -> #(
+                      "Skill " <> action <> ": " <> name,
+                      Some(#(name, content)),
+                    )
+                    Error(e) -> #("Error: " <> e, None)
                   }
                 }
               }
-            }
-            }
           }
         }
         unknown -> #("Error: unknown tool '" <> unknown <> "'", None)
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Shared log + notify
+// ---------------------------------------------------------------------------
+
+fn log_and_notify(
+  log_dir: String,
+  domain_name: String,
+  review_type: String,
+  written: List(#(String, String)),
+  discord_token: String,
+  channel_id: String,
+  notify: Bool,
+) -> Nil {
+  let count = list.length(written)
+  let log_entry =
+    json.object([
+      #("type", json.string(review_type <> "_review_completed")),
+      #("domain", json.string(domain_name)),
+      #("entries_written", json.int(count)),
+      #("keys", json.array(list.map(written, fn(e) { e.0 }), json.string)),
+      #("ts", json.int(time.now_ms())),
+    ])
+  case memory.append_domain_log(log_dir, json.to_string(log_entry)) {
+    Ok(_) -> Nil
+    Error(e) -> io.println("[review] Failed to write log: " <> e)
+  }
+  io.println(
+    "[review] "
+    <> review_type
+    <> " review for "
+    <> domain_name
+    <> ": "
+    <> int.to_string(count)
+    <> " entries written",
+  )
+
+  case notify && count > 0 {
+    True -> {
+      let entries_text =
+        list.map(written, fn(e) {
+          "**" <> e.0 <> ":** " <> string.slice(e.1, 0, 100)
+        })
+        |> string.join("\n")
+      let icon = case review_type {
+        "state" -> "State updated"
+        "skill" -> "Skill updated"
+        _ -> "Memory saved"
+      }
+      let msg = "\u{1F4BE} " <> icon <> ":\n" <> entries_text
+      case rest.send_message(discord_token, channel_id, msg, []) {
+        Ok(_) -> Nil
+        Error(e) -> io.println("[review] Discord notification failed: " <> e)
+      }
+    }
+    False -> Nil
+  }
+}
+
+fn log_review_error(
+  log_dir: String,
+  domain_name: String,
+  review_type: String,
+  error: String,
+) -> Nil {
+  let log_entry =
+    json.object([
+      #("type", json.string(review_type <> "_review_failed")),
+      #("domain", json.string(domain_name)),
+      #("error", json.string(error)),
+      #("ts", json.int(time.now_ms())),
+    ])
+  case memory.append_domain_log(log_dir, json.to_string(log_entry)) {
+    Ok(_) -> Nil
+    Error(log_err) ->
+      io.println("[review] Failed to write error log: " <> log_err)
+  }
+  io.println(
+    "[review] "
+    <> review_type
+    <> " review failed for "
+    <> domain_name
+    <> ": "
+    <> error,
+  )
 }
 
 // ---------------------------------------------------------------------------
