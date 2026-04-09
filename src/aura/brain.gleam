@@ -82,6 +82,7 @@ pub type BrainMessage {
   RegisterThread(thread_id: String, domain_name: String)
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
   UpdateReviewCount(channel_id: String, count: Int)
+  UpdateSkillReviewCount(channel_id: String, count: Int)
   HandleInteraction(
     interaction_id: String,
     interaction_token: String,
@@ -131,6 +132,7 @@ pub type BrainState {
     thread_domains: dict.Dict(String, String),
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
     review_counts: dict.Dict(String, Int),
+    skill_review_counts: dict.Dict(String, Int),
     compressor_states: dict.Dict(String, conversation.CompressorState),
     brain_context: Int,
     pending_proposals: dict.Dict(String, brain_tools.PendingProposal),
@@ -212,7 +214,6 @@ pub fn build_system_prompt(
   <> "\n- Discovering a codebase pattern → set memory"
   <> "\n\nSkills guidance:"
   <> "\nBefore using run_skill, call view_skill first to read the skill's full instructions. The instructions contain exact commands, argument format, and examples. Never guess CLI syntax."
-  <> "\nAfter completing a complex task (3+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with create_skill so you can reuse it next time."
   <> "\nWhen using a skill and finding it outdated, incomplete, or wrong, update it immediately with create_skill — don't wait to be asked."
 }
 
@@ -263,6 +264,7 @@ pub fn start(
       domain_configs: brain_config.domain_configs,
       scheduler_subject: None,
       review_counts: dict.new(),
+      skill_review_counts: dict.new(),
       compressor_states: dict.new(),
       brain_context: brain_context,
       pending_proposals: dict.new(),
@@ -500,6 +502,10 @@ fn handle_message(
     UpdateReviewCount(channel_id:, count:) -> {
       let new_counts = dict.insert(state.review_counts, channel_id, count)
       actor.continue(BrainState(..state, review_counts: new_counts))
+    }
+    UpdateSkillReviewCount(channel_id:, count:) -> {
+      let new_counts = dict.insert(state.skill_review_counts, channel_id, count)
+      actor.continue(BrainState(..state, skill_review_counts: new_counts))
     }
     HandleInteraction(interaction_id:, interaction_token:, custom_id:, channel_id: _) -> {
       // Acknowledge immediately (must respond within 3 seconds)
@@ -1124,6 +1130,37 @@ fn handle_with_llm(
             UpdateReviewCount(
               channel_id: response_channel,
               count: new_review_count,
+            ),
+          )
+        None -> Nil
+      }
+
+      // Post-response skill review
+      let skill_review_count = case dict.get(state.skill_review_counts, response_channel) {
+        Ok(c) -> c
+        Error(_) -> 0
+      }
+      let new_tool_calls = list.length(traces)
+      let new_skill_review_count =
+        review.maybe_spawn_skill_review(
+          state.global_config.memory.skill_review_interval,
+          domain_for_review,
+          response_channel,
+          state.discord_token,
+          list.flatten([history, all_turn_messages]),
+          skill_review_count,
+          new_tool_calls,
+          state.paths,
+          state.global_config.models.monitor,
+          state.skills_dir,
+        )
+      case brain_subject_opt {
+        Some(subj) ->
+          process.send(
+            subj,
+            UpdateSkillReviewCount(
+              channel_id: response_channel,
+              count: new_skill_review_count,
             ),
           )
         None -> Nil
