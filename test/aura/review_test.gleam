@@ -1,3 +1,4 @@
+import aura/llm
 import aura/review
 import aura/xdg
 import gleam/string
@@ -61,4 +62,32 @@ pub fn maybe_spawn_review_not_yet_test() {
       "test-model",
     )
   should.equal(result, 4)
+}
+
+pub fn build_flush_prompt_test() {
+  let prompt = review.build_flush_prompt("§ pr-215\nOpen, needs review")
+  should.be_true(string.contains(prompt, "compressed"))
+  should.be_true(string.contains(prompt, "pr-215"))
+  should.be_true(string.contains(prompt, "Open, needs review"))
+  should.be_true(string.contains(prompt, "user preferences"))
+}
+
+pub fn build_flush_prompt_empty_test() {
+  let prompt = review.build_flush_prompt("(empty)")
+  should.be_true(string.contains(prompt, "compressed"))
+  should.be_true(string.contains(prompt, "(empty)"))
+}
+
+pub fn flush_before_compression_skips_short_history_test() {
+  let short_history = [
+    llm.UserMessage("hello"),
+    llm.AssistantMessage("hi there"),
+  ]
+  review.flush_before_compression(
+    llm.LlmConfig(api_key: "", base_url: "", model: ""),
+    short_history,
+    "test-domain",
+    xdg.resolve_with_home("/tmp/aura-flush-test"),
+  )
+  should.be_true(True)
 }

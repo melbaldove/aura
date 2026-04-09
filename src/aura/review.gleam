@@ -163,6 +163,103 @@ pub fn build_review_prompt(
   }
 }
 
+/// Build the prompt for pre-compression memory flush.
+pub fn build_flush_prompt(current_content: String) -> String {
+  "This conversation is about to be compressed. Older messages will be summarized and discarded.\n\n"
+  <> "Save anything worth remembering before it's lost — prioritize user preferences, corrections, recurring patterns, and active work status over task-specific details.\n\n"
+  <> "Current memory:\n"
+  <> current_content
+  <> "\n\n"
+  <> "Use the memory tool to save entries. Use 'state' for current status, 'memory' for durable knowledge.\n\n"
+  <> "If nothing worth saving, say \"Nothing to save.\" and stop."
+}
+
+const min_flush_messages = 6
+
+/// Synchronous memory flush before context compression.
+/// Reads current state + memory, gives the LLM one chance to persist
+/// anything worth saving before messages are discarded.
+/// Skips if fewer than min_flush_messages in history.
+/// Never fails — logs errors and returns Nil.
+pub fn flush_before_compression(
+  llm_config: llm.LlmConfig,
+  history: List(llm.Message),
+  domain_name: String,
+  paths: xdg.Paths,
+) -> Nil {
+  case list.length(history) < min_flush_messages {
+    True -> {
+      io.println(
+        "[review] Flush skipped — fewer than "
+        <> int.to_string(min_flush_messages)
+        <> " messages",
+      )
+      Nil
+    }
+    False -> {
+      let state_path = xdg.domain_state_path(paths, domain_name)
+      let memory_path = xdg.domain_memory_path(paths, domain_name)
+
+      let state_content = case structured_memory.format_for_display(state_path) {
+        Ok(c) -> c
+        Error(_) -> "(empty)"
+      }
+      let memory_content = case structured_memory.format_for_display(memory_path) {
+        Ok(c) -> c
+        Error(_) -> "(empty)"
+      }
+      let combined =
+        "**State:**\n"
+        <> state_content
+        <> "\n\n**Memory:**\n"
+        <> memory_content
+
+      let flush_prompt = build_flush_prompt(combined)
+      let messages = list.append(history, [llm.UserMessage(flush_prompt)])
+      let tool = memory_tool_definition()
+
+      let tool_executor = fn(call: llm.ToolCall) -> #(
+        String,
+        option.Option(#(String, String)),
+      ) {
+        execute_memory_tool(call, domain_name, paths)
+      }
+
+      case review_tool_loop(llm_config, messages, [tool], tool_executor, 0, []) {
+        Ok(written) -> {
+          let count = list.length(written)
+          case count > 0 {
+            True ->
+              io.println(
+                "[review] Pre-compression flush for "
+                <> domain_name
+                <> ": "
+                <> int.to_string(count)
+                <> " entries saved",
+              )
+            False ->
+              io.println(
+                "[review] Pre-compression flush for "
+                <> domain_name
+                <> ": nothing to save",
+              )
+          }
+          Nil
+        }
+        Error(e) -> {
+          io.println(
+            "[review] Pre-compression flush failed for "
+            <> domain_name
+            <> ": "
+            <> e,
+          )
+          Nil
+        }
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Internal
 // ---------------------------------------------------------------------------
@@ -209,7 +306,7 @@ fn run_review(
   // Run the tool loop
   let tool = memory_tool_definition()
   let tool_executor = fn(call: llm.ToolCall) -> #(String, Option(#(String, String))) {
-    execute_memory_tool(call, target_path, domain_name, paths)
+    execute_memory_tool(call, domain_name, paths)
   }
   case
     review_tool_loop(
@@ -366,7 +463,6 @@ fn review_tool_loop(
 /// if an entry was written.
 fn execute_memory_tool(
   call: llm.ToolCall,
-  _target_path: String,
   domain_name: String,
   paths: xdg.Paths,
 ) -> #(String, Option(#(String, String))) {
