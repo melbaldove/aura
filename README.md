@@ -1,26 +1,24 @@
-# Aura
+# A.U.R.A.
 
 **Autonomous Unified Runtime Agent**
 
-A local-first executive assistant framework built in Gleam on the BEAM VM. Runs on your hardware. Manages your domains. Communicates via Discord.
+Managing work across multiple projects is fragmented. You context-switch between tools, your AI assistant forgets everything between sessions, and your coding agent can fix a bug but can't connect it to the ticket you're behind on.
 
-Aura is not a chatbot. It is an opinionated framework for building a personal EA that understands your projects, monitors your tools, and dispatches coding agents on your behalf.
+A.U.R.A. is an executive assistant and orchestrator. Each area of your life gets an isolated domain with its own instructions, memory, and state — but A.U.R.A. sees across all of them. When there's work to do, it dispatches coding agents via ACP, monitors progress, and persists what it learns. Think Jarvis, not Copilot.
+
+Built on the BEAM. Supervised OTP actors crash and recover independently. Gateways, providers, and skills are all pluggable.
+
+> *Inspired by [Hermes Agent](https://github.com/nousresearch/hermes-agent) and [OpenClaw](https://github.com/openclaw/openclaw). A.U.R.A. is the orchestrator layer above the coding agent, not the agent itself.*
 
 ## What It Does
 
-- **Domains** — parallel knowledge partitions (jobs, projects, responsibilities) with isolated memory, state, and instructions
-- **Discord interface** — one channel per domain, automatic threading, rich formatting
-- **Schedules** — config-driven cron + interval tasks that monitor Jira, calendar, PRs, and Slack
-- **ACP** — dispatch Claude Code sessions in tmux, monitor progress in real-time, get structured reports
-- **Skills** — language-agnostic CLI tools. Drop a script in a directory, it becomes a skill
-- **Active memory** — automatic post-response review persists state and knowledge every N turns
-- **Runtime compression** — tiered context management: tool pruning at 50%, LLM summarization at 70%
-- **Self-configuration** — create domains, update config, manage identity — all through Discord with propose/approve flow
-- **SQLite-backed conversations** — full-text search, compression summaries, multi-platform ready
-
-## Why BEAM
-
-Every component is a supervised OTP actor. The Discord gateway crashing does not take down your ACP sessions. A domain context failing does not block the brain. The supervisor restarts failed actors in milliseconds. No watchdog cron jobs. The runtime is the watchdog.
+- **Domains** — isolated knowledge partitions per project/responsibility, with cross-domain awareness
+- **ACP** — dispatch coding agents (provider-agnostic) into isolated worktrees, monitor in real-time, get structured reports
+- **Active memory** — automatic post-response review persists state and knowledge. Domain-aware compression preserves what matters.
+- **Skills** — language-agnostic CLI tools. Drop a script in a directory, it becomes a capability. A.U.R.A. auto-creates skills from learned workflows.
+- **Schedules** — config-driven cron + interval tasks that monitor Linear, calendar, PRs, and Slack
+- **Self-configuration** — create domains, update config, manage identity — all through conversation with propose/approve flow
+- **Pluggable gateways** — Discord ships first. Multi-platform conversation schema from day one.
 
 ## Requirements
 
@@ -29,7 +27,6 @@ Every component is a supervised OTP actor. The Discord gateway crashing does not
 - tmux
 - A Discord bot token ([create one here](https://discord.com/developers/applications))
 - An LLM API key (ZAI/GLM or Anthropic/Claude)
-- A Brave Search API key (optional, for web search)
 
 ## Quick Start
 
@@ -40,49 +37,10 @@ gleam build
 gleam run -- init
 ```
 
-The init command will:
-1. Check dependencies
-2. Create XDG-compliant directories
-3. Prompt for Discord bot token and LLM API key
-4. Generate identity files (SOUL.md, USER.md)
-5. Generate config.toml
-
-Then start Aura:
+The init command checks dependencies, creates XDG-compliant directories, prompts for credentials, and generates identity files.
 
 ```bash
 gleam run -- start
-```
-
-## Directory Structure
-
-Aura follows the XDG Base Directory specification:
-
-```
-~/.config/aura/                    # Configuration
-  config.toml                        # Global settings
-  SOUL.md                            # Personality and boundaries
-  USER.md                            # User profile
-  schedules.toml                     # Scheduled tasks
-  domains/
-    <name>/config.toml               # Per-domain settings
-    <name>/AGENTS.md                 # Domain instructions
-
-~/.local/share/aura/               # Data
-  aura.db                            # Conversations (SQLite)
-  acp-sessions.json                  # ACP session persistence
-  events.jsonl                       # Global event log
-  skills/
-    <name>/SKILL.md                  # Skill definition + optional CLI
-  domains/
-    <name>/MEMORY.md                 # Durable domain knowledge
-    <name>/log.jsonl                 # Domain activity log
-    <name>/repos/                    # Project repositories
-    <name>/logs/                     # Session logs
-
-~/.local/state/aura/               # Runtime state
-  MEMORY.md                          # Global cross-domain memory
-  domains/
-    <name>/STATE.md                  # Current domain status
 ```
 
 ## Architecture
@@ -90,19 +48,39 @@ Aura follows the XDG Base Directory specification:
 ```
 supervisor (OneForOne)
 ├── db            SQLite actor — serializes all DB reads/writes
-├── poller        Discord gateway WebSocket
-├── acp_manager   ACP session lifecycle actor — dispatch, monitor, persist
+├── poller        Gateway WebSocket (Discord first, pluggable)
+├── acp_manager   ACP session lifecycle — dispatch, monitor, persist
 ├── brain         Routes messages, LLM tool loop, streaming, memory review
 └── scheduler     Config-driven cron + interval schedules
 ```
 
-Messages flow: Discord → Gateway → Poller → Brain → Domain → LLM → Brain → Discord.
+## Directory Structure
 
-The brain routes by channel (no LLM call needed). Messages in domain channels auto-create threads. Each domain loads its own context (AGENTS.md, STATE.md, MEMORY.md) before reasoning.
+A.U.R.A. follows the XDG Base Directory specification:
+
+```
+~/.config/aura/                    # Configuration
+  config.toml                        # Global settings
+  SOUL.md                            # Personality and boundaries
+  USER.md                            # User profile
+  schedules.toml                     # Scheduled tasks
+  domains/<name>/config.toml         # Per-domain settings
+  domains/<name>/AGENTS.md           # Domain instructions
+
+~/.local/share/aura/               # Data
+  aura.db                            # Conversations (SQLite)
+  skills/<name>/SKILL.md             # Skills
+  domains/<name>/MEMORY.md           # Durable domain knowledge
+  domains/<name>/repos/              # Project repositories
+
+~/.local/state/aura/               # Runtime state
+  MEMORY.md                          # Global cross-domain memory
+  domains/<name>/STATE.md            # Current domain status
+```
 
 ## Configuration
 
-See [docs/CONFIG.md](docs/CONFIG.md) for the full configuration reference.
+See [docs/CONFIG.md](docs/CONFIG.md) for the full reference.
 
 ### Global (`~/.config/aura/config.toml`)
 
@@ -119,11 +97,6 @@ acp = "claude/opus"
 heartbeat = "zai/glm-5-turbo"
 monitor = "zai/glm-5-turbo"
 
-[notifications]
-digest_windows = ["07:35", "09:10", "11:10", "15:00"]
-timezone = "Asia/Manila"
-urgent_bypass = true
-
 [acp]
 global_max_concurrent = 4
 
@@ -136,46 +109,30 @@ notify_on_review = true
 
 ```toml
 name = "my-project"
-description = "Backend API. Rust. Jira board MP."
+description = "Backend API. Rust."
 cwd = "~/.local/share/aura/domains/my-project"
-tools = ["jira", "google"]
+tools = ["linear", "google"]
 
 [discord]
 channel = "my-project"
 ```
 
-Create a domain through Discord (Aura uses the `self-configure` skill and the propose flow) or manually create the config files.
+## ACP (Autonomous Code Protocol)
 
-## Skills
-
-Skills are directories in `~/.local/share/aura/skills/<name>/` with a `SKILL.md` file and optional CLI entrypoint.
-
-```bash
-mkdir -p ~/.local/share/aura/skills/my-tool
-# Write SKILL.md with instructions
-# Optionally add a CLI script (referenced in SKILL.md frontmatter)
-```
-
-Aura can also create and update skills automatically through the skill review system.
-
-## ACP (Autonomous Claude Protocol)
-
-Tell Aura to fix a bug or implement a feature. It spawns Claude Code in a tmux session with worktree isolation, monitors progress, and reports structured updates back to Discord.
+Dispatch coding agents into isolated worktrees. A.U.R.A. monitors progress and reports structured updates.
 
 ```
 You (in #my-project): investigate and fix the login timeout bug PROJ-123
-Aura: ACP dispatched.
-      ACP session started: acp-my-project-t1775618752766
-      Attach with: tmux attach -t acp-my-project-t1775618752766
+A.U.R.A.: ACP dispatched.
 
-      📋 **Investigate login timeout PROJ-123** · 8m elapsed
-      `acp-my-project-t1775618752766`
+         📋 **Investigate login timeout PROJ-123** · 8m elapsed
+         `acp-my-project-t1775618752766`
 
-      **Status:** Working
-      **Done:** Found root cause in `AuthService.swift:142`
-      **Current:** Implementing fix
-      **Needs input:** none
-      **Next:** Create PR
+         **Status:** Working
+         **Done:** Found root cause in `AuthService.swift:142`
+         **Current:** Implementing fix
+         **Needs input:** none
+         **Next:** Create PR
 ```
 
 ## License
