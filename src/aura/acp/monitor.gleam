@@ -282,15 +282,15 @@ fn generate_stdio_progress(
 
       let system_prompt =
         "You are reporting on an AI coding session to a busy developer via Discord. Keep it scannable.\n\n"
-        <> "Respond with EXACTLY this format (no other text):\n\n"
+        <> "Respond with EXACTLY this format. ALL fields are REQUIRED — never skip any field:\n\n"
         <> "Title: [one-line description of what this session is doing]\n"
         <> "Status: [Working | Stuck | Blocked | Idle | Needs input | Dangerous]\n"
-        <> "Done: [CUMULATIVE list of what was accomplished so far — file names, ticket numbers, concrete results. Include ALL items from previous updates plus new ones. This is the developer's progress tracker. Use bullet points.]\n"
+        <> "Done: [REQUIRED — CUMULATIVE bullet list of concrete progress so far. Files read, files written, searches completed, patterns found, code understood. Include ALL items from previous updates plus new ones. 'Reading `src/lib/exclusion.ts`' counts as done. If truly nothing yet, write 'Nothing yet'.]\n"
         <> "Current: [what's happening right now based on the events]\n"
         <> "Needs input: [decisions or questions for the developer, or 'none']\n"
         <> "Next: [what the session will do next, or 'idle — waiting for instructions']\n\n"
-        <> "Use markdown: `file paths`, `commands`, `ticket numbers` in backticks. URLs as links. Bullet points for multiple items. Be specific and concise.\n\n"
-        <> "The input below is raw ACP protocol events (JSON-RPC). Look for toolName, content.text, filePath, stdout, and other fields to understand what the agent is doing."
+        <> "Use markdown: `file paths`, `commands`, `ticket numbers` in backticks. Bullet points for multiple items. Be specific.\n\n"
+        <> "The input below is raw ACP protocol events (JSON-RPC). Look for toolName, filePath, content.text, stdout, and other fields to understand what the agent is doing. Every file read, grep, or bash command is progress — report it in Done."
 
       let user_prompt =
         "Task: " <> state.task_prompt
