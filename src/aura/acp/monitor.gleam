@@ -63,6 +63,36 @@ pub fn snapshot_is_active(snapshot: ActivitySnapshot) -> Bool {
   snapshot.tool_calls != [] || snapshot.message_chunks != ""
 }
 
+/// Format an ActivitySnapshot into Discord-friendly text.
+/// Tool calls get 🔧 prefix, message chunks get 💬 prefix.
+/// Max 5 tool calls shown (most recent), message truncated to 100 chars.
+pub fn format_snapshot(snapshot: ActivitySnapshot) -> String {
+  let tool_lines = case snapshot.tool_calls {
+    [] -> []
+    calls -> {
+      let recent = case list.length(calls) > 5 {
+        True -> list.drop(calls, list.length(calls) - 5)
+        False -> calls
+      }
+      list.map(recent, fn(title) { "\u{1F527} " <> title })
+    }
+  }
+
+  let message_line = case snapshot.message_chunks {
+    "" -> []
+    text -> {
+      let truncated = case string.length(text) > 100 {
+        True -> string.slice(text, 0, 100) <> "..."
+        False -> text
+      }
+      ["\u{1F4AC} " <> truncated]
+    }
+  }
+
+  list.append(tool_lines, message_line)
+  |> string.join("\n")
+}
+
 pub type MonitorMessage {
   CheckSession
   UpdateSummary(summary: String)
