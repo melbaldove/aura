@@ -1,4 +1,5 @@
 import aura/acp/monitor as acp_monitor
+import gleam/erlang/process
 import gleam/string
 import gleeunit/should
 
@@ -85,4 +86,115 @@ pub fn format_snapshot_limits_tool_calls_test() {
   result |> string_contains("Tool 3") |> should.be_true
   result |> string_contains("Tool 7") |> should.be_true
   result |> string_contains("Tool 1") |> should.be_false
+}
+
+pub fn monitor_accumulates_tool_calls_test() {
+  let event_subject = process.new_subject()
+  let on_event = fn(event) { process.send(event_subject, event) }
+
+  let monitor =
+    acp_monitor.start_push_monitor(
+      acp_monitor.MonitorConfig(
+        emit_interval_ms: 100,
+        idle_interval_ms: 500,
+        idle_surface_threshold: 3,
+        timeout_ms: 60_000,
+      ),
+      "test-session",
+      "test-domain",
+      on_event,
+    )
+
+  process.send(monitor, acp_monitor.RawEvent("tool_call", "Read src/main.ts"))
+  process.send(
+    monitor,
+    acp_monitor.RawEvent("tool_call", "Search isExcluded"),
+  )
+  process.send(
+    monitor,
+    acp_monitor.RawEvent("agent_message_chunk", "Analyzing..."),
+  )
+
+  case process.receive(event_subject, 500) {
+    Ok(acp_monitor.AcpProgress(_, _, _, _, summary, False)) -> {
+      summary
+      |> string_contains("\u{1F527} Read src/main.ts")
+      |> should.be_true
+      summary
+      |> string_contains("\u{1F527} Search isExcluded")
+      |> should.be_true
+      summary
+      |> string_contains("\u{1F4AC} Analyzing...")
+      |> should.be_true
+    }
+    Ok(_other) -> should.fail()
+    Error(_) -> should.fail()
+  }
+}
+
+pub fn monitor_idle_detection_test() {
+  let event_subject = process.new_subject()
+  let on_event = fn(event) { process.send(event_subject, event) }
+
+  let _monitor =
+    acp_monitor.start_push_monitor(
+      acp_monitor.MonitorConfig(
+        emit_interval_ms: 50,
+        idle_interval_ms: 50,
+        idle_surface_threshold: 2,
+        timeout_ms: 60_000,
+      ),
+      "test-idle",
+      "test-domain",
+      on_event,
+    )
+
+  // Send no events, wait for idle detection (2 ticks at 50ms + threshold 2)
+  process.sleep(250)
+  let is_idle = drain_for_idle(event_subject)
+  is_idle |> should.be_true
+}
+
+pub fn monitor_resets_after_emit_test() {
+  let event_subject = process.new_subject()
+  let on_event = fn(event) { process.send(event_subject, event) }
+
+  let monitor =
+    acp_monitor.start_push_monitor(
+      acp_monitor.MonitorConfig(
+        emit_interval_ms: 100,
+        idle_interval_ms: 500,
+        idle_surface_threshold: 3,
+        timeout_ms: 60_000,
+      ),
+      "test-reset",
+      "test-domain",
+      on_event,
+    )
+
+  process.send(monitor, acp_monitor.RawEvent("tool_call", "First tool"))
+  case process.receive(event_subject, 500) {
+    Ok(acp_monitor.AcpProgress(_, _, _, _, summary1, _)) -> {
+      summary1 |> string_contains("First tool") |> should.be_true
+      process.send(monitor, acp_monitor.RawEvent("tool_call", "Second tool"))
+      case process.receive(event_subject, 500) {
+        Ok(acp_monitor.AcpProgress(_, _, _, _, summary2, _)) -> {
+          summary2 |> string_contains("Second tool") |> should.be_true
+          summary2 |> string_contains("First tool") |> should.be_false
+        }
+        _ -> should.fail()
+      }
+    }
+    _ -> should.fail()
+  }
+}
+
+fn drain_for_idle(
+  subject: process.Subject(acp_monitor.AcpEvent),
+) -> Bool {
+  case process.receive(subject, 300) {
+    Ok(acp_monitor.AcpProgress(_, _, _, _, _, True)) -> True
+    Ok(_) -> drain_for_idle(subject)
+    Error(_) -> False
+  }
 }

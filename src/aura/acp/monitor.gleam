@@ -87,6 +87,229 @@ pub fn format_snapshot(snapshot: ActivitySnapshot) -> String {
   |> string.join("\n")
 }
 
+// ---------------------------------------------------------------------------
+// Push-based stdio monitor
+// ---------------------------------------------------------------------------
+
+/// Configuration for the push-based monitor.
+pub type MonitorConfig {
+  MonitorConfig(
+    emit_interval_ms: Int,
+    idle_interval_ms: Int,
+    idle_surface_threshold: Int,
+    timeout_ms: Int,
+  )
+}
+
+/// Messages the push-based monitor receives.
+pub type StdioMonitorMsg {
+  RawEvent(event_type: String, content: String)
+  Tick
+}
+
+/// Default monitor config using the existing constants.
+pub fn default_monitor_config(timeout_ms: Int) -> MonitorConfig {
+  MonitorConfig(
+    emit_interval_ms: check_interval_ms,
+    idle_interval_ms: idle_check_interval_ms,
+    idle_surface_threshold: idle_surface_threshold,
+    timeout_ms: timeout_ms,
+  )
+}
+
+/// Start a push-based monitor actor. Returns the subject to send RawEvents to.
+/// The monitor self-schedules Tick messages on emit_interval_ms cadence.
+pub fn start_push_monitor(
+  config: MonitorConfig,
+  session_name: String,
+  domain: String,
+  on_event: fn(AcpEvent) -> Nil,
+) -> process.Subject(StdioMonitorMsg) {
+  let empty = ActivitySnapshot(
+    tool_calls: [],
+    message_chunks: "",
+    event_count: 0,
+    last_event_type: "",
+  )
+
+  let builder =
+    actor.new_with_initialiser(5000, fn(subject) {
+      process.send_after(subject, config.emit_interval_ms, Tick)
+
+      let state =
+        PushMonitorState(
+          config: config,
+          session_name: session_name,
+          domain: domain,
+          acc: empty,
+          idle_checks: 0,
+          idle_surfaced: False,
+          last_event_type: "",
+          started_at_ms: time.now_ms(),
+          on_event: on_event,
+          self_subject: subject,
+        )
+
+      Ok(actor.initialised(state) |> actor.returning(subject))
+    })
+    |> actor.on_message(handle_push_msg)
+
+  case actor.start(builder) {
+    Ok(started) -> started.data
+    Error(err) -> {
+      io.println(
+        "[acp-monitor] Failed to start push monitor: "
+        <> string.inspect(err),
+      )
+      process.new_subject()
+    }
+  }
+}
+
+type PushMonitorState {
+  PushMonitorState(
+    config: MonitorConfig,
+    session_name: String,
+    domain: String,
+    acc: ActivitySnapshot,
+    idle_checks: Int,
+    idle_surfaced: Bool,
+    last_event_type: String,
+    started_at_ms: Int,
+    on_event: fn(AcpEvent) -> Nil,
+    self_subject: process.Subject(StdioMonitorMsg),
+  )
+}
+
+fn handle_push_msg(
+  state: PushMonitorState,
+  msg: StdioMonitorMsg,
+) -> actor.Next(PushMonitorState, StdioMonitorMsg) {
+  case msg {
+    RawEvent(event_type, content) ->
+      handle_raw_event(state, event_type, content)
+    Tick -> handle_push_tick(state)
+  }
+}
+
+fn handle_raw_event(
+  state: PushMonitorState,
+  event_type: String,
+  content: String,
+) -> actor.Next(PushMonitorState, StdioMonitorMsg) {
+  let new_acc = case event_type {
+    "tool_call" ->
+      ActivitySnapshot(
+        ..state.acc,
+        tool_calls: list.append(state.acc.tool_calls, [content]),
+        event_count: state.acc.event_count + 1,
+        last_event_type: event_type,
+      )
+    "agent_message_chunk" ->
+      ActivitySnapshot(
+        ..state.acc,
+        message_chunks: state.acc.message_chunks <> content,
+        event_count: state.acc.event_count + 1,
+        last_event_type: event_type,
+      )
+    _ ->
+      ActivitySnapshot(
+        ..state.acc,
+        event_count: state.acc.event_count + 1,
+        last_event_type: event_type,
+      )
+  }
+  actor.continue(PushMonitorState(..state, acc: new_acc))
+}
+
+fn handle_push_tick(
+  state: PushMonitorState,
+) -> actor.Next(PushMonitorState, StdioMonitorMsg) {
+  let is_active = snapshot_is_active(state.acc)
+  let new_idle_checks = case is_active {
+    True -> 0
+    False -> state.idle_checks + 1
+  }
+
+  let elapsed_ms = time.now_ms() - state.started_at_ms
+  case elapsed_ms > state.config.timeout_ms {
+    True -> {
+      state.on_event(AcpTimedOut(
+        session_name: state.session_name,
+        domain: state.domain,
+      ))
+      actor.stop()
+    }
+    False -> {
+      let is_idle = !is_active
+      let should_emit =
+        is_active
+        || {
+          new_idle_checks >= state.config.idle_surface_threshold
+          && !state.idle_surfaced
+        }
+
+      let new_state = case should_emit {
+        True -> {
+          let body = format_snapshot(state.acc)
+          let idle_suffix = case is_idle {
+            True -> "\nLast activity: " <> state.last_event_type
+            False -> ""
+          }
+
+          state.on_event(AcpProgress(
+            session_name: state.session_name,
+            domain: state.domain,
+            title: "",
+            status: "",
+            summary: body <> idle_suffix,
+            is_idle: is_idle,
+          ))
+
+          let empty = ActivitySnapshot(
+            tool_calls: [],
+            message_chunks: "",
+            event_count: 0,
+            last_event_type: "",
+          )
+
+          PushMonitorState(
+            ..state,
+            acc: empty,
+            idle_checks: new_idle_checks,
+            idle_surfaced: case is_idle {
+              True -> True
+              False -> False
+            },
+            last_event_type: case state.acc.last_event_type {
+              "" -> state.last_event_type
+              t -> t
+            },
+          )
+        }
+        False ->
+          PushMonitorState(
+            ..state,
+            idle_checks: new_idle_checks,
+            idle_surfaced: case is_active {
+              True -> False
+              False -> state.idle_surfaced
+            },
+          )
+      }
+
+      let next_interval = case
+        new_idle_checks >= state.config.idle_surface_threshold
+      {
+        True -> state.config.idle_interval_ms
+        False -> state.config.emit_interval_ms
+      }
+      process.send_after(state.self_subject, next_interval, Tick)
+      actor.continue(new_state)
+    }
+  }
+}
+
 pub type MonitorMessage {
   CheckSession
   UpdateSummary(summary: String)
