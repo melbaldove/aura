@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Enforce: fix: commits must include changes to test files.
+# Engineering principle #8: Every bug reveals a gap in thinking — fix, test, understand.
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Only enforce on fix: commits
+if echo "$COMMIT_MSG" | head -1 | grep -qi "^fix"; then
+    # Check if any test files are staged
+    STAGED_TEST_FILES=$(git diff --cached --name-only | grep -E "^test/")
+
+    if [ -z "$STAGED_TEST_FILES" ]; then
+        echo ""
+        echo "ERROR: fix: commit without regression test."
+        echo ""
+        echo "  Engineering principle #8: Every bug reveals a gap in thinking."
+        echo "  Fix the bug, write the test, understand what you missed."
+        echo ""
+        echo "  Staged files:"
+        git diff --cached --name-only | sed 's/^/    /'
+        echo ""
+        echo "  No files under test/ are staged."
+        echo ""
+        echo "  If this bug genuinely cannot be tested (IO/process code with no"
+        echo "  pure functions to isolate), add 'no-regression-test: <reason>'"
+        echo "  to the commit body and retry."
+        echo ""
+
+        # Allow override with explicit justification
+        if echo "$COMMIT_MSG" | grep -qi "no-regression-test:"; then
+            echo "  Override accepted: no-regression-test justification found."
+            echo ""
+            exit 0
+        fi
+
+        exit 1
+    fi
+fi
+
+exit 0

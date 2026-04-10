@@ -34,7 +34,17 @@
 
     Duck tape is sometimes unavoidable — a third-party API that doesn't work the way it should, an external system you can't control. When you do reach for it, mark it clearly and know what the real fix is. But it should never be the first option.
 
-12. **No silent errors.** When something fails, someone must find out. Two rules: (1) LLM-facing functions never return silent defaults — if a tool call fails, the LLM gets an error string back so it can self-correct or inform the user. Returning `""` or `[]` on failure means the LLM confidently proceeds with garbage. (2) Everything else logs on error — config loading, file reads, and network calls can still fall back to defaults, but the error gets a log line. `Error(_) -> []` without a log is a bug waiting to happen. Optional absence (config field not set) is not an error — don't log that. But a parse failure, a disk error, a network timeout — those are errors, even if the system can continue without the result.
+12. **No silent errors.** When something fails, someone must find out.
+
+13. **Read the spec, don't guess.** When integrating with a protocol, API, or external system, read the official documentation or source code before writing a single line. Guessing at message formats, field names, or response structures creates bugs that compound — each guess that's wrong means another debug cycle, another deploy, another wasted hour. If no spec exists, read the implementation. If you can't read the implementation, write a test harness that logs the actual wire format. "It's probably like this" is not engineering.
+
+    **This applies to:**
+    - Wire protocols (JSON-RPC, HTTP APIs, WebSocket frames)
+    - Library APIs (function signatures, return types, error codes)
+    - System interfaces (file formats, env vars, CLI flags)
+    - Internal interfaces (what does this actor return? Read it, don't assume)
+
+    Three bugs from one unread spec is not bad luck — it's a process failure. Two rules: (1) LLM-facing functions never return silent defaults — if a tool call fails, the LLM gets an error string back so it can self-correct or inform the user. Returning `""` or `[]` on failure means the LLM confidently proceeds with garbage. (2) Everything else logs on error — config loading, file reads, and network calls can still fall back to defaults, but the error gets a log line. `Error(_) -> []` without a log is a bug waiting to happen. Optional absence (config field not set) is not an error — don't log that. But a parse failure, a disk error, a network timeout — those are errors, even if the system can continue without the result.
 
 ## System invariants
 

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Enforce: fix commits must touch test files.
+# Engineering principle #8: Every bug reveals a gap in thinking — fix, test, understand.
+
+# Get the commit message from the staged commit
+# (pre-commit runs before the message is finalized, so we check staged files only)
+COMMIT_MSG_FILE="$1"
+
+# Check if this is a fix commit by looking at staged changes
+# We inspect the commit message via prepare-commit-msg or by convention.
+# Since pre-commit doesn't have the message yet, we check if the branch
+# or recent context suggests a fix. Instead, we use a commit-msg hook.
+
+# This hook runs the test suite before any commit.
+# The commit-msg hook (below) enforces fix+test pairing.
+
+echo "[pre-commit] Running tests..."
+gleam test 2>&1
+TEST_EXIT=$?
+
+if [ $TEST_EXIT -ne 0 ]; then
+    echo ""
+    echo "ERROR: Tests failed. Fix before committing."
+    exit 1
+fi
+
+echo "[pre-commit] Tests passed."
+exit 0

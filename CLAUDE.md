@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+> **MANDATORY: Read [`docs/ENGINEERING.md`](docs/ENGINEERING.md) before designing or implementing anything.** Not after. Not when reminded. Before. Every principle applies — especially #11 (elegance), #12 (no silent errors), and #13 (read the spec, don't guess).
+
 ## Project overview
 
 Aura (Autonomous Unified Runtime Agent) is a local-first executive assistant framework built in Gleam on the BEAM VM. It communicates via Discord, manages parallel domains (knowledge partitions), and dispatches Claude Code sessions for coding tasks.
@@ -140,6 +142,7 @@ src/
 - Test pure functions directly. Test actors via their public convenience functions.
 - Temp files in `/tmp/aura-*-test`, clean up after
 - 316 tests currently. Don't regress.
+- **HARD RULE: Every bug fix must include a regression test.** No exceptions for "it's hard to test" — if the buggy code has pure functions (encoding, parsing, extraction), test those. If the bug is in process/IO code that genuinely can't be unit tested, document why in the commit message. A `fix:` commit without a test is incomplete.
 
 ### Database
 
@@ -199,8 +202,6 @@ src/
 - Auto-probe: halves context length on overflow error and retries
 
 ## Engineering practice
-
-**MANDATORY: Read `docs/ENGINEERING.md` before designing or implementing anything.** Not after. Not when reminded. Before. Especially principles #11 (elegance — does this solve the general problem?) and #12 (no silent errors). If a design needs a workaround, that's a signal to redesign, not to ship.
 
 The core rule: **"Does this make Aura do work for me today?"** Vertical slices first, polish last.
 
