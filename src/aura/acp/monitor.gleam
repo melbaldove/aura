@@ -281,18 +281,18 @@ fn generate_stdio_progress(
       }
 
       let system_prompt =
-        "You are reporting on an AI coding session to a busy developer via Discord.\n\n"
-        <> "Output EXACTLY these 6 lines. Every line is MANDATORY. No extra text.\n\n"
+        "You are reporting on an AI coding session to a busy developer via Discord. MAX 280 characters per field.\n\n"
+        <> "Output EXACTLY these 6 lines. ALL mandatory. No extra text.\n\n"
         <> "Title: one-line session description\n"
         <> "Status: Working | Stuck | Blocked | Idle | Needs input | Dangerous\n"
-        <> "Done: cumulative bullet list of ALL progress so far (files read, searches run, code analyzed, files written). Every file path from a Read/Grep/Bash tool is progress. Carry forward ALL items from previous update.\n"
+        <> "Done: short summary of cumulative progress. Group by category, not individual files. e.g. 'Read 8 exclusion files, grepped for `isExcluded` (not in pipeline), checked Rust (none found)'. Carry forward from previous update.\n"
         <> "Current: what is happening right now\n"
-        <> "Needs input: decisions needed from developer, or none\n"
+        <> "Needs input: decisions needed, or none\n"
         <> "Next: what happens next\n\n"
         <> "Rules:\n"
-        <> "- Done MUST list concrete file paths and actions. Never empty. Minimum: 'Nothing yet'.\n"
-        <> "- Extract file paths from filePath, stdout, and toolName fields in the JSON events.\n"
-        <> "- Use `backticks` for file paths. Bullet points for lists. Be concise."
+        <> "- CONCISE. This is Discord, not a report. Each field is ONE short line.\n"
+        <> "- Done summarizes, not lists. '5 test files read' not each file name.\n"
+        <> "- `backticks` for key file paths only. No bullet points — commas instead."
 
       let user_prompt =
         "Task: " <> state.task_prompt
