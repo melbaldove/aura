@@ -27,6 +27,7 @@ pub type AcpEvent {
     session_name: String,
     domain: String,
     report: types.AcpReport,
+    result_text: String,
   )
   AcpTimedOut(session_name: String, domain: String)
   AcpFailed(session_name: String, domain: String, error: String)

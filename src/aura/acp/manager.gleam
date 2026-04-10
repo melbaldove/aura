@@ -375,7 +375,7 @@ fn handle_monitor_event(
       update_session_state(state, session_name, Running)
     acp_monitor.AcpTimedOut(session_name, _) ->
       unregister(state, session_name, TimedOut)
-    acp_monitor.AcpCompleted(session_name, _, _) ->
+    acp_monitor.AcpCompleted(session_name, _, _, _) ->
       unregister(state, session_name, Complete)
     acp_monitor.AcpFailed(session_name, _, reason) ->
       unregister(state, session_name, Failed(reason))
@@ -698,6 +698,7 @@ fn http_recovery_event_loop(
                 blockers: "",
                 anchor: data,
               ),
+              data,
             ),
           )
         "run.failed" ->

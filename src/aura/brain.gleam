@@ -876,7 +876,7 @@ fn handle_acp_event(
       })
       actor.continue(state)
     }
-    acp_monitor.AcpCompleted(session_name, domain, report) -> {
+    acp_monitor.AcpCompleted(session_name, domain, report, _result_text) -> {
       let outcome = acp_types.outcome_to_string(report.outcome)
       let msg = "**ACP Complete** [" <> outcome <> "] -- " <> report.anchor
       let channel = resolve_acp_channel(state, session_name, domain)

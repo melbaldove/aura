@@ -191,7 +191,7 @@ fn stdio_event_loop(
           on_event(acp_monitor.AcpCompleted(session_name, domain, types.AcpReport(
             outcome: types.Clean, files_changed: [], decisions: "",
             tests: "", blockers: "", anchor: "Session completed",
-          )))
+          ), ""))
         "cancelled" ->
           on_event(acp_monitor.AcpFailed(session_name, domain, "cancelled"))
         "refusal" ->
@@ -283,6 +283,7 @@ fn http_event_loop(
                 blockers: "",
                 anchor: data,
               ),
+              data,
             ),
           )
         "run.failed" ->
