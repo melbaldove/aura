@@ -115,6 +115,7 @@ session_loop(Port, SessionId, EventPid, NextId) ->
         %% Port data
         {Port, {data, {eol, Line}}} ->
             CleanLine = binary:replace(Line, <<"\r">>, <<>>),
+            io:format("[acp-stdio-ffi] Line: ~s~n", [binary:part(CleanLine, 0, min(200, byte_size(CleanLine)))]),
             handle_line(CleanLine, EventPid),
             session_loop(Port, SessionId, EventPid, NextId);
         {Port, {data, {noeol, _}}} ->
@@ -216,7 +217,8 @@ send_notification(Port, Method, Params) ->
 jsx_encode(Map) when is_map(Map) ->
     Pairs = maps:fold(fun(K, V, Acc) ->
         Key = if is_binary(K) -> K; is_atom(K) -> atom_to_binary(K) end,
-        [<<"\"">>, json_escape(Key), <<"\":">>, jsx_encode(V) | Acc]
+        Pair = iolist_to_binary([<<"\"">>, json_escape(Key), <<"\":">>, jsx_encode(V)]),
+        [Pair | Acc]
     end, [], Map),
     iolist_to_binary([<<"{">>, lists:join(<<",">>, lists:reverse(Pairs)), <<"}">>]);
 jsx_encode(List) when is_list(List) ->
