@@ -144,7 +144,8 @@ fn dispatch_stdio(
   // We use a reply subject to get the handshake result back to the caller.
   let reply_subject = process.new_subject()
 
-  process.spawn_unlinked(fn() {
+  // spawn_unlinked returns the Pid — we need it for the snapshot bridge
+  let event_loop_pid = process.spawn_unlinked(fn() {
     // THIS process receives events from the FFI (it calls start_session)
     case stdio.start_session(command, task_spec.cwd, task_spec.prompt) {
       Error(e) -> {
@@ -163,13 +164,41 @@ fn dispatch_stdio(
 
   // Wait for the handshake result
   case process.receive(reply_subject, 30_000) {
-    Ok(Ok(#(owner, session_id))) ->
+    Ok(Ok(#(owner, session_id))) -> {
+      // Start the snapshot bridge + monitor
+      let snapshot_subject = process.new_subject()
+      process.spawn_unlinked(fn() {
+        snapshot_bridge(snapshot_subject, event_loop_pid)
+      })
+
+      acp_monitor.start_stdio_monitor(
+        task_spec,
+        session_name,
+        on_event,
+        snapshot_subject,
+      )
+
       Ok(DispatchResult(
         run_id: session_id,
         handle: StdioHandle(owner: owner, session_id: session_id),
       ))
+    }
     Ok(Error(err)) -> Error("Stdio dispatch failed: " <> err)
     Error(_) -> Error("Stdio session handshake timed out")
+  }
+}
+
+/// Bridge between the monitor's Gleam subject and the event loop's Erlang mailbox.
+/// Receives SnapshotRequest on the subject, forwards to the event loop PID.
+fn snapshot_bridge(
+  subject: process.Subject(acp_monitor.SnapshotRequest),
+  event_loop_pid: process.Pid,
+) -> Nil {
+  case process.receive_forever(subject) {
+    acp_monitor.GetSnapshot(reply_to) -> {
+      stdio.send_snapshot_request(event_loop_pid, reply_to)
+      snapshot_bridge(subject, event_loop_pid)
+    }
   }
 }
 

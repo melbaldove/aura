@@ -118,3 +118,11 @@ pub fn poll_snapshot_request() -> Result(process.Subject(acp_monitor.ActivitySna
 
 @external(erlang, "aura_acp_stdio_ffi", "poll_snapshot_request")
 fn poll_snapshot_request_ffi() -> Result(process.Subject(acp_monitor.ActivitySnapshot), Nil)
+
+/// Send a snapshot request to a stdio event loop process.
+pub fn send_snapshot_request(pid: process.Pid, reply_to: process.Subject(acp_monitor.ActivitySnapshot)) -> Nil {
+  send_snapshot_request_ffi(pid, reply_to)
+}
+
+@external(erlang, "aura_acp_stdio_ffi", "send_snapshot_request")
+fn send_snapshot_request_ffi(pid: process.Pid, reply_to: process.Subject(acp_monitor.ActivitySnapshot)) -> Nil

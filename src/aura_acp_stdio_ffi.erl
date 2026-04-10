@@ -1,6 +1,6 @@
 -module(aura_acp_stdio_ffi).
 -export([start_session/4, send_input/3, close_session/1, receive_event/1,
-         poll_snapshot_request/0]).
+         poll_snapshot_request/0, send_snapshot_request/2]).
 
 %% Exported for testing — pure functions only
 -export([jsx_encode/1, json_escape/1, extract_field/2, extract_session_id/1,
@@ -72,6 +72,12 @@ poll_snapshot_request() ->
     after 0 ->
         {error, nil}
     end.
+
+%% Send a snapshot request to a stdio event loop process.
+%% The process polls for {snapshot_request, ReplySubject} via poll_snapshot_request/0.
+send_snapshot_request(Pid, ReplySubject) ->
+    Pid ! {snapshot_request, ReplySubject},
+    nil.
 
 %% ---------------------------------------------------------------------------
 %% Internal: session owner process
