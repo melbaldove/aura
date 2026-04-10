@@ -148,7 +148,14 @@ fn dispatch_stdio(
       Ok(#(owner, session_id)) -> {
         process.send(reply_subject, Ok(#(owner, session_id)))
         on_event(acp_monitor.AcpStarted(session_name, task_spec.domain, task_spec.id))
-        stdio_event_loop(session_name, task_spec.domain, on_event)
+        // Start push-based monitor — events forwarded on each iteration
+        let monitor = acp_monitor.start_push_monitor(
+          acp_monitor.default_monitor_config(task_spec.timeout_ms),
+          session_name,
+          task_spec.domain,
+          on_event,
+        )
+        stdio_event_loop(session_name, task_spec.domain, on_event, monitor)
       }
     }
   })
@@ -168,11 +175,12 @@ fn stdio_event_loop(
   session_name: String,
   domain: String,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
+  monitor: process.Subject(acp_monitor.StdioMonitorMsg),
 ) -> Nil {
   case stdio.receive_event(5000) {
-    stdio.Event(_event_type, _content) -> {
-      // Will forward to monitor in next task
-      stdio_event_loop(session_name, domain, on_event)
+    stdio.Event(event_type, content) -> {
+      process.send(monitor, acp_monitor.RawEvent(event_type, content))
+      stdio_event_loop(session_name, domain, on_event, monitor)
     }
     stdio.Complete(stop_reason) -> {
       case stop_reason {
@@ -198,7 +206,7 @@ fn stdio_event_loop(
       on_event(acp_monitor.AcpFailed(session_name, domain, reason))
     }
     stdio.Timeout -> {
-      stdio_event_loop(session_name, domain, on_event)
+      stdio_event_loop(session_name, domain, on_event, monitor)
     }
   }
 }
