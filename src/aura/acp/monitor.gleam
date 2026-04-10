@@ -40,6 +40,29 @@ pub type AcpEvent {
   )
 }
 
+/// Structured snapshot of activity since last monitor check.
+/// ACP-native: reasons about protocol event types, not raw text.
+pub type ActivitySnapshot {
+  ActivitySnapshot(
+    tool_calls: List(String),
+    message_chunks: String,
+    event_count: Int,
+    last_event_type: String,
+  )
+}
+
+/// Request sent from monitor to data source on each heartbeat tick.
+/// The data source replies with an ActivitySnapshot via the reply subject.
+pub type SnapshotRequest {
+  GetSnapshot(reply_to: process.Subject(ActivitySnapshot))
+}
+
+/// An active snapshot has tool calls or message chunks (real work).
+/// Metadata-only events (config updates, mode changes) don't count.
+pub fn snapshot_is_active(snapshot: ActivitySnapshot) -> Bool {
+  snapshot.tool_calls != [] || snapshot.message_chunks != ""
+}
+
 pub type MonitorMessage {
   CheckSession
   UpdateSummary(summary: String)
