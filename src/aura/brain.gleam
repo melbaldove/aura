@@ -8,6 +8,8 @@ import aura/conversation
 import aura/db
 import aura/discord
 import aura/discord/rest
+import aura/discord/types as discord_types
+import aura/web
 import aura/domain
 import aura/llm
 import aura/memory
@@ -1276,7 +1278,7 @@ fn handle_with_llm(
   let system_prompt = system_prompt <> acp_context
 
   // Vision preprocessing — describe attached images before tool loop
-  let enriched_content = preprocess_vision(state, msg, domain_name)
+  let enriched_content = preprocess_attachments(state, msg, domain_name)
 
   // Load conversation history (from memory or DB)
   let now_ts = time.now_ms()
@@ -1895,8 +1897,8 @@ fn load_domain_context_files(
 // Vision preprocessing
 // ---------------------------------------------------------------------------
 
-/// Preprocess message content with vision descriptions for image attachments.
-fn preprocess_vision(
+/// Preprocess message content: fetch text file attachments, describe images.
+fn preprocess_attachments(
   state: BrainState,
   msg: discord.IncomingMessage,
   domain_name: Option(String),
@@ -1904,9 +1906,17 @@ fn preprocess_vision(
   case msg.attachments {
     [] -> msg.content
     attachments -> {
+      // First: fetch text file attachments and prepend their content
+      let text_content = fetch_text_attachments(attachments)
+      let base_content = case text_content {
+        "" -> msg.content
+        content -> content <> "\n\n" <> msg.content
+      }
+
+      // Then: handle image attachments via vision
       let image_urls = vision.extract_image_urls(attachments)
       case image_urls {
-        [] -> msg.content
+        [] -> base_content
         [first_url, ..] -> {
           // Resolve vision config for this domain
           let domain_config = case domain_name {
@@ -1923,7 +1933,7 @@ fn preprocess_vision(
           case vision.is_enabled(vision_config) {
             False -> {
               io.println("[brain] Vision not configured, skipping image")
-              msg.content
+              base_content
             }
             True -> {
               io.println("[brain] Processing image attachment: " <> first_url)
@@ -1933,11 +1943,11 @@ fn preprocess_vision(
                     "[brain] Vision description: "
                     <> string.slice(description, 0, 100),
                   )
-                  "[Image: " <> description <> "]\n\n" <> msg.content
+                  "[Image: " <> description <> "]\n\n" <> base_content
                 }
                 Error(err) -> {
                   io.println("[brain] Vision error: " <> err)
-                  msg.content
+                  base_content
                 }
               }
             }
@@ -1946,6 +1956,71 @@ fn preprocess_vision(
       }
     }
   }
+}
+
+/// Fetch text file attachments and return their content as a formatted string.
+/// Supports common text file types. Returns empty string if no text files.
+fn fetch_text_attachments(
+  attachments: List(discord_types.Attachment),
+) -> String {
+  let text_parts = list.filter_map(attachments, fn(att) {
+    case is_text_attachment(att) {
+      False -> Error(Nil)
+      True -> {
+        io.println("[brain] Fetching text attachment: " <> att.filename)
+        case web.fetch(att.url, 50_000) {
+          Ok(content) -> {
+            io.println("[brain] Fetched " <> att.filename <> " (" <> int.to_string(string.length(content)) <> " chars)")
+            Ok("[File: " <> att.filename <> "]\n```\n" <> content <> "\n```")
+          }
+          Error(e) -> {
+            io.println("[brain] Failed to fetch " <> att.filename <> ": " <> e)
+            Error(Nil)
+          }
+        }
+      }
+    }
+  })
+  string.join(text_parts, "\n\n")
+}
+
+fn is_text_attachment(att: discord_types.Attachment) -> Bool {
+  let ct = string.lowercase(att.content_type)
+  let fn_lower = string.lowercase(att.filename)
+  string.starts_with(ct, "text/")
+  || string.ends_with(fn_lower, ".json")
+  || string.ends_with(fn_lower, ".toml")
+  || string.ends_with(fn_lower, ".yaml")
+  || string.ends_with(fn_lower, ".yml")
+  || string.ends_with(fn_lower, ".md")
+  || string.ends_with(fn_lower, ".gleam")
+  || string.ends_with(fn_lower, ".rs")
+  || string.ends_with(fn_lower, ".py")
+  || string.ends_with(fn_lower, ".js")
+  || string.ends_with(fn_lower, ".ts")
+  || string.ends_with(fn_lower, ".swift")
+  || string.ends_with(fn_lower, ".sh")
+  || string.ends_with(fn_lower, ".sql")
+  || string.ends_with(fn_lower, ".csv")
+  || string.ends_with(fn_lower, ".xml")
+  || string.ends_with(fn_lower, ".html")
+  || string.ends_with(fn_lower, ".css")
+  || string.ends_with(fn_lower, ".erl")
+  || string.ends_with(fn_lower, ".ex")
+  || string.ends_with(fn_lower, ".go")
+  || string.ends_with(fn_lower, ".java")
+  || string.ends_with(fn_lower, ".kt")
+  || string.ends_with(fn_lower, ".c")
+  || string.ends_with(fn_lower, ".h")
+  || string.ends_with(fn_lower, ".cpp")
+  || string.ends_with(fn_lower, ".log")
+  || string.ends_with(fn_lower, ".env")
+  || string.ends_with(fn_lower, ".cfg")
+  || string.ends_with(fn_lower, ".ini")
+  || string.ends_with(fn_lower, ".conf")
+  || ct == "application/json"
+  || ct == "application/xml"
+  || ct == "application/toml"
 }
 
 /// Call the vision model to describe an image.
