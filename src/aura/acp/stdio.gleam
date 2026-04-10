@@ -71,3 +71,40 @@ pub fn receive_event(timeout_ms: Int) -> SessionEvent {
 
 @external(erlang, "aura_acp_stdio_ffi", "receive_event")
 fn receive_event_ffi(timeout_ms: Int) -> #(String, String, String)
+
+// ---------------------------------------------------------------------------
+// Test helpers — expose pure FFI functions for regression testing
+// ---------------------------------------------------------------------------
+
+/// Encode a Gleam value to JSON using the FFI encoder.
+@external(erlang, "aura_acp_stdio_ffi", "jsx_encode")
+pub fn ffi_jsx_encode(value: a) -> String
+
+/// Escape a string for JSON embedding.
+@external(erlang, "aura_acp_stdio_ffi", "json_escape")
+pub fn ffi_json_escape(value: String) -> String
+
+/// Extract a string field from a JSON line by marker.
+@external(erlang, "aura_acp_stdio_ffi", "extract_field")
+pub fn ffi_extract_field(line: String, marker: String) -> String
+
+/// Extract the sessionId from a JSON-RPC response line.
+@external(erlang, "aura_acp_stdio_ffi", "extract_session_id")
+pub fn ffi_extract_session_id(line: String) -> String
+
+/// Check if a JSON-RPC response is an error.
+pub type ErrorCheck {
+  IsError(message: String)
+  NotError
+}
+
+/// Check if a JSON-RPC response line contains an error.
+pub fn ffi_is_error_response(line: String) -> ErrorCheck {
+  case ffi_is_error_response_raw(line) {
+    #(True, msg) -> IsError(msg)
+    #(False, _) -> NotError
+  }
+}
+
+@external(erlang, "aura_acp_stdio_ffi", "is_error_response")
+fn ffi_is_error_response_raw(line: String) -> #(Bool, String)

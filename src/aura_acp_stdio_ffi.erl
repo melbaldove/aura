@@ -1,6 +1,10 @@
 -module(aura_acp_stdio_ffi).
 -export([start_session/4, send_input/3, close_session/1, receive_event/1]).
 
+%% Exported for testing — pure functions only
+-export([jsx_encode/1, json_escape/1, extract_field/2, extract_session_id/1,
+         parse_jsonrpc_id/1, is_error_response/1]).
+
 %% start_session/4 — Spawn a session owner process that:
 %%   1. Opens the child process port (owns it)
 %%   2. Runs the initialize + session/new + session/prompt handshake
@@ -10,6 +14,9 @@
 %%
 %% Returns {ok, {OwnerPid, SessionId}} or {error, Reason} synchronously
 %% by waiting for the handshake result.
+%%
+%% Protocol reference: https://agentclientprotocol.dev
+%% Wire format: JSON-RPC 2.0 over newline-delimited JSON (NDJSON) on stdio
 start_session(Command, Cwd, Prompt, EventPid) ->
     Self = self(),
     OwnerPid = spawn_link(fun() ->
@@ -69,6 +76,7 @@ session_init(CommandStr, Cwd, Prompt, EventPid, CallerPid) ->
         stderr_to_stdout
     ]),
     %% Step 1: Initialize
+    %% Spec: params = {protocolVersion, clientCapabilities, clientInfo}
     send_jsonrpc(Port, 0, <<"initialize">>, #{
         <<"protocolVersion">> => 1,
         <<"clientCapabilities">> => #{},
@@ -84,8 +92,11 @@ session_init(CommandStr, Cwd, Prompt, EventPid, CallerPid) ->
             CallerPid ! {handshake_error, self(), Reason};
         {ok, _} ->
             %% Step 2: session/new
+            %% Spec: params = {cwd (required), mcpServers (required, can be [])}
+            %% Response: result = {sessionId}
             send_jsonrpc(Port, 1, <<"session/new">>, #{
-                <<"cwd">> => Cwd
+                <<"cwd">> => Cwd,
+                <<"mcpServers">> => []
             }),
             case wait_response(Port, 1, EventPid, 10000) of
                 {error, Reason2} ->
@@ -93,19 +104,28 @@ session_init(CommandStr, Cwd, Prompt, EventPid, CallerPid) ->
                     CallerPid ! {handshake_error, self(), Reason2};
                 {ok, SessionResponse} ->
                     SessionId = extract_session_id(SessionResponse),
-                    %% Step 3: session/prompt
-                    send_jsonrpc(Port, 2, <<"session/prompt">>, #{
-                        <<"sessionId">> => SessionId,
-                        <<"prompt">> => [#{
-                            <<"type">> => <<"text">>,
-                            <<"text">> => Prompt
-                        }]
-                    }),
-                    %% Handshake complete — notify caller
-                    CallerPid ! {handshake_ok, self(), SessionId},
-                    %% Enter the event loop (prompt response + events arrive here)
-                    NextId = 3,
-                    session_loop(Port, SessionId, EventPid, NextId)
+                    case SessionId of
+                        <<"unknown">> ->
+                            io:format("[acp-stdio] session/new returned no sessionId: ~s~n",
+                                      [binary:part(SessionResponse, 0, min(500, byte_size(SessionResponse)))]),
+                            port_close(Port),
+                            CallerPid ! {handshake_error, self(), <<"No sessionId in session/new response">>};
+                        _ ->
+                            %% Step 3: session/prompt
+                            %% Spec: params = {sessionId, prompt: [ContentBlock]}
+                            send_jsonrpc(Port, 2, <<"session/prompt">>, #{
+                                <<"sessionId">> => SessionId,
+                                <<"prompt">> => [#{
+                                    <<"type">> => <<"text">>,
+                                    <<"text">> => Prompt
+                                }]
+                            }),
+                            %% Handshake complete — notify caller
+                            CallerPid ! {handshake_ok, self(), SessionId},
+                            %% Enter the event loop (prompt response + events arrive here)
+                            NextId = 3,
+                            session_loop(Port, SessionId, EventPid, NextId)
+                    end
             end
     end.
 
@@ -115,7 +135,6 @@ session_loop(Port, SessionId, EventPid, NextId) ->
         %% Port data
         {Port, {data, {eol, Line}}} ->
             CleanLine = binary:replace(Line, <<"\r">>, <<>>),
-            io:format("[acp-stdio-ffi] Line: ~s~n", [binary:part(CleanLine, 0, min(200, byte_size(CleanLine)))]),
             handle_line(CleanLine, EventPid),
             session_loop(Port, SessionId, EventPid, NextId);
         {Port, {data, {noeol, _}}} ->
@@ -136,19 +155,27 @@ session_loop(Port, SessionId, EventPid, NextId) ->
             }),
             session_loop(Port, SessionId, EventPid, NextId + 1);
         close ->
-            send_notification(Port, <<"cancel">>, #{}),
+            %% Spec: session/cancel notification
+            send_notification(Port, <<"session/cancel">>, #{
+                <<"sessionId">> => SessionId
+            }),
             try port_close(Port) catch _:_ -> ok end
     end.
 
 %% Wait for a JSON-RPC response with a specific id.
 %% Forwards any notifications received while waiting to EventPid.
+%% Returns {error, Reason} for JSON-RPC error responses.
 wait_response(Port, ExpectedId, EventPid, TimeoutMs) ->
     receive
         {Port, {data, {eol, Line}}} ->
             CleanLine = binary:replace(Line, <<"\r">>, <<>>),
             case parse_jsonrpc_id(CleanLine) of
                 {ok, Id} when Id == ExpectedId ->
-                    {ok, CleanLine};
+                    %% Check if this is an error response
+                    case is_error_response(CleanLine) of
+                        {true, ErrMsg} -> {error, ErrMsg};
+                        {false, _} -> {ok, CleanLine}
+                    end;
                 {ok, _OtherId} ->
                     %% Response for a different request — skip
                     wait_response(Port, ExpectedId, EventPid, TimeoutMs);
@@ -170,21 +197,27 @@ wait_response(Port, ExpectedId, EventPid, TimeoutMs) ->
     end.
 
 %% Parse a JSON-RPC line and forward as an event if it's a notification.
+%% Spec: session/update notifications have params.update.sessionUpdate as discriminator.
+%% Event types: agent_message_chunk, tool_call, tool_call_update, plan, etc.
+%% Content for text chunks: params.update.content.text
 handle_line(Line, EventPid) ->
-    %% Check for session/update notification
     case binary:match(Line, <<"\"method\":\"session/update\"">>) of
         {_, _} ->
             EventType = extract_field(Line, <<"\"sessionUpdate\":\"">>),
-            Content = extract_field(Line, <<"\"text\":\"">>),
+            %% For text content, we need the "text" value inside the "content" object,
+            %% not the "type":"text" discriminator. Use the pattern that follows "text":"
+            %% after "content":{ to avoid matching "type":"text".
+            Content = extract_content_text(Line),
             EventPid ! {stdio_event, EventType, Content};
         nomatch ->
             %% Check for stopReason (prompt response)
+            %% Spec: result = {stopReason: "end_turn"|"max_tokens"|"cancelled"|...}
             case binary:match(Line, <<"\"stopReason\"">>) of
                 {_, _} ->
                     StopReason = extract_field(Line, <<"\"stopReason\":\"">>),
                     EventPid ! {stdio_complete, StopReason};
                 nomatch ->
-                    ok %% Ignore other messages
+                    ok
             end
     end.
 
@@ -193,7 +226,6 @@ handle_line(Line, EventPid) ->
 %% ---------------------------------------------------------------------------
 
 send_jsonrpc(Port, Id, Method, Params) ->
-    %% Build JSON manually to avoid dependency
     ParamsJson = jsx_encode(Params),
     Msg = iolist_to_binary([
         <<"{\"jsonrpc\":\"2.0\",\"id\":">>,
@@ -254,7 +286,6 @@ parse_jsonrpc_id(Line) ->
                 _ -> extract_int(After2)
             end;
         nomatch ->
-            %% No id field — it's a notification
             notification
     end.
 
@@ -269,6 +300,22 @@ extract_int(_, Acc) ->
 skip_ws(<<" ", R/binary>>) -> skip_ws(R);
 skip_ws(<<"\t", R/binary>>) -> skip_ws(R);
 skip_ws(Other) -> Other.
+
+%% Check if a JSON-RPC response contains an error.
+%% Spec: error responses have {"error":{"code":N,"message":"...",...}}
+is_error_response(Line) ->
+    case binary:match(Line, <<"\"error\":{">>) of
+        {_, _} ->
+            Msg = extract_field(Line, <<"\"message\":\"">>),
+            Details = extract_field(Line, <<"\"details\":\"">>),
+            case {Msg, Details} of
+                {<<>>, <<>>} -> {true, <<"Unknown JSON-RPC error">>};
+                {M, <<>>} -> {true, M};
+                {M, D} -> {true, iolist_to_binary([M, <<": ">>, D])}
+            end;
+        nomatch ->
+            {false, <<>>}
+    end.
 
 %% Extract a string field value after a marker like <<"\"stopReason\":\"">>.
 extract_field(Line, Marker) ->
@@ -286,6 +333,30 @@ extract_until_quote(<<"\"", _/binary>>, Acc) -> Acc;
 extract_until_quote(<<C, R/binary>>, Acc) ->
     extract_until_quote(R, <<Acc/binary, C>>);
 extract_until_quote(<<>>, Acc) -> Acc.
+
+%% Extract text content from a session/update notification.
+%% The update structure is: params.update.content.text
+%% We must match "text":" that appears AFTER "content":{ to avoid
+%% matching the "type":"text" discriminator.
+%% Spec: {"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"..."}}}}
+extract_content_text(Line) ->
+    %% Find the content object, then find "text":" within it
+    case binary:match(Line, <<"\"content\":{">>) of
+        {Pos, Len} ->
+            AfterContent = binary:part(Line, Pos + Len, byte_size(Line) - Pos - Len),
+            %% Now search for "text":" within the content object
+            extract_field(AfterContent, <<"\"text\":\"">>);
+        nomatch ->
+            %% Some update types (tool_call, plan) have different content structures.
+            %% For tool_call, try to extract the title as content.
+            case binary:match(Line, <<"\"title\":\"">>) of
+                {TPos, TLen} ->
+                    After = binary:part(Line, TPos + TLen, byte_size(Line) - TPos - TLen),
+                    extract_until_quote(After, <<>>);
+                nomatch ->
+                    <<>>
+            end
+    end.
 
 extract_session_id(Line) ->
     case extract_field(Line, <<"\"sessionId\":\"">>) of
