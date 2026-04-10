@@ -271,12 +271,12 @@ fn generate_stdio_progress(
         prev ->
           "\n\nPrevious update:\n"
           <> prev
-          <> "\n\nUpdate the summary. Accumulate Done items — don't drop previous accomplishments."
+          <> "\n\nIMPORTANT: The Done field MUST include everything from the previous update's Done field PLUS any new accomplishments. Never drop previous Done items. The developer reads Done to see cumulative progress."
       }
 
       let idle_hint = case is_idle {
         True ->
-          "\nNo new events have arrived — the session appears idle or waiting for input. Set Status to 'Idle' or 'Needs input' as appropriate."
+          "\nNo new events have arrived — the session appears idle or finished. Summarize ALL accomplishments in the Done field (carry forward from previous update). Set Status to 'Idle'. Set Current to what was last happening. Set Next to 'idle — waiting' or 'may be complete'."
         False -> ""
       }
 
@@ -285,7 +285,7 @@ fn generate_stdio_progress(
         <> "Respond with EXACTLY this format (no other text):\n\n"
         <> "Title: [one-line description of what this session is doing]\n"
         <> "Status: [Working | Stuck | Blocked | Idle | Needs input | Dangerous]\n"
-        <> "Done: [what was accomplished — file names, ticket numbers, concrete results. Use bullet points if multiple items.]\n"
+        <> "Done: [CUMULATIVE list of what was accomplished so far — file names, ticket numbers, concrete results. Include ALL items from previous updates plus new ones. This is the developer's progress tracker. Use bullet points.]\n"
         <> "Current: [what's happening right now based on the events]\n"
         <> "Needs input: [decisions or questions for the developer, or 'none']\n"
         <> "Next: [what the session will do next, or 'idle — waiting for instructions']\n\n"
