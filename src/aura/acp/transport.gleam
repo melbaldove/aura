@@ -7,7 +7,6 @@ import aura/acp/tmux
 import aura/acp/types
 import gleam/erlang/process
 import gleam/io
-import gleam/list
 import gleam/result
 
 // ---------------------------------------------------------------------------
@@ -139,86 +138,30 @@ fn dispatch_stdio(
   task_spec: types.TaskSpec,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
 ) -> Result(DispatchResult, String) {
-  // The event reader process must be the one calling start_session,
-  // because the FFI sends events to the calling process's mailbox.
-  // We use a reply subject to get the handshake result back to the caller.
   let reply_subject = process.new_subject()
 
-  // spawn_unlinked returns the Pid — we need it for the snapshot bridge
-  let event_loop_pid = process.spawn_unlinked(fn() {
-    // THIS process receives events from the FFI (it calls start_session)
+  process.spawn_unlinked(fn() {
     case stdio.start_session(command, task_spec.cwd, task_spec.prompt) {
       Error(e) -> {
         process.send(reply_subject, Error(e))
       }
       Ok(#(owner, session_id)) -> {
-        // Report success back to the caller (manager)
         process.send(reply_subject, Ok(#(owner, session_id)))
-        // Emit started
         on_event(acp_monitor.AcpStarted(session_name, task_spec.domain, task_spec.id))
-        // Enter event loop — this process stays alive for the session lifetime
         stdio_event_loop(session_name, task_spec.domain, on_event)
       }
     }
   })
 
-  // Wait for the handshake result
   case process.receive(reply_subject, 30_000) {
-    Ok(Ok(#(owner, session_id))) -> {
-      // Start the snapshot bridge + monitor
-      let snapshot_subject = process.new_subject()
-      process.spawn_unlinked(fn() {
-        snapshot_bridge(snapshot_subject, event_loop_pid)
-      })
-
-      acp_monitor.start_stdio_monitor(
-        task_spec,
-        session_name,
-        on_event,
-        snapshot_subject,
-      )
-
+    Ok(Ok(#(owner, session_id))) ->
       Ok(DispatchResult(
         run_id: session_id,
         handle: StdioHandle(owner: owner, session_id: session_id),
       ))
-    }
     Ok(Error(err)) -> Error("Stdio dispatch failed: " <> err)
     Error(_) -> Error("Stdio session handshake timed out")
   }
-}
-
-/// Bridge between the monitor's Gleam subject and the event loop's Erlang mailbox.
-/// Receives SnapshotRequest on the subject, forwards to the event loop PID.
-fn snapshot_bridge(
-  subject: process.Subject(acp_monitor.SnapshotRequest),
-  event_loop_pid: process.Pid,
-) -> Nil {
-  case process.receive_forever(subject) {
-    acp_monitor.GetSnapshot(reply_to) -> {
-      stdio.send_snapshot_request(event_loop_pid, reply_to)
-      snapshot_bridge(subject, event_loop_pid)
-    }
-  }
-}
-
-/// Stdio accumulator — collects events between monitor snapshots.
-type StdioAccumulator {
-  StdioAccumulator(
-    tool_calls: List(String),
-    message_text: String,
-    event_count: Int,
-    last_event_type: String,
-  )
-}
-
-fn empty_accumulator() -> StdioAccumulator {
-  StdioAccumulator(
-    tool_calls: [],
-    message_text: "",
-    event_count: 0,
-    last_event_type: "",
-  )
 }
 
 fn stdio_event_loop(
@@ -226,58 +169,10 @@ fn stdio_event_loop(
   domain: String,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
 ) -> Nil {
-  stdio_event_loop_inner(session_name, domain, on_event, empty_accumulator())
-}
-
-fn stdio_event_loop_inner(
-  session_name: String,
-  domain: String,
-  on_event: fn(acp_monitor.AcpEvent) -> Nil,
-  acc: StdioAccumulator,
-) -> Nil {
-  // First, check for any pending snapshot requests (non-blocking)
-  let acc = case stdio.poll_snapshot_request() {
-    Ok(reply_subject) -> {
-      // Build snapshot from accumulator and reply
-      let snapshot = acp_monitor.ActivitySnapshot(
-        tool_calls: acc.tool_calls,
-        message_chunks: acc.message_text,
-        event_count: acc.event_count,
-        last_event_type: acc.last_event_type,
-      )
-      process.send(reply_subject, snapshot)
-      // Reset accumulator
-      empty_accumulator()
-    }
-    Error(_) -> acc
-  }
-
-  // Then, wait for the next stdio event
-  case stdio.receive_event(300_000) {
-    stdio.Event(event_type, content) -> {
-      let new_acc = case event_type {
-        "tool_call" ->
-          StdioAccumulator(
-            ..acc,
-            tool_calls: list.append(acc.tool_calls, [content]),
-            event_count: acc.event_count + 1,
-            last_event_type: event_type,
-          )
-        "agent_message_chunk" ->
-          StdioAccumulator(
-            ..acc,
-            message_text: acc.message_text <> content,
-            event_count: acc.event_count + 1,
-            last_event_type: event_type,
-          )
-        _ ->
-          StdioAccumulator(
-            ..acc,
-            event_count: acc.event_count + 1,
-            last_event_type: event_type,
-          )
-      }
-      stdio_event_loop_inner(session_name, domain, on_event, new_acc)
+  case stdio.receive_event(5000) {
+    stdio.Event(_event_type, _content) -> {
+      // Will forward to monitor in next task
+      stdio_event_loop(session_name, domain, on_event)
     }
     stdio.Complete(stop_reason) -> {
       case stop_reason {
@@ -303,8 +198,7 @@ fn stdio_event_loop_inner(
       on_event(acp_monitor.AcpFailed(session_name, domain, reason))
     }
     stdio.Timeout -> {
-      io.println("[acp-stdio] Timeout for " <> session_name)
-      on_event(acp_monitor.AcpFailed(session_name, domain, "stdio timeout"))
+      stdio_event_loop(session_name, domain, on_event)
     }
   }
 }

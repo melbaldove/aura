@@ -1,4 +1,3 @@
-import aura/acp/monitor as acp_monitor
 import gleam/erlang/process
 
 /// Opaque handle to a stdio session owner process.
@@ -110,19 +109,3 @@ pub fn ffi_is_error_response(line: String) -> ErrorCheck {
 @external(erlang, "aura_acp_stdio_ffi", "is_error_response")
 fn ffi_is_error_response_raw(line: String) -> #(Bool, String)
 
-/// Non-blocking poll for a snapshot request from the monitor.
-/// Returns Ok(reply_subject) if a request is waiting, or Error(Nil) if not.
-pub fn poll_snapshot_request() -> Result(process.Subject(acp_monitor.ActivitySnapshot), Nil) {
-  poll_snapshot_request_ffi()
-}
-
-@external(erlang, "aura_acp_stdio_ffi", "poll_snapshot_request")
-fn poll_snapshot_request_ffi() -> Result(process.Subject(acp_monitor.ActivitySnapshot), Nil)
-
-/// Send a snapshot request to a stdio event loop process.
-pub fn send_snapshot_request(pid: process.Pid, reply_to: process.Subject(acp_monitor.ActivitySnapshot)) -> Nil {
-  send_snapshot_request_ffi(pid, reply_to)
-}
-
-@external(erlang, "aura_acp_stdio_ffi", "send_snapshot_request")
-fn send_snapshot_request_ffi(pid: process.Pid, reply_to: process.Subject(acp_monitor.ActivitySnapshot)) -> Nil

@@ -51,12 +51,6 @@ pub type ActivitySnapshot {
   )
 }
 
-/// Request sent from monitor to data source on each heartbeat tick.
-/// The data source replies with an ActivitySnapshot via the reply subject.
-pub type SnapshotRequest {
-  GetSnapshot(reply_to: process.Subject(ActivitySnapshot))
-}
-
 /// An active snapshot has tool calls or message chunks (real work).
 /// Metadata-only events (config updates, mode changes) don't count.
 pub fn snapshot_is_active(snapshot: ActivitySnapshot) -> Bool {
@@ -96,126 +90,6 @@ pub fn format_snapshot(snapshot: ActivitySnapshot) -> String {
 pub type MonitorMessage {
   CheckSession
   UpdateSummary(summary: String)
-}
-
-/// Start a monitor for a stdio session.
-/// Spawns a process that queries the data source on a 15-second heartbeat.
-pub fn start_stdio_monitor(
-  task_spec: types.TaskSpec,
-  session_name: String,
-  on_event: fn(AcpEvent) -> Nil,
-  data_source: process.Subject(SnapshotRequest),
-) -> Nil {
-  process.spawn_unlinked(fn() {
-    stdio_monitor_loop(
-      task_spec,
-      session_name,
-      on_event,
-      data_source,
-      time.now_ms(),
-      0,
-      False,
-      "",
-    )
-  })
-  Nil
-}
-
-fn stdio_monitor_loop(
-  task_spec: types.TaskSpec,
-  session_name: String,
-  on_event: fn(AcpEvent) -> Nil,
-  data_source: process.Subject(SnapshotRequest),
-  started_at_ms: Int,
-  idle_checks: Int,
-  idle_surfaced: Bool,
-  last_event_type: String,
-) -> Nil {
-  // Sleep for the check interval
-  let sleep_ms = case idle_checks >= idle_threshold {
-    True -> idle_check_interval_ms
-    False -> check_interval_ms
-  }
-  process.sleep(sleep_ms)
-
-  // Request snapshot from data source
-  let reply_subject = process.new_subject()
-  process.send(data_source, GetSnapshot(reply_to: reply_subject))
-
-  case process.receive(reply_subject, 5000) {
-    Error(_) -> {
-      // Data source process may have died — session probably ended
-      io.println("[acp-monitor] Snapshot timeout for " <> session_name <> " — stopping monitor")
-      Nil
-    }
-    Ok(snapshot) -> {
-      let is_active = snapshot_is_active(snapshot)
-      let new_idle_checks = case is_active {
-        True -> 0
-        False -> idle_checks + 1
-      }
-      let new_idle_surfaced = case is_active {
-        True -> False
-        False -> idle_surfaced
-      }
-
-      // Check timeout
-      let elapsed_ms = time.now_ms() - started_at_ms
-      case elapsed_ms > task_spec.timeout_ms {
-        True -> {
-          on_event(AcpTimedOut(
-            session_name: session_name,
-            domain: task_spec.domain,
-          ))
-          Nil
-        }
-        False -> {
-          // Emit progress if active, or surfacing idle for the first time
-          let is_idle = !is_active
-          let should_emit = is_active || { new_idle_checks >= idle_surface_threshold && !new_idle_surfaced }
-
-          let final_idle_surfaced = case should_emit {
-            True -> {
-              let body = format_snapshot(snapshot)
-              let idle_suffix = case is_idle {
-                True -> "\nLast activity: " <> last_event_type
-                False -> ""
-              }
-              let summary = body <> idle_suffix
-
-              on_event(AcpProgress(
-                session_name: session_name,
-                domain: task_spec.domain,
-                title: "",
-                status: "",
-                summary: summary,
-                is_idle: is_idle,
-              ))
-
-              case is_idle { True -> True False -> new_idle_surfaced }
-            }
-            False -> new_idle_surfaced
-          }
-
-          let new_last_event = case snapshot.last_event_type {
-            "" -> last_event_type
-            t -> t
-          }
-
-          stdio_monitor_loop(
-            task_spec,
-            session_name,
-            on_event,
-            data_source,
-            started_at_ms,
-            new_idle_checks,
-            final_idle_surfaced,
-            new_last_event,
-          )
-        }
-      }
-    }
-  }
 }
 
 pub type MonitorState {
