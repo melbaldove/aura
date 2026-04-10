@@ -6,6 +6,7 @@ import aura/acp/stdio
 import aura/acp/tmux
 import aura/acp/types
 import gleam/erlang/process
+import aura/time
 import gleam/io
 import gleam/result
 
@@ -177,14 +178,35 @@ fn stdio_event_loop(
   domain: String,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
 ) -> Nil {
+  stdio_event_loop_inner(session_name, domain, on_event, 0)
+}
+
+fn stdio_event_loop_inner(
+  session_name: String,
+  domain: String,
+  on_event: fn(acp_monitor.AcpEvent) -> Nil,
+  last_progress_ms: Int,
+) -> Nil {
   case stdio.receive_event(300_000) {
     stdio.Event(event_type, content) -> {
-      case event_type {
-        "agent_message_chunk" | "tool_call" | "tool_call_update" | "plan" ->
-          on_event(acp_monitor.AcpProgress(session_name, domain, "", "", content, False))
-        _ -> Nil
+      let now = time.now_ms()
+      // Throttle progress updates to Discord: max once per 10 seconds
+      // tool_call events (new tool invocations) always go through
+      let should_send = case event_type, content {
+        _, "" -> False
+        "tool_call", _ -> True
+        _, _ -> { now - last_progress_ms } > 10_000
       }
-      stdio_event_loop(session_name, domain, on_event)
+      let new_last = case should_send {
+        True -> {
+          on_event(acp_monitor.AcpProgress(
+            session_name, domain, "", "", content, False,
+          ))
+          now
+        }
+        False -> last_progress_ms
+      }
+      stdio_event_loop_inner(session_name, domain, on_event, new_last)
     }
     stdio.Complete(stop_reason) -> {
       case stop_reason {
