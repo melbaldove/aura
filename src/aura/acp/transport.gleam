@@ -232,7 +232,7 @@ fn dispatch_stdio(
           monitor_model,
           on_event,
         )
-        stdio_event_loop(session_name, task_spec.domain, on_event, monitor)
+        stdio_event_loop(session_name, task_spec.domain, on_event, monitor, new_completion_buffer())
       }
     }
   })
@@ -253,19 +253,27 @@ fn stdio_event_loop(
   domain: String,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
   monitor: process.Subject(acp_monitor.StdioMonitorMsg),
+  buf: CompletionBuffer,
 ) -> Nil {
   case stdio.receive_event(5000) {
-    stdio.Event(_event_type, content) -> {
+    stdio.Event(event_type, content) -> {
       process.send(monitor, acp_monitor.RawLine(content))
-      stdio_event_loop(session_name, domain, on_event, monitor)
+      let new_buf = buffer_event(buf, event_type, content)
+      stdio_event_loop(session_name, domain, on_event, monitor, new_buf)
     }
     stdio.Complete(stop_reason) -> {
       case stop_reason {
-        "end_turn" ->
+        "end_turn" -> {
+          // Request monitor's cumulative summary
+          let monitor_summary = process.call(monitor, 5000, fn(reply_to) {
+            acp_monitor.GetLastSummary(reply_to)
+          })
+          let result_text = format_result_text(buf, monitor_summary)
           on_event(acp_monitor.AcpCompleted(session_name, domain, types.AcpReport(
             outcome: types.Clean, files_changed: [], decisions: "",
             tests: "", blockers: "", anchor: "Session completed",
-          ), ""))
+          ), result_text))
+        }
         "cancelled" ->
           on_event(acp_monitor.AcpFailed(session_name, domain, "cancelled"))
         "refusal" ->
@@ -283,7 +291,7 @@ fn stdio_event_loop(
       on_event(acp_monitor.AcpFailed(session_name, domain, reason))
     }
     stdio.Timeout -> {
-      stdio_event_loop(session_name, domain, on_event, monitor)
+      stdio_event_loop(session_name, domain, on_event, monitor, buf)
     }
   }
 }
