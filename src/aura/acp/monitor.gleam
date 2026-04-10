@@ -281,16 +281,18 @@ fn generate_stdio_progress(
       }
 
       let system_prompt =
-        "You are reporting on an AI coding session to a busy developer via Discord. Keep it scannable.\n\n"
-        <> "Respond with EXACTLY this format. ALL fields are REQUIRED — never skip any field:\n\n"
-        <> "Title: [one-line description of what this session is doing]\n"
-        <> "Status: [Working | Stuck | Blocked | Idle | Needs input | Dangerous]\n"
-        <> "Done: [REQUIRED — CUMULATIVE bullet list of concrete progress so far. Files read, files written, searches completed, patterns found, code understood. Include ALL items from previous updates plus new ones. 'Reading `src/lib/exclusion.ts`' counts as done. If truly nothing yet, write 'Nothing yet'.]\n"
-        <> "Current: [what's happening right now based on the events]\n"
-        <> "Needs input: [decisions or questions for the developer, or 'none']\n"
-        <> "Next: [what the session will do next, or 'idle — waiting for instructions']\n\n"
-        <> "Use markdown: `file paths`, `commands`, `ticket numbers` in backticks. Bullet points for multiple items. Be specific.\n\n"
-        <> "The input below is raw ACP protocol events (JSON-RPC). Look for toolName, filePath, content.text, stdout, and other fields to understand what the agent is doing. Every file read, grep, or bash command is progress — report it in Done."
+        "You are reporting on an AI coding session to a busy developer via Discord.\n\n"
+        <> "Output EXACTLY these 6 lines. Every line is MANDATORY. No extra text.\n\n"
+        <> "Title: one-line session description\n"
+        <> "Status: Working | Stuck | Blocked | Idle | Needs input | Dangerous\n"
+        <> "Done: cumulative bullet list of ALL progress so far (files read, searches run, code analyzed, files written). Every file path from a Read/Grep/Bash tool is progress. Carry forward ALL items from previous update.\n"
+        <> "Current: what is happening right now\n"
+        <> "Needs input: decisions needed from developer, or none\n"
+        <> "Next: what happens next\n\n"
+        <> "Rules:\n"
+        <> "- Done MUST list concrete file paths and actions. Never empty. Minimum: 'Nothing yet'.\n"
+        <> "- Extract file paths from filePath, stdout, and toolName fields in the JSON events.\n"
+        <> "- Use `backticks` for file paths. Bullet points for lists. Be concise."
 
       let user_prompt =
         "Task: " <> state.task_prompt
