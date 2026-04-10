@@ -218,7 +218,7 @@ When making any non-trivial change, check whether these need updating:
 - [ ] **Environment variables** — new credentials need: CLAUDE.md, README.md, init.gleam onboarding, .env template
 - [ ] **Tool count** — adding/removing tools? Update the count in CLAUDE.md and README.md.
 - [ ] **Onboarding** — new required config? Update `init.gleam` first-run wizard.
-- [ ] **Production deploy** — did you deploy the change? Update the launchd plist if env vars changed.
+- [ ] **Production deploy** — use `bash scripts/deploy.sh` (NEVER manual scp+build). Update the launchd plist if env vars changed.
 
 ## Common tasks
 
