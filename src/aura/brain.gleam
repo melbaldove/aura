@@ -950,56 +950,63 @@ fn handle_acp_event(
         <> session_name
         <> "`"
 
-      // Build body from structured fields
-      let body = case is_idle {
-        True -> {
-          // Idle: show Done + Needs input + nudge
-          let done = extract_summary_field(summary, "Done:")
-          let needs = extract_summary_field(summary, "Needs input:")
-          let parts = [
-            case done {
-              "" -> ""
-              _ -> "**Done:** " <> done
-            },
-            case needs {
-              "" | "none" | "None" -> ""
-              _ -> "**Needs input:** " <> needs
-            },
-          ]
-          let body_text =
-            list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
-          body_text <> "\n\nWant me to check on this? Reply in this thread."
+      // Build body — branch on whether this is structured (tmux) or native (stdio)
+      let body = case title {
+        "" -> {
+          // Stdio-native: summary is pre-formatted (tool calls + message chunks)
+          summary
         }
-        False -> {
-          // Active: show Status + Done + Current + Needs input + Next
-          let status_line = case status {
-            "" -> ""
-            _ -> "**Status:** " <> status
+        _ -> {
+          // Tmux-structured: parse Done/Current/Next fields from LLM summary
+          case is_idle {
+            True -> {
+              let done = extract_summary_field(summary, "Done:")
+              let needs = extract_summary_field(summary, "Needs input:")
+              let parts = [
+                case done {
+                  "" -> ""
+                  _ -> "**Done:** " <> done
+                },
+                case needs {
+                  "" | "none" | "None" -> ""
+                  _ -> "**Needs input:** " <> needs
+                },
+              ]
+              let body_text =
+                list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
+              body_text <> "\n\nWant me to check on this? Reply in this thread."
+            }
+            False -> {
+              let status_line = case status {
+                "" -> ""
+                _ -> "**Status:** " <> status
+              }
+              let done = extract_summary_field(summary, "Done:")
+              let current = extract_summary_field(summary, "Current:")
+              let needs = extract_summary_field(summary, "Needs input:")
+              let next = extract_summary_field(summary, "Next:")
+              let parts = [
+                status_line,
+                case done {
+                  "" -> ""
+                  _ -> "**Done:** " <> done
+                },
+                case current {
+                  "" -> ""
+                  _ -> "**Current:** " <> current
+                },
+                case needs {
+                  "" | "none" | "None" -> ""
+                  _ -> "**Needs input:** " <> needs
+                },
+                case next {
+                  "" -> ""
+                  _ -> "**Next:** " <> next
+                },
+              ]
+              list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
+            }
           }
-          let done = extract_summary_field(summary, "Done:")
-          let current = extract_summary_field(summary, "Current:")
-          let needs = extract_summary_field(summary, "Needs input:")
-          let next = extract_summary_field(summary, "Next:")
-          let parts = [
-            status_line,
-            case done {
-              "" -> ""
-              _ -> "**Done:** " <> done
-            },
-            case current {
-              "" -> ""
-              _ -> "**Current:** " <> current
-            },
-            case needs {
-              "" | "none" | "None" -> ""
-              _ -> "**Needs input:** " <> needs
-            },
-            case next {
-              "" -> ""
-              _ -> "**Next:** " <> next
-            },
-          ]
-          list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
         }
       }
 
