@@ -876,14 +876,41 @@ fn handle_acp_event(
       })
       actor.continue(state)
     }
-    acp_monitor.AcpCompleted(session_name, domain, report, _result_text) -> {
-      let outcome = acp_types.outcome_to_string(report.outcome)
-      let msg = "**ACP Complete** [" <> outcome <> "] -- " <> report.anchor
+    acp_monitor.AcpCompleted(session_name, domain, report, result_text) -> {
       let channel = resolve_acp_channel(state, session_name, domain)
-      process.spawn_unlinked(fn() {
-        send_discord_response(state.discord_token, channel, msg)
-      })
-      actor.continue(state)
+      case result_text {
+        "" -> {
+          let outcome = acp_types.outcome_to_string(report.outcome)
+          let msg =
+            "**ACP Complete** [" <> outcome <> "] -- " <> report.anchor
+          process.spawn_unlinked(fn() {
+            send_discord_response(state.discord_token, channel, msg)
+          })
+          let new_msgs =
+            dict.delete(state.acp_progress_msgs, session_name)
+          actor.continue(BrainState(..state, acp_progress_msgs: new_msgs))
+        }
+        text -> {
+          let domain_name = case
+            list.find(state.domains, fn(d) { d.name == domain })
+          {
+            Ok(d) -> Some(d.name)
+            Error(_) -> None
+          }
+          process.spawn_unlinked(fn() {
+            handle_handback(
+              state,
+              channel,
+              domain_name,
+              session_name,
+              text,
+            )
+          })
+          let new_msgs =
+            dict.delete(state.acp_progress_msgs, session_name)
+          actor.continue(BrainState(..state, acp_progress_msgs: new_msgs))
+        }
+      }
     }
     acp_monitor.AcpTimedOut(session_name, domain) -> {
       let msg =
@@ -1069,6 +1096,187 @@ fn resolve_acp_channel(
         id -> id
       }
     Error(_) -> resolve_domain_channel(state, domain)
+  }
+}
+
+/// Handle a flare reporting back — load thread conversation, append result
+/// as system message, and re-enter the tool loop so the LLM responds naturally.
+fn handle_handback(
+  state: BrainState,
+  channel: String,
+  domain_name: Option(String),
+  session_name: String,
+  result_text: String,
+) -> Nil {
+  io.println(
+    "[brain] Handback from " <> session_name <> " to channel " <> channel,
+  )
+
+  let system_msg =
+    "[Flare reported back: \"" <> session_name <> "\"]\n\n" <> result_text
+
+  let typing_stop = start_typing_loop(state.discord_token, channel)
+
+  let domain_names = list.map(state.domains, fn(d) { d.name })
+  let memory_content = case
+    structured_memory.format_for_display(xdg.memory_path(state.paths))
+  {
+    Ok(c) -> c
+    Error(_) -> ""
+  }
+  let user_content = case
+    structured_memory.format_for_display(xdg.user_path(state.paths))
+  {
+    Ok(c) -> c
+    Error(_) -> ""
+  }
+  let system_prompt =
+    build_system_prompt(
+      state.soul,
+      domain_names,
+      state.skill_infos,
+      memory_content,
+      user_content,
+    )
+
+  let domain_prompt = case domain_name {
+    Some(name) -> {
+      let config_dir = xdg.domain_config_dir(state.paths, name)
+      let data_dir = xdg.domain_data_dir(state.paths, name)
+      let state_dir = xdg.domain_state_dir(state.paths, name)
+      let ctx =
+        domain.load_context(config_dir, data_dir, state_dir, state.skill_infos)
+      "\n\n" <> domain.build_domain_prompt(ctx)
+    }
+    None -> ""
+  }
+  let system_prompt = system_prompt <> domain_prompt
+
+  let now_ts = time.now_ms()
+  let #(_, _, history) =
+    conversation.get_or_load_db(
+      state.conversations,
+      state.db_subject,
+      "discord",
+      channel,
+      now_ts,
+    )
+
+  let initial_messages =
+    list.flatten([
+      [llm.SystemMessage(system_prompt)],
+      history,
+      [llm.SystemMessage(system_msg)],
+    ])
+
+  let #(
+    domain_cwd,
+    acp_provider,
+    acp_binary,
+    acp_worktree,
+    acp_server_url,
+    acp_agent_name,
+  ) = case domain_name {
+    Some(name) ->
+      case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
+        Ok(#(_, cfg)) -> #(
+          cfg.cwd,
+          cfg.acp_provider,
+          cfg.acp_binary,
+          cfg.acp_worktree,
+          cfg.acp_server_url,
+          cfg.acp_agent_name,
+        )
+        Error(_) -> #(".", "claude-code", "", True, "", "")
+      }
+    None -> #(".", "claude-code", "", True, "", "")
+  }
+
+  let base_dir = case domain_name {
+    Some(_) -> domain_cwd
+    None -> state.paths.data
+  }
+
+  let tool_ctx =
+    brain_tools.ToolContext(
+      base_dir: base_dir,
+      discord_token: state.discord_token,
+      guild_id: state.guild_id,
+      message_id: "",
+      channel_id: channel,
+      paths: state.paths,
+      skill_infos: state.skill_infos,
+      skills_dir: state.skills_dir,
+      validation_rules: state.validation_rules,
+      db_subject: state.db_subject,
+      scheduler_subject: state.scheduler_subject,
+      acp_subject: state.acp_subject,
+      domain_name: option.unwrap(domain_name, "aura"),
+      domain_cwd: domain_cwd,
+      acp_provider: acp_provider,
+      acp_binary: acp_binary,
+      acp_worktree: acp_worktree,
+      acp_server_url: acp_server_url,
+      acp_agent_name: acp_agent_name,
+      on_propose: fn(_) { Nil },
+    )
+
+  let result =
+    tool_loop_with_retry(state, tool_ctx, channel, initial_messages, 3)
+
+  stop_typing_loop(typing_stop)
+
+  case result {
+    Ok(#(response_text, traces, msg_id, new_messages, _prompt_tokens)) -> {
+      let handback_msg = llm.SystemMessage(system_msg)
+      let all_turn_messages = [handback_msg, ..new_messages]
+
+      let now = time.now_ms()
+      case db.resolve_conversation(state.db_subject, "discord", channel, now) {
+        Ok(convo_id) -> {
+          case
+            conversation.save_exchange_to_db(
+              state.db_subject,
+              convo_id,
+              all_turn_messages,
+              "aura",
+              "Aura",
+              now,
+            )
+          {
+            Ok(_) -> Nil
+            Error(e) -> io.println("[brain] Handback DB save failed: " <> e)
+          }
+        }
+        Error(e) ->
+          io.println(
+            "[brain] Handback conversation resolve failed: " <> e,
+          )
+      }
+
+      let full = conversation.format_full_message(traces, response_text)
+      let _ = send_or_edit(state.discord_token, channel, msg_id, full)
+
+      case state.self_subject {
+        Some(subj) -> {
+          let dn = option.unwrap(domain_name, "aura")
+          process.send(
+            subj,
+            StoreExchange(channel, all_turn_messages, dn, 0),
+          )
+        }
+        None -> Nil
+      }
+    }
+    Error(e) -> {
+      io.println("[brain] Handback tool loop failed: " <> e)
+      let fallback_msg =
+        "**Flare reported back** ("
+        <> session_name
+        <> ")\n\n"
+        <> result_text
+      send_discord_response(state.discord_token, channel, fallback_msg)
+    }
   }
 }
 
