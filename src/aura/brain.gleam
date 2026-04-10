@@ -950,15 +950,8 @@ fn handle_acp_event(
         <> session_name
         <> "`"
 
-      // Build body — branch on whether this is structured (tmux) or native (stdio)
-      let body = case title {
-        "" -> {
-          // Stdio-native: summary is pre-formatted (tool calls + message chunks)
-          summary
-        }
-        _ -> {
-          // Tmux-structured: parse Done/Current/Next fields from LLM summary
-          case is_idle {
+      // Build body from structured fields (same format for tmux and stdio — both LLM-summarized)
+      let body = case is_idle {
             True -> {
               let done = extract_summary_field(summary, "Done:")
               let needs = extract_summary_field(summary, "Needs input:")
@@ -1007,8 +1000,6 @@ fn handle_acp_event(
               list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
             }
           }
-        }
-      }
 
       let msg = header <> "\n\n" <> body
       let channel = resolve_acp_channel(state, session_name, domain)
