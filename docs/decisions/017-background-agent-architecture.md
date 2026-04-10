@@ -1,7 +1,7 @@
 # ADR 017: Background Agent Architecture (OpenPoke Pattern)
 
 ## Status
-Proposed (design phase — not yet implemented)
+Superseded by [ADR 018](018-flare-architecture.md)
 
 ## Context
 ACP sessions currently operate as fire-and-forget: the brain dispatches, the monitor shows progress, the session completes, and the results are trapped. The user never gets an answer to their original question. The brain doesn't read what the agent produced, doesn't summarize findings, and doesn't continue the conversation.
