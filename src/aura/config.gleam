@@ -56,6 +56,8 @@ pub type GlobalConfig {
     acp_global_max_concurrent: Int,
     acp_server_url: String,
     acp_agent_name: String,
+    acp_transport: String,
+    acp_command: String,
     brain_context: Int,
   )
 }
@@ -103,6 +105,8 @@ pub fn default_global() -> GlobalConfig {
     acp_global_max_concurrent: 0,
     acp_server_url: "",
     acp_agent_name: "claude-code",
+    acp_transport: "stdio",
+    acp_command: "claude-agent-acp",
     brain_context: 0,
   )
 }
@@ -231,6 +235,14 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     tom.get_string(doc, ["acp", "agent_name"])
     |> result.unwrap("claude-code")
 
+  let acp_transport =
+    tom.get_string(doc, ["acp", "transport"])
+    |> result.unwrap("stdio")
+
+  let acp_command =
+    tom.get_string(doc, ["acp", "command"])
+    |> result.unwrap("claude-agent-acp")
+
   Ok(GlobalConfig(
     discord: DiscordConfig(
       token: token,
@@ -259,6 +271,8 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     acp_global_max_concurrent: global_max_concurrent,
     acp_server_url: acp_server_url,
     acp_agent_name: acp_agent_name,
+    acp_transport: acp_transport,
+    acp_command: acp_command,
     brain_context: brain_context,
   ))
 }

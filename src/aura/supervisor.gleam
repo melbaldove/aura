@@ -1,4 +1,5 @@
 import aura/acp/manager
+import aura/acp/transport
 import aura/brain
 import aura/config
 import aura/db
@@ -148,14 +149,19 @@ pub fn start(
 
   // 5b. Start ACP manager actor (with placeholder callback — brain not started yet)
   let acp_store_path = xdg.data_path(paths, "acp-sessions.json")
+  let acp_transport = transport.parse(
+    global_config.acp_transport,
+    global_config.acp_server_url,
+    global_config.acp_agent_name,
+    global_config.acp_command,
+  )
   use acp_subject <- result.try(
     manager.start(
       global_config.acp_global_max_concurrent,
       acp_store_path,
       global_config.models.monitor,
       fn(_event) { Nil },
-      global_config.acp_server_url,
-      global_config.acp_agent_name,
+      acp_transport,
     ),
   )
   io.println("[supervisor] ACP manager started")

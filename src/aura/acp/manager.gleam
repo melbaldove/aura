@@ -4,13 +4,14 @@ import aura/acp/provider
 import aura/acp/session_store
 import aura/acp/sse
 import aura/acp/tmux
+import aura/acp/transport
 import aura/acp/types
 import aura/time
 import gleam/dict.{type Dict}
 import gleam/int
 import gleam/io
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/erlang/process
 import gleam/string
@@ -39,6 +40,7 @@ pub type ActiveSession {
     prompt: String,
     cwd: String,
     idle_surfaced: Bool,
+    handle: Option(transport.SessionHandle),
   )
 }
 
@@ -76,8 +78,7 @@ pub type AcpActorState {
     monitor_model: String,
     on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
     self_subject: process.Subject(AcpMessage),
-    acp_server_url: String,
-    acp_agent_name: String,
+    transport: transport.Transport,
   )
 }
 
@@ -151,19 +152,18 @@ pub fn start(
   store_path: String,
   monitor_model: String,
   on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
-  acp_server_url: String,
-  acp_agent_name: String,
+  acp_transport: transport.Transport,
 ) -> Result(process.Subject(AcpMessage), String) {
   let builder =
     actor.new_with_initialiser(10_000, fn(self_subject) {
-      // Recovery: load persisted sessions, check tmux/ACP, start monitors
+      // Recovery: load persisted sessions, check status, start monitors
       let sessions =
         recover_sessions(
           self_subject,
           store_path,
           monitor_model,
           on_brain_event,
-          acp_server_url,
+          acp_transport,
         )
 
       let state =
@@ -174,8 +174,7 @@ pub fn start(
           monitor_model: monitor_model,
           on_brain_event: on_brain_event,
           self_subject: self_subject,
-          acp_server_url: acp_server_url,
-          acp_agent_name: acp_agent_name,
+          transport: acp_transport,
         )
       Ok(actor.initialised(state) |> actor.returning(self_subject))
     })
@@ -231,7 +230,7 @@ fn handle_message(
 }
 
 // ---------------------------------------------------------------------------
-// Dispatch
+// Dispatch — single path via transport abstraction
 // ---------------------------------------------------------------------------
 
 fn handle_dispatch(
@@ -249,136 +248,60 @@ fn handle_dispatch(
       ),
     )
     True -> {
-      case state.acp_server_url {
-        "" -> handle_dispatch_tmux(state, task_spec, thread_id)
-        server_url ->
-          handle_dispatch_acp(state, task_spec, thread_id, server_url)
-      }
-    }
-  }
-}
-
-/// Dispatch via ACP HTTP protocol.
-fn handle_dispatch_acp(
-  state: AcpActorState,
-  task_spec: types.TaskSpec,
-  thread_id: String,
-  server_url: String,
-) -> #(AcpActorState, Result(String, String)) {
-  let session_name =
-    tmux.build_session_name(task_spec.domain, task_spec.id)
-
-  case client.create_run(server_url, state.acp_agent_name, task_spec.prompt) {
-    Ok(run) -> {
+      let session_name =
+        tmux.build_session_name(task_spec.domain, task_spec.id)
       let session =
         ActiveSession(
           session_name: session_name,
           domain: task_spec.domain,
           task_id: task_spec.id,
-          run_id: run.run_id,
+          run_id: "",
           state: Starting,
           started_at_ms: time.now_ms(),
           thread_id: thread_id,
           prompt: task_spec.prompt,
           cwd: task_spec.cwd,
           idle_surfaced: False,
+          handle: None,
         )
+
+      // Insert and persist BEFORE dispatch
       let new_sessions = dict.insert(state.sessions, session_name, session)
       let new_state = AcpActorState(..state, sessions: new_sessions)
       persist(new_state)
 
-      // Start SSE listener for this run
-      start_sse_listener(
-        server_url,
-        run.run_id,
-        session_name,
-        task_spec.domain,
-        state.self_subject,
-      )
-      #(new_state, Ok(session_name))
-    }
-    Error(err) -> {
-      #(state, Error("ACP dispatch failed: " <> err))
-    }
-  }
-}
-
-/// Dispatch via legacy tmux path.
-fn handle_dispatch_tmux(
-  state: AcpActorState,
-  task_spec: types.TaskSpec,
-  thread_id: String,
-) -> #(AcpActorState, Result(String, String)) {
-  let session_name =
-    tmux.build_session_name(task_spec.domain, task_spec.id)
-  let session =
-    ActiveSession(
-      session_name: session_name,
-      domain: task_spec.domain,
-      task_id: task_spec.id,
-      run_id: "",
-      state: Starting,
-      started_at_ms: time.now_ms(),
-      thread_id: thread_id,
-      prompt: task_spec.prompt,
-      cwd: task_spec.cwd,
-      idle_surfaced: False,
-    )
-
-  // Insert and persist BEFORE starting tmux/monitor
-  let new_sessions = dict.insert(state.sessions, session_name, session)
-  let new_state = AcpActorState(..state, sessions: new_sessions)
-  persist(new_state)
-
-  // Trust directory if Claude Code provider
-  case task_spec.provider {
-    provider.ClaudeCode -> {
-      let _ = tmux.ensure_trusted(task_spec.cwd)
-      Nil
-    }
-    _ -> Nil
-  }
-
-  // Build shell command and start tmux
-  let shell_command =
-    provider.build_command(
-      task_spec.provider,
-      task_spec.prompt,
-      task_spec.cwd,
-      session_name,
-      task_spec.worktree,
-    )
-  case tmux.create_session(session_name, shell_command) {
-    Error(reason) -> {
-      // Clean up: remove from state and persist
-      let rolled_back = dict.delete(new_sessions, session_name)
-      let rolled_state = AcpActorState(..state, sessions: rolled_back)
-      persist(rolled_state)
-      #(rolled_state, Error("Failed to create tmux session: " <> reason))
-    }
-    Ok(Nil) -> {
-      // Start monitor — events route back to this actor
       let on_event = fn(event) {
         process.send(state.self_subject, MonitorEvent(event))
       }
       case
-        acp_monitor.start_monitor_only(
-          task_spec,
+        transport.dispatch(
+          state.transport,
           session_name,
+          task_spec,
           state.monitor_model,
           on_event,
-          True,
-          False,
         )
       {
-        Ok(_) -> #(new_state, Ok(session_name))
+        Ok(result) -> {
+          let updated_session =
+            ActiveSession(
+              ..session,
+              run_id: result.run_id,
+              handle: Some(result.handle),
+            )
+          let final_sessions =
+            dict.insert(new_sessions, session_name, updated_session)
+          let final_state =
+            AcpActorState(..state, sessions: final_sessions)
+          persist(final_state)
+          #(final_state, Ok(session_name))
+        }
         Error(err) -> {
-          // tmux started but monitor failed — kill tmux, clean up
-          let _ = tmux.kill_session(session_name)
+          // Clean up: remove from state and persist
           let rolled_back = dict.delete(new_sessions, session_name)
           let rolled_state = AcpActorState(..state, sessions: rolled_back)
           persist(rolled_state)
-          #(rolled_state, Error("Monitor start failed: " <> err))
+          #(rolled_state, Error(err))
         }
       }
     }
@@ -386,46 +309,32 @@ fn handle_dispatch_tmux(
 }
 
 // ---------------------------------------------------------------------------
-// Kill
+// Kill — via transport abstraction
 // ---------------------------------------------------------------------------
 
 fn handle_kill(
   state: AcpActorState,
   session_name: String,
 ) -> #(AcpActorState, Result(Nil, String)) {
-  case state.acp_server_url {
-    "" -> {
-      // Legacy tmux kill
-      case tmux.kill_session(session_name) {
+  case dict.get(state.sessions, session_name) {
+    Ok(session) -> {
+      let handle = option.unwrap(session.handle, transport.TmuxHandle)
+      case transport.kill(state.transport, handle, session_name) {
         Ok(_) -> Nil
         Error(e) ->
           io.println(
-            "[acp] tmux kill failed for " <> session_name <> ": " <> e,
+            "[acp] Kill failed for " <> session_name <> ": " <> e,
           )
       }
     }
-    server_url -> {
-      // ACP cancel
-      case dict.get(state.sessions, session_name) {
-        Ok(session) -> {
-          case client.cancel_run(server_url, session.run_id) {
-            Ok(_) -> Nil
-            Error(e) ->
-              io.println(
-                "[acp] Cancel failed for " <> session_name <> ": " <> e,
-              )
-          }
-        }
-        Error(_) -> Nil
-      }
-    }
+    Error(_) -> Nil
   }
   let new_state = unregister(state, session_name, Failed("killed"))
   #(new_state, Ok(Nil))
 }
 
 // ---------------------------------------------------------------------------
-// Send input
+// Send input — via transport abstraction
 // ---------------------------------------------------------------------------
 
 fn handle_send_input(
@@ -433,29 +342,21 @@ fn handle_send_input(
   session_name: String,
   input: String,
 ) -> Result(Nil, String) {
-  case state.acp_server_url {
-    "" -> {
-      // Legacy tmux path
-      case dict.get(state.sessions, session_name) {
-        Error(_) -> {
+  case dict.get(state.sessions, session_name) {
+    Ok(session) -> {
+      let handle = option.unwrap(session.handle, transport.TmuxHandle)
+      transport.send_input(state.transport, handle, session_name, input)
+    }
+    Error(_) -> {
+      // Fallback: for tmux transport, check if tmux session exists directly
+      case state.transport {
+        transport.Tmux -> {
           case tmux.session_exists(session_name) {
             True -> tmux.send_input(session_name, input)
             False -> Error("Session not found: " <> session_name)
           }
         }
-        Ok(_) -> tmux.send_input(session_name, input)
-      }
-    }
-    server_url -> {
-      // ACP resume
-      case dict.get(state.sessions, session_name) {
-        Ok(session) -> {
-          case client.resume_run(server_url, session.run_id, input) {
-            Ok(_) -> Ok(Nil)
-            Error(e) -> Error(e)
-          }
-        }
-        Error(_) -> Error("Session not found: " <> session_name)
+        _ -> Error("Session not found: " <> session_name)
       }
     }
   }
@@ -490,137 +391,6 @@ fn handle_monitor_event(
   // Forward ALL events to the brain for Discord notifications
   state.on_brain_event(event)
   new_state
-}
-
-// ---------------------------------------------------------------------------
-// SSE event listener (ACP path)
-// ---------------------------------------------------------------------------
-
-/// Spawn a process that subscribes to SSE events for an ACP run and
-/// translates them into AcpEvent messages sent to the manager actor.
-fn start_sse_listener(
-  server_url: String,
-  run_id: String,
-  session_name: String,
-  domain: String,
-  self_subject: process.Subject(AcpMessage),
-) -> Nil {
-  process.spawn_unlinked(fn() {
-    let self_pid = process.self()
-    // Start SSE subscription in a separate process (it blocks on httpc)
-    process.spawn_unlinked(fn() {
-      client.subscribe_events(server_url, run_id, self_pid)
-    })
-    // Event loop: receive SSE events, translate to AcpEvents
-    sse_event_loop(self_subject, session_name, domain, run_id, server_url)
-  })
-  Nil
-}
-
-/// Receive SSE events and translate them to AcpEvent messages for the manager.
-fn sse_event_loop(
-  manager_subject: process.Subject(AcpMessage),
-  session_name: String,
-  domain: String,
-  run_id: String,
-  server_url: String,
-) -> Nil {
-  case sse.receive_event(300_000) {
-    sse.Event(event_type, data) -> {
-      let acp_event = case event_type {
-        "run.in-progress" ->
-          Some(acp_monitor.AcpStarted(session_name, domain, run_id))
-        "run.awaiting" ->
-          Some(acp_monitor.AcpAlert(
-            session_name,
-            domain,
-            types.Blocked,
-            "Agent awaiting input",
-          ))
-        "run.completed" ->
-          Some(acp_monitor.AcpCompleted(
-            session_name,
-            domain,
-            types.AcpReport(
-              outcome: types.Clean,
-              files_changed: [],
-              decisions: "",
-              tests: "",
-              blockers: "",
-              anchor: data,
-            ),
-          ))
-        "run.failed" ->
-          Some(acp_monitor.AcpFailed(session_name, domain, data))
-        "run.cancelled" ->
-          Some(acp_monitor.AcpFailed(session_name, domain, "cancelled"))
-        "message.part" ->
-          Some(acp_monitor.AcpProgress(
-            session_name,
-            domain,
-            "",
-            "",
-            data,
-            False,
-          ))
-        _ -> None
-      }
-      case acp_event {
-        Some(event) -> process.send(manager_subject, MonitorEvent(event))
-        None -> Nil
-      }
-      // Stop on terminal events, continue otherwise
-      case event_type {
-        "run.completed" | "run.failed" | "run.cancelled" -> Nil
-        _ ->
-          sse_event_loop(
-            manager_subject,
-            session_name,
-            domain,
-            run_id,
-            server_url,
-          )
-      }
-    }
-    sse.Error(reason) -> {
-      io.println(
-        "[acp-sse] Error for " <> session_name <> ": " <> reason,
-      )
-      // Reconnect after delay — re-subscribe then resume event loop
-      process.sleep(5000)
-      let self_pid = process.self()
-      process.spawn_unlinked(fn() {
-        client.subscribe_events(server_url, run_id, self_pid)
-      })
-      sse_event_loop(
-        manager_subject,
-        session_name,
-        domain,
-        run_id,
-        server_url,
-      )
-    }
-    sse.Done -> {
-      io.println("[acp-sse] Stream ended for " <> session_name)
-      Nil
-    }
-    sse.Timeout -> {
-      io.println(
-        "[acp-sse] Timeout for " <> session_name <> ", reconnecting",
-      )
-      let self_pid = process.self()
-      process.spawn_unlinked(fn() {
-        client.subscribe_events(server_url, run_id, self_pid)
-      })
-      sse_event_loop(
-        manager_subject,
-        session_name,
-        domain,
-        run_id,
-        server_url,
-      )
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -740,7 +510,7 @@ fn persist(state: AcpActorState) -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// Recovery
+// Recovery — uses transport.is_alive for status checks
 // ---------------------------------------------------------------------------
 
 fn recover_sessions(
@@ -748,7 +518,7 @@ fn recover_sessions(
   store_path: String,
   monitor_model: String,
   on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
-  acp_server_url: String,
+  acp_transport: transport.Transport,
 ) -> Dict(String, ActiveSession) {
   let stored = session_store.load(store_path)
   let active =
@@ -764,90 +534,114 @@ fn recover_sessions(
       )
       let pairs =
         list.filter_map(active, fn(s) {
-          // Determine if this is an ACP session (has run_id) or tmux session
-          case s.run_id {
-            "" ->
-              recover_tmux_session(
-                s,
-                self_subject,
-                store_path,
-                monitor_model,
-                on_brain_event,
-              )
-            run_id ->
-              recover_acp_session(
-                s,
-                run_id,
-                self_subject,
-                store_path,
-                acp_server_url,
-                on_brain_event,
-              )
-          }
+          recover_session(
+            s,
+            self_subject,
+            store_path,
+            monitor_model,
+            on_brain_event,
+            acp_transport,
+          )
         })
       dict.from_list(pairs)
     }
   }
 }
 
-/// Recover a tmux-based session: check if tmux session exists, start monitor.
-fn recover_tmux_session(
+/// Recover a single session using transport.is_alive to check status.
+fn recover_session(
   s: session_store.StoredSession,
   self_subject: process.Subject(AcpMessage),
   store_path: String,
   monitor_model: String,
   on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
+  acp_transport: transport.Transport,
 ) -> Result(#(String, ActiveSession), Nil) {
-  case tmux.session_exists(s.session_name) {
+  case transport.is_alive(acp_transport, s.run_id, s.session_name) {
     True -> {
-      io.println("[acp] Recovering alive tmux session: " <> s.session_name)
+      io.println("[acp] Recovering alive session: " <> s.session_name)
       let session =
         ActiveSession(
           session_name: s.session_name,
           domain: s.domain,
           task_id: s.task_id,
-          run_id: "",
+          run_id: s.run_id,
           state: Running,
           started_at_ms: s.started_at_ms,
           thread_id: s.thread_id,
           prompt: s.prompt,
           cwd: s.cwd,
           idle_surfaced: s.idle_surfaced,
+          handle: None,
         )
-      let task_spec =
-        types.TaskSpec(
-          id: s.task_id,
-          domain: s.domain,
-          prompt: s.prompt,
-          cwd: s.cwd,
-          timeout_ms: 30 * 60_000,
-          acceptance_criteria: [],
-          provider: provider.ClaudeCode,
-          worktree: True,
-        )
+
+      // Start appropriate listener/monitor for the recovered session
       let on_event = fn(event) {
         process.send(self_subject, MonitorEvent(event))
       }
-      case
-        acp_monitor.start_monitor_only(
-          task_spec,
-          s.session_name,
-          monitor_model,
-          on_event,
-          False,
-          s.idle_surfaced,
-        )
-      {
-        Ok(_) ->
-          io.println("[acp] Monitor re-attached: " <> s.session_name)
-        Error(e) ->
-          io.println(
-            "[acp] Failed to re-attach monitor for "
-            <> s.session_name
-            <> ": "
-            <> e,
-          )
+
+      case acp_transport {
+        transport.Tmux -> {
+          // Re-attach tmux monitor
+          let task_spec =
+            types.TaskSpec(
+              id: s.task_id,
+              domain: s.domain,
+              prompt: s.prompt,
+              cwd: s.cwd,
+              timeout_ms: 30 * 60_000,
+              acceptance_criteria: [],
+              provider: provider.ClaudeCode,
+              worktree: True,
+            )
+          case
+            acp_monitor.start_monitor_only(
+              task_spec,
+              s.session_name,
+              monitor_model,
+              on_event,
+              False,
+              s.idle_surfaced,
+            )
+          {
+            Ok(_) ->
+              io.println("[acp] Monitor re-attached: " <> s.session_name)
+            Error(e) ->
+              io.println(
+                "[acp] Failed to re-attach monitor for "
+                <> s.session_name
+                <> ": "
+                <> e,
+              )
+          }
+        }
+        transport.Http(server_url, _) -> {
+          // Re-start SSE listener for HTTP sessions
+          let run_id = s.run_id
+          let domain = s.domain
+          let session_name = s.session_name
+          process.spawn_unlinked(fn() {
+            let self_pid = process.self()
+            process.spawn_unlinked(fn() {
+              client.subscribe_events(server_url, run_id, self_pid)
+            })
+            http_recovery_event_loop(
+              on_event,
+              session_name,
+              domain,
+              run_id,
+              server_url,
+            )
+          })
+          Nil
+        }
+        transport.Stdio(_) -> {
+          // Stdio sessions can't survive restarts — should never reach here
+          // because is_alive returns False for stdio
+          Nil
+        }
       }
+
       Ok(#(s.session_name, session))
     }
     False -> {
@@ -862,124 +656,104 @@ fn recover_tmux_session(
       on_brain_event(acp_monitor.AcpFailed(
         s.session_name,
         s.domain,
-        "tmux session disappeared during restart",
+        "session disappeared during restart",
       ))
       Error(Nil)
     }
   }
 }
 
-/// Recover an ACP-based session: check run status via HTTP, start SSE listener.
-fn recover_acp_session(
-  s: session_store.StoredSession,
+/// SSE event loop for HTTP recovery — uses on_event callback.
+fn http_recovery_event_loop(
+  on_event: fn(acp_monitor.AcpEvent) -> Nil,
+  session_name: String,
+  domain: String,
   run_id: String,
-  self_subject: process.Subject(AcpMessage),
-  store_path: String,
   server_url: String,
-  on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
-) -> Result(#(String, ActiveSession), Nil) {
-  case server_url {
-    "" -> {
-      // No ACP server configured — can't recover ACP sessions
-      io.println(
-        "[acp] ACP session orphaned (no server_url): " <> s.session_name,
-      )
-      let _ =
-        session_store.upsert(
-          store_path,
-          session_store.StoredSession(
-            ..s,
-            state: "failed(no-acp-server)",
-          ),
-        )
-      on_brain_event(acp_monitor.AcpFailed(
-        s.session_name,
-        s.domain,
-        "ACP server not configured, cannot recover session",
-      ))
-      Error(Nil)
-    }
-    _ -> {
-      case client.get_run(server_url, run_id) {
-        Ok(run) -> {
-          case client.is_terminal(run.status) {
-            True -> {
-              // Run already finished
-              let terminal_reason = client.status_to_string(run.status)
-              io.println(
-                "[acp] ACP session already terminal: "
-                <> s.session_name
-                <> " ("
-                <> terminal_reason
-                <> ")",
-              )
-              let _ =
-                session_store.upsert(
-                  store_path,
-                  session_store.StoredSession(
-                    ..s,
-                    state: "failed(" <> terminal_reason <> ")",
-                  ),
-                )
-              on_brain_event(acp_monitor.AcpFailed(
-                s.session_name,
-                s.domain,
-                "Run ended during restart: " <> terminal_reason,
-              ))
-              Error(Nil)
-            }
-            False -> {
-              // Run still active — recover
-              io.println(
-                "[acp] Recovering ACP session: " <> s.session_name,
-              )
-              let session =
-                ActiveSession(
-                  session_name: s.session_name,
-                  domain: s.domain,
-                  task_id: s.task_id,
-                  run_id: run_id,
-                  state: Running,
-                  started_at_ms: s.started_at_ms,
-                  thread_id: s.thread_id,
-                  prompt: s.prompt,
-                  cwd: s.cwd,
-                  idle_surfaced: s.idle_surfaced,
-                )
-              start_sse_listener(
-                server_url,
-                run_id,
-                s.session_name,
-                s.domain,
-                self_subject,
-              )
-              Ok(#(s.session_name, session))
-            }
-          }
-        }
-        Error(err) -> {
-          io.println(
-            "[acp] Failed to check ACP run for "
-            <> s.session_name
-            <> ": "
-            <> err,
+) -> Nil {
+  case sse.receive_event(300_000) {
+    sse.Event(event_type, data) -> {
+      case event_type {
+        "run.in-progress" ->
+          on_event(acp_monitor.AcpStarted(session_name, domain, run_id))
+        "run.awaiting" ->
+          on_event(
+            acp_monitor.AcpAlert(
+              session_name,
+              domain,
+              types.Blocked,
+              "Agent awaiting input",
+            ),
           )
-          let _ =
-            session_store.upsert(
-              store_path,
-              session_store.StoredSession(
-                ..s,
-                state: "failed(recovery-error)",
+        "run.completed" ->
+          on_event(
+            acp_monitor.AcpCompleted(
+              session_name,
+              domain,
+              types.AcpReport(
+                outcome: types.Clean,
+                files_changed: [],
+                decisions: "",
+                tests: "",
+                blockers: "",
+                anchor: data,
               ),
-            )
-          on_brain_event(acp_monitor.AcpFailed(
-            s.session_name,
-            s.domain,
-            "Failed to check ACP run status: " <> err,
-          ))
-          Error(Nil)
-        }
+            ),
+          )
+        "run.failed" ->
+          on_event(acp_monitor.AcpFailed(session_name, domain, data))
+        "run.cancelled" ->
+          on_event(acp_monitor.AcpFailed(session_name, domain, "cancelled"))
+        "message.part" ->
+          on_event(
+            acp_monitor.AcpProgress(session_name, domain, "", "", data, False),
+          )
+        _ -> Nil
       }
+      case event_type {
+        "run.completed" | "run.failed" | "run.cancelled" -> Nil
+        _ ->
+          http_recovery_event_loop(
+            on_event,
+            session_name,
+            domain,
+            run_id,
+            server_url,
+          )
+      }
+    }
+    sse.Error(reason) -> {
+      io.println("[acp-sse] Error for " <> session_name <> ": " <> reason)
+      process.sleep(5000)
+      let self_pid = process.self()
+      process.spawn_unlinked(fn() {
+        client.subscribe_events(server_url, run_id, self_pid)
+      })
+      http_recovery_event_loop(
+        on_event,
+        session_name,
+        domain,
+        run_id,
+        server_url,
+      )
+    }
+    sse.Done -> {
+      io.println("[acp-sse] Stream ended for " <> session_name)
+      Nil
+    }
+    sse.Timeout -> {
+      io.println("[acp-sse] Timeout for " <> session_name <> ", reconnecting")
+      let self_pid = process.self()
+      process.spawn_unlinked(fn() {
+        client.subscribe_events(server_url, run_id, self_pid)
+      })
+      http_recovery_event_loop(
+        on_event,
+        session_name,
+        domain,
+        run_id,
+        server_url,
+      )
     }
   }
 }
