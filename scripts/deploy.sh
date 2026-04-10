@@ -12,10 +12,13 @@ REMOTE="melbournebaldove@192.168.50.140"
 REMOTE_DIR="~/aura"
 RPATH="/opt/homebrew/bin"
 
-echo "==> Syncing source..."
+echo "==> Syncing source + tests..."
 rsync -av --delete \
   --include='*.gleam' --include='*.erl' --include='*/' --exclude='*' \
   src/ "${REMOTE}:${REMOTE_DIR}/src/"
+rsync -av --delete \
+  --include='*.gleam' --include='*.erl' --include='*/' --exclude='*' \
+  test/ "${REMOTE}:${REMOTE_DIR}/test/"
 
 echo "==> Clean build..."
 ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && cd ${REMOTE_DIR} && gleam clean && gleam build"

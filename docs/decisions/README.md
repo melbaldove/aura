@@ -44,10 +44,12 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [013](013-active-memory-review.md) | Active memory review (Hermes-inspired) | Accepted |
 | [014](014-tiered-runtime-compression.md) | Tiered runtime compression | Accepted |
 | [015](015-acp-protocol.md) | ACP protocol for agent dispatch | Accepted |
+| [016](016-push-based-stdio-monitor.md) | Push-based stdio monitor with LLM summarization | Accepted |
+| [017](017-background-agent-architecture.md) | Background agent architecture (OpenPoke pattern) | Proposed |
 
 ## Adding a new ADR
 
 1. Copy the template above
-2. Number sequentially (next is 015)
+2. Number sequentially (next is 018)
 3. Add to the index in this README
 4. Commit with the code change it relates to

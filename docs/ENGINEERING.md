@@ -20,7 +20,7 @@
 
 9. **Don't break what works.** Before deploying, verify existing functionality still works. New features don't get to break old ones.
 
-10. **Design for one, generalize later.** Solve the concrete problem in front of you. Don't abstract for hypothetical future users or platforms until a second case actually exists.
+10. **Design for one, generalize later.** Solve the concrete problem in front of you. Don't abstract for hypothetical future users or platforms until a second case actually exists. **When you do generalize, list the assumptions the original design relied on. Verify each one holds in the new context. If any assumption breaks, the mechanism is wrong — redesign from the new context's constraints, don't force-fit the old pattern.**
 
 11. **Elegance and efficiency first.** The right solution is as simple as the problem. You can explain it in one sentence. It composes with the rest of the system instead of fighting it. Before writing code, ask: does this solve the general problem or patch this specific instance? Will this still make sense when the next skill, domain, or platform is added?
 

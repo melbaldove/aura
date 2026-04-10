@@ -141,7 +141,7 @@ src/
 - Use `gleeunit` + `should` assertions
 - Test pure functions directly. Test actors via their public convenience functions.
 - Temp files in `/tmp/aura-*-test`, clean up after
-- 316 tests currently. Don't regress.
+- 341 tests currently. Don't regress.
 - **HARD RULE: Every bug fix must include a regression test.** No exceptions for "it's hard to test" — if the buggy code has pure functions (encoding, parsing, extraction), test those. If the bug is in process/IO code that genuinely can't be unit tested, document why in the commit message. A `fix:` commit without a test is incomplete.
 
 ### Database
