@@ -148,6 +148,8 @@ pub type BrainState {
     compressor_states: dict.Dict(String, conversation.CompressorState),
     brain_context: Int,
     pending_proposals: dict.Dict(String, brain_tools.PendingProposal),
+    acp_progress_msgs: dict.Dict(String, #(String, String)),
+    // session_name -> #(channel_id, message_id)
   )
 }
 
@@ -277,6 +279,7 @@ pub fn start(
       compressor_states: dict.new(),
       brain_context: brain_context,
       pending_proposals: dict.new(),
+      acp_progress_msgs: dict.new(),
     )
 
   actor.new_with_initialiser(10_000, fn(self_subject) {
@@ -801,14 +804,16 @@ fn handle_acp_event(
       let msg =
         "**ACP Started** -- "
         <> task_id
-        <> "\n`tmux attach -t "
+        <> "\n`"
         <> session_name
         <> "`"
       let channel = resolve_acp_channel(state, session_name, domain)
       process.spawn_unlinked(fn() {
         send_discord_response(state.discord_token, channel, msg)
       })
-      actor.continue(state)
+      // Clear progress message ID so next progress creates a new message
+      let new_msgs = dict.delete(state.acp_progress_msgs, session_name)
+      actor.continue(BrainState(..state, acp_progress_msgs: new_msgs))
     }
     acp_monitor.AcpAlert(session_name, domain, status, summary) -> {
       let status_str = acp_types.status_to_string(status)
@@ -1003,10 +1008,44 @@ fn handle_acp_event(
 
       let msg = header <> "\n\n" <> body
       let channel = resolve_acp_channel(state, session_name, domain)
-      process.spawn_unlinked(fn() {
-        send_discord_response(state.discord_token, channel, msg)
-      })
-      actor.continue(state)
+      let token = state.discord_token
+
+      // Edit existing progress message or send new one
+      let new_state = case dict.get(state.acp_progress_msgs, session_name) {
+        Ok(#(ch, mid)) -> {
+          process.spawn_unlinked(fn() {
+            let safe = case string.length(msg) > 1990 {
+              True -> string.slice(msg, 0, 1990) <> " ..."
+              False -> msg
+            }
+            case rest.edit_message(token, ch, mid, safe) {
+              Ok(_) -> Nil
+              Error(_) -> Nil
+            }
+          })
+          state
+        }
+        Error(_) -> {
+          // First progress for this session — send inline to get message ID
+          let progress_msgs = state.acp_progress_msgs
+          let sn = session_name
+          let safe = case string.length(msg) > 1990 {
+            True -> string.slice(msg, 0, 1990) <> " ..."
+            False -> msg
+          }
+          case rest.send_message(token, channel, safe, []) {
+            Ok(message_id) ->
+              BrainState(..state,
+                acp_progress_msgs: dict.insert(progress_msgs, sn, #(channel, message_id)),
+              )
+            Error(err) -> {
+              io.println("[brain] Failed to send progress: " <> err)
+              state
+            }
+          }
+        }
+      }
+      actor.continue(new_state)
     }
   }
 }
