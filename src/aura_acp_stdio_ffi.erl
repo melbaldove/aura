@@ -196,22 +196,13 @@ wait_response(Port, ExpectedId, EventPid, TimeoutMs) ->
         {error, <<"Timeout waiting for response">>}
     end.
 
-%% Parse a JSON-RPC line and forward as an event if it's a notification.
-%% Spec: session/update notifications have params.update.sessionUpdate as discriminator.
-%% Event types: agent_message_chunk, tool_call, tool_call_update, plan, etc.
-%% Content for text chunks: params.update.content.text
 handle_line(Line, EventPid) ->
     case binary:match(Line, <<"\"method\":\"session/update\"">>) of
         {_, _} ->
+            %% Forward raw JSON line — the LLM will parse event data
             EventType = extract_field(Line, <<"\"sessionUpdate\":\"">>),
-            %% For text content, we need the "text" value inside the "content" object,
-            %% not the "type":"text" discriminator. Use the pattern that follows "text":"
-            %% after "content":{ to avoid matching "type":"text".
-            Content = extract_content_text(Line),
-            EventPid ! {stdio_event, EventType, Content};
+            EventPid ! {stdio_event, EventType, Line};
         nomatch ->
-            %% Check for stopReason (prompt response)
-            %% Spec: result = {stopReason: "end_turn"|"max_tokens"|"cancelled"|...}
             case binary:match(Line, <<"\"stopReason\"">>) of
                 {_, _} ->
                     StopReason = extract_field(Line, <<"\"stopReason\":\"">>),
@@ -333,30 +324,6 @@ extract_until_quote(<<"\"", _/binary>>, Acc) -> Acc;
 extract_until_quote(<<C, R/binary>>, Acc) ->
     extract_until_quote(R, <<Acc/binary, C>>);
 extract_until_quote(<<>>, Acc) -> Acc.
-
-%% Extract text content from a session/update notification.
-%% The update structure is: params.update.content.text
-%% We must match "text":" that appears AFTER "content":{ to avoid
-%% matching the "type":"text" discriminator.
-%% Spec: {"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"..."}}}}
-extract_content_text(Line) ->
-    %% Find the content object, then find "text":" within it
-    case binary:match(Line, <<"\"content\":{">>) of
-        {Pos, Len} ->
-            AfterContent = binary:part(Line, Pos + Len, byte_size(Line) - Pos - Len),
-            %% Now search for "text":" within the content object
-            extract_field(AfterContent, <<"\"text\":\"">>);
-        nomatch ->
-            %% Some update types (tool_call, plan) have different content structures.
-            %% For tool_call, try to extract the title as content.
-            case binary:match(Line, <<"\"title\":\"">>) of
-                {TPos, TLen} ->
-                    After = binary:part(Line, TPos + TLen, byte_size(Line) - TPos - TLen),
-                    extract_until_quote(After, <<>>);
-                nomatch ->
-                    <<>>
-            end
-    end.
 
 extract_session_id(Line) ->
     case extract_field(Line, <<"\"sessionId\":\"">>) of
