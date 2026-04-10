@@ -7,7 +7,81 @@ import aura/acp/tmux
 import aura/acp/types
 import gleam/erlang/process
 import gleam/io
+import gleam/list
 import gleam/result
+import gleam/string
+
+// ---------------------------------------------------------------------------
+// Completion buffer — accumulates data for handback payload
+// ---------------------------------------------------------------------------
+
+pub type CompletionBuffer {
+  CompletionBuffer(
+    tool_names: List(String),
+    agent_text: String,
+  )
+}
+
+pub fn new_completion_buffer() -> CompletionBuffer {
+  CompletionBuffer(tool_names: [], agent_text: "")
+}
+
+pub fn buffer_event(buf: CompletionBuffer, event_type: String, data: String) -> CompletionBuffer {
+  case event_type {
+    "tool_call" -> {
+      let name = extract_tool_name(data)
+      let names = list.append(buf.tool_names, [name])
+      let capped = case list.length(names) > 5 {
+        True -> list.drop(names, list.length(names) - 5)
+        False -> names
+      }
+      CompletionBuffer(tool_names: capped, agent_text: "")
+    }
+    "agent_message_chunk" -> {
+      CompletionBuffer(..buf, agent_text: buf.agent_text <> data)
+    }
+    _ -> buf
+  }
+}
+
+pub fn tool_names(buf: CompletionBuffer) -> List(String) {
+  buf.tool_names
+}
+
+pub fn agent_text(buf: CompletionBuffer) -> String {
+  buf.agent_text
+}
+
+pub fn extract_tool_name(data: String) -> String {
+  case string.split(data, "\"toolName\":\"") {
+    [_, rest] ->
+      case string.split(rest, "\"") {
+        [name, ..] -> name
+        _ -> ""
+      }
+    _ -> ""
+  }
+}
+
+pub fn format_result_text(buf: CompletionBuffer, monitor_summary: String) -> String {
+  let summary_section = case monitor_summary {
+    "" -> ""
+    s -> "Summary: " <> s
+  }
+
+  let tools_section = case buf.tool_names {
+    [] -> ""
+    names -> "Last actions: " <> string.join(names, ", ")
+  }
+
+  let agent_section = case string.trim(buf.agent_text) {
+    "" -> ""
+    text -> "Agent's response:\n" <> text
+  }
+
+  let sections = list.filter([summary_section, tools_section, agent_section], fn(s) { s != "" })
+  string.join(sections, "\n\n")
+}
 
 // ---------------------------------------------------------------------------
 // Types
