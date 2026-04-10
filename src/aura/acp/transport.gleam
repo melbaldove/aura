@@ -6,8 +6,8 @@ import aura/acp/stdio
 import aura/acp/tmux
 import aura/acp/types
 import gleam/erlang/process
-import aura/time
 import gleam/io
+import gleam/list
 import gleam/result
 
 // ---------------------------------------------------------------------------
@@ -173,40 +173,82 @@ fn dispatch_stdio(
   }
 }
 
+/// Stdio accumulator — collects events between monitor snapshots.
+type StdioAccumulator {
+  StdioAccumulator(
+    tool_calls: List(String),
+    message_text: String,
+    event_count: Int,
+    last_event_type: String,
+  )
+}
+
+fn empty_accumulator() -> StdioAccumulator {
+  StdioAccumulator(
+    tool_calls: [],
+    message_text: "",
+    event_count: 0,
+    last_event_type: "",
+  )
+}
+
 fn stdio_event_loop(
   session_name: String,
   domain: String,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
 ) -> Nil {
-  stdio_event_loop_inner(session_name, domain, on_event, 0)
+  stdio_event_loop_inner(session_name, domain, on_event, empty_accumulator())
 }
 
 fn stdio_event_loop_inner(
   session_name: String,
   domain: String,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
-  last_progress_ms: Int,
+  acc: StdioAccumulator,
 ) -> Nil {
+  // First, check for any pending snapshot requests (non-blocking)
+  let acc = case stdio.poll_snapshot_request() {
+    Ok(reply_subject) -> {
+      // Build snapshot from accumulator and reply
+      let snapshot = acp_monitor.ActivitySnapshot(
+        tool_calls: acc.tool_calls,
+        message_chunks: acc.message_text,
+        event_count: acc.event_count,
+        last_event_type: acc.last_event_type,
+      )
+      process.send(reply_subject, snapshot)
+      // Reset accumulator
+      empty_accumulator()
+    }
+    Error(_) -> acc
+  }
+
+  // Then, wait for the next stdio event
   case stdio.receive_event(300_000) {
     stdio.Event(event_type, content) -> {
-      let now = time.now_ms()
-      // Throttle progress updates to Discord: max once per 10 seconds
-      // tool_call events (new tool invocations) always go through
-      let should_send = case event_type, content {
-        _, "" -> False
-        "tool_call", _ -> True
-        _, _ -> { now - last_progress_ms } > 10_000
+      let new_acc = case event_type {
+        "tool_call" ->
+          StdioAccumulator(
+            ..acc,
+            tool_calls: list.append(acc.tool_calls, [content]),
+            event_count: acc.event_count + 1,
+            last_event_type: event_type,
+          )
+        "agent_message_chunk" ->
+          StdioAccumulator(
+            ..acc,
+            message_text: acc.message_text <> content,
+            event_count: acc.event_count + 1,
+            last_event_type: event_type,
+          )
+        _ ->
+          StdioAccumulator(
+            ..acc,
+            event_count: acc.event_count + 1,
+            last_event_type: event_type,
+          )
       }
-      let new_last = case should_send {
-        True -> {
-          on_event(acp_monitor.AcpProgress(
-            session_name, domain, "", "", content, False,
-          ))
-          now
-        }
-        False -> last_progress_ms
-      }
-      stdio_event_loop_inner(session_name, domain, on_event, new_last)
+      stdio_event_loop_inner(session_name, domain, on_event, new_acc)
     }
     stdio.Complete(stop_reason) -> {
       case stop_reason {

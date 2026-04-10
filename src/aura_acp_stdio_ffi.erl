@@ -1,5 +1,6 @@
 -module(aura_acp_stdio_ffi).
--export([start_session/4, send_input/3, close_session/1, receive_event/1]).
+-export([start_session/4, send_input/3, close_session/1, receive_event/1,
+         poll_snapshot_request/0]).
 
 %% Exported for testing — pure functions only
 -export([jsx_encode/1, json_escape/1, extract_field/2, extract_session_id/1,
@@ -61,6 +62,15 @@ receive_event(TimeoutMs) ->
         {stdio_error, Reason} -> {<<"error">>, Reason, <<>>}
     after TimeoutMs ->
         {<<"timeout">>, <<>>, <<>>}
+    end.
+
+%% Non-blocking poll for a snapshot request from the monitor.
+%% Returns {ok, ReplySubject} if a request is waiting, or {error, nil} if not.
+poll_snapshot_request() ->
+    receive
+        {snapshot_request, ReplySubject} -> {ok, ReplySubject}
+    after 0 ->
+        {error, nil}
     end.
 
 %% ---------------------------------------------------------------------------
