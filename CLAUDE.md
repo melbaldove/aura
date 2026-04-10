@@ -200,7 +200,9 @@ src/
 
 ## Engineering practice
 
-Read `docs/ENGINEERING.md` before starting any feature. The core rule: **"Does this make Aura do work for me today?"** Vertical slices first, polish last.
+**MANDATORY: Read `docs/ENGINEERING.md` before designing or implementing anything.** Not after. Not when reminded. Before. Especially principles #11 (elegance — does this solve the general problem?) and #12 (no silent errors). If a design needs a workaround, that's a signal to redesign, not to ship.
+
+The core rule: **"Does this make Aura do work for me today?"** Vertical slices first, polish last.
 
 ## Crosscutting concerns checklist
 

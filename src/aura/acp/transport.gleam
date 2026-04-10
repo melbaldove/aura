@@ -5,11 +5,8 @@ import aura/acp/sse
 import aura/acp/stdio
 import aura/acp/tmux
 import aura/acp/types
-import aura/time
-import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/io
-import gleam/json
 import gleam/result
 
 // ---------------------------------------------------------------------------
@@ -26,7 +23,7 @@ pub type Transport {
 /// Handle to a running session — varies by transport.
 pub type SessionHandle {
   HttpHandle(run_id: String)
-  StdioHandle(port: stdio.Port, session_id: String)
+  StdioHandle(owner: stdio.SessionOwner, session_id: String)
   TmuxHandle
 }
 
@@ -73,8 +70,8 @@ pub fn send_input(
   case transport, handle {
     Http(server_url, _), HttpHandle(run_id) ->
       client.resume_run(server_url, run_id, input) |> result.map(fn(_) { Nil })
-    Stdio(_), StdioHandle(port, session_id) ->
-      send_stdio_prompt(port, session_id, input)
+    Stdio(_), StdioHandle(owner, session_id) ->
+      stdio.send_input(owner, session_id, input)
     Tmux, TmuxHandle -> tmux.send_input(session_name, input)
     _, _ -> Error("Transport/handle mismatch")
   }
@@ -89,9 +86,8 @@ pub fn kill(
   case transport, handle {
     Http(server_url, _), HttpHandle(run_id) ->
       client.cancel_run(server_url, run_id)
-    Stdio(_), StdioHandle(port, _) -> {
-      let _ = stdio.send_notification(port, "cancel", json.object([]))
-      stdio.close(port)
+    Stdio(_), StdioHandle(owner, _) -> {
+      stdio.close(owner)
       Ok(Nil)
     }
     Tmux, TmuxHandle -> {
@@ -142,93 +138,38 @@ fn dispatch_stdio(
   task_spec: types.TaskSpec,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
 ) -> Result(DispatchResult, String) {
-  // Spawn the child process
-  let self_pid = process.self()
-  let port = stdio.start(command, self_pid)
+  // The event reader process must be the one calling start_session,
+  // because the FFI sends events to the calling process's mailbox.
+  // We use a reply subject to get the handshake result back to the caller.
+  let reply_subject = process.new_subject()
 
-  // Initialize handshake
-  use _ <- result.try(
-    stdio.send_jsonrpc(
-      port,
-      0,
-      "initialize",
-      json.object([
-        #("protocolVersion", json.int(1)),
-        #("clientCapabilities", json.object([])),
-        #(
-          "clientInfo",
-          json.object([
-            #("name", json.string("aura")),
-            #("title", json.string("A.U.R.A.")),
-            #("version", json.string("0.1.0")),
-          ]),
-        ),
-      ]),
-    ),
-  )
-
-  // Wait for initialize response
-  use _ <- result.try(wait_for_response(0, 10_000))
-
-  // Create session
-  use _ <- result.try(
-    stdio.send_jsonrpc(
-      port,
-      1,
-      "session/new",
-      json.object([#("cwd", json.string(task_spec.cwd))]),
-    ),
-  )
-
-  // Wait for session response, extract sessionId
-  use session_response <- result.try(wait_for_response(1, 10_000))
-  let session_id =
-    case
-      json.parse(
-        session_response,
-        decode.at(["result", "sessionId"], decode.string),
-      )
-    {
-      Ok(id) -> id
-      Error(_) -> "unknown"
-    }
-
-  // Send the initial prompt
-  use _ <- result.try(
-    stdio.send_jsonrpc(
-      port,
-      2,
-      "session/prompt",
-      json.object([
-        #("sessionId", json.string(session_id)),
-        #(
-          "prompt",
-          json.array(
-            [
-              json.object([
-                #("type", json.string("text")),
-                #("text", json.string(task_spec.prompt)),
-              ]),
-            ],
-            fn(x) { x },
-          ),
-        ),
-      ]),
-    ),
-  )
-
-  // Spawn a reader process that translates stdio events to AcpEvents
   process.spawn_unlinked(fn() {
-    on_event(
-      acp_monitor.AcpStarted(session_name, task_spec.domain, task_spec.id),
-    )
-    stdio_event_loop(session_name, task_spec.domain, on_event)
+    // THIS process receives events from the FFI (it calls start_session)
+    case stdio.start_session(command, task_spec.cwd, task_spec.prompt) {
+      Error(e) -> {
+        process.send(reply_subject, Error(e))
+      }
+      Ok(#(owner, session_id)) -> {
+        // Report success back to the caller (manager)
+        process.send(reply_subject, Ok(#(owner, session_id)))
+        // Emit started
+        on_event(acp_monitor.AcpStarted(session_name, task_spec.domain, task_spec.id))
+        // Enter event loop — this process stays alive for the session lifetime
+        stdio_event_loop(session_name, task_spec.domain, on_event)
+      }
+    }
   })
 
-  Ok(DispatchResult(
-    run_id: session_id,
-    handle: StdioHandle(port: port, session_id: session_id),
-  ))
+  // Wait for the handshake result
+  case process.receive(reply_subject, 30_000) {
+    Ok(Ok(#(owner, session_id))) ->
+      Ok(DispatchResult(
+        run_id: session_id,
+        handle: StdioHandle(owner: owner, session_id: session_id),
+      ))
+    Ok(Error(err)) -> Error("Stdio dispatch failed: " <> err)
+    Error(_) -> Error("Stdio session handshake timed out")
+  }
 }
 
 fn stdio_event_loop(
@@ -236,80 +177,33 @@ fn stdio_event_loop(
   domain: String,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
 ) -> Nil {
-  case stdio.receive_message(300_000) {
-    stdio.Line(data) -> {
-      // Parse JSON-RPC message
-      case parse_stdio_message(data) {
-        StdioNotification(event_type, content) -> {
-          // Translate to AcpEvent
-          case event_type {
-            "agent_message_chunk" | "tool_call" | "tool_call_update" | "plan" ->
-              on_event(
-                acp_monitor.AcpProgress(
-                  session_name,
-                  domain,
-                  "",
-                  "",
-                  content,
-                  False,
-                ),
-              )
-            _ -> Nil
-          }
-          stdio_event_loop(session_name, domain, on_event)
-        }
-        StdioResponse(stop_reason) -> {
-          // Turn complete
-          case stop_reason {
-            "end_turn" ->
-              on_event(
-                acp_monitor.AcpCompleted(
-                  session_name,
-                  domain,
-                  types.AcpReport(
-                    outcome: types.Clean,
-                    files_changed: [],
-                    decisions: "",
-                    tests: "",
-                    blockers: "",
-                    anchor: "Session completed",
-                  ),
-                ),
-              )
-            "cancelled" ->
-              on_event(acp_monitor.AcpFailed(session_name, domain, "cancelled"))
-            "refusal" ->
-              on_event(acp_monitor.AcpFailed(session_name, domain, "refused"))
-            other ->
-              on_event(
-                acp_monitor.AcpFailed(
-                  session_name,
-                  domain,
-                  "stopped: " <> other,
-                ),
-              )
-          }
-        }
-        StdioOther -> {
-          // Unrecognized message, continue
-          stdio_event_loop(session_name, domain, on_event)
-        }
+  case stdio.receive_event(300_000) {
+    stdio.Event(event_type, content) -> {
+      case event_type {
+        "agent_message_chunk" | "tool_call" | "tool_call_update" | "plan" ->
+          on_event(acp_monitor.AcpProgress(session_name, domain, "", "", content, False))
+        _ -> Nil
+      }
+      stdio_event_loop(session_name, domain, on_event)
+    }
+    stdio.Complete(stop_reason) -> {
+      case stop_reason {
+        "end_turn" ->
+          on_event(acp_monitor.AcpCompleted(session_name, domain, types.AcpReport(
+            outcome: types.Clean, files_changed: [], decisions: "",
+            tests: "", blockers: "", anchor: "Session completed",
+          )))
+        "cancelled" ->
+          on_event(acp_monitor.AcpFailed(session_name, domain, "cancelled"))
+        "refusal" ->
+          on_event(acp_monitor.AcpFailed(session_name, domain, "refused"))
+        other ->
+          on_event(acp_monitor.AcpFailed(session_name, domain, "stopped: " <> other))
       }
     }
     stdio.Exit(code) -> {
-      io.println(
-        "[acp-stdio] Process exited with code "
-        <> code
-        <> " for "
-        <> session_name,
-      )
-      on_event(
-        acp_monitor.AcpFailed(
-          session_name,
-          domain,
-          "process exited (code " <> code <> ")",
-        ),
-      )
+      io.println("[acp-stdio] Process exited with code " <> code <> " for " <> session_name)
+      on_event(acp_monitor.AcpFailed(session_name, domain, "process exited (code " <> code <> ")"))
     }
     stdio.Error(reason) -> {
       io.println("[acp-stdio] Error for " <> session_name <> ": " <> reason)
@@ -322,100 +216,8 @@ fn stdio_event_loop(
   }
 }
 
-type StdioMessageType {
-  StdioNotification(event_type: String, content: String)
-  StdioResponse(stop_reason: String)
-  StdioOther
-}
-
-fn parse_stdio_message(data: String) -> StdioMessageType {
-  // Check if it's a session/update notification
-  case json.parse(data, decode.at(["method"], decode.string)) {
-    Ok("session/update") -> {
-      let event_type =
-        case
-          json.parse(
-            data,
-            decode.at(
-              ["params", "update", "sessionUpdate"],
-              decode.string,
-            ),
-          )
-        {
-          Ok(t) -> t
-          Error(_) -> "unknown"
-        }
-      let content =
-        case
-          json.parse(
-            data,
-            decode.at(["params", "update", "content", "text"], decode.string),
-          )
-        {
-          Ok(t) -> t
-          Error(_) -> data
-        }
-      StdioNotification(event_type, content)
-    }
-    _ -> {
-      // Check if it's a response with stopReason
-      case
-        json.parse(data, decode.at(["result", "stopReason"], decode.string))
-      {
-        Ok(reason) -> StdioResponse(reason)
-        Error(_) -> StdioOther
-      }
-    }
-  }
-}
-
-fn wait_for_response(
-  expected_id: Int,
-  timeout_ms: Int,
-) -> Result(String, String) {
-  case stdio.receive_message(timeout_ms) {
-    stdio.Line(data) -> {
-      // Check if this is the response we're waiting for
-      case json.parse(data, decode.at(["id"], decode.int)) {
-        Ok(id) if id == expected_id -> Ok(data)
-        Ok(_) -> wait_for_response(expected_id, timeout_ms)
-        Error(_) -> wait_for_response(expected_id, timeout_ms)
-      }
-    }
-    stdio.Error(reason) -> Error("stdio error: " <> reason)
-    stdio.Exit(code) ->
-      Error("process exited during init (code " <> code <> ")")
-    stdio.Timeout -> Error("timeout waiting for response")
-  }
-}
-
-fn send_stdio_prompt(
-  port: stdio.Port,
-  session_id: String,
-  input: String,
-) -> Result(Nil, String) {
-  let id = time.now_ms() / 1000
-  stdio.send_jsonrpc(
-    port,
-    id,
-    "session/prompt",
-    json.object([
-      #("sessionId", json.string(session_id)),
-      #(
-        "prompt",
-        json.array(
-          [
-            json.object([
-              #("type", json.string("text")),
-              #("text", json.string(input)),
-            ]),
-          ],
-          fn(x) { x },
-        ),
-      ),
-    ]),
-  )
-}
+// Stdio protocol handling (handshake, JSON-RPC, event parsing) is in the
+// Erlang FFI (aura_acp_stdio_ffi.erl). The Gleam side only manages lifecycle.
 
 // ---------------------------------------------------------------------------
 // HTTP dispatch (delegates to existing client + SSE)

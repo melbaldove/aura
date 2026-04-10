@@ -1,86 +1,73 @@
 import gleam/erlang/process
-import gleam/json
 
-/// Opaque Erlang port handle for a child process.
-pub type Port
+/// Opaque handle to a stdio session owner process.
+pub type SessionOwner
 
-/// Messages received from a stdio child process.
-pub type StdioMessage {
-  Line(data: String)
+/// Events received from a stdio session.
+pub type SessionEvent {
+  Event(event_type: String, data: String)
+  Complete(stop_reason: String)
   Exit(code: String)
   Error(reason: String)
   Timeout
 }
 
-/// Start a child process. Returns the Erlang port.
-/// The callback_pid receives {stdio_line, Line} messages from the reader.
-pub fn start(command: String, callback_pid: process.Pid) -> Port {
-  start_ffi(command, callback_pid)
+/// Start a stdio ACP session. Spawns the child process, runs the
+/// initialize + session/new + session/prompt handshake, and returns
+/// the session owner pid + session ID.
+/// The owner process stays alive, reading events and accepting input.
+/// Events are sent to the calling process's mailbox.
+pub fn start_session(
+  command: String,
+  cwd: String,
+  prompt: String,
+) -> Result(#(SessionOwner, String), String) {
+  let self_pid = process.self()
+  start_session_ffi(command, cwd, prompt, self_pid)
 }
 
-@external(erlang, "aura_acp_stdio_ffi", "start")
-fn start_ffi(command: String, callback_pid: process.Pid) -> Port
+@external(erlang, "aura_acp_stdio_ffi", "start_session")
+fn start_session_ffi(
+  command: String,
+  cwd: String,
+  prompt: String,
+  event_pid: process.Pid,
+) -> Result(#(SessionOwner, String), String)
 
-/// Send a line of text to the child process stdin.
-pub fn send_line(port: Port, data: String) -> Result(Nil, String) {
-  send_line_ffi(port, data)
+/// Send input to a running session (subsequent prompt).
+pub fn send_input(
+  owner: SessionOwner,
+  session_id: String,
+  text: String,
+) -> Result(Nil, String) {
+  send_input_ffi(owner, session_id, text)
 }
 
-@external(erlang, "aura_acp_stdio_ffi", "send_line")
-fn send_line_ffi(port: Port, data: String) -> Result(Nil, String)
+@external(erlang, "aura_acp_stdio_ffi", "send_input")
+fn send_input_ffi(
+  owner: SessionOwner,
+  session_id: String,
+  text: String,
+) -> Result(Nil, String)
 
-/// Close the port (kills child process).
-pub fn close(port: Port) -> Nil {
-  close_ffi(port)
+/// Close the session (sends cancel + closes port).
+pub fn close(owner: SessionOwner) -> Nil {
+  close_ffi(owner)
 }
 
-@external(erlang, "aura_acp_stdio_ffi", "close")
-fn close_ffi(port: Port) -> Nil
+@external(erlang, "aura_acp_stdio_ffi", "close_session")
+fn close_ffi(owner: SessionOwner) -> Nil
 
-/// Receive a message from the reader process mailbox.
-/// Blocks for up to `timeout_ms` milliseconds.
-pub fn receive_message(timeout_ms: Int) -> StdioMessage {
-  case receive_line_ffi(timeout_ms) {
-    #("line", data) -> Line(data)
-    #("exit", code) -> Exit(code)
-    #("error", reason) -> Error(reason)
+/// Receive an event from the session owner process.
+pub fn receive_event(timeout_ms: Int) -> SessionEvent {
+  case receive_event_ffi(timeout_ms) {
+    #("event", event_type, data) -> Event(event_type, data)
+    #("complete", stop_reason, _) -> Complete(stop_reason)
+    #("exit", code, _) -> Exit(code)
+    #("error", reason, _) -> Error(reason)
     _ -> Timeout
   }
 }
 
-@external(erlang, "aura_acp_stdio_ffi", "receive_line")
-fn receive_line_ffi(timeout_ms: Int) -> #(String, String)
-
-/// Send a JSON-RPC request (has id, expects response).
-pub fn send_jsonrpc(
-  port: Port,
-  id: Int,
-  method: String,
-  params: json.Json,
-) -> Result(Nil, String) {
-  let msg =
-    json.object([
-      #("jsonrpc", json.string("2.0")),
-      #("id", json.int(id)),
-      #("method", json.string(method)),
-      #("params", params),
-    ])
-    |> json.to_string
-  send_line(port, msg)
-}
-
-/// Send a JSON-RPC notification (no id, no response expected).
-pub fn send_notification(
-  port: Port,
-  method: String,
-  params: json.Json,
-) -> Result(Nil, String) {
-  let msg =
-    json.object([
-      #("jsonrpc", json.string("2.0")),
-      #("method", json.string(method)),
-      #("params", params),
-    ])
-    |> json.to_string
-  send_line(port, msg)
-}
+@external(erlang, "aura_acp_stdio_ffi", "receive_event")
+fn receive_event_ffi(timeout_ms: Int) -> #(String, String, String)
