@@ -59,6 +59,7 @@ pub type StdioMonitorMsg {
   RawLine(line: String)
   Tick
   UpdateStdioSummary(summary: String)
+  GetLastSummary(reply_to: process.Subject(String))
 }
 
 /// Default monitor config using the existing constants.
@@ -160,6 +161,10 @@ fn handle_push_msg(
     UpdateStdioSummary(summary) -> {
       actor.continue(PushMonitorState(..state, last_summary: summary))
     }
+    GetLastSummary(reply_to) -> {
+      process.send(reply_to, state.last_summary)
+      actor.continue(state)
+    }
   }
 }
 
@@ -247,6 +252,8 @@ fn generate_stdio_progress(
         True -> "Session idle"
         False -> "[" <> int.to_string(line_count) <> " events received]"
       }
+      // Update actor's last_summary for continuity (same as LLM path)
+      process.send(state.self_subject, UpdateStdioSummary(summary))
       state.on_event(AcpProgress(
         session_name: state.session_name,
         domain: state.domain,

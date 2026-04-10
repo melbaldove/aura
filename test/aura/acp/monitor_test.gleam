@@ -94,6 +94,62 @@ pub fn monitor_resets_after_emit_test() {
   }
 }
 
+pub fn monitor_get_last_summary_test() {
+  let event_subject = process.new_subject()
+  let on_event = fn(event) { process.send(event_subject, event) }
+
+  let monitor = acp_monitor.start_push_monitor(
+    acp_monitor.MonitorConfig(
+      emit_interval_ms: 100,
+      idle_interval_ms: 500,
+      idle_surface_threshold: 3,
+      timeout_ms: 60_000,
+    ),
+    "test-summary",
+    "test-domain",
+    "Analyze the code",
+    "",
+    on_event,
+  )
+
+  // Send some data and wait for a tick to generate a summary
+  process.send(monitor, acp_monitor.RawLine("{\"update\":true}"))
+  process.sleep(300)
+  // Drain the progress event
+  let _ = process.receive(event_subject, 500)
+
+  // Now ask for the summary
+  let summary = process.call(monitor, 1000, fn(reply_to) {
+    acp_monitor.GetLastSummary(reply_to)
+  })
+  { summary != "" } |> should.be_true
+}
+
+pub fn monitor_get_last_summary_empty_test() {
+  let event_subject = process.new_subject()
+  let on_event = fn(_event) { process.send(event_subject, Nil) }
+
+  let monitor = acp_monitor.start_push_monitor(
+    acp_monitor.MonitorConfig(
+      emit_interval_ms: 5000,
+      idle_interval_ms: 5000,
+      idle_surface_threshold: 3,
+      timeout_ms: 60_000,
+    ),
+    "test-summary-empty",
+    "test-domain",
+    "Analyze the code",
+    "",
+    fn(_) { Nil },
+  )
+
+  // No data sent, no tick fired — summary should be empty
+  let summary = process.call(monitor, 1000, fn(reply_to) {
+    acp_monitor.GetLastSummary(reply_to)
+  })
+  summary |> should.equal("")
+}
+
 fn drain_for_idle(subject: process.Subject(acp_monitor.AcpEvent)) -> Bool {
   case process.receive(subject, 500) {
     Ok(acp_monitor.AcpProgress(_, _, _, _, _, True)) -> True
