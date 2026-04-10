@@ -40,53 +40,6 @@ pub type AcpEvent {
   )
 }
 
-/// Structured snapshot of activity since last monitor check.
-/// ACP-native: reasons about protocol event types, not raw text.
-pub type ActivitySnapshot {
-  ActivitySnapshot(
-    tool_calls: List(String),
-    message_chunks: String,
-    event_count: Int,
-    last_event_type: String,
-  )
-}
-
-/// An active snapshot has tool calls or message chunks (real work).
-/// Metadata-only events (config updates, mode changes) don't count.
-pub fn snapshot_is_active(snapshot: ActivitySnapshot) -> Bool {
-  snapshot.tool_calls != [] || snapshot.message_chunks != ""
-}
-
-/// Format an ActivitySnapshot into Discord-friendly text.
-/// Tool calls get 🔧 prefix, message chunks get 💬 prefix.
-/// Max 5 tool calls shown (most recent), message truncated to 100 chars.
-pub fn format_snapshot(snapshot: ActivitySnapshot) -> String {
-  let tool_lines = case snapshot.tool_calls {
-    [] -> []
-    calls -> {
-      let recent = case list.length(calls) > 5 {
-        True -> list.drop(calls, list.length(calls) - 5)
-        False -> calls
-      }
-      list.map(recent, fn(title) { "\u{1F527} " <> title })
-    }
-  }
-
-  let message_line = case snapshot.message_chunks {
-    "" -> []
-    text -> {
-      let truncated = case string.length(text) > 100 {
-        True -> string.slice(text, 0, 100) <> "..."
-        False -> text
-      }
-      ["\u{1F4AC} " <> truncated]
-    }
-  }
-
-  list.append(tool_lines, message_line)
-  |> string.join("\n")
-}
-
 // ---------------------------------------------------------------------------
 // Push-based stdio monitor
 // ---------------------------------------------------------------------------
@@ -103,8 +56,9 @@ pub type MonitorConfig {
 
 /// Messages the push-based monitor receives.
 pub type StdioMonitorMsg {
-  RawEvent(event_type: String, content: String)
+  RawLine(line: String)
   Tick
+  UpdateStdioSummary(summary: String)
 }
 
 /// Default monitor config using the existing constants.
@@ -117,20 +71,26 @@ pub fn default_monitor_config(timeout_ms: Int) -> MonitorConfig {
   )
 }
 
-/// Start a push-based monitor actor. Returns the subject to send RawEvents to.
+/// Start a push-based monitor actor. Returns the subject to send RawLines to.
 /// The monitor self-schedules Tick messages on emit_interval_ms cadence.
 pub fn start_push_monitor(
   config: MonitorConfig,
   session_name: String,
   domain: String,
+  task_prompt: String,
+  monitor_model: String,
   on_event: fn(AcpEvent) -> Nil,
 ) -> process.Subject(StdioMonitorMsg) {
-  let empty = ActivitySnapshot(
-    tool_calls: [],
-    message_chunks: "",
-    event_count: 0,
-    last_event_type: "",
-  )
+  let llm_config = case monitor_model {
+    "" -> None
+    model -> case models.build_llm_config(model) {
+      Ok(c) -> Some(c)
+      Error(e) -> {
+        io.println("[acp-monitor] No LLM config for " <> model <> ": " <> e)
+        None
+      }
+    }
+  }
 
   let builder =
     actor.new_with_initialiser(5000, fn(subject) {
@@ -141,11 +101,13 @@ pub fn start_push_monitor(
           config: config,
           session_name: session_name,
           domain: domain,
-          acc: empty,
+          task_prompt: task_prompt,
+          raw_lines: [],
+          last_summary: "",
           idle_checks: 0,
           idle_surfaced: False,
-          last_event_type: "",
           started_at_ms: time.now_ms(),
+          llm_config: llm_config,
           on_event: on_event,
           self_subject: subject,
         )
@@ -171,11 +133,13 @@ type PushMonitorState {
     config: MonitorConfig,
     session_name: String,
     domain: String,
-    acc: ActivitySnapshot,
+    task_prompt: String,
+    raw_lines: List(String),
+    last_summary: String,
     idle_checks: Int,
     idle_surfaced: Bool,
-    last_event_type: String,
     started_at_ms: Int,
+    llm_config: Option(llm.LlmConfig),
     on_event: fn(AcpEvent) -> Nil,
     self_subject: process.Subject(StdioMonitorMsg),
   )
@@ -186,46 +150,23 @@ fn handle_push_msg(
   msg: StdioMonitorMsg,
 ) -> actor.Next(PushMonitorState, StdioMonitorMsg) {
   case msg {
-    RawEvent(event_type, content) ->
-      handle_raw_event(state, event_type, content)
+    RawLine(line) -> {
+      actor.continue(PushMonitorState(
+        ..state,
+        raw_lines: list.append(state.raw_lines, [line]),
+      ))
+    }
     Tick -> handle_push_tick(state)
+    UpdateStdioSummary(summary) -> {
+      actor.continue(PushMonitorState(..state, last_summary: summary))
+    }
   }
-}
-
-fn handle_raw_event(
-  state: PushMonitorState,
-  event_type: String,
-  content: String,
-) -> actor.Next(PushMonitorState, StdioMonitorMsg) {
-  let new_acc = case event_type {
-    "tool_call" ->
-      ActivitySnapshot(
-        ..state.acc,
-        tool_calls: list.append(state.acc.tool_calls, [content]),
-        event_count: state.acc.event_count + 1,
-        last_event_type: event_type,
-      )
-    "agent_message_chunk" ->
-      ActivitySnapshot(
-        ..state.acc,
-        message_chunks: state.acc.message_chunks <> content,
-        event_count: state.acc.event_count + 1,
-        last_event_type: event_type,
-      )
-    _ ->
-      ActivitySnapshot(
-        ..state.acc,
-        event_count: state.acc.event_count + 1,
-        last_event_type: event_type,
-      )
-  }
-  actor.continue(PushMonitorState(..state, acc: new_acc))
 }
 
 fn handle_push_tick(
   state: PushMonitorState,
 ) -> actor.Next(PushMonitorState, StdioMonitorMsg) {
-  let is_active = snapshot_is_active(state.acc)
+  let is_active = state.raw_lines != []
   let new_idle_checks = case is_active {
     True -> 0
     False -> state.idle_checks + 1
@@ -251,39 +192,20 @@ fn handle_push_tick(
 
       let new_state = case should_emit {
         True -> {
-          let body = format_snapshot(state.acc)
-          let idle_suffix = case is_idle {
-            True -> "\nLast activity: " <> state.last_event_type
-            False -> ""
-          }
-
-          state.on_event(AcpProgress(
-            session_name: state.session_name,
-            domain: state.domain,
-            title: "",
-            status: "",
-            summary: body <> idle_suffix,
-            is_idle: is_idle,
-          ))
-
-          let empty = ActivitySnapshot(
-            tool_calls: [],
-            message_chunks: "",
-            event_count: 0,
-            last_event_type: "",
-          )
+          // Spawn LLM summarization (non-blocking)
+          let s = state
+          let lines = state.raw_lines
+          process.spawn_unlinked(fn() {
+            generate_stdio_progress(s, lines, is_idle)
+          })
 
           PushMonitorState(
             ..state,
-            acc: empty,
+            raw_lines: [],
             idle_checks: new_idle_checks,
             idle_surfaced: case is_idle {
               True -> True
               False -> False
-            },
-            last_event_type: case state.acc.last_event_type {
-              "" -> state.last_event_type
-              t -> t
             },
           )
         }
@@ -306,6 +228,127 @@ fn handle_push_tick(
       }
       process.send_after(state.self_subject, next_interval, Tick)
       actor.continue(new_state)
+    }
+  }
+}
+
+/// Generate a structured progress update for stdio sessions using LLM.
+/// Spawned in a separate process so it doesn't block the actor.
+fn generate_stdio_progress(
+  state: PushMonitorState,
+  raw_lines: List(String),
+  is_idle: Bool,
+) -> Nil {
+  case state.llm_config {
+    None -> {
+      // No LLM — emit a basic fallback
+      let line_count = list.length(raw_lines)
+      let summary = case is_idle {
+        True -> "Session idle"
+        False -> "[" <> int.to_string(line_count) <> " events received]"
+      }
+      state.on_event(AcpProgress(
+        session_name: state.session_name,
+        domain: state.domain,
+        title: "",
+        status: case is_idle { True -> "Idle" False -> "Working" },
+        summary: summary,
+        is_idle: is_idle,
+      ))
+    }
+    Some(config) -> {
+      // Cap raw lines to last ~3000 chars
+      let joined = string.join(raw_lines, "\n")
+      let tail = case string.length(joined) > 3000 {
+        True -> string.slice(joined, string.length(joined) - 3000, 3000)
+        False -> joined
+      }
+
+      let elapsed_min = { time.now_ms() - state.started_at_ms } / 60_000
+
+      let previous_section = case state.last_summary {
+        "" -> ""
+        prev ->
+          "\n\nPrevious update:\n"
+          <> prev
+          <> "\n\nUpdate the summary. Accumulate Done items — don't drop previous accomplishments."
+      }
+
+      let idle_hint = case is_idle {
+        True ->
+          "\nNo new events have arrived — the session appears idle or waiting for input. Set Status to 'Idle' or 'Needs input' as appropriate."
+        False -> ""
+      }
+
+      let system_prompt =
+        "You are reporting on an AI coding session to a busy developer via Discord. Keep it scannable.\n\n"
+        <> "Respond with EXACTLY this format (no other text):\n\n"
+        <> "Title: [one-line description of what this session is doing]\n"
+        <> "Status: [Working | Stuck | Blocked | Idle | Needs input | Dangerous]\n"
+        <> "Done: [what was accomplished — file names, ticket numbers, concrete results. Use bullet points if multiple items.]\n"
+        <> "Current: [what's happening right now based on the events]\n"
+        <> "Needs input: [decisions or questions for the developer, or 'none']\n"
+        <> "Next: [what the session will do next, or 'idle — waiting for instructions']\n\n"
+        <> "Use markdown: `file paths`, `commands`, `ticket numbers` in backticks. URLs as links. Bullet points for multiple items. Be specific and concise.\n\n"
+        <> "The input below is raw ACP protocol events (JSON-RPC). Look for toolName, content.text, filePath, stdout, and other fields to understand what the agent is doing."
+
+      let user_prompt =
+        "Task: " <> state.task_prompt
+        <> "\nElapsed: " <> int.to_string(elapsed_min) <> " minutes"
+        <> idle_hint
+        <> previous_section
+        <> "\n\nLatest ACP events:\n" <> tail
+
+      let messages = [
+        llm.SystemMessage(system_prompt),
+        llm.UserMessage(user_prompt),
+      ]
+
+      case llm.chat(config, messages) {
+        Ok(response) -> {
+          let trimmed = string.trim(response)
+
+          // Send summary back to actor for continuity
+          process.send(state.self_subject, UpdateStdioSummary(trimmed))
+
+          let title = extract_field(trimmed, "Title:")
+          let status = extract_field(trimmed, "Status:")
+
+          // Alert for non-normal statuses
+          let parsed_status = case string.uppercase(string.trim(status)) {
+            "STUCK" -> Some(types.Stuck)
+            "BLOCKED" -> Some(types.Blocked)
+            "DANGEROUS" -> Some(types.Dangerous)
+            _ -> None
+          }
+
+          case parsed_status {
+            Some(alert_status) ->
+              state.on_event(AcpAlert(
+                session_name: state.session_name,
+                domain: state.domain,
+                status: alert_status,
+                summary: trimmed,
+              ))
+            None -> Nil
+          }
+
+          state.on_event(AcpProgress(
+            session_name: state.session_name,
+            domain: state.domain,
+            title: title,
+            status: status,
+            summary: trimmed,
+            is_idle: is_idle,
+          ))
+        }
+        Error(e) -> {
+          io.println(
+            "[acp-monitor] Stdio progress LLM failed for "
+            <> state.session_name <> ": " <> e,
+          )
+        }
+      }
     }
   }
 }

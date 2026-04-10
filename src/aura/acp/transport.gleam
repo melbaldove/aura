@@ -54,7 +54,7 @@ pub fn dispatch(
         on_event,
       )
     Stdio(command) ->
-      dispatch_stdio(command, session_name, task_spec, on_event)
+      dispatch_stdio(command, session_name, task_spec, monitor_model, on_event)
     Tmux ->
       dispatch_tmux(session_name, task_spec, monitor_model, on_event)
   }
@@ -136,6 +136,7 @@ fn dispatch_stdio(
   command: String,
   session_name: String,
   task_spec: types.TaskSpec,
+  monitor_model: String,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
 ) -> Result(DispatchResult, String) {
   let reply_subject = process.new_subject()
@@ -153,6 +154,8 @@ fn dispatch_stdio(
           acp_monitor.default_monitor_config(task_spec.timeout_ms),
           session_name,
           task_spec.domain,
+          task_spec.prompt,
+          monitor_model,
           on_event,
         )
         stdio_event_loop(session_name, task_spec.domain, on_event, monitor)
@@ -178,8 +181,8 @@ fn stdio_event_loop(
   monitor: process.Subject(acp_monitor.StdioMonitorMsg),
 ) -> Nil {
   case stdio.receive_event(5000) {
-    stdio.Event(event_type, content) -> {
-      process.send(monitor, acp_monitor.RawEvent(event_type, content))
+    stdio.Event(_event_type, content) -> {
+      process.send(monitor, acp_monitor.RawLine(content))
       stdio_event_loop(session_name, domain, on_event, monitor)
     }
     stdio.Complete(stop_reason) -> {
