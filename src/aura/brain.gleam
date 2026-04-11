@@ -1193,6 +1193,27 @@ fn build_llm_context(
       on_propose: fn(_) { Nil },
     )
 
+  // Build roster summary
+  let flares = flare_manager.list_flares(state.acp_subject)
+  let active_flares = list.filter(flares, fn(f) { f.status == flare_manager.Active })
+  let parked_flares = list.filter(flares, fn(f) { f.status == flare_manager.Parked })
+  let roster_section = case list.length(active_flares) + list.length(parked_flares) {
+    0 -> ""
+    _ -> {
+      let active_lines = list.map(active_flares, fn(f) {
+        "- \"" <> f.label <> "\" (" <> f.domain <> ") — active, session: " <> f.session_name
+      })
+      let parked_lines = list.map(parked_flares, fn(f) {
+        "- \"" <> f.label <> "\" (" <> f.domain <> ") — parked"
+      })
+      "\n\n## Flare Roster"
+      <> case active_lines { [] -> "" lines -> "\nActive:\n" <> string.join(lines, "\n") }
+      <> case parked_lines { [] -> "" lines -> "\nParked:\n" <> string.join(lines, "\n") }
+      <> "\n\nUse flare(action='rekindle', ...) to resume a parked flare. Use flare(action='ignite', ...) to start new work."
+    }
+  }
+  let system_prompt = system_prompt <> roster_section
+
   #(system_prompt, tool_ctx)
 }
 
