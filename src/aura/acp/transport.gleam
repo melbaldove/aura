@@ -206,22 +206,37 @@ fn dispatch_stdio(
   monitor_model: String,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
 ) -> Result(DispatchResult, String) {
+  dispatch_stdio_inner(
+    fn() { stdio.start_session(command, task_spec.cwd, task_spec.prompt) },
+    session_name,
+    task_spec,
+    task_spec.prompt,
+    monitor_model,
+    on_event,
+  )
+}
+
+fn dispatch_stdio_inner(
+  start_fn: fn() -> Result(#(stdio.SessionOwner, String), String),
+  session_name: String,
+  task_spec: types.TaskSpec,
+  prompt_text: String,
+  monitor_model: String,
+  on_event: fn(acp_monitor.AcpEvent) -> Nil,
+) -> Result(DispatchResult, String) {
   let reply_subject = process.new_subject()
 
   process.spawn_unlinked(fn() {
-    case stdio.start_session(command, task_spec.cwd, task_spec.prompt) {
-      Error(e) -> {
-        process.send(reply_subject, Error(e))
-      }
+    case start_fn() {
+      Error(e) -> process.send(reply_subject, Error(e))
       Ok(#(owner, session_id)) -> {
         process.send(reply_subject, Ok(#(owner, session_id)))
         on_event(acp_monitor.AcpStarted(session_name, task_spec.domain, task_spec.id))
-        // Start push-based monitor — events forwarded on each iteration
         let monitor = acp_monitor.start_push_monitor(
           acp_monitor.default_monitor_config(task_spec.timeout_ms),
           session_name,
           task_spec.domain,
-          task_spec.prompt,
+          prompt_text,
           monitor_model,
           on_event,
         )
@@ -237,7 +252,7 @@ fn dispatch_stdio(
         handle: StdioHandle(owner: owner, session_id: session_id),
       ))
     Ok(Error(err)) -> Error("Stdio dispatch failed: " <> err)
-    Error(_) -> Error("Stdio session handshake timed out")
+    Error(_) -> Error("Stdio session timed out")
   }
 }
 
@@ -299,38 +314,14 @@ pub fn dispatch_stdio_resume(
   monitor_model: String,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
 ) -> Result(DispatchResult, String) {
-  let reply_subject = process.new_subject()
-
-  process.spawn_unlinked(fn() {
-    case stdio.start_session_resume(command, task_spec.cwd, resume_session_id, prompt) {
-      Error(e) -> {
-        process.send(reply_subject, Error(e))
-      }
-      Ok(#(owner, session_id)) -> {
-        process.send(reply_subject, Ok(#(owner, session_id)))
-        on_event(acp_monitor.AcpStarted(session_name, task_spec.domain, task_spec.id))
-        let monitor = acp_monitor.start_push_monitor(
-          acp_monitor.default_monitor_config(task_spec.timeout_ms),
-          session_name,
-          task_spec.domain,
-          prompt,
-          monitor_model,
-          on_event,
-        )
-        stdio_event_loop(session_name, task_spec.domain, on_event, monitor, new_completion_buffer())
-      }
-    }
-  })
-
-  case process.receive(reply_subject, 30_000) {
-    Ok(Ok(#(owner, session_id))) ->
-      Ok(DispatchResult(
-        run_id: session_id,
-        handle: StdioHandle(owner: owner, session_id: session_id),
-      ))
-    Ok(Error(err)) -> Error("Stdio resume failed: " <> err)
-    Error(_) -> Error("Stdio resume handshake timed out")
-  }
+  dispatch_stdio_inner(
+    fn() { stdio.start_session_resume(command, task_spec.cwd, resume_session_id, prompt) },
+    session_name,
+    task_spec,
+    prompt,
+    monitor_model,
+    on_event,
+  )
 }
 
 // Stdio protocol handling (handshake, JSON-RPC, event parsing) is in the

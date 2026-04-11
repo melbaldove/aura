@@ -576,6 +576,26 @@ fn handle_archive(
 }
 
 // ---------------------------------------------------------------------------
+// Concurrency guard
+// ---------------------------------------------------------------------------
+
+fn check_concurrency(state: FlareManagerState) -> Result(Nil, String) {
+  let active_count =
+    dict.values(state.flares)
+    |> list.filter(fn(f) { f.session_name != "" && f.status == Active })
+    |> list.length
+  case active_count < state.max_concurrent {
+    True -> Ok(Nil)
+    False ->
+      Error(
+        "ACP concurrency limit reached ("
+        <> int.to_string(state.max_concurrent)
+        <> ")",
+      )
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch — link a flare to a transport session
 // ---------------------------------------------------------------------------
 
@@ -589,21 +609,9 @@ fn handle_dispatch(
   case dict.get(state.flares, flare_id) {
     Error(_) -> #(state, Error("Flare not found: " <> flare_id))
     Ok(flare) -> {
-      // Check concurrency limit (count flares with active sessions)
-      let active_count =
-        dict.values(state.flares)
-        |> list.filter(fn(f) { f.session_name != "" && f.status == Active })
-        |> list.length
-      case active_count < state.max_concurrent {
-        False -> #(
-          state,
-          Error(
-            "ACP concurrency limit reached ("
-            <> int.to_string(state.max_concurrent)
-            <> ")",
-          ),
-        )
-        True -> {
+      case check_concurrency(state) {
+        Error(e) -> #(state, Error(e))
+        Ok(_) -> {
           let session_name =
             tmux.build_session_name(task_spec.domain, task_spec.id)
 
@@ -827,21 +835,9 @@ fn handle_rekindle(
       case flare.status {
         Active -> #(state, Error("Flare is already active: " <> flare_id))
         _ -> {
-          // Check concurrency limit
-          let active_count =
-            dict.values(state.flares)
-            |> list.filter(fn(f) { f.session_name != "" && f.status == Active })
-            |> list.length
-          case active_count < state.max_concurrent {
-            False -> #(
-              state,
-              Error(
-                "ACP concurrency limit reached ("
-                <> int.to_string(state.max_concurrent)
-                <> ")",
-              ),
-            )
-            True -> {
+          case check_concurrency(state) {
+            Error(e) -> #(state, Error(e))
+            Ok(_) -> {
               let cwd = case flare.workspace {
                 "" -> "."
                 ws -> ws
@@ -899,15 +895,10 @@ fn handle_rekindle(
                       updated_at_ms: now,
                     )
 
-                  case db.update_flare_session_id(state.db_subject, flare_id, result.run_id, now) {
+                  case db.update_flare_rekindle(state.db_subject, flare_id, result.run_id, status_to_string(Active), now) {
                     Ok(_) -> Nil
                     Error(e) ->
-                      io.println("[flare] Failed to persist rekindle session: " <> e)
-                  }
-                  case db.update_flare_status(state.db_subject, flare_id, status_to_string(Active), now) {
-                    Ok(_) -> Nil
-                    Error(e) ->
-                      io.println("[flare] Failed to persist rekindle status: " <> e)
+                      io.println("[flare] Failed to persist rekindle: " <> e)
                   }
 
                   let new_flares =

@@ -144,6 +144,13 @@ pub type DbMessage {
     session_id: String,
     updated_at_ms: Int,
   )
+  UpdateFlareRekindle(
+    reply_to: process.Subject(Result(Nil, String)),
+    id: String,
+    session_id: String,
+    status: String,
+    updated_at_ms: Int,
+  )
 }
 
 type DbState {
@@ -392,6 +399,19 @@ pub fn update_flare_session_id(
   })
 }
 
+/// Atomically update a flare's session_id and status (used by rekindle).
+pub fn update_flare_rekindle(
+  subject: process.Subject(DbMessage),
+  id: String,
+  session_id: String,
+  status: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    UpdateFlareRekindle(reply_to:, id:, session_id:, status:, updated_at_ms:)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
@@ -486,6 +506,12 @@ fn handle_message(
 
     UpdateFlareSessionId(reply_to:, id:, session_id:, updated_at_ms:) -> {
       let result = do_update_flare_session_id(state.conn, id, session_id, updated_at_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    UpdateFlareRekindle(reply_to:, id:, session_id:, status:, updated_at_ms:) -> {
+      let result = do_update_flare_rekindle(state.conn, id, session_id, status, updated_at_ms)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -815,6 +841,25 @@ fn do_update_flare_session_id(
   |> result.map(fn(_) { Nil })
   |> result.map_error(fn(err) {
     "Failed to update flare session_id: " <> string.inspect(err)
+  })
+}
+
+fn do_update_flare_rekindle(
+  conn: sqlight.Connection,
+  id: String,
+  session_id: String,
+  status: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "UPDATE flares SET session_id = ?1, status = ?2, updated_at_ms = ?3 WHERE id = ?4",
+    on: conn,
+    with: [sqlight.text(session_id), sqlight.text(status), sqlight.int(updated_at_ms), sqlight.text(id)],
+    expecting: decode.success(Nil),
+  )
+  |> result.map(fn(_) { Nil })
+  |> result.map_error(fn(err) {
+    "Failed to update flare rekindle: " <> string.inspect(err)
   })
 }
 
