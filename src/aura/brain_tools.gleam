@@ -499,118 +499,120 @@ fn execute_tool_dispatch(
         }
       }
     }
-    "acp_dispatch" -> {
-      case require_arg(args, "prompt") {
-        Error(e) -> TextResult(e)
-        Ok(prompt) -> case require_arg(args, "repo") {
-          Error(e) -> TextResult(e)
-          Ok(repo) -> {
-            let task_id = "t" <> int.to_string(time.now_ms())
-            let cwd = ctx.domain_cwd <> "/" <> repo
-            let timeout_ms = case int.parse(get_arg(args, "timeout_minutes")) {
-              Ok(m) -> m * 60_000
-              Error(_) -> 30 * 60_000
-            }
-            let task_spec = acp_types.TaskSpec(
-              id: task_id,
-              domain: ctx.domain_name,
-              prompt: prompt,
-              cwd: cwd,
-              timeout_ms: timeout_ms,
-              acceptance_criteria: [],
-              provider: provider.parse_provider(ctx.acp_provider, ctx.acp_binary),
-              worktree: ctx.acp_worktree,
-            )
-            let thread_id = ctx.channel_id
-            case manager.dispatch(ctx.acp_subject, task_spec, thread_id) {
-              Ok(session_name) -> {
-                let details_msg =
-                  "ACP session started: " <> session_name
-                  <> "\n\n**Prompt:**\n" <> prompt
-                TextResult("ACP dispatched.\n" <> details_msg)
+    "flare" -> {
+      case get_arg(args, "action") {
+        "ignite" -> {
+          case require_arg(args, "prompt") {
+            Error(e) -> TextResult(e)
+            Ok(prompt) -> case require_arg(args, "repo") {
+              Error(e) -> TextResult(e)
+              Ok(repo) -> {
+                let task_id = "t" <> int.to_string(time.now_ms())
+                let cwd = ctx.domain_cwd <> "/" <> repo
+                let timeout_ms = case int.parse(get_arg(args, "timeout_minutes")) {
+                  Ok(m) -> m * 60_000
+                  Error(_) -> 30 * 60_000
+                }
+                let task_spec = acp_types.TaskSpec(
+                  id: task_id,
+                  domain: ctx.domain_name,
+                  prompt: prompt,
+                  cwd: cwd,
+                  timeout_ms: timeout_ms,
+                  acceptance_criteria: [],
+                  provider: provider.parse_provider(ctx.acp_provider, ctx.acp_binary),
+                  worktree: ctx.acp_worktree,
+                )
+                let thread_id = ctx.channel_id
+                case manager.dispatch(ctx.acp_subject, task_spec, thread_id) {
+                  Ok(session_name) -> {
+                    let details_msg =
+                      "Flare ignited: " <> session_name
+                      <> "\n\n**Prompt:**\n" <> prompt
+                    TextResult("Flare ignited.\n" <> details_msg)
+                  }
+                  Error(e) -> TextResult("Error: " <> e)
+                }
               }
-              Error(e) -> TextResult("Error: " <> e)
             }
           }
         }
-      }
-    }
-    "acp_status" -> {
-      case require_arg(args, "session_name") {
-        Error(e) -> TextResult(e)
-        Ok(session_name) -> {
-          case manager.get_session(ctx.acp_subject, session_name) {
-            Ok(session) -> {
-              let elapsed_ms = time.now_ms() - session.started_at_ms
-              let elapsed_min = elapsed_ms / 60_000
-              let state_str = " [" <> manager.session_state_to_string(session.state) <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
-              // ACP sessions (run_id set) don't have tmux panes
-              case session.run_id {
-                "" -> {
-                  // tmux session — capture pane output
-                  case acp_tmux.capture_pane(session_name) {
-                    Ok(output) -> {
-                      let tail = case string.length(output) > 500 {
-                        True -> "...\n" <> string.slice(output, string.length(output) - 500, 500)
-                        False -> output
+        "status" -> {
+          case require_arg(args, "session_name") {
+            Error(e) -> TextResult(e)
+            Ok(session_name) -> {
+              case manager.get_session(ctx.acp_subject, session_name) {
+                Ok(session) -> {
+                  let elapsed_ms = time.now_ms() - session.started_at_ms
+                  let elapsed_min = elapsed_ms / 60_000
+                  let state_str = " [" <> manager.session_state_to_string(session.state) <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
+                  case session.run_id {
+                    "" -> {
+                      case acp_tmux.capture_pane(session_name) {
+                        Ok(output) -> {
+                          let tail = case string.length(output) > 500 {
+                            True -> "...\n" <> string.slice(output, string.length(output) - 500, 500)
+                            False -> output
+                          }
+                          TextResult("Flare: " <> session_name <> state_str <> "\n\n" <> tail)
+                        }
+                        Error(_) -> TextResult("Flare: " <> session_name <> state_str <> "\n\n(output not available)")
                       }
-                      TextResult("Session: " <> session_name <> state_str <> "\n\n" <> tail)
                     }
-                    Error(_) -> TextResult("Session: " <> session_name <> state_str <> "\n\n(tmux pane not available)")
+                    run_id -> {
+                      TextResult("Flare: " <> session_name <> state_str <> "\nRun: " <> run_id <> "\nDomain: " <> session.domain <> "\nPrompt: " <> string.slice(session.prompt, 0, 200))
+                    }
                   }
                 }
-                run_id -> {
-                  // ACP session — show run status
-                  TextResult("Session: " <> session_name <> state_str <> "\nACP run: " <> run_id <> "\nDomain: " <> session.domain <> "\nPrompt: " <> string.slice(session.prompt, 0, 200))
+                Error(_) -> TextResult("Flare not found: " <> session_name)
+              }
+            }
+          }
+        }
+        "list" -> {
+          let sessions = manager.list_sessions(ctx.acp_subject)
+          case sessions {
+            [] -> TextResult("No active flares.")
+            _ -> {
+              list.map(sessions, fn(s) {
+                let elapsed_ms = time.now_ms() - s.started_at_ms
+                let elapsed_min = elapsed_ms / 60_000
+                s.session_name
+                <> " [" <> manager.session_state_to_string(s.state) <> "]"
+                <> " domain=" <> s.domain
+                <> " (started " <> int.to_string(elapsed_min) <> "m ago)"
+              })
+              |> string.join("\n")
+              |> TextResult
+            }
+          }
+        }
+        "prompt" -> {
+          case require_arg(args, "session_name") {
+            Error(e) -> TextResult(e)
+            Ok(session_name) -> case require_arg(args, "prompt") {
+              Error(e) -> TextResult(e)
+              Ok(message) -> {
+                case manager.send_input(ctx.acp_subject, session_name, message) {
+                  Ok(_) -> TextResult("Sent to " <> session_name)
+                  Error(e) -> TextResult("Error: " <> e)
                 }
               }
             }
-            Error(_) -> TextResult("Session not found: " <> session_name)
           }
         }
-      }
-    }
-    "acp_list" -> {
-      let sessions = manager.list_sessions(ctx.acp_subject)
-      case sessions {
-        [] -> TextResult("No active ACP sessions.")
-        _ -> {
-          list.map(sessions, fn(s) {
-            let elapsed_ms = time.now_ms() - s.started_at_ms
-            let elapsed_min = elapsed_ms / 60_000
-            s.session_name
-            <> " [" <> manager.session_state_to_string(s.state) <> "]"
-            <> " domain=" <> s.domain
-            <> " (started " <> int.to_string(elapsed_min) <> "m ago)"
-          })
-          |> string.join("\n")
-          |> TextResult
-        }
-      }
-    }
-    "acp_prompt" -> {
-      case require_arg(args, "session_name") {
-        Error(e) -> TextResult(e)
-        Ok(session_name) -> case require_arg(args, "message") {
-          Error(e) -> TextResult(e)
-          Ok(message) -> {
-            case manager.send_input(ctx.acp_subject, session_name, message) {
-              Ok(_) -> TextResult("Sent to " <> session_name)
-              Error(e) -> TextResult("Error: " <> e)
+        "kill" -> {
+          case require_arg(args, "session_name") {
+            Error(e) -> TextResult(e)
+            Ok(session_name) -> {
+              case manager.kill(ctx.acp_subject, session_name) {
+                Ok(_) -> TextResult("Flare killed: " <> session_name)
+                Error(e) -> TextResult("Error: " <> e)
+              }
             }
           }
         }
-      }
-    }
-    "acp_kill" -> {
-      case require_arg(args, "session_name") {
-        Error(e) -> TextResult(e)
-        Ok(session_name) -> {
-          case manager.kill(ctx.acp_subject, session_name) {
-            Ok(_) -> TextResult("Session killed: " <> session_name)
-            Error(e) -> TextResult("Error: " <> e)
-          }
-        }
+        unknown -> TextResult("Unknown flare action: " <> unknown <> ". Use: ignite, status, list, prompt, kill")
       }
     }
     _ -> {
@@ -1046,73 +1048,38 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
       ],
     ),
     llm.ToolDefinition(
-      name: "acp_dispatch",
-      description: "Dispatch a Claude Code session to work on a task autonomously in a tmux session. Check the domain's AGENTS.md to find which repo to use. You'll get Discord notifications on progress, alerts, and completion.",
+      name: "flare",
+      description: "Extend yourself to work on a task. Flares are persistent — they can be parked and rekindled later. Actions: ignite (start new), status (check progress), list (show all), prompt (send follow-up), kill (terminate).",
       parameters: [
+        llm.ToolParam(
+          name: "action",
+          param_type: "string",
+          description: "One of: ignite, status, list, prompt, kill",
+          required: True,
+        ),
         llm.ToolParam(
           name: "prompt",
           param_type: "string",
-          description: "The full task prompt for Claude Code. Be specific about what to do, which files, and acceptance criteria.",
-          required: True,
+          description: "For ignite: the full task prompt. For prompt: the follow-up message.",
+          required: False,
         ),
         llm.ToolParam(
           name: "repo",
           param_type: "string",
-          description: "Repo path relative to domain root (e.g. 'repos/cm2'). Check AGENTS.md for available repos.",
-          required: True,
+          description: "For ignite: repo path relative to domain root (e.g. 'repos/cm2'). Check AGENTS.md.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "session_name",
+          param_type: "string",
+          description: "For status/prompt/kill: the session name.",
+          required: False,
         ),
         llm.ToolParam(
           name: "timeout_minutes",
           param_type: "string",
-          description: "Max duration in minutes (default 30)",
+          description: "For ignite: max duration in minutes (default 30).",
           required: False,
-        ),
-      ],
-    ),
-    llm.ToolDefinition(
-      name: "acp_status",
-      description: "Check the current output of a running ACP (Claude Code) session. Shows session state, uptime, and the last 500 characters of the tmux pane.",
-      parameters: [
-        llm.ToolParam(
-          name: "session_name",
-          param_type: "string",
-          description: "The tmux session name (e.g. acp-hy-t1234567)",
-          required: True,
-        ),
-      ],
-    ),
-    llm.ToolDefinition(
-      name: "acp_list",
-      description: "List all active ACP (Claude Code) sessions with their current state, domain, and uptime.",
-      parameters: [],
-    ),
-    llm.ToolDefinition(
-      name: "acp_prompt",
-      description: "Send a follow-up instruction to a running ACP session. The message is typed into the Claude Code session as if the user typed it.",
-      parameters: [
-        llm.ToolParam(
-          name: "session_name",
-          param_type: "string",
-          description: "The tmux session name (e.g. acp-hy-t1234567)",
-          required: True,
-        ),
-        llm.ToolParam(
-          name: "message",
-          param_type: "string",
-          description: "The instruction to send to Claude Code",
-          required: True,
-        ),
-      ],
-    ),
-    llm.ToolDefinition(
-      name: "acp_kill",
-      description: "Kill an ACP session's tmux session. Use when closing/completing a session. Always update state and memory BEFORE killing.",
-      parameters: [
-        llm.ToolParam(
-          name: "session_name",
-          param_type: "string",
-          description: "The tmux session name to kill",
-          required: True,
         ),
       ],
     ),

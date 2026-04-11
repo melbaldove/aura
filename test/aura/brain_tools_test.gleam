@@ -118,6 +118,28 @@ pub fn expand_tool_calls_mixed_names_test() {
   }
 }
 
+pub fn built_in_tools_include_flare_test() {
+  let tools = brain_tools.make_built_in_tools()
+  let has_flare = list.any(tools, fn(t) {
+    case t {
+      llm.ToolDefinition(name: "flare", ..) -> True
+      _ -> False
+    }
+  })
+  has_flare |> should.be_true
+}
+
+pub fn built_in_tools_no_acp_dispatch_test() {
+  let tools = brain_tools.make_built_in_tools()
+  let has_acp = list.any(tools, fn(t) {
+    case t {
+      llm.ToolDefinition(name: "acp_dispatch", ..) -> True
+      _ -> False
+    }
+  })
+  has_acp |> should.be_false
+}
+
 pub fn expand_tool_calls_preserves_non_concat_test() {
   let calls = [
     llm.ToolCall(id: "1", name: "read_file", arguments: "{\"path\":\"foo.txt\"}"),
