@@ -1,6 +1,7 @@
 import aura/db_schema
 import gleam/dynamic/decode
 import gleam/erlang/process
+import gleam/option
 import gleam/otp/actor
 import gleam/result
 import gleam/string
@@ -40,6 +41,24 @@ pub type SearchResult {
     created_at: Int,
     platform: String,
     platform_id: String,
+  )
+}
+
+pub type StoredFlare {
+  StoredFlare(
+    id: String,
+    label: String,
+    status: String,
+    domain: String,
+    thread_id: String,
+    original_prompt: String,
+    execution: String,
+    triggers: String,
+    tools: String,
+    workspace: String,
+    session_id: String,
+    created_at_ms: Int,
+    updated_at_ms: Int,
   )
 }
 
@@ -105,6 +124,38 @@ pub type DbMessage {
     tool_call_id: String,
     tool_calls: String,
     timestamp: Int,
+  )
+  UpsertFlare(
+    reply_to: process.Subject(Result(Nil, String)),
+    id: String,
+    label: String,
+    status: String,
+    domain: String,
+    thread_id: String,
+    original_prompt: String,
+    execution: String,
+    triggers: String,
+    tools: String,
+    workspace: String,
+    session_id: String,
+    created_at_ms: Int,
+    updated_at_ms: Int,
+  )
+  LoadFlares(
+    reply_to: process.Subject(Result(List(StoredFlare), String)),
+    exclude_archived: Bool,
+  )
+  UpdateFlareStatus(
+    reply_to: process.Subject(Result(Nil, String)),
+    id: String,
+    status: String,
+    updated_at_ms: Int,
+  )
+  UpdateFlareSessionId(
+    reply_to: process.Subject(Result(Nil, String)),
+    id: String,
+    session_id: String,
+    updated_at_ms: Int,
   )
 }
 
@@ -310,6 +361,64 @@ pub fn has_messages(
   })
 }
 
+/// Insert or replace a flare record.
+pub fn upsert_flare(
+  subject: process.Subject(DbMessage),
+  id: String,
+  label: String,
+  status: String,
+  domain: String,
+  thread_id: String,
+  original_prompt: String,
+  execution: String,
+  triggers: String,
+  tools: String,
+  workspace: String,
+  session_id: String,
+  created_at_ms: Int,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 10_000, fn(reply_to) {
+    UpsertFlare(reply_to:, id:, label:, status:, domain:, thread_id:,
+      original_prompt:, execution:, triggers:, tools:, workspace:,
+      session_id:, created_at_ms:, updated_at_ms:)
+  })
+}
+
+/// Load all flares, optionally excluding archived ones.
+pub fn load_flares(
+  subject: process.Subject(DbMessage),
+  exclude_archived: Bool,
+) -> Result(List(StoredFlare), String) {
+  process.call(subject, 10_000, fn(reply_to) {
+    LoadFlares(reply_to:, exclude_archived:)
+  })
+}
+
+/// Update the status of a flare.
+pub fn update_flare_status(
+  subject: process.Subject(DbMessage),
+  id: String,
+  status: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    UpdateFlareStatus(reply_to:, id:, status:, updated_at_ms:)
+  })
+}
+
+/// Update the session_id of a flare.
+pub fn update_flare_session_id(
+  subject: process.Subject(DbMessage),
+  id: String,
+  session_id: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    UpdateFlareSessionId(reply_to:, id:, session_id:, updated_at_ms:)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
@@ -380,6 +489,30 @@ fn handle_message(
 
     AppendMessageFull(reply_to:, conversation_id:, role:, content:, author_id:, author_name:, tool_call_id:, tool_calls:, timestamp:) -> {
       let result = do_append_message_full(state.conn, conversation_id, role, content, author_id, author_name, tool_call_id, tool_calls, timestamp)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    UpsertFlare(reply_to:, id:, label:, status:, domain:, thread_id:, original_prompt:, execution:, triggers:, tools:, workspace:, session_id:, created_at_ms:, updated_at_ms:) -> {
+      let result = do_upsert_flare(state.conn, id, label, status, domain, thread_id, original_prompt, execution, triggers, tools, workspace, session_id, created_at_ms, updated_at_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    LoadFlares(reply_to:, exclude_archived:) -> {
+      let result = do_load_flares(state.conn, exclude_archived)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    UpdateFlareStatus(reply_to:, id:, status:, updated_at_ms:) -> {
+      let result = do_update_flare_status(state.conn, id, status, updated_at_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    UpdateFlareSessionId(reply_to:, id:, session_id:, updated_at_ms:) -> {
+      let result = do_update_flare_session_id(state.conn, id, session_id, updated_at_ms)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -625,6 +758,105 @@ fn do_has_messages(conn: sqlight.Connection) -> Result(Bool, String) {
   }
 }
 
+fn do_upsert_flare(
+  conn: sqlight.Connection,
+  id: String,
+  label: String,
+  status: String,
+  domain: String,
+  thread_id: String,
+  original_prompt: String,
+  execution: String,
+  triggers: String,
+  tools: String,
+  workspace: String,
+  session_id: String,
+  created_at_ms: Int,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "INSERT OR REPLACE INTO flares (id, label, status, domain, thread_id, original_prompt, execution, triggers, tools, workspace, session_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    on: conn,
+    with: [
+      sqlight.text(id),
+      sqlight.text(label),
+      sqlight.text(status),
+      sqlight.text(domain),
+      sqlight.text(thread_id),
+      sqlight.text(original_prompt),
+      sqlight.text(execution),
+      sqlight.text(triggers),
+      sqlight.text(tools),
+      sqlight.text(workspace),
+      sqlight.text(session_id),
+      sqlight.int(created_at_ms),
+      sqlight.int(updated_at_ms),
+    ],
+    expecting: decode.success(Nil),
+  )
+  |> result.map(fn(_) { Nil })
+  |> result.map_error(fn(err) {
+    "Failed to upsert flare: " <> string.inspect(err)
+  })
+}
+
+fn do_load_flares(
+  conn: sqlight.Connection,
+  exclude_archived: Bool,
+) -> Result(List(StoredFlare), String) {
+  let sql = case exclude_archived {
+    True ->
+      "SELECT id, label, status, domain, thread_id, original_prompt, execution, triggers, tools, workspace, session_id, created_at_ms, updated_at_ms FROM flares WHERE status != 'archived' ORDER BY created_at_ms ASC"
+    False ->
+      "SELECT id, label, status, domain, thread_id, original_prompt, execution, triggers, tools, workspace, session_id, created_at_ms, updated_at_ms FROM flares ORDER BY created_at_ms ASC"
+  }
+  sqlight.query(
+    sql,
+    on: conn,
+    with: [],
+    expecting: flare_decoder(),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to load flares: " <> string.inspect(err)
+  })
+}
+
+fn do_update_flare_status(
+  conn: sqlight.Connection,
+  id: String,
+  status: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "UPDATE flares SET status = ?, updated_at_ms = ? WHERE id = ?",
+    on: conn,
+    with: [sqlight.text(status), sqlight.int(updated_at_ms), sqlight.text(id)],
+    expecting: decode.success(Nil),
+  )
+  |> result.map(fn(_) { Nil })
+  |> result.map_error(fn(err) {
+    "Failed to update flare status: " <> string.inspect(err)
+  })
+}
+
+fn do_update_flare_session_id(
+  conn: sqlight.Connection,
+  id: String,
+  session_id: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "UPDATE flares SET session_id = ?, updated_at_ms = ? WHERE id = ?",
+    on: conn,
+    with: [sqlight.text(session_id), sqlight.int(updated_at_ms), sqlight.text(id)],
+    expecting: decode.success(Nil),
+  )
+  |> result.map(fn(_) { Nil })
+  |> result.map_error(fn(err) {
+    "Failed to update flare session_id: " <> string.inspect(err)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Decoders
 // ---------------------------------------------------------------------------
@@ -679,4 +911,35 @@ fn nullable_string_decoder() -> decode.Decoder(String) {
   decode.one_of(decode.string, [
     decode.success(""),
   ])
+}
+
+fn flare_decoder() -> decode.Decoder(StoredFlare) {
+  use id <- decode.field(0, decode.string)
+  use label <- decode.field(1, decode.string)
+  use status <- decode.field(2, decode.string)
+  use domain <- decode.field(3, decode.string)
+  use thread_id <- decode.field(4, decode.string)
+  use original_prompt <- decode.field(5, decode.string)
+  use execution <- decode.field(6, decode.string)
+  use triggers <- decode.field(7, decode.string)
+  use tools <- decode.field(8, decode.string)
+  use workspace <- decode.field(9, decode.optional(decode.string))
+  use session_id <- decode.field(10, decode.optional(decode.string))
+  use created_at_ms <- decode.field(11, decode.int)
+  use updated_at_ms <- decode.field(12, decode.int)
+  decode.success(StoredFlare(
+    id: id,
+    label: label,
+    status: status,
+    domain: domain,
+    thread_id: thread_id,
+    original_prompt: original_prompt,
+    execution: execution,
+    triggers: triggers,
+    tools: tools,
+    workspace: option.unwrap(workspace, ""),
+    session_id: option.unwrap(session_id, ""),
+    created_at_ms: created_at_ms,
+    updated_at_ms: updated_at_ms,
+  ))
 }

@@ -212,3 +212,58 @@ pub fn load_messages_returns_newest_test() {
 
   process.send(subject, db.Shutdown)
 }
+
+pub fn upsert_and_load_flare_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(_) = db.upsert_flare(
+    subject, "f1", "Test flare", "active", "work", "ch1",
+    "Do stuff", "{}", "[]", "[]", "", "", 1000, 1000,
+  )
+  let assert Ok(flares) = db.load_flares(subject, False)
+  list.length(flares) |> should.equal(1)
+  let assert Ok(f) = list.first(flares)
+  f.id |> should.equal("f1")
+  f.label |> should.equal("Test flare")
+  f.status |> should.equal("active")
+}
+
+pub fn load_flares_excludes_archived_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(_) = db.upsert_flare(
+    subject, "f1", "Active", "active", "work", "ch1",
+    "Do stuff", "{}", "[]", "[]", "", "", 1000, 1000,
+  )
+  let assert Ok(_) = db.upsert_flare(
+    subject, "f2", "Archived", "archived", "work", "ch2",
+    "Old stuff", "{}", "[]", "[]", "", "", 1000, 1000,
+  )
+  let assert Ok(all) = db.load_flares(subject, False)
+  list.length(all) |> should.equal(2)
+  let assert Ok(active_only) = db.load_flares(subject, True)
+  list.length(active_only) |> should.equal(1)
+}
+
+pub fn update_flare_status_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(_) = db.upsert_flare(
+    subject, "f1", "Test", "active", "work", "ch1",
+    "Do stuff", "{}", "[]", "[]", "", "", 1000, 1000,
+  )
+  let assert Ok(_) = db.update_flare_status(subject, "f1", "parked", 2000)
+  let assert Ok(flares) = db.load_flares(subject, False)
+  let assert Ok(f) = list.first(flares)
+  f.status |> should.equal("parked")
+  f.updated_at_ms |> should.equal(2000)
+}
+
+pub fn update_flare_session_id_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(_) = db.upsert_flare(
+    subject, "f1", "Test", "active", "work", "ch1",
+    "Do stuff", "{}", "[]", "[]", "", "", 1000, 1000,
+  )
+  let assert Ok(_) = db.update_flare_session_id(subject, "f1", "sess-123", 2000)
+  let assert Ok(flares) = db.load_flares(subject, False)
+  let assert Ok(f) = list.first(flares)
+  f.session_id |> should.equal("sess-123")
+}
