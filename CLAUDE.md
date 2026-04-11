@@ -36,7 +36,7 @@ erlc -o . ../src/esqlite3.erl ../src/esqlite3_nif.erl
 supervisor (OneForOne)
 ├── db          SQLite actor — serializes all DB reads/writes
 ├── poller      Discord gateway WebSocket
-├── acp_manager ACP session lifecycle actor — dispatch, monitor, persist
+├── flare_manager Flare lifecycle actor — roster, dispatch, monitor, SQLite persist
 ├── brain       Routes messages, LLM tool loop, progressive streaming, review
 ├── (domains loaded as context, not actors)
 └── scheduler   Config-driven cron + interval schedules
@@ -110,12 +110,11 @@ src/aura/
     rest.gleam          Discord REST API (send, edit, threads, typing)
     types.gleam         Discord event/embed types
   acp/
-    manager.gleam       ACP session lifecycle actor — dispatch, monitor, state, persistence
+    flare_manager.gleam Flare lifecycle actor — roster, dispatch, monitor, SQLite persistence
     client.gleam        ACP HTTP client (create_run, get_run, cancel, resume, subscribe_events)
     sse.gleam           SSE event stream wrapper for ACP real-time events
-    monitor.gleam       tmux session polling + LLM status classification (legacy fallback)
+    monitor.gleam       Push-based stdio monitor + tmux polling (legacy fallback)
     provider.gleam      Provider-agnostic command builder (legacy tmux path)
-    session_store.gleam JSON file store for session persistence across restarts
     tmux.gleam          tmux session lifecycle (legacy fallback)
     types.gleam         TaskSpec, SessionStatus, AcpReport types
 
