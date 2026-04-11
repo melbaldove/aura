@@ -1,5 +1,6 @@
 import aura/db_schema
 import gleam/dynamic/decode
+import gleam/list
 import gleeunit
 import gleeunit/should
 import sqlight
@@ -64,5 +65,22 @@ pub fn schema_version_is_set_test() {
 
   db_schema.get_version(conn)
   |> should.be_ok
-  |> should.equal(2)
+  |> should.equal(3)
+}
+
+pub fn schema_v3_creates_flares_table_test() {
+  let assert Ok(conn) = sqlight.open(":memory:")
+  let assert Ok(_) = db_schema.initialize(conn)
+  // Verify flares table exists by inserting a row
+  let assert Ok(_) = sqlight.exec(
+    "INSERT INTO flares (id, label, status, domain, thread_id, original_prompt, execution, triggers, tools, created_at_ms, updated_at_ms) VALUES ('test-id', 'test', 'active', 'work', 'ch1', 'do stuff', '{}', '[]', '[]', 1000, 1000)",
+    conn,
+  )
+  let assert Ok(rows) = sqlight.query(
+    "SELECT id FROM flares",
+    on: conn,
+    with: [],
+    expecting: decode.at([0], decode.string),
+  )
+  list.length(rows) |> should.equal(1)
 }

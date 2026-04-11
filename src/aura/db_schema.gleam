@@ -3,7 +3,7 @@ import gleam/result
 import gleam/string
 import sqlight
 
-const current_version = 2
+const current_version = 3
 
 /// Create all tables, indexes, FTS5 virtual table, and triggers if they do not
 /// already exist, then run any pending schema migrations.
@@ -92,6 +92,26 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
     END
   "))
 
+  use _ <- result.try(exec(conn, "
+    CREATE TABLE IF NOT EXISTS flares (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      status TEXT NOT NULL,
+      domain TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      original_prompt TEXT NOT NULL,
+      execution TEXT NOT NULL,
+      triggers TEXT NOT NULL,
+      tools TEXT NOT NULL,
+      workspace TEXT,
+      session_id TEXT,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    )
+  "))
+  use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_flares_status ON flares(status)"))
+  use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_flares_domain ON flares(domain)"))
+
   // Set or migrate schema version
   migrate_version(conn)
 }
@@ -129,6 +149,30 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
           use _ <- result.try(exec(conn, "ALTER TABLE conversations RENAME COLUMN workstream TO domain"))
           use _ <- result.try(exec(conn, "DROP INDEX IF EXISTS idx_conversations_workstream"))
           exec(conn, "CREATE INDEX IF NOT EXISTS idx_conversations_domain ON conversations(domain)")
+        }
+        False -> Ok(Nil)
+      })
+      use _ <- result.try(case v < 3 {
+        True -> {
+          use _ <- result.try(exec(conn, "
+            CREATE TABLE IF NOT EXISTS flares (
+              id TEXT PRIMARY KEY,
+              label TEXT NOT NULL,
+              status TEXT NOT NULL,
+              domain TEXT NOT NULL,
+              thread_id TEXT NOT NULL,
+              original_prompt TEXT NOT NULL,
+              execution TEXT NOT NULL,
+              triggers TEXT NOT NULL,
+              tools TEXT NOT NULL,
+              workspace TEXT,
+              session_id TEXT,
+              created_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            )
+          "))
+          use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_flares_status ON flares(status)"))
+          exec(conn, "CREATE INDEX IF NOT EXISTS idx_flares_domain ON flares(domain)")
         }
         False -> Ok(Nil)
       })
