@@ -119,6 +119,11 @@ pub type FlareMsg {
   // Events
   MonitorEvent(acp_monitor.AcpEvent)
   SetBrainCallback(on_brain_event: fn(acp_monitor.AcpEvent) -> Nil)
+
+  // Query
+  ListParkedWithTriggers(
+    reply_to: process.Subject(List(FlareRecord)),
+  )
 }
 
 type FlareManagerState {
@@ -306,6 +311,15 @@ pub fn rekindle(
   })
 }
 
+/// Return all parked flares that have a non-empty triggers_json.
+pub fn list_parked_with_triggers(
+  subject: process.Subject(FlareMsg),
+) -> List(FlareRecord) {
+  process.call(subject, 5000, fn(reply_to) {
+    ListParkedWithTriggers(reply_to: reply_to)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Actor lifecycle
 // ---------------------------------------------------------------------------
@@ -430,6 +444,17 @@ fn handle_message(
     }
     SetBrainCallback(on_brain_event:) -> {
       actor.continue(FlareManagerState(..state, on_brain_event: on_brain_event))
+    }
+    ListParkedWithTriggers(reply_to:) -> {
+      let parked_with_triggers =
+        dict.values(state.flares)
+        |> list.filter(fn(f) {
+          f.status == Parked
+          && f.triggers_json != ""
+          && f.triggers_json != "[]"
+        })
+      process.send(reply_to, parked_with_triggers)
+      actor.continue(state)
     }
   }
 }

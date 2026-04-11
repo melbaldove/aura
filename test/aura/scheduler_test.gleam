@@ -210,3 +210,33 @@ pub fn is_due_disabled_test() {
   let entry = scheduler.ScheduleEntry(config: config, last_run_ms: 0)
   scheduler.is_due(entry, 1_000_000) |> should.be_false
 }
+
+// ---------------------------------------------------------------------------
+// is_flare_trigger_due
+// ---------------------------------------------------------------------------
+
+pub fn flare_delay_trigger_due_test() {
+  scheduler.is_flare_trigger_due(
+    "{\"type\":\"delay\",\"rekindle_at_ms\":1000}",
+    2000,
+  )
+  |> should.be_true
+}
+
+pub fn flare_delay_trigger_not_due_test() {
+  scheduler.is_flare_trigger_due(
+    "{\"type\":\"delay\",\"rekindle_at_ms\":3000}",
+    2000,
+  )
+  |> should.be_false
+}
+
+pub fn flare_empty_trigger_not_due_test() {
+  scheduler.is_flare_trigger_due("[]", 2000)
+  |> should.be_false
+}
+
+pub fn flare_invalid_trigger_not_due_test() {
+  scheduler.is_flare_trigger_due("not json", 2000)
+  |> should.be_false
+}

@@ -1,3 +1,4 @@
+import aura/acp/flare_manager
 import aura/config
 import aura/cron
 import aura/llm
@@ -11,6 +12,7 @@ import gleam/erlang/process
 import gleam/int
 import gleam/io
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
@@ -47,6 +49,7 @@ pub type SchedulerMessage {
     reply_to: process.Subject(String),
   )
   ReloadSchedules
+  SetFlareSubject(subject: process.Subject(flare_manager.FlareMsg))
 }
 
 pub type SchedulerState {
@@ -54,8 +57,10 @@ pub type SchedulerState {
     entries: List(ScheduleEntry),
     skills: List(skill.SkillInfo),
     on_finding: fn(notification.Finding) -> Nil,
+    on_rekindle: fn(String, String) -> Nil,
     config_path: String,
     self_subject: process.Subject(SchedulerMessage),
+    flare_subject: Option(process.Subject(flare_manager.FlareMsg)),
   )
 }
 
@@ -259,6 +264,62 @@ fn is_due_cron(entry: ScheduleEntry, now_ms: Int) -> Bool {
   }
 }
 
+/// Check if a flare's trigger JSON indicates it's due to fire.
+/// Supports:
+///   {"type":"delay","rekindle_at_ms":TIMESTAMP}
+///   {"type":"schedule","cron":"CRON_EXPR"}
+pub fn is_flare_trigger_due(triggers_json: String, now_ms: Int) -> Bool {
+  case string.contains(triggers_json, "\"delay\"") {
+    True -> {
+      case string.split(triggers_json, "\"rekindle_at_ms\":") {
+        [_, rest] -> {
+          let num_str =
+            string.trim(rest)
+            |> string.replace("}", "")
+            |> string.replace(",", "")
+            |> string.trim
+          case int.parse(num_str) {
+            Ok(ts) -> now_ms >= ts
+            Error(_) -> False
+          }
+        }
+        _ -> False
+      }
+    }
+    False ->
+      case string.contains(triggers_json, "\"schedule\"") {
+        True -> {
+          case string.split(triggers_json, "\"cron\":\"") {
+            [_, rest] -> {
+              case string.split(rest, "\"") {
+                [cron_str, ..] -> {
+                  case cron.parse(cron_str) {
+                    Ok(expr) -> {
+                      let #(minute, hour, day, month, weekday) =
+                        ms_to_time_parts(now_ms)
+                      cron.matches(
+                        expr,
+                        minute: minute,
+                        hour: hour,
+                        day: day,
+                        month: month,
+                        weekday: weekday,
+                      )
+                    }
+                    Error(_) -> False
+                  }
+                }
+                _ -> False
+              }
+            }
+            _ -> False
+          }
+        }
+        False -> False
+      }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -316,6 +377,7 @@ pub fn start(
   config_path: String,
   skills: List(skill.SkillInfo),
   on_finding: fn(notification.Finding) -> Nil,
+  on_rekindle: fn(String, String) -> Nil,
 ) -> Result(process.Subject(SchedulerMessage), String) {
   let toml_content = case simplifile.read(config_path) {
     Ok(content) -> content
@@ -339,8 +401,10 @@ pub fn start(
           entries: entries,
           skills: skills,
           on_finding: on_finding,
+          on_rekindle: on_rekindle,
           config_path: config_path,
           self_subject: subject,
+          flare_subject: None,
         )
 
       // Schedule first tick after 60 seconds
@@ -388,6 +452,20 @@ fn handle_message(
           }
         })
 
+      // Check flare triggers
+      case state.flare_subject {
+        None -> Nil
+        Some(fs) -> {
+          let parked = flare_manager.list_parked_with_triggers(fs)
+          list.each(parked, fn(flare) {
+            case is_flare_trigger_due(flare.triggers_json, now_ms) {
+              True -> state.on_rekindle(flare.id, "Scheduled trigger fired")
+              False -> Nil
+            }
+          })
+        }
+      }
+
       // Schedule next tick in 60 seconds
       process.send_after(state.self_subject, 60_000, Tick)
 
@@ -432,6 +510,10 @@ fn handle_message(
       let #(response, new_state) = handle_manage(state, action, params)
       process.send(reply_to, response)
       actor.continue(new_state)
+    }
+
+    SetFlareSubject(subject:) -> {
+      actor.continue(SchedulerState(..state, flare_subject: Some(subject)))
     }
   }
 }

@@ -191,10 +191,26 @@ pub fn start(
   let on_finding = fn(finding: notification.Finding) {
     process.send(brain_subject, brain.HeartbeatFinding(finding))
   }
-  case scheduler.start(schedules_path, all_skills, on_finding) {
+  let on_rekindle = fn(flare_id: String, context: String) {
+    case flare_manager.rekindle(flare_subject, flare_id, context) {
+      Ok(session_name) ->
+        io.println(
+          "[scheduler] Rekindled flare " <> flare_id <> " -> " <> session_name,
+        )
+      Error(e) ->
+        io.println(
+          "[scheduler] Failed to rekindle " <> flare_id <> ": " <> e,
+        )
+    }
+  }
+  case scheduler.start(schedules_path, all_skills, on_finding, on_rekindle) {
     Ok(scheduler_subject) -> {
       io.println("[supervisor] Scheduler started")
       process.send(brain_subject, brain.SetScheduler(scheduler_subject))
+      process.send(
+        scheduler_subject,
+        scheduler.SetFlareSubject(flare_subject),
+      )
     }
     Error(e) -> {
       io.println("[supervisor] Failed to start scheduler: " <> e)
