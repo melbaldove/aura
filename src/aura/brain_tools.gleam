@@ -1,4 +1,4 @@
-import aura/acp/manager
+import aura/acp/flare_manager
 import aura/acp/provider
 import aura/acp/tmux as acp_tmux
 import aura/acp/types as acp_types
@@ -71,7 +71,7 @@ pub type ToolContext {
     validation_rules: List(validator.Rule),
     db_subject: process.Subject(db.DbMessage),
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
-    acp_subject: process.Subject(manager.AcpMessage),
+    acp_subject: process.Subject(flare_manager.FlareMsg),
     domain_name: String,
     domain_cwd: String,
     acp_provider: String,
@@ -513,25 +513,42 @@ fn execute_tool_dispatch(
                   Ok(m) -> m * 60_000
                   Error(_) -> 30 * 60_000
                 }
-                let task_spec = acp_types.TaskSpec(
-                  id: task_id,
-                  domain: ctx.domain_name,
-                  prompt: prompt,
-                  cwd: cwd,
-                  timeout_ms: timeout_ms,
-                  acceptance_criteria: [],
-                  provider: provider.parse_provider(ctx.acp_provider, ctx.acp_binary),
-                  worktree: ctx.acp_worktree,
-                )
+                let label = string.slice(prompt, 0, 50)
                 let thread_id = ctx.channel_id
-                case manager.dispatch(ctx.acp_subject, task_spec, thread_id) {
-                  Ok(session_name) -> {
-                    let details_msg =
-                      "Flare ignited: " <> session_name
-                      <> "\n\n**Prompt:**\n" <> prompt
-                    TextResult("Flare ignited.\n" <> details_msg)
+                // Create flare record first
+                case flare_manager.ignite(
+                  ctx.acp_subject,
+                  label,
+                  ctx.domain_name,
+                  thread_id,
+                  prompt,
+                  "{}",
+                  "{}",
+                  "{}",
+                  cwd,
+                ) {
+                  Ok(flare_id) -> {
+                    let task_spec = acp_types.TaskSpec(
+                      id: task_id,
+                      domain: ctx.domain_name,
+                      prompt: prompt,
+                      cwd: cwd,
+                      timeout_ms: timeout_ms,
+                      acceptance_criteria: [],
+                      provider: provider.parse_provider(ctx.acp_provider, ctx.acp_binary),
+                      worktree: ctx.acp_worktree,
+                    )
+                    case flare_manager.dispatch(ctx.acp_subject, task_spec, thread_id, flare_id) {
+                      Ok(session_name) -> {
+                        let details_msg =
+                          "Flare ignited: " <> session_name
+                          <> "\n\n**Prompt:**\n" <> prompt
+                        TextResult("Flare ignited.\n" <> details_msg)
+                      }
+                      Error(e) -> TextResult("Error dispatching flare: " <> e)
+                    }
                   }
-                  Error(e) -> TextResult("Error: " <> e)
+                  Error(e) -> TextResult("Error creating flare: " <> e)
                 }
               }
             }
@@ -541,12 +558,12 @@ fn execute_tool_dispatch(
           case require_arg(args, "session_name") {
             Error(e) -> TextResult(e)
             Ok(session_name) -> {
-              case manager.get_session(ctx.acp_subject, session_name) {
-                Ok(session) -> {
-                  let elapsed_ms = time.now_ms() - session.started_at_ms
+              case flare_manager.get_session(ctx.acp_subject, session_name) {
+                Ok(flare) -> {
+                  let elapsed_ms = time.now_ms() - flare.started_at_ms
                   let elapsed_min = elapsed_ms / 60_000
-                  let state_str = " [" <> manager.session_state_to_string(session.state) <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
-                  case session.run_id {
+                  let state_str = " [" <> flare_manager.status_to_string(flare.status) <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
+                  case flare.session_id {
                     "" -> {
                       case acp_tmux.capture_pane(session_name) {
                         Ok(output) -> {
@@ -559,8 +576,8 @@ fn execute_tool_dispatch(
                         Error(_) -> TextResult("Flare: " <> session_name <> state_str <> "\n\n(output not available)")
                       }
                     }
-                    run_id -> {
-                      TextResult("Flare: " <> session_name <> state_str <> "\nRun: " <> run_id <> "\nDomain: " <> session.domain <> "\nPrompt: " <> string.slice(session.prompt, 0, 200))
+                    session_id -> {
+                      TextResult("Flare: " <> session_name <> state_str <> "\nRun: " <> session_id <> "\nDomain: " <> flare.domain <> "\nPrompt: " <> string.slice(flare.original_prompt, 0, 200))
                     }
                   }
                 }
@@ -570,7 +587,7 @@ fn execute_tool_dispatch(
           }
         }
         "list" -> {
-          let sessions = manager.list_sessions(ctx.acp_subject)
+          let sessions = flare_manager.list_sessions(ctx.acp_subject)
           case sessions {
             [] -> TextResult("No active flares.")
             _ -> {
@@ -578,7 +595,7 @@ fn execute_tool_dispatch(
                 let elapsed_ms = time.now_ms() - s.started_at_ms
                 let elapsed_min = elapsed_ms / 60_000
                 s.session_name
-                <> " [" <> manager.session_state_to_string(s.state) <> "]"
+                <> " [" <> flare_manager.status_to_string(s.status) <> "]"
                 <> " domain=" <> s.domain
                 <> " (started " <> int.to_string(elapsed_min) <> "m ago)"
               })
@@ -593,7 +610,7 @@ fn execute_tool_dispatch(
             Ok(session_name) -> case require_arg(args, "prompt") {
               Error(e) -> TextResult(e)
               Ok(message) -> {
-                case manager.send_input(ctx.acp_subject, session_name, message) {
+                case flare_manager.send_input(ctx.acp_subject, session_name, message) {
                   Ok(_) -> TextResult("Sent to " <> session_name)
                   Error(e) -> TextResult("Error: " <> e)
                 }
@@ -605,7 +622,7 @@ fn execute_tool_dispatch(
           case require_arg(args, "session_name") {
             Error(e) -> TextResult(e)
             Ok(session_name) -> {
-              case manager.kill(ctx.acp_subject, session_name) {
+              case flare_manager.kill(ctx.acp_subject, session_name) {
                 Ok(_) -> TextResult("Flare killed: " <> session_name)
                 Error(e) -> TextResult("Error: " <> e)
               }

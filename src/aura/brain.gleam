@@ -1,4 +1,4 @@
-import aura/acp/manager
+import aura/acp/flare_manager
 import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
 import aura/brain_tools
@@ -115,7 +115,7 @@ pub type BrainConfig {
     skill_infos: List(skill.SkillInfo),
     validation_rules: List(validator.Rule),
     db_subject: process.Subject(db.DbMessage),
-    acp_subject: process.Subject(manager.AcpMessage),
+    acp_subject: process.Subject(flare_manager.FlareMsg),
   )
 }
 
@@ -132,7 +132,7 @@ pub type BrainState {
     skill_infos: List(skill.SkillInfo),
     notification_queue: notification.NotificationQueue,
     aura_channel_id: String,
-    acp_subject: process.Subject(manager.AcpMessage),
+    acp_subject: process.Subject(flare_manager.FlareMsg),
     validation_rules: List(validator.Rule),
     skills_dir: String,
     db_subject: process.Subject(db.DbMessage),
@@ -824,10 +824,10 @@ fn handle_acp_event(
       }
 
       let elapsed_str = case
-        manager.get_session(state.acp_subject, session_name)
+        flare_manager.get_session(state.acp_subject, session_name)
       {
-        Ok(session) -> {
-          let elapsed_min = { time.now_ms() - session.started_at_ms } / 60_000
+        Ok(flare) -> {
+          let elapsed_min = { time.now_ms() - flare.started_at_ms } / 60_000
           int.to_string(elapsed_min) <> "m elapsed"
         }
         Error(_) -> ""
@@ -948,10 +948,10 @@ fn handle_acp_event(
 
       // Build elapsed time from session
       let elapsed_str = case
-        manager.get_session(state.acp_subject, session_name)
+        flare_manager.get_session(state.acp_subject, session_name)
       {
-        Ok(session) -> {
-          let elapsed_min = { time.now_ms() - session.started_at_ms } / 60_000
+        Ok(flare) -> {
+          let elapsed_min = { time.now_ms() - flare.started_at_ms } / 60_000
           int.to_string(elapsed_min) <> "m elapsed"
         }
         Error(_) -> ""
@@ -1089,9 +1089,9 @@ fn resolve_acp_channel(
   session_name: String,
   domain: String,
 ) -> String {
-  case manager.get_session(state.acp_subject, session_name) {
-    Ok(session) ->
-      case session.thread_id {
+  case flare_manager.get_session(state.acp_subject, session_name) {
+    Ok(flare) ->
+      case flare.thread_id {
         "" -> resolve_domain_channel(state, domain)
         id -> id
       }
@@ -1461,21 +1461,21 @@ fn handle_with_llm(
 
   // Inject flare context if this message is in a flare thread
   let flare_context = case
-    list.find(manager.list_sessions(state.acp_subject), fn(s) {
+    list.find(flare_manager.list_sessions(state.acp_subject), fn(s) {
       s.thread_id == msg.channel_id
     })
   {
-    Ok(session) -> {
+    Ok(flare) -> {
       "\n\n## Active Flare"
       <> "\nYou are in a flare thread."
       <> "\nSession: "
-      <> session.session_name
+      <> flare.session_name
       <> "\nState: "
-      <> manager.session_state_to_string(session.state)
+      <> flare_manager.status_to_string(flare.status)
       <> "\nDomain: "
-      <> session.domain
+      <> flare.domain
       <> "\nTask: "
-      <> string.slice(session.prompt, 0, 300)
+      <> string.slice(flare.original_prompt, 0, 300)
       <> "\n\nUse flare(action='status', session_name='...') to check progress, flare(action='prompt', ...) to send instructions, flare(action='list') to see all flares."
     }
     Error(_) -> ""

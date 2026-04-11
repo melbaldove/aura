@@ -1,4 +1,4 @@
-import aura/acp/manager
+import aura/acp/flare_manager
 import aura/acp/transport
 import aura/brain
 import aura/config
@@ -147,26 +147,25 @@ pub fn start(
     }
   }
 
-  // 5b. Start ACP manager actor (with placeholder callback — brain not started yet)
-  let acp_store_path = xdg.data_path(paths, "acp-sessions.json")
+  // 5b. Start flare manager actor (with placeholder callback — brain not started yet)
   let acp_transport = transport.parse(
     global_config.acp_transport,
     global_config.acp_server_url,
     global_config.acp_agent_name,
     global_config.acp_command,
   )
-  use acp_subject <- result.try(
-    manager.start(
+  use flare_subject <- result.try(
+    flare_manager.start(
       global_config.acp_global_max_concurrent,
-      acp_store_path,
       global_config.models.monitor,
       fn(_event) { Nil },
       acp_transport,
+      db_subject,
     ),
   )
-  io.println("[supervisor] ACP manager started")
+  io.println("[supervisor] Flare manager started")
 
-  // 6. Start brain (with acp_subject)
+  // 6. Start brain (with flare_subject)
   use brain_subject <- result.try(
     brain.start(brain.BrainConfig(
       global: global_config,
@@ -177,13 +176,13 @@ pub fn start(
       skill_infos: all_skills,
       validation_rules: validation_rules,
       db_subject: db_subject,
-      acp_subject: acp_subject,
+      acp_subject: flare_subject,
     )),
   )
   io.println("[supervisor] Brain started")
 
-  // 6b. Wire ACP events to brain
-  process.send(acp_subject, manager.SetBrainCallback(fn(event) {
+  // 6b. Wire flare events to brain
+  process.send(flare_subject, flare_manager.SetBrainCallback(fn(event) {
     process.send(brain_subject, brain.AcpEvent(event))
   }))
 
