@@ -75,7 +75,7 @@ Two-model pipeline: vision model as preprocessor, orchestrator model for tool lo
 - **Domain** — a knowledge partition representing an area of the user's life (job, project, responsibility). Has its own config, AGENTS.md, anchors, logs, skills, conversation history. One Discord channel per domain.
 - **Conversation** — per-channel message history. In-memory buffer (hot cache) backed by SQLite. Tiered auto-compression: tool pruning at 50%, LLM summarization at 70% of context window.
 - **Skill** — a directory with a SKILL.md and optional CLI entrypoint. Instruction-only skills teach the LLM; external skills are invoked as subprocesses.
-- **Tool** — primitive operation the LLM can call. 16 built-in tools (filesystem, Discord, skills, memory, search, web, schedules).
+- **Tool** — primitive operation the LLM can call. 12 built-in tools (filesystem, Discord, skills, memory, search, web, schedules).
 - **Schedule** — a config-driven periodic task defined in `schedules.toml`. Supports fixed intervals ("15m") and cron expressions ("0 9 * * *"). Each schedule invokes a skill, classifies urgency via LLM, and emits findings.
 
 ## Source layout
@@ -164,7 +164,7 @@ src/
 
 ### Tool system
 
-- 16 built-in tools defined in `brain.gleam:make_built_in_tools()`
+- 12 built-in tools defined in `brain.gleam:make_built_in_tools()`
 - Tools are static — constructed once at brain startup, stored in `BrainState.built_in_tools`
 - Skill-based tools invoked via `run_skill` tool → subprocess
 - New tools: add definition to `make_built_in_tools()`, add execution case to `execute_tool()`

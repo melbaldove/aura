@@ -1499,15 +1499,15 @@ fn handle_with_llm(
 
   let system_prompt = system_prompt <> domain_prompt <> fs_section
 
-  // Inject ACP session context if this message is in an ACP thread
-  let acp_context = case
+  // Inject flare context if this message is in a flare thread
+  let flare_context = case
     list.find(manager.list_sessions(state.acp_subject), fn(s) {
       s.thread_id == msg.channel_id
     })
   {
     Ok(session) -> {
-      "\n\n## Active ACP Session"
-      <> "\nYou are in an ACP session thread."
+      "\n\n## Active Flare"
+      <> "\nYou are in a flare thread."
       <> "\nSession: "
       <> session.session_name
       <> "\nState: "
@@ -1516,11 +1516,11 @@ fn handle_with_llm(
       <> session.domain
       <> "\nTask: "
       <> string.slice(session.prompt, 0, 300)
-      <> "\n\nUse acp_status to check progress, acp_prompt to send instructions, acp_list to see all sessions."
+      <> "\n\nUse flare(action='status', session_name='...') to check progress, flare(action='prompt', ...) to send instructions, flare(action='list') to see all flares."
     }
     Error(_) -> ""
   }
-  let system_prompt = system_prompt <> acp_context
+  let system_prompt = system_prompt <> flare_context
 
   // Vision preprocessing — describe attached images before tool loop
   let enriched_content = preprocess_attachments(state, msg, domain_name)
