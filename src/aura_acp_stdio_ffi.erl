@@ -1,5 +1,5 @@
 -module(aura_acp_stdio_ffi).
--export([start_session/4, send_input/3, close_session/1, receive_event/1]).
+-export([start_session/4, start_session_resume/5, send_input/3, close_session/1, receive_event/1]).
 
 %% Exported for testing — pure functions only
 -export([jsx_encode/1, json_escape/1, extract_field/2, extract_session_id/1,
@@ -23,6 +23,24 @@ start_session(Command, Cwd, Prompt, EventPid) ->
         session_init(binary_to_list(Command), Cwd, Prompt, EventPid, Self)
     end),
     %% Wait for handshake result from the owner process
+    receive
+        {handshake_ok, OwnerPid, SessionId} ->
+            {ok, {OwnerPid, SessionId}};
+        {handshake_error, OwnerPid, Reason} ->
+            {error, Reason}
+    after 30000 ->
+        exit(OwnerPid, kill),
+        {error, <<"Handshake timeout">>}
+    end.
+
+%% start_session_resume/5 — Like start_session but with --resume flag
+%% Resumes a previous Claude Code session by appending --resume SessionId to the command.
+start_session_resume(Command, Cwd, ResumeSessionId, Prompt, EventPid) ->
+    Self = self(),
+    OwnerPid = spawn_link(fun() ->
+        ResumeCmd = binary_to_list(iolist_to_binary([Command, <<" --resume ">>, ResumeSessionId])),
+        session_init(ResumeCmd, Cwd, Prompt, EventPid, Self)
+    end),
     receive
         {handshake_ok, OwnerPid, SessionId} ->
             {ok, {OwnerPid, SessionId}};

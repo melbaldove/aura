@@ -34,6 +34,27 @@ fn start_session_ffi(
   event_pid: process.Pid,
 ) -> Result(#(SessionOwner, String), String)
 
+/// Start a stdio ACP session resuming a previous conversation.
+/// The --resume flag tells Claude Code to load the previous session's context.
+pub fn start_session_resume(
+  command: String,
+  cwd: String,
+  resume_session_id: String,
+  prompt: String,
+) -> Result(#(SessionOwner, String), String) {
+  let self_pid = process.self()
+  start_session_resume_ffi(command, cwd, resume_session_id, prompt, self_pid)
+}
+
+@external(erlang, "aura_acp_stdio_ffi", "start_session_resume")
+fn start_session_resume_ffi(
+  command: String,
+  cwd: String,
+  resume_session_id: String,
+  prompt: String,
+  event_pid: process.Pid,
+) -> Result(#(SessionOwner, String), String)
+
 /// Send input to a running session (subsequent prompt).
 pub fn send_input(
   owner: SessionOwner,
