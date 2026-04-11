@@ -629,7 +629,44 @@ fn execute_tool_dispatch(
             }
           }
         }
-        unknown -> TextResult("Unknown flare action: " <> unknown <> ". Use: ignite, status, list, prompt, kill")
+        "park" -> {
+          case require_arg(args, "session_name") {
+            Error(e) -> TextResult(e)
+            Ok(session_name) -> {
+              case flare_manager.get_session(ctx.acp_subject, session_name) {
+                Ok(flare) -> {
+                  let triggers = get_arg(args, "triggers")
+                  case flare_manager.park(ctx.acp_subject, flare.id, triggers) {
+                    Ok(_) -> TextResult("Flare parked: " <> flare.label)
+                    Error(e) -> TextResult("Error: " <> e)
+                  }
+                }
+                Error(_) -> TextResult("Flare not found: " <> session_name)
+              }
+            }
+          }
+        }
+        "rekindle" -> {
+          case require_arg(args, "session_name") {
+            Error(e) -> TextResult(e)
+            Ok(session_name) -> {
+              case flare_manager.get_session(ctx.acp_subject, session_name) {
+                Ok(flare) -> {
+                  let input = get_arg(args, "prompt")
+                  case input {
+                    "" -> TextResult("Error: prompt is required for rekindle")
+                    _ -> case flare_manager.rekindle(ctx.acp_subject, flare.id, input) {
+                      Ok(new_session) -> TextResult("Flare rekindled: " <> new_session)
+                      Error(e) -> TextResult("Error: " <> e)
+                    }
+                  }
+                }
+                Error(_) -> TextResult("Flare not found: " <> session_name)
+              }
+            }
+          }
+        }
+        unknown -> TextResult("Unknown flare action: " <> unknown <> ". Use: ignite, status, list, prompt, kill, park, rekindle")
       }
     }
     _ -> {
@@ -1066,12 +1103,12 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "flare",
-      description: "Extend yourself to work on a task. Flares are persistent — they can be parked and rekindled later. Actions: ignite (start new), status (check progress), list (show all), prompt (send follow-up), kill (terminate).",
+      description: "Extend yourself to work on a task. Flares are persistent — they can be parked and rekindled later. Actions: ignite (start new), status (check progress), list (show all), prompt (send follow-up), kill (terminate), park (suspend with triggers), rekindle (resume parked flare).",
       parameters: [
         llm.ToolParam(
           name: "action",
           param_type: "string",
-          description: "One of: ignite, status, list, prompt, kill",
+          description: "One of: ignite, status, list, prompt, kill, park, rekindle",
           required: True,
         ),
         llm.ToolParam(
@@ -1096,6 +1133,12 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "timeout_minutes",
           param_type: "string",
           description: "For ignite: max duration in minutes (default 30).",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "triggers",
+          param_type: "string",
+          description: "For park: JSON trigger config, e.g. '{\"type\":\"delay\",\"rekindle_at_ms\":1234567890}'",
           required: False,
         ),
       ],

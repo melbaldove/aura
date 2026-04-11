@@ -104,6 +104,18 @@ pub type FlareMsg {
     reply_to: process.Subject(List(FlareRecord)),
   )
 
+  // Lifecycle operations
+  Park(
+    reply_to: process.Subject(Result(Nil, String)),
+    flare_id: String,
+    triggers_json: String,
+  )
+  Rekindle(
+    reply_to: process.Subject(Result(String, String)),
+    flare_id: String,
+    input: String,
+  )
+
   // Events
   MonitorEvent(acp_monitor.AcpEvent)
   SetBrainCallback(on_brain_event: fn(acp_monitor.AcpEvent) -> Nil)
@@ -274,6 +286,26 @@ pub fn list_flares(
   })
 }
 
+pub fn park(
+  subject: process.Subject(FlareMsg),
+  flare_id: String,
+  triggers_json: String,
+) -> Result(Nil, String) {
+  process.call(subject, 10_000, fn(reply_to) {
+    Park(reply_to: reply_to, flare_id: flare_id, triggers_json: triggers_json)
+  })
+}
+
+pub fn rekindle(
+  subject: process.Subject(FlareMsg),
+  flare_id: String,
+  input: String,
+) -> Result(String, String) {
+  process.call(subject, 30_000, fn(reply_to) {
+    Rekindle(reply_to: reply_to, flare_id: flare_id, input: input)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Actor lifecycle
 // ---------------------------------------------------------------------------
@@ -381,6 +413,16 @@ fn handle_message(
         |> list.filter(fn(f) { f.session_name != "" })
       process.send(reply_to, active)
       actor.continue(state)
+    }
+    Park(reply_to:, flare_id:, triggers_json:) -> {
+      let #(new_state, result) = handle_park(state, flare_id, triggers_json)
+      process.send(reply_to, result)
+      actor.continue(new_state)
+    }
+    Rekindle(reply_to:, flare_id:, input:) -> {
+      let #(new_state, result) = handle_rekindle(state, flare_id, input)
+      process.send(reply_to, result)
+      actor.continue(new_state)
     }
     MonitorEvent(event) -> {
       let new_state = handle_monitor_event(state, event)
@@ -677,6 +719,229 @@ fn handle_send_input(
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Park — suspend a flare, kill its session, persist triggers
+// ---------------------------------------------------------------------------
+
+fn handle_park(
+  state: FlareManagerState,
+  flare_id: String,
+  triggers_json: String,
+) -> #(FlareManagerState, Result(Nil, String)) {
+  case dict.get(state.flares, flare_id) {
+    Error(_) -> #(state, Error("Flare not found: " <> flare_id))
+    Ok(flare) -> {
+      // Kill the transport session if active
+      case flare.session_name {
+        "" -> Nil
+        session_name -> {
+          let handle = option.unwrap(flare.handle, transport.TmuxHandle)
+          case transport.kill(state.transport, handle, session_name) {
+            Ok(_) -> Nil
+            Error(e) ->
+              io.println(
+                "[flare] Kill failed during park for "
+                <> session_name
+                <> ": "
+                <> e,
+              )
+          }
+        }
+      }
+
+      let now = time.now_ms()
+      let updated =
+        FlareRecord(
+          ..flare,
+          status: Parked,
+          triggers_json: triggers_json,
+          handle: None,
+          session_name: "",
+          updated_at_ms: now,
+        )
+
+      // Full upsert to persist triggers and status
+      let stored = flare_to_stored(updated)
+      case db.upsert_flare(state.db_subject, stored) {
+        Ok(_) -> Nil
+        Error(e) -> io.println("[flare] Failed to persist park: " <> e)
+      }
+
+      let new_flares = dict.insert(state.flares, flare_id, updated)
+      let new_session_to_flare = case flare.session_name {
+        "" -> state.session_to_flare
+        sn -> dict.delete(state.session_to_flare, sn)
+      }
+      let new_state =
+        FlareManagerState(
+          ..state,
+          flares: new_flares,
+          session_to_flare: new_session_to_flare,
+        )
+      io.println("[flare] Parked: " <> flare_id)
+      #(new_state, Ok(Nil))
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rekindle — resume a parked/failed flare with a new prompt
+// ---------------------------------------------------------------------------
+
+fn handle_rekindle(
+  state: FlareManagerState,
+  flare_id: String,
+  input: String,
+) -> #(FlareManagerState, Result(String, String)) {
+  case dict.get(state.flares, flare_id) {
+    Error(_) -> #(state, Error("Flare not found: " <> flare_id))
+    Ok(flare) -> {
+      // Guard: must not be Active already
+      case flare.status {
+        Active -> #(state, Error("Flare is already active: " <> flare_id))
+        _ -> {
+          // Check concurrency limit
+          let active_count =
+            dict.values(state.flares)
+            |> list.filter(fn(f) { f.session_name != "" && f.status == Active })
+            |> list.length
+          case active_count < state.max_concurrent {
+            False -> #(
+              state,
+              Error(
+                "ACP concurrency limit reached ("
+                <> int.to_string(state.max_concurrent)
+                <> ")",
+              ),
+            )
+            True -> {
+              let cwd = case flare.workspace {
+                "" -> "."
+                ws -> ws
+              }
+              let task_spec =
+                types.TaskSpec(
+                  id: flare.id,
+                  domain: flare.domain,
+                  prompt: input,
+                  cwd: cwd,
+                  timeout_ms: 30 * 60_000,
+                  acceptance_criteria: [],
+                  provider: provider.ClaudeCode,
+                  worktree: True,
+                )
+              let session_name =
+                tmux.build_session_name(flare.domain, flare.id)
+
+              let on_event = fn(event) {
+                process.send(state.self_subject, MonitorEvent(event))
+              }
+
+              // Use resume dispatch if we have a previous session_id (Stdio transport)
+              let dispatch_result = case flare.session_id, state.transport {
+                sid, transport.Stdio(command) if sid != "" ->
+                  transport.dispatch_stdio_resume(
+                    command,
+                    session_name,
+                    task_spec,
+                    sid,
+                    input,
+                    state.monitor_model,
+                    on_event,
+                  )
+                _, _ ->
+                  transport.dispatch(
+                    state.transport,
+                    session_name,
+                    task_spec,
+                    state.monitor_model,
+                    on_event,
+                  )
+              }
+
+              case dispatch_result {
+                Ok(result) -> {
+                  let now = time.now_ms()
+                  let updated_flare =
+                    FlareRecord(
+                      ..flare,
+                      session_name: session_name,
+                      session_id: result.run_id,
+                      handle: Some(result.handle),
+                      status: Active,
+                      updated_at_ms: now,
+                    )
+
+                  case db.update_flare_session_id(state.db_subject, flare_id, result.run_id, now) {
+                    Ok(_) -> Nil
+                    Error(e) ->
+                      io.println("[flare] Failed to persist rekindle session: " <> e)
+                  }
+                  case db.update_flare_status(state.db_subject, flare_id, status_to_string(Active), now) {
+                    Ok(_) -> Nil
+                    Error(e) ->
+                      io.println("[flare] Failed to persist rekindle status: " <> e)
+                  }
+
+                  let new_flares =
+                    dict.insert(state.flares, flare_id, updated_flare)
+                  let new_session_to_flare =
+                    dict.insert(state.session_to_flare, session_name, flare_id)
+                  let new_state =
+                    FlareManagerState(
+                      ..state,
+                      flares: new_flares,
+                      session_to_flare: new_session_to_flare,
+                    )
+                  io.println(
+                    "[flare] Rekindled: "
+                    <> flare_id
+                    <> " -> "
+                    <> session_name,
+                  )
+                  #(new_state, Ok(session_name))
+                }
+                Error(err) -> {
+                  io.println(
+                    "[flare] Rekindle dispatch failed for "
+                    <> flare_id
+                    <> ": "
+                    <> err,
+                  )
+                  #(state, Error(err))
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — FlareRecord to StoredFlare conversion
+// ---------------------------------------------------------------------------
+
+/// Convert a FlareRecord to a db.StoredFlare for upsert.
+fn flare_to_stored(flare: FlareRecord) -> db.StoredFlare {
+  db.StoredFlare(
+    id: flare.id,
+    label: flare.label,
+    status: status_to_string(flare.status),
+    domain: flare.domain,
+    thread_id: flare.thread_id,
+    original_prompt: flare.original_prompt,
+    execution: flare.execution_json,
+    triggers: flare.triggers_json,
+    tools: flare.tools_json,
+    workspace: flare.workspace,
+    session_id: flare.session_id,
+    created_at_ms: flare.started_at_ms,
+    updated_at_ms: flare.updated_at_ms,
+  )
 }
 
 // ---------------------------------------------------------------------------
