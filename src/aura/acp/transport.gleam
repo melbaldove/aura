@@ -324,7 +324,7 @@ fn dispatch_http(
 }
 
 /// Receive SSE events and translate them to AcpEvents.
-fn http_event_loop(
+pub fn http_event_loop(
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
   session_name: String,
   domain: String,

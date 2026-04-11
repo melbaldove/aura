@@ -1,7 +1,6 @@
 import aura/acp/client
 import aura/acp/monitor as acp_monitor
 import aura/acp/provider
-import aura/acp/sse
 import aura/acp/tmux
 import aura/acp/transport
 import aura/acp/types
@@ -288,7 +287,6 @@ pub fn start(
 ) -> Result(process.Subject(FlareMsg), String) {
   let builder =
     actor.new_with_initialiser(10_000, fn(self_subject) {
-      // Recovery: load flares from SQLite, check liveness
       let #(flares, session_to_flare) =
         recover_flares(self_subject, monitor_model, on_brain_event, acp_transport, db_subject)
 
@@ -431,25 +429,22 @@ fn handle_ignite(
       updated_at_ms: now,
     )
 
-  // Persist to SQLite
-  case
-    db.upsert_flare(
-      state.db_subject,
-      flare_id,
-      label,
-      status_to_string(Active),
-      domain,
-      thread_id,
-      prompt,
-      execution_json,
-      triggers_json,
-      tools_json,
-      workspace,
-      "",
-      now,
-      now,
-    )
-  {
+  let stored = db.StoredFlare(
+    id: flare_id,
+    label: label,
+    status: status_to_string(flare.status),
+    domain: domain,
+    thread_id: thread_id,
+    original_prompt: prompt,
+    execution: execution_json,
+    triggers: triggers_json,
+    tools: tools_json,
+    workspace: workspace,
+    session_id: "",
+    created_at_ms: now,
+    updated_at_ms: now,
+  )
+  case db.upsert_flare(state.db_subject, stored) {
     Ok(_) -> {
       let new_flares = dict.insert(state.flares, flare_id, flare)
       let new_state = FlareManagerState(..state, flares: new_flares)
@@ -477,7 +472,6 @@ fn handle_archive(
       let now = time.now_ms()
       let updated = FlareRecord(..flare, status: Archived, updated_at_ms: now)
 
-      // Kill any active session
       case flare.session_name {
         "" -> Nil
         session_name -> {
@@ -492,7 +486,6 @@ fn handle_archive(
         }
       }
 
-      // Persist status change
       case db.update_flare_status(state.db_subject, flare_id, status_to_string(Archived), now) {
         Ok(_) -> Nil
         Error(e) -> io.println("[flare] Failed to persist archive: " <> e)
@@ -573,7 +566,6 @@ fn handle_dispatch(
                   updated_at_ms: now,
                 )
 
-              // Persist session link
               case db.update_flare_session_id(state.db_subject, flare_id, result.run_id, now) {
                 Ok(_) -> Nil
                 Error(e) ->
@@ -765,7 +757,6 @@ fn update_flare_status(
       let updated =
         FlareRecord(..flare, status: new_status, updated_at_ms: now)
 
-      // Persist
       case db.update_flare_status(state.db_subject, flare_id, status_to_string(new_status), now) {
         Ok(_) -> Nil
         Error(e) ->
@@ -869,12 +860,12 @@ fn recover_single_flare(
   sf: db.StoredFlare,
   self_subject: process.Subject(FlareMsg),
   monitor_model: String,
-  on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
+  _on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
   acp_transport: transport.Transport,
   db_subject: process.Subject(db.DbMessage),
 ) -> #(FlareRecord, String) {
   let stored_status = status_from_string(sf.status)
-  let session_name = build_session_name_from_stored(sf)
+  let session_name = tmux.build_session_name(sf.domain, sf.id)
 
   case stored_status {
     Active -> {
@@ -913,11 +904,6 @@ fn recover_single_flare(
             Error(e) ->
               io.println("[flare] Failed to persist parked status: " <> e)
           }
-          on_brain_event(acp_monitor.AcpFailed(
-            session_name,
-            sf.domain,
-            "session disappeared during restart",
-          ))
           let flare = stored_flare_to_record(sf, Parked, "", None)
           #(flare, "")
         }
@@ -940,15 +926,6 @@ fn recover_single_flare(
       let flare = stored_flare_to_record(sf, Archived, "", None)
       #(flare, "")
     }
-  }
-}
-
-/// Reconstruct a session_name from stored flare data.
-/// Uses the same naming convention as dispatch.
-fn build_session_name_from_stored(sf: db.StoredFlare) -> String {
-  case sf.session_id {
-    "" -> "acp-" <> sf.domain <> "-" <> sf.id
-    _ -> "acp-" <> sf.domain <> "-" <> sf.id
   }
 }
 
@@ -1029,7 +1006,7 @@ fn reattach_monitor(
         process.spawn_unlinked(fn() {
           client.subscribe_events(server_url, run_id, self_pid)
         })
-        http_recovery_event_loop(on_event, session_name, domain, run_id, server_url)
+        transport.http_event_loop(on_event, session_name, domain, run_id, server_url)
       })
       Nil
     }
@@ -1045,101 +1022,3 @@ fn provider_from_domain() -> provider.AcpProvider {
   provider.ClaudeCode
 }
 
-// ---------------------------------------------------------------------------
-// HTTP recovery event loop (same pattern as manager.gleam)
-// ---------------------------------------------------------------------------
-
-fn http_recovery_event_loop(
-  on_event: fn(acp_monitor.AcpEvent) -> Nil,
-  session_name: String,
-  domain: String,
-  run_id: String,
-  server_url: String,
-) -> Nil {
-  case sse.receive_event(300_000) {
-    sse.Event(event_type, data) -> {
-      case event_type {
-        "run.in-progress" ->
-          on_event(acp_monitor.AcpStarted(session_name, domain, run_id))
-        "run.awaiting" ->
-          on_event(
-            acp_monitor.AcpAlert(
-              session_name,
-              domain,
-              types.Blocked,
-              "Agent awaiting input",
-            ),
-          )
-        "run.completed" ->
-          on_event(
-            acp_monitor.AcpCompleted(
-              session_name,
-              domain,
-              types.AcpReport(
-                outcome: types.Clean,
-                files_changed: [],
-                decisions: "",
-                tests: "",
-                blockers: "",
-                anchor: data,
-              ),
-              data,
-            ),
-          )
-        "run.failed" ->
-          on_event(acp_monitor.AcpFailed(session_name, domain, data))
-        "run.cancelled" ->
-          on_event(acp_monitor.AcpFailed(session_name, domain, "cancelled"))
-        "message.part" ->
-          on_event(
-            acp_monitor.AcpProgress(session_name, domain, "", "", data, False),
-          )
-        _ -> Nil
-      }
-      case event_type {
-        "run.completed" | "run.failed" | "run.cancelled" -> Nil
-        _ ->
-          http_recovery_event_loop(
-            on_event,
-            session_name,
-            domain,
-            run_id,
-            server_url,
-          )
-      }
-    }
-    sse.Error(reason) -> {
-      io.println("[acp-sse] Error for " <> session_name <> ": " <> reason)
-      process.sleep(5000)
-      let self_pid = process.self()
-      process.spawn_unlinked(fn() {
-        client.subscribe_events(server_url, run_id, self_pid)
-      })
-      http_recovery_event_loop(
-        on_event,
-        session_name,
-        domain,
-        run_id,
-        server_url,
-      )
-    }
-    sse.Done -> {
-      io.println("[acp-sse] Stream ended for " <> session_name)
-      Nil
-    }
-    sse.Timeout -> {
-      io.println("[acp-sse] Timeout for " <> session_name <> ", reconnecting")
-      let self_pid = process.self()
-      process.spawn_unlinked(fn() {
-        client.subscribe_events(server_url, run_id, self_pid)
-      })
-      http_recovery_event_loop(
-        on_event,
-        session_name,
-        domain,
-        run_id,
-        server_url,
-      )
-    }
-  }
-}

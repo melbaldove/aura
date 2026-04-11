@@ -216,8 +216,8 @@ pub fn load_messages_returns_newest_test() {
 pub fn upsert_and_load_flare_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(_) = db.upsert_flare(
-    subject, "f1", "Test flare", "active", "work", "ch1",
-    "Do stuff", "{}", "[]", "[]", "", "", 1000, 1000,
+    subject,
+    db.StoredFlare(id: "f1", label: "Test flare", status: "active", domain: "work", thread_id: "ch1", original_prompt: "Do stuff", execution: "{}", triggers: "[]", tools: "[]", workspace: "", session_id: "", created_at_ms: 1000, updated_at_ms: 1000),
   )
   let assert Ok(flares) = db.load_flares(subject, False)
   list.length(flares) |> should.equal(1)
@@ -230,12 +230,12 @@ pub fn upsert_and_load_flare_test() {
 pub fn load_flares_excludes_archived_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(_) = db.upsert_flare(
-    subject, "f1", "Active", "active", "work", "ch1",
-    "Do stuff", "{}", "[]", "[]", "", "", 1000, 1000,
+    subject,
+    db.StoredFlare(id: "f1", label: "Active", status: "active", domain: "work", thread_id: "ch1", original_prompt: "Do stuff", execution: "{}", triggers: "[]", tools: "[]", workspace: "", session_id: "", created_at_ms: 1000, updated_at_ms: 1000),
   )
   let assert Ok(_) = db.upsert_flare(
-    subject, "f2", "Archived", "archived", "work", "ch2",
-    "Old stuff", "{}", "[]", "[]", "", "", 1000, 1000,
+    subject,
+    db.StoredFlare(id: "f2", label: "Archived", status: "archived", domain: "work", thread_id: "ch2", original_prompt: "Old stuff", execution: "{}", triggers: "[]", tools: "[]", workspace: "", session_id: "", created_at_ms: 1000, updated_at_ms: 1000),
   )
   let assert Ok(all) = db.load_flares(subject, False)
   list.length(all) |> should.equal(2)
@@ -246,8 +246,8 @@ pub fn load_flares_excludes_archived_test() {
 pub fn update_flare_status_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(_) = db.upsert_flare(
-    subject, "f1", "Test", "active", "work", "ch1",
-    "Do stuff", "{}", "[]", "[]", "", "", 1000, 1000,
+    subject,
+    db.StoredFlare(id: "f1", label: "Test", status: "active", domain: "work", thread_id: "ch1", original_prompt: "Do stuff", execution: "{}", triggers: "[]", tools: "[]", workspace: "", session_id: "", created_at_ms: 1000, updated_at_ms: 1000),
   )
   let assert Ok(_) = db.update_flare_status(subject, "f1", "parked", 2000)
   let assert Ok(flares) = db.load_flares(subject, False)
@@ -259,8 +259,8 @@ pub fn update_flare_status_test() {
 pub fn update_flare_session_id_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(_) = db.upsert_flare(
-    subject, "f1", "Test", "active", "work", "ch1",
-    "Do stuff", "{}", "[]", "[]", "", "", 1000, 1000,
+    subject,
+    db.StoredFlare(id: "f1", label: "Test", status: "active", domain: "work", thread_id: "ch1", original_prompt: "Do stuff", execution: "{}", triggers: "[]", tools: "[]", workspace: "", session_id: "", created_at_ms: 1000, updated_at_ms: 1000),
   )
   let assert Ok(_) = db.update_flare_session_id(subject, "f1", "sess-123", 2000)
   let assert Ok(flares) = db.load_flares(subject, False)

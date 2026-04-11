@@ -1,7 +1,6 @@
 import aura/db_schema
 import gleam/dynamic/decode
 import gleam/erlang/process
-import gleam/option
 import gleam/otp/actor
 import gleam/result
 import gleam/string
@@ -127,19 +126,7 @@ pub type DbMessage {
   )
   UpsertFlare(
     reply_to: process.Subject(Result(Nil, String)),
-    id: String,
-    label: String,
-    status: String,
-    domain: String,
-    thread_id: String,
-    original_prompt: String,
-    execution: String,
-    triggers: String,
-    tools: String,
-    workspace: String,
-    session_id: String,
-    created_at_ms: Int,
-    updated_at_ms: Int,
+    stored: StoredFlare,
   )
   LoadFlares(
     reply_to: process.Subject(Result(List(StoredFlare), String)),
@@ -364,24 +351,10 @@ pub fn has_messages(
 /// Insert or replace a flare record.
 pub fn upsert_flare(
   subject: process.Subject(DbMessage),
-  id: String,
-  label: String,
-  status: String,
-  domain: String,
-  thread_id: String,
-  original_prompt: String,
-  execution: String,
-  triggers: String,
-  tools: String,
-  workspace: String,
-  session_id: String,
-  created_at_ms: Int,
-  updated_at_ms: Int,
+  stored: StoredFlare,
 ) -> Result(Nil, String) {
   process.call(subject, 10_000, fn(reply_to) {
-    UpsertFlare(reply_to:, id:, label:, status:, domain:, thread_id:,
-      original_prompt:, execution:, triggers:, tools:, workspace:,
-      session_id:, created_at_ms:, updated_at_ms:)
+    UpsertFlare(reply_to:, stored:)
   })
 }
 
@@ -493,8 +466,8 @@ fn handle_message(
       actor.continue(state)
     }
 
-    UpsertFlare(reply_to:, id:, label:, status:, domain:, thread_id:, original_prompt:, execution:, triggers:, tools:, workspace:, session_id:, created_at_ms:, updated_at_ms:) -> {
-      let result = do_upsert_flare(state.conn, id, label, status, domain, thread_id, original_prompt, execution, triggers, tools, workspace, session_id, created_at_ms, updated_at_ms)
+    UpsertFlare(reply_to:, stored:) -> {
+      let result = do_upsert_flare(state.conn, stored)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -760,37 +733,25 @@ fn do_has_messages(conn: sqlight.Connection) -> Result(Bool, String) {
 
 fn do_upsert_flare(
   conn: sqlight.Connection,
-  id: String,
-  label: String,
-  status: String,
-  domain: String,
-  thread_id: String,
-  original_prompt: String,
-  execution: String,
-  triggers: String,
-  tools: String,
-  workspace: String,
-  session_id: String,
-  created_at_ms: Int,
-  updated_at_ms: Int,
+  stored: StoredFlare,
 ) -> Result(Nil, String) {
   sqlight.query(
     "INSERT OR REPLACE INTO flares (id, label, status, domain, thread_id, original_prompt, execution, triggers, tools, workspace, session_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     on: conn,
     with: [
-      sqlight.text(id),
-      sqlight.text(label),
-      sqlight.text(status),
-      sqlight.text(domain),
-      sqlight.text(thread_id),
-      sqlight.text(original_prompt),
-      sqlight.text(execution),
-      sqlight.text(triggers),
-      sqlight.text(tools),
-      sqlight.text(workspace),
-      sqlight.text(session_id),
-      sqlight.int(created_at_ms),
-      sqlight.int(updated_at_ms),
+      sqlight.text(stored.id),
+      sqlight.text(stored.label),
+      sqlight.text(stored.status),
+      sqlight.text(stored.domain),
+      sqlight.text(stored.thread_id),
+      sqlight.text(stored.original_prompt),
+      sqlight.text(stored.execution),
+      sqlight.text(stored.triggers),
+      sqlight.text(stored.tools),
+      sqlight.text(stored.workspace),
+      sqlight.text(stored.session_id),
+      sqlight.int(stored.created_at_ms),
+      sqlight.int(stored.updated_at_ms),
     ],
     expecting: decode.success(Nil),
   )
@@ -923,8 +884,8 @@ fn flare_decoder() -> decode.Decoder(StoredFlare) {
   use execution <- decode.field(6, decode.string)
   use triggers <- decode.field(7, decode.string)
   use tools <- decode.field(8, decode.string)
-  use workspace <- decode.field(9, decode.optional(decode.string))
-  use session_id <- decode.field(10, decode.optional(decode.string))
+  use workspace <- decode.field(9, nullable_string_decoder())
+  use session_id <- decode.field(10, nullable_string_decoder())
   use created_at_ms <- decode.field(11, decode.int)
   use updated_at_ms <- decode.field(12, decode.int)
   decode.success(StoredFlare(
@@ -937,8 +898,8 @@ fn flare_decoder() -> decode.Decoder(StoredFlare) {
     execution: execution,
     triggers: triggers,
     tools: tools,
-    workspace: option.unwrap(workspace, ""),
-    session_id: option.unwrap(session_id, ""),
+    workspace: workspace,
+    session_id: session_id,
     created_at_ms: created_at_ms,
     updated_at_ms: updated_at_ms,
   ))
