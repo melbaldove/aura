@@ -56,6 +56,7 @@ Properties that must hold at all times. Violations are bugs.
 4. **An ACP session is always in exactly one state.** States: `starting` → `running` → `failed | timed_out`. Completion is declared by the user, not the system. Every transition emits an event to Discord. No session exists without a state. No session changes state without notification.
 5. **A session that stops is always accounted for.** If a tmux session disappears, the monitor detects it and reports why — completed with report, failed without report, or timed out. No silent disappearances.
 6. **One session per dispatch.** A dispatch creates exactly one tmux session and one monitor actor. The monitor dies when the session ends. No orphaned monitors, no zombie sessions.
+7. **Handback is never silent.** When an ACP session completes with `end_turn`, the brain always processes the result through the tool loop. If the tool loop fails, the raw result is posted to Discord as a fallback. No completion goes unacknowledged.
 
 ## Domain model
 

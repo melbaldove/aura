@@ -51,6 +51,15 @@ Discord → Gateway → Poller → Brain → Domain → LLM → Brain → Discor
 
 Brain routes by `channel_id` to resolve a domain. Every channel gets the full tool loop — domains are context selectors, not capability boundaries.
 
+### ACP Handback
+
+When an ACP session completes (`end_turn`), the event loop captures three layers of results:
+- Monitor's cumulative summary (Done field from LLM progress)
+- Last 5 tool call names (what the agent did at the end)
+- Agent's final message text (the actual conclusion)
+
+These are formatted as a system message, appended to the thread conversation, and the brain re-enters its tool loop — responding to the user naturally with the agent's findings. If the tool loop fails, the raw result is posted to Discord as a fallback.
+
 ### Vision pipeline
 
 ```
