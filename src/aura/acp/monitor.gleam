@@ -720,7 +720,7 @@ fn generate_progress_update(state: MonitorState, output: String, is_idle: Bool) 
 
 /// Extract a field value from structured LLM response.
 /// Given "Title: Fix the bug\nStatus: Working\n...", extract_field(text, "Title:") returns "Fix the bug".
-fn extract_field(text: String, field: String) -> String {
+pub fn extract_field(text: String, field: String) -> String {
   case string.split(text, "\n") {
     [] -> ""
     lines -> {

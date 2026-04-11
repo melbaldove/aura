@@ -817,7 +817,7 @@ fn handle_acp_event(
     }
     acp_monitor.AcpAlert(session_name, domain, status, summary) -> {
       let status_str = acp_types.status_to_string(status)
-      let title = extract_summary_field(summary, "Title:")
+      let title = acp_monitor.extract_field(summary, "Title:")
       let title_display = case title {
         "" -> session_name
         _ -> title
@@ -844,10 +844,10 @@ fn handle_acp_event(
         <> session_name
         <> "`"
 
-      let done = extract_summary_field(summary, "Done:")
-      let current = extract_summary_field(summary, "Current:")
-      let needs = extract_summary_field(summary, "Needs input:")
-      let next = extract_summary_field(summary, "Next:")
+      let done = acp_monitor.extract_field(summary, "Done:")
+      let current = acp_monitor.extract_field(summary, "Current:")
+      let needs = acp_monitor.extract_field(summary, "Needs input:")
+      let next = acp_monitor.extract_field(summary, "Next:")
       let parts = [
         "**Status:** " <> status_str,
         case done {
@@ -985,8 +985,8 @@ fn handle_acp_event(
       // Build body from structured fields (same format for tmux and stdio — both LLM-summarized)
       let body = case is_idle {
             True -> {
-              let done = extract_summary_field(summary, "Done:")
-              let needs = extract_summary_field(summary, "Needs input:")
+              let done = acp_monitor.extract_field(summary, "Done:")
+              let needs = acp_monitor.extract_field(summary, "Needs input:")
               let parts = [
                 case done {
                   "" -> ""
@@ -1006,10 +1006,10 @@ fn handle_acp_event(
                 "" -> ""
                 _ -> "**Status:** " <> status
               }
-              let done = extract_summary_field(summary, "Done:")
-              let current = extract_summary_field(summary, "Current:")
-              let needs = extract_summary_field(summary, "Needs input:")
-              let next = extract_summary_field(summary, "Next:")
+              let done = acp_monitor.extract_field(summary, "Done:")
+              let current = acp_monitor.extract_field(summary, "Current:")
+              let needs = acp_monitor.extract_field(summary, "Needs input:")
+              let next = acp_monitor.extract_field(summary, "Next:")
               let parts = [
                 status_line,
                 case done {
@@ -1099,24 +1099,13 @@ fn resolve_acp_channel(
   }
 }
 
-/// Handle a flare reporting back — load thread conversation, append result
-/// as system message, and re-enter the tool loop so the LLM responds naturally.
-fn handle_handback(
+/// Build the system prompt and tool context for a channel.
+/// Shared between handle_with_llm and handle_handback.
+fn build_llm_context(
   state: BrainState,
   channel: String,
   domain_name: Option(String),
-  session_name: String,
-  result_text: String,
-) -> Nil {
-  io.println(
-    "[brain] Handback from " <> session_name <> " to channel " <> channel,
-  )
-
-  let system_msg =
-    "[Flare reported back: \"" <> session_name <> "\"]\n\n" <> result_text
-
-  let typing_stop = start_typing_loop(state.discord_token, channel)
-
+) -> #(String, brain_tools.ToolContext) {
   let domain_names = list.map(state.domains, fn(d) { d.name })
   let memory_content = case
     structured_memory.format_for_display(xdg.memory_path(state.paths))
@@ -1151,23 +1140,6 @@ fn handle_handback(
     None -> ""
   }
   let system_prompt = system_prompt <> domain_prompt
-
-  let now_ts = time.now_ms()
-  let #(_, _, history) =
-    conversation.get_or_load_db(
-      state.conversations,
-      state.db_subject,
-      "discord",
-      channel,
-      now_ts,
-    )
-
-  let initial_messages =
-    list.flatten([
-      [llm.SystemMessage(system_prompt)],
-      history,
-      [llm.SystemMessage(system_msg)],
-    ])
 
   let #(
     domain_cwd,
@@ -1220,6 +1192,46 @@ fn handle_handback(
       acp_agent_name: acp_agent_name,
       on_propose: fn(_) { Nil },
     )
+
+  #(system_prompt, tool_ctx)
+}
+
+/// Handle a flare reporting back — load thread conversation, append result
+/// as system message, and re-enter the tool loop so the LLM responds naturally.
+fn handle_handback(
+  state: BrainState,
+  channel: String,
+  domain_name: Option(String),
+  session_name: String,
+  result_text: String,
+) -> Nil {
+  io.println(
+    "[brain] Handback from " <> session_name <> " to channel " <> channel,
+  )
+
+  let system_msg =
+    "[Flare reported back: \"" <> session_name <> "\"]\n\n" <> result_text
+
+  let typing_stop = start_typing_loop(state.discord_token, channel)
+
+  let #(system_prompt, tool_ctx) = build_llm_context(state, channel, domain_name)
+
+  let now_ts = time.now_ms()
+  let #(_, _, history) =
+    conversation.get_or_load_db(
+      state.conversations,
+      state.db_subject,
+      "discord",
+      channel,
+      now_ts,
+    )
+
+  let initial_messages =
+    list.flatten([
+      [llm.SystemMessage(system_prompt)],
+      history,
+      [llm.SystemMessage(system_msg)],
+    ])
 
   let result =
     tool_loop_with_retry(state, tool_ctx, channel, initial_messages, 3)
@@ -1285,25 +1297,6 @@ fn resolve_finding_channel(
   finding: notification.Finding,
 ) -> String {
   resolve_domain_channel(state, finding.domain)
-}
-
-/// Extract a field from a structured summary.
-/// Given "Done: fixed the bug\nCurrent: running tests", extract_summary_field(text, "Done:") returns "fixed the bug".
-fn extract_summary_field(text: String, field: String) -> String {
-  case string.split(text, "\n") {
-    [] -> ""
-    lines -> {
-      case
-        list.find(lines, fn(line) {
-          string.starts_with(string.trim(line), field)
-        })
-      {
-        Ok(line) ->
-          string.trim(string.drop_start(string.trim(line), string.length(field)))
-        Error(_) -> ""
-      }
-    }
-  }
 }
 
 /// Spawn a process that sends typing indicators every 8 seconds.
@@ -1432,40 +1425,9 @@ fn handle_with_llm(
   // Start a typing indicator loop that refreshes every 8 seconds
   let typing_stop = start_typing_loop(state.discord_token, response_channel)
 
-  let domain_names = list.map(state.domains, fn(d) { d.name })
-  let memory_content = case
-    structured_memory.format_for_display(xdg.memory_path(state.paths))
-  {
-    Ok(c) -> c
-    Error(_) -> ""
-  }
-  let user_content = case
-    structured_memory.format_for_display(xdg.user_path(state.paths))
-  {
-    Ok(c) -> c
-    Error(_) -> ""
-  }
-  let system_prompt =
-    build_system_prompt(
-      state.soul,
-      domain_names,
-      state.skill_infos,
-      memory_content,
-      user_content,
-    )
+  let #(base_prompt, base_tool_ctx) = build_llm_context(state, response_channel, domain_name)
 
-  // Load domain context if routed to a domain
-  let domain_prompt = case domain_name {
-    Some(name) -> {
-      let config_dir = xdg.domain_config_dir(state.paths, name)
-      let data_dir = xdg.domain_data_dir(state.paths, name)
-      let state_dir = xdg.domain_state_dir(state.paths, name)
-      let ctx =
-        domain.load_context(config_dir, data_dir, state_dir, state.skill_infos)
-      "\n\n" <> domain.build_domain_prompt(ctx)
-    }
-    None -> ""
-  }
+  // Append file system section and flare context (handle_with_llm-specific)
   let fs_section =
     "\n\n## File System\n"
     <> "You can read any file. Use ~ for home directory.\n"
@@ -1497,8 +1459,6 @@ fn handle_with_llm(
     <> "\n\nWrites to logs, memory, state, and skills are autonomous."
     <> "\nAll other writes require approval -- use propose(path, content, description)."
 
-  let system_prompt = system_prompt <> domain_prompt <> fs_section
-
   // Inject flare context if this message is in a flare thread
   let flare_context = case
     list.find(manager.list_sessions(state.acp_subject), fn(s) {
@@ -1520,7 +1480,7 @@ fn handle_with_llm(
     }
     Error(_) -> ""
   }
-  let system_prompt = system_prompt <> flare_context
+  let system_prompt = base_prompt <> fs_section <> flare_context
 
   // Vision preprocessing — describe attached images before tool loop
   let enriched_content = preprocess_attachments(state, msg, domain_name)
@@ -1549,49 +1509,10 @@ fn handle_with_llm(
       [llm.UserMessage(enriched_content)],
     ])
 
-  // Look up domain config once for cwd + provider settings
-  let #(domain_cwd, acp_provider, acp_binary, acp_worktree, acp_server_url, acp_agent_name) = case domain_name {
-    Some(name) ->
-      case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
-        Ok(#(_, cfg)) -> #(
-          cfg.cwd,
-          cfg.acp_provider,
-          cfg.acp_binary,
-          cfg.acp_worktree,
-          cfg.acp_server_url,
-          cfg.acp_agent_name,
-        )
-        Error(_) -> #(".", "claude-code", "", True, "", "")
-      }
-    None -> #(".", "claude-code", "", True, "", "")
-  }
-
-  let base_dir = case domain_name {
-    Some(_) -> domain_cwd
-    None -> state.paths.data
-  }
-
   let tool_ctx =
     brain_tools.ToolContext(
-      base_dir: base_dir,
-      discord_token: state.discord_token,
-      guild_id: state.guild_id,
+      ..base_tool_ctx,
       message_id: msg.message_id,
-      channel_id: response_channel,
-      paths: state.paths,
-      skill_infos: state.skill_infos,
-      skills_dir: state.skills_dir,
-      validation_rules: state.validation_rules,
-      db_subject: state.db_subject,
-      scheduler_subject: state.scheduler_subject,
-      acp_subject: state.acp_subject,
-      domain_name: option.unwrap(domain_name, "aura"),
-      domain_cwd: domain_cwd,
-      acp_provider: acp_provider,
-      acp_binary: acp_binary,
-      acp_worktree: acp_worktree,
-      acp_server_url: acp_server_url,
-      acp_agent_name: acp_agent_name,
       on_propose: fn(proposal) {
         case brain_subject_opt {
           Some(subj) -> process.send(subj, RegisterProposal(proposal: proposal))

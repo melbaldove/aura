@@ -18,12 +18,12 @@ import gleam/string
 pub type CompletionBuffer {
   CompletionBuffer(
     tool_names: List(String),
-    agent_text: String,
+    agent_chunks: List(String),
   )
 }
 
 pub fn new_completion_buffer() -> CompletionBuffer {
-  CompletionBuffer(tool_names: [], agent_text: "")
+  CompletionBuffer(tool_names: [], agent_chunks: [])
 }
 
 pub fn buffer_event(buf: CompletionBuffer, event_type: String, data: String) -> CompletionBuffer {
@@ -31,25 +31,18 @@ pub fn buffer_event(buf: CompletionBuffer, event_type: String, data: String) -> 
     "tool_call" -> {
       let name = extract_tool_name(data)
       let names = list.append(buf.tool_names, [name])
-      let capped = case list.length(names) > 5 {
-        True -> list.drop(names, list.length(names) - 5)
+      let len = list.length(names)
+      let capped = case len > 5 {
+        True -> list.drop(names, len - 5)
         False -> names
       }
-      CompletionBuffer(tool_names: capped, agent_text: "")
+      CompletionBuffer(tool_names: capped, agent_chunks: [])
     }
     "agent_message_chunk" -> {
-      CompletionBuffer(..buf, agent_text: buf.agent_text <> data)
+      CompletionBuffer(..buf, agent_chunks: list.append(buf.agent_chunks, [data]))
     }
     _ -> buf
   }
-}
-
-pub fn tool_names(buf: CompletionBuffer) -> List(String) {
-  buf.tool_names
-}
-
-pub fn agent_text(buf: CompletionBuffer) -> String {
-  buf.agent_text
 }
 
 pub fn extract_tool_name(data: String) -> String {
@@ -74,7 +67,7 @@ pub fn format_result_text(buf: CompletionBuffer, monitor_summary: String) -> Str
     names -> "Last actions: " <> string.join(names, ", ")
   }
 
-  let agent_section = case string.trim(buf.agent_text) {
+  let agent_section = case string.trim(string.concat(buf.agent_chunks)) {
     "" -> ""
     text -> "Agent's response:\n" <> text
   }
