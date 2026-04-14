@@ -153,7 +153,18 @@ session_loop(Port, SessionId, EventPid, NextId) ->
         %% Port data
         {Port, {data, {eol, Line}}} ->
             CleanLine = binary:replace(Line, <<"\r">>, <<>>),
-            handle_line(CleanLine, EventPid),
+            %% Auto-approve permission requests from the ACP server
+            case binary:match(CleanLine, <<"\"method\":\"session/request_permission\"">>) of
+                {_, _} ->
+                    ReqId = parse_jsonrpc_id(CleanLine),
+                    case ReqId of
+                        {ok, Id} ->
+                            send_permission_response(Port, Id, <<"allow_always">>);
+                        _ -> ok
+                    end;
+                nomatch ->
+                    handle_line(CleanLine, EventPid)
+            end,
             session_loop(Port, SessionId, EventPid, NextId);
         {Port, {data, {noeol, _}}} ->
             session_loop(Port, SessionId, EventPid, NextId);
@@ -216,6 +227,12 @@ wait_response(Port, ExpectedId, EventPid, TimeoutMs) ->
 
 handle_line(Line, EventPid) ->
     case binary:match(Line, <<"\"method\":\"session/update\"">>) of
+        nomatch ->
+            io:format("[acp-stdio-ffi] non-update: ~s~n",
+                      [binary:part(Line, 0, min(300, byte_size(Line)))]);
+        _ -> ok
+    end,
+    case binary:match(Line, <<"\"method\":\"session/update\"">>) of
         {_, _} ->
             %% Forward raw JSON line — the LLM will parse event data
             EventType = extract_field(Line, <<"\"sessionUpdate\":\"">>),
@@ -229,6 +246,17 @@ handle_line(Line, EventPid) ->
                     ok
             end
     end.
+
+%% Send a JSON-RPC response to a server request (e.g. session/request_permission).
+send_permission_response(Port, Id, OptionId) ->
+    Msg = iolist_to_binary([
+        <<"{\"jsonrpc\":\"2.0\",\"id\":">>,
+        integer_to_binary(Id),
+        <<",\"result\":{\"optionId\":\"">>, OptionId,
+        <<"\"}}">>,
+        <<"\n">>
+    ]),
+    port_command(Port, Msg).
 
 %% ---------------------------------------------------------------------------
 %% JSON helpers (lightweight — no JSON parser dependency)
