@@ -1177,20 +1177,22 @@ fn recover_single_flare(
           #(flare, session_name)
         }
         False -> {
-          // Session dead — mark as Parked (interrupted, not broken)
+          // Session dead — schedule auto-rekindle after actor starts
           io.println(
-            "[flare] Flare session dead, marking parked: "
+            "[flare] Flare session dead, will auto-rekindle: "
             <> sf.id
             <> " ("
             <> sf.label
             <> ")",
           )
-          let now = time.now_ms()
-          case db.update_flare_status(db_subject, sf.id, status_to_string(Parked), now) {
-            Ok(_) -> Nil
-            Error(e) ->
-              io.println("[flare] Failed to persist parked status: " <> e)
-          }
+          // Keep as Active in memory — the rekindle message will handle dispatch
+          // Use send_after to rekindle after actor init completes
+          process.send_after(self_subject, 2000, Rekindle(
+            reply_to: process.new_subject(),
+            flare_id: sf.id,
+            input: "Continue where you left off. You were interrupted by a system restart.",
+          ))
+          // Temporarily mark as Parked so rekindle guard passes (must not be Active)
           let flare = stored_flare_to_record(sf, Parked, "", None)
           #(flare, "")
         }
