@@ -346,7 +346,11 @@ pub fn format_traces(traces: List(ToolTrace)) -> String {
       True -> "\u{274C}"
       False -> "\u{1F527}"
     }
-    let args_preview = string.slice(trace.args, 0, 40)
+    let args_limit = case trace.name {
+      "flare" -> 500
+      _ -> 40
+    }
+    let args_preview = string.slice(trace.args, 0, args_limit)
     let result_collapsed =
       string.replace(trace.result, each: "\n", with: ", ")
     let result_preview = case string.length(result_collapsed) > 50 {
