@@ -39,7 +39,8 @@ pub fn buffer_event(buf: CompletionBuffer, event_type: String, data: String) -> 
       CompletionBuffer(tool_names: capped, agent_chunks: [])
     }
     "agent_message_chunk" -> {
-      CompletionBuffer(..buf, agent_chunks: list.append(buf.agent_chunks, [data]))
+      let text = extract_agent_text(data)
+      CompletionBuffer(..buf, agent_chunks: list.append(buf.agent_chunks, [text]))
     }
     _ -> buf
   }
@@ -52,6 +53,23 @@ pub fn extract_tool_name(data: String) -> String {
         [name, ..] -> name
         _ -> ""
       }
+    _ -> ""
+  }
+}
+
+/// Extract the text content from an agent_message_chunk JSON line.
+/// Format: ...{"content":{"type":"text","text":"THE TEXT"}}...
+/// We split on ,"text":" to skip the "type":"text" field.
+pub fn extract_agent_text(data: String) -> String {
+  case string.split(data, ",\"text\":\"") {
+    [_, rest] -> {
+      // rest is: THE TEXT"}}}\n or similar — find the closing quote
+      // but the text may contain escaped quotes, so find the last "}}
+      case string.split_once(rest, "\"}}") {
+        Ok(#(text, _)) -> string.replace(text, "\\n", "\n")
+        Error(_) -> ""
+      }
+    }
     _ -> ""
   }
 }
