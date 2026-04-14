@@ -1177,15 +1177,21 @@ fn recover_single_flare(
           #(flare, session_name)
         }
         False -> {
-          // Process died (deploy/restart) — flare is still Active, just no process
+          // Process died (deploy/restart) — auto-rekindle with safe prompt
           io.println(
-            "[flare] Session dead, flare still active: "
+            "[flare] Session dead, auto-rekindling: "
             <> sf.id
             <> " ("
             <> sf.label
             <> ")",
           )
-          let flare = stored_flare_to_record(sf, Active, "", None)
+          // Load as Parked so rekindle guard passes (rejects Active)
+          let flare = stored_flare_to_record(sf, Parked, "", None)
+          process.send_after(self_subject, 3000, Rekindle(
+            reply_to: process.new_subject(),
+            flare_id: sf.id,
+            input: "Your session was interrupted by a system restart. If you were not done, continue where you left off. If you were already done, do nothing.",
+          ))
           #(flare, "")
         }
       }
