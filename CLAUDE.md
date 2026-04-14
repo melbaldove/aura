@@ -228,6 +228,25 @@ When making any non-trivial change, check whether these need updating:
 - [ ] **Onboarding** — new required config? Update `init.gleam` first-run wizard.
 - [ ] **Production deploy** — use `bash scripts/deploy.sh` (NEVER manual scp+build). Update the launchd plist if env vars changed.
 
+## Deploy
+
+**Always use `bash scripts/deploy.sh`.** Never manual scp+build — it causes stale beams, missing NIF, and FFI mismatch bugs.
+
+The script does:
+1. `rsync` source + test `.gleam` and `.erl` files to Eisenhower (192.168.50.140)
+2. `gleam clean && gleam build` — ensures no stale beams from previous builds
+3. Fix esqlite NIF — `gleam clean` wipes the NIF, OTP 27+ needs manual `erlc` recompile
+4. Recompile all Erlang FFI beams — `gleam build` doesn't compile `.erl` files, so every `aura_*_ffi.erl` is compiled with `erlc -o ebin`
+5. `launchctl kickstart -k` restarts the launchd service (`com.aura.agent`)
+6. Waits 5s and tails the log to verify startup
+
+**Gotchas:**
+- Never deploy with `gleam build` alone — FFI beams won't update
+- Never `gleam clean` without the subsequent `erlc` steps — esqlite NIF will be corrupt
+- If you add a new env var, update `~/Library/LaunchAgents/com.aura.agent.plist` on Eisenhower
+- The deploy script never kills tmux sessions — running flares survive deploys
+- Exit code 1 from the script is usually the final `tail | grep` not matching — the deploy itself succeeded if you see "Restarting Aura"
+
 ## Common tasks
 
 ### Add a new built-in tool
