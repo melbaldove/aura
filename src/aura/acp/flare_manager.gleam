@@ -980,7 +980,8 @@ fn handle_monitor_event(
     acp_monitor.AcpProgress(..) -> state
     acp_monitor.AcpAlert(..) -> state
   }
-  // Forward ALL events to the brain for Discord notifications
+  // Forward to brain — lookup_flare_by_session has a fallback scan
+  // that finds archived flares even after session_to_flare is cleared
   state.on_brain_event(event)
   new_state
 }
@@ -1008,7 +1009,12 @@ fn lookup_flare_by_session(
 ) -> Result(FlareRecord, Nil) {
   case dict.get(state.session_to_flare, session_name) {
     Ok(flare_id) -> dict.get(state.flares, flare_id)
-    Error(_) -> Error(Nil)
+    Error(_) ->
+      // Fallback: scan all flares — needed when session_to_flare mapping
+      // was already cleared (e.g., after AcpCompleted archives the flare)
+      list.find(dict.values(state.flares), fn(f) {
+        f.session_name == session_name
+      })
   }
 }
 
