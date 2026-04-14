@@ -227,12 +227,6 @@ wait_response(Port, ExpectedId, EventPid, TimeoutMs) ->
 
 handle_line(Line, EventPid) ->
     case binary:match(Line, <<"\"method\":\"session/update\"">>) of
-        nomatch ->
-            io:format("[acp-stdio-ffi] non-update: ~s~n",
-                      [binary:part(Line, 0, min(300, byte_size(Line)))]);
-        _ -> ok
-    end,
-    case binary:match(Line, <<"\"method\":\"session/update\"">>) of
         {_, _} ->
             %% Forward raw JSON line — the LLM will parse event data
             EventType = extract_field(Line, <<"\"sessionUpdate\":\"">>),
@@ -253,10 +247,9 @@ send_permission_response(Port, Id, OptionId) ->
         <<"{\"jsonrpc\":\"2.0\",\"id\":">>,
         integer_to_binary(Id),
         <<",\"result\":{\"optionId\":\"">>, OptionId,
-        <<"\"}}">>,
-        <<"\n">>
+        <<"\"}}">>
     ]),
-    port_command(Port, Msg).
+    port_command(Port, [Msg, <<"\n">>]).
 
 %% ---------------------------------------------------------------------------
 %% JSON helpers (lightweight — no JSON parser dependency)

@@ -60,6 +60,9 @@ pub fn extract_tool_name(data: String) -> String {
 /// Extract the text content from an agent_message_chunk JSON line.
 /// Format: ...{"content":{"type":"text","text":"THE TEXT"}}...
 /// We split on ,"text":" to skip the "type":"text" field.
+/// FRAGILE: Will truncate if agent text contains literal "}}.
+/// The ACP wire format doesn't currently produce this, but a proper
+/// JSON parser would be more robust.
 pub fn extract_agent_text(data: String) -> String {
   case string.split(data, ",\"text\":\"") {
     [_, rest] -> {

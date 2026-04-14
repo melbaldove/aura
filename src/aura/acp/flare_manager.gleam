@@ -1134,6 +1134,17 @@ fn recover_flares(
               }
             })
             |> dict.from_list
+          // Schedule staggered rekindles for flares that need it (3s, 5s, 7s, ...)
+          let needs_rekindle =
+            list.filter(pairs, fn(p) { p.2 })
+          list.index_map(needs_rekindle, fn(p, idx) {
+            let delay = 3000 + idx * 2000
+            process.send_after(self_subject, delay, Rekindle(
+              reply_to: process.new_subject(),
+              flare_id: p.0.id,
+              input: "Your session was interrupted by a system restart. If you were not done, continue where you left off. If you were already done, do nothing.",
+            ))
+          })
           #(flare_dict, session_dict)
         }
       }
@@ -1141,16 +1152,17 @@ fn recover_flares(
   }
 }
 
-/// Recover a single flare. Returns the FlareRecord and its session_name
-/// (empty string if no active session).
+/// Recover a single flare. Returns the FlareRecord, its session_name
+/// (empty string if no active session), and a Bool indicating whether
+/// a rekindle should be scheduled (staggered by the caller).
 fn recover_single_flare(
   sf: db.StoredFlare,
   self_subject: process.Subject(FlareMsg),
   monitor_model: String,
   _on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
   acp_transport: transport.Transport,
-  db_subject: process.Subject(db.DbMessage),
-) -> #(FlareRecord, String) {
+  _db_subject: process.Subject(db.DbMessage),
+) -> #(FlareRecord, String, Bool) {
   let stored_status = status_from_string(sf.status)
   let session_name = tmux.build_session_name(sf.domain, sf.id)
 
@@ -1174,10 +1186,10 @@ fn recover_single_flare(
           )
 
           let flare = stored_flare_to_record(sf, Active, session_name, None)
-          #(flare, session_name)
+          #(flare, session_name, False)
         }
         False -> {
-          // Process died (deploy/restart) — auto-rekindle with safe prompt
+          // Process died (deploy/restart) — caller schedules staggered rekindle
           io.println(
             "[flare] Session dead, auto-rekindling: "
             <> sf.id
@@ -1187,12 +1199,7 @@ fn recover_single_flare(
           )
           // Load as Parked so rekindle guard passes (rejects Active)
           let flare = stored_flare_to_record(sf, Parked, "", None)
-          process.send_after(self_subject, 3000, Rekindle(
-            reply_to: process.new_subject(),
-            flare_id: sf.id,
-            input: "Your session was interrupted by a system restart. If you were not done, continue where you left off. If you were already done, do nothing.",
-          ))
-          #(flare, "")
+          #(flare, "", True)
         }
       }
     }
@@ -1200,18 +1207,18 @@ fn recover_single_flare(
       // Just load into memory, no session to check
       io.println("[flare] Loading parked flare: " <> sf.id <> " (" <> sf.label <> ")")
       let flare = stored_flare_to_record(sf, Parked, "", None)
-      #(flare, "")
+      #(flare, "", False)
     }
     Failed(reason) -> {
       // Load failed flares into memory for visibility
       io.println("[flare] Loading failed flare: " <> sf.id <> " (" <> sf.label <> ")")
       let flare = stored_flare_to_record(sf, Failed(reason), "", None)
-      #(flare, "")
+      #(flare, "", False)
     }
     Archived -> {
       // Shouldn't reach here (excluded by load_flares), but handle gracefully
       let flare = stored_flare_to_record(sf, Archived, "", None)
-      #(flare, "")
+      #(flare, "", False)
     }
   }
 }
