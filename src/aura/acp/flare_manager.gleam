@@ -1177,22 +1177,21 @@ fn recover_single_flare(
           #(flare, session_name)
         }
         False -> {
-          // Session dead — mark as failed, let the brain decide whether to rekindle
-          let reason = "interrupted"
+          // Session dead (deploy/restart) — auto-rekindle after actor starts
           io.println(
-            "[flare] Flare session dead: "
+            "[flare] Flare session dead, will auto-rekindle: "
             <> sf.id
             <> " ("
             <> sf.label
-            <> ") — marking failed:interrupted",
+            <> ")",
           )
-          let now = time.now_ms()
-          case db.update_flare_status(db_subject, sf.id, status_to_string(Failed(reason)), now) {
-            Ok(_) -> Nil
-            Error(e) ->
-              io.println("[flare] Failed to persist status: " <> e)
-          }
-          let flare = stored_flare_to_record(sf, Failed(reason), "", None)
+          // Mark as Parked temporarily so rekindle guard passes (rejects Active)
+          let flare = stored_flare_to_record(sf, Parked, "", None)
+          process.send_after(self_subject, 3000, Rekindle(
+            reply_to: process.new_subject(),
+            flare_id: sf.id,
+            input: "You were interrupted by a system restart. Continue where you left off.",
+          ))
           #(flare, "")
         }
       }
