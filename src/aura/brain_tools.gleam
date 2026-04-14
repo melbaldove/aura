@@ -587,17 +587,19 @@ fn execute_tool_dispatch(
           }
         }
         "list" -> {
-          let sessions = flare_manager.list_sessions(ctx.acp_subject)
-          case sessions {
-            [] -> TextResult("No active flares.")
+          let flares = flare_manager.list_flares(ctx.acp_subject)
+          case flares {
+            [] -> TextResult("No flares.")
             _ -> {
-              list.map(sessions, fn(s) {
-                let elapsed_ms = time.now_ms() - s.started_at_ms
-                let elapsed_min = elapsed_ms / 60_000
-                s.session_name
-                <> " [" <> flare_manager.status_to_string(s.status) <> "]"
-                <> " domain=" <> s.domain
-                <> " (started " <> int.to_string(elapsed_min) <> "m ago)"
+              list.map(flares, fn(f) {
+                f.id
+                <> " \"" <> f.label <> "\""
+                <> " [" <> flare_manager.status_to_string(f.status) <> "]"
+                <> " domain=" <> f.domain
+                <> case f.session_name {
+                  "" -> ""
+                  sn -> " session=" <> sn
+                }
               })
               |> string.join("\n")
               |> TextResult
