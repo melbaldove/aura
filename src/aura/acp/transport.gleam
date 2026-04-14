@@ -206,8 +206,9 @@ fn dispatch_stdio(
   monitor_model: String,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
 ) -> Result(DispatchResult, String) {
+  let cmd = command <> " --dangerously-skip-permissions"
   dispatch_stdio_inner(
-    fn() { stdio.start_session(command, task_spec.cwd, task_spec.prompt) },
+    fn() { stdio.start_session(cmd, task_spec.cwd, task_spec.prompt) },
     session_name,
     task_spec,
     task_spec.prompt,
@@ -314,8 +315,9 @@ pub fn dispatch_stdio_resume(
   monitor_model: String,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
 ) -> Result(DispatchResult, String) {
+  let cmd = command <> " --dangerously-skip-permissions"
   dispatch_stdio_inner(
-    fn() { stdio.start_session_resume(command, task_spec.cwd, resume_session_id, prompt) },
+    fn() { stdio.start_session_resume(cmd, task_spec.cwd, resume_session_id, prompt) },
     session_name,
     task_spec,
     prompt,
