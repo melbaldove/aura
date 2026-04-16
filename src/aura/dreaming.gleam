@@ -529,18 +529,10 @@ pub fn dream_tool_loop(
         }
         calls -> {
           // Execute each tool call
-          let #(_written, result_messages) =
-            list.fold(calls, #([], []), fn(acc, call) {
-              let #(acc_written, acc_results) = acc
-              let #(result_text, entry) = tool_executor(call)
-              let new_written = case entry {
-                Some(e) -> [e, ..acc_written]
-                None -> acc_written
-              }
-              #(new_written, [
-                llm.ToolResultMessage(call.id, result_text),
-                ..acc_results
-              ])
+          let result_messages =
+            list.fold(calls, [], fn(acc, call) {
+              let #(result_text, _entry) = tool_executor(call)
+              [llm.ToolResultMessage(call.id, result_text), ..acc]
             })
 
           let new_count = tool_count + list.length(calls)
@@ -808,50 +800,66 @@ fn parallel_dream_domains(
   })
 
   // Wait for all results (or timeout)
-  collect_results(result_subject, count, [], domain_timeout_ms)
+  let deadline_ms = time.now_ms() + domain_timeout_ms
+  collect_results(result_subject, count, [], deadline_ms)
 }
 
-/// Wait for N results with a timeout.
+/// Wait for N results with a deadline.
 /// Returns all results received before the deadline. On timeout, logs a warning
-/// and returns what was collected so far.
+/// and returns what was collected so far. The deadline_ms parameter is an
+/// absolute timestamp (ms since epoch), not a relative duration.
 pub fn collect_results(
   subject: process.Subject(#(String, Result(DreamResult, String))),
   remaining: Int,
   acc: List(Result(DreamResult, String)),
-  timeout_ms: Int,
+  deadline_ms: Int,
 ) -> List(Result(DreamResult, String)) {
   case remaining <= 0 {
     True -> list.reverse(acc)
     False -> {
-      case process.receive(subject, timeout_ms) {
-        Ok(#(domain, result)) -> {
-          case result {
-            Ok(dr) ->
-              io.println(
-                "[dream] " <> domain <> " completed — phase: "
-                <> dr.phase_reached
-                <> ", consolidated: " <> int.to_string(dr.entries_consolidated)
-                <> ", promoted: " <> int.to_string(dr.entries_promoted)
-                <> ", reflections: " <> int.to_string(dr.reflections_generated)
-                <> " (" <> int.to_string(dr.duration_ms / 1000) <> "s)",
-              )
-            Error(e) ->
-              io.println("[dream] " <> domain <> " failed: " <> e)
-          }
-          collect_results(
-            subject,
-            remaining - 1,
-            [result, ..acc],
-            timeout_ms,
-          )
-        }
-        Error(Nil) -> {
+      let now = time.now_ms()
+      let remaining_ms = deadline_ms - now
+      case remaining_ms <= 0 {
+        True -> {
           io.println(
-            "[dream] Timed out waiting for "
+            "[dream] Timeout: "
             <> int.to_string(remaining)
-            <> " remaining domain(s)",
+            <> " domains still pending",
           )
           list.reverse(acc)
+        }
+        False -> {
+          case process.receive(subject, remaining_ms) {
+            Ok(#(domain, result)) -> {
+              case result {
+                Ok(dr) ->
+                  io.println(
+                    "[dream] " <> domain <> " completed — phase: "
+                    <> dr.phase_reached
+                    <> ", consolidated: " <> int.to_string(dr.entries_consolidated)
+                    <> ", promoted: " <> int.to_string(dr.entries_promoted)
+                    <> ", reflections: " <> int.to_string(dr.reflections_generated)
+                    <> " (" <> int.to_string(dr.duration_ms / 1000) <> "s)",
+                  )
+                Error(e) ->
+                  io.println("[dream] " <> domain <> " failed: " <> e)
+              }
+              collect_results(
+                subject,
+                remaining - 1,
+                [result, ..acc],
+                deadline_ms,
+              )
+            }
+            Error(Nil) -> {
+              io.println(
+                "[dream] Timeout: "
+                <> int.to_string(remaining)
+                <> " domains still pending",
+              )
+              list.reverse(acc)
+            }
+          }
         }
       }
     }
@@ -883,7 +891,7 @@ fn log_domain_results(
   list.each(results, fn(r) {
     case r {
       Ok(dr) -> {
-        let _ =
+        case
           db.insert_dream_run(
             db_subject,
             dr.domain,
@@ -894,7 +902,16 @@ fn log_domain_results(
             dr.reflections_generated,
             dr.duration_ms,
           )
-        Nil
+        {
+          Ok(_) -> Nil
+          Error(e) ->
+            io.println(
+              "[dream] Failed to log dream run for "
+              <> dr.domain
+              <> ": "
+              <> e,
+            )
+        }
       }
       Error(_) -> Nil
     }
@@ -1070,7 +1087,7 @@ fn log_global_dream_run(
   reflections_generated: Int,
 ) -> Nil {
   let duration_ms = time.now_ms() - start_ms
-  let _ =
+  case
     db.insert_dream_run(
       db_subject,
       "_global",
@@ -1081,5 +1098,8 @@ fn log_global_dream_run(
       reflections_generated,
       duration_ms,
     )
-  Nil
+  {
+    Ok(_) -> Nil
+    Error(e) -> io.println("[dream] Failed to log global dream run: " <> e)
+  }
 }

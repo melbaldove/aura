@@ -1,6 +1,7 @@
 import aura/dreaming
 import aura/llm
 import aura/test_helpers
+import aura/time
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
@@ -491,7 +492,8 @@ pub fn collect_results_all_received_test() {
     )),
   ))
 
-  let results = dreaming.collect_results(subject, 2, [], 1000)
+  let deadline = time.now_ms() + 1000
+  let results = dreaming.collect_results(subject, 2, [], deadline)
   list.length(results) |> should.equal(2)
 
   // Both should be Ok
@@ -522,14 +524,16 @@ pub fn collect_results_timeout_returns_partial_test() {
   ))
 
   // Expect 2 but only 1 was sent — should timeout and return what we have
-  let results = dreaming.collect_results(subject, 2, [], 100)
+  let deadline = time.now_ms() + 100
+  let results = dreaming.collect_results(subject, 2, [], deadline)
   list.length(results) |> should.equal(1)
 }
 
 pub fn collect_results_zero_remaining_test() {
   // When remaining is 0, should return empty immediately
   let subject = process.new_subject()
-  let results = dreaming.collect_results(subject, 0, [], 1000)
+  let deadline = time.now_ms() + 1000
+  let results = dreaming.collect_results(subject, 0, [], deadline)
   list.length(results) |> should.equal(0)
 }
 
@@ -550,7 +554,8 @@ pub fn collect_results_includes_errors_test() {
     )),
   ))
 
-  let results = dreaming.collect_results(subject, 2, [], 1000)
+  let deadline = time.now_ms() + 1000
+  let results = dreaming.collect_results(subject, 2, [], deadline)
   list.length(results) |> should.equal(2)
 
   // One should be Error, one Ok

@@ -68,11 +68,13 @@ fn finalize_entry(
   }
 }
 
-/// Upsert an entry by key. Creates if new, replaces if exists.
-/// Scans for security threats before writing.
-pub fn set(path: String, key: String, content: String) -> Result(Nil, String) {
-  use _ <- result.try(security_scan(content))
-  use entries <- result.try(read_entries(path))
+/// Upsert an entry in a list by key. Creates if new, replaces if exists.
+/// Returns a tuple of (existed_already, updated_list).
+fn upsert_entries(
+  entries: List(Entry),
+  key: String,
+  content: String,
+) -> #(Bool, List(Entry)) {
   let exists = list.any(entries, fn(e) { e.key == key })
   let updated = case exists {
     True -> list.map(entries, fn(e) {
@@ -83,6 +85,15 @@ pub fn set(path: String, key: String, content: String) -> Result(Nil, String) {
     })
     False -> list.append(entries, [Entry(key: key, content: content)])
   }
+  #(exists, updated)
+}
+
+/// Upsert an entry by key. Creates if new, replaces if exists.
+/// Scans for security threats before writing.
+pub fn set(path: String, key: String, content: String) -> Result(Nil, String) {
+  use _ <- result.try(security_scan(content))
+  use entries <- result.try(read_entries(path))
+  let #(_, updated) = upsert_entries(entries, key, content)
   write_entries(path, updated)
 }
 
@@ -100,16 +111,7 @@ pub fn set_with_archive(
 ) -> Result(Nil, String) {
   use _ <- result.try(security_scan(content))
   use entries <- result.try(read_entries(path))
-  let exists = list.any(entries, fn(e) { e.key == key })
-  let updated = case exists {
-    True -> list.map(entries, fn(e) {
-      case e.key == key {
-        True -> Entry(key: key, content: content)
-        False -> e
-      }
-    })
-    False -> list.append(entries, [Entry(key: key, content: content)])
-  }
+  let #(exists, updated) = upsert_entries(entries, key, content)
   use _ <- result.try(write_entries(path, updated))
 
   // Write-through to SQLite archive (best-effort)

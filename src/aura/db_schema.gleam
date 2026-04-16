@@ -127,6 +127,7 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
   "))
   use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_memory_entries_domain_target ON memory_entries(domain, target)"))
   use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_memory_entries_superseded ON memory_entries(superseded_at_ms)"))
+  use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_memory_entries_active_key ON memory_entries(domain, target, key, superseded_at_ms)"))
 
   use _ <- result.try(exec(conn, "
     CREATE TABLE IF NOT EXISTS dream_runs (
@@ -222,6 +223,7 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
           "))
           use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_memory_entries_domain_target ON memory_entries(domain, target)"))
           use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_memory_entries_superseded ON memory_entries(superseded_at_ms)"))
+          use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_memory_entries_active_key ON memory_entries(domain, target, key, superseded_at_ms)"))
           use _ <- result.try(exec(conn, "
             CREATE TABLE IF NOT EXISTS dream_runs (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
