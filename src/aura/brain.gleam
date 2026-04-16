@@ -1218,21 +1218,39 @@ fn handle_acp_event(
 
 /// Persist a flare's result_text to the DB for dreaming synthesis.
 /// Shared by AcpCompleted and AcpTurnCompleted handlers.
+/// Security scan before persisting — this text flows into dreaming LLM prompts.
 fn persist_flare_result(
   acp_subject: process.Subject(flare_manager.FlareMsg),
   db_subject: process.Subject(db.DbMessage),
   session_name: String,
   result_text: String,
 ) -> Nil {
-  case
-    flare_manager.get_flare_by_session_name(acp_subject, session_name)
-  {
-    Ok(flare) -> {
-      let _ =
-        db.update_flare_result(db_subject, flare.id, result_text, time.now_ms())
+  case structured_memory.security_scan(result_text) {
+    Error(reason) -> {
+      io.println(
+        "[brain] Blocked flare result_text for "
+        <> session_name
+        <> ": "
+        <> reason,
+      )
       Nil
     }
-    Error(_) -> Nil
+    Ok(_) ->
+      case
+        flare_manager.get_flare_by_session_name(acp_subject, session_name)
+      {
+        Ok(flare) -> {
+          let _ =
+            db.update_flare_result(
+              db_subject,
+              flare.id,
+              result_text,
+              time.now_ms(),
+            )
+          Nil
+        }
+        Error(_) -> Nil
+      }
   }
 }
 

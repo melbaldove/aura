@@ -237,7 +237,17 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
             )
           "))
           use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_dream_runs_domain ON dream_runs(domain)"))
-          exec(conn, "ALTER TABLE flares ADD COLUMN result_text TEXT")
+          // Check if result_text column already exists before ALTER (idempotent)
+          case sqlight.query(
+            "SELECT COUNT(*) FROM pragma_table_info('flares') WHERE name = 'result_text'",
+            on: conn,
+            with: [],
+            expecting: decode.at([0], decode.int),
+          ) {
+            Ok([0]) -> exec(conn, "ALTER TABLE flares ADD COLUMN result_text TEXT")
+            Ok(_) -> Ok(Nil)  // Column already exists
+            Error(_) -> exec(conn, "ALTER TABLE flares ADD COLUMN result_text TEXT")  // Fallback: try anyway
+          }
         }
         False -> Ok(Nil)
       })

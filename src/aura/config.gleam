@@ -1,3 +1,6 @@
+import aura/cron
+import gleam/int
+import gleam/io
 import gleam/list
 import gleam/result
 import gleam/string
@@ -253,13 +256,23 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     tom.get_string(doc, ["models", "dream"])
     |> result.unwrap(brain)
 
-  let dreaming_cron =
-    tom.get_string(doc, ["dreaming", "cron"])
-    |> result.unwrap("0 4 * * *")
+  let dreaming_cron = case tom.get_string(doc, ["dreaming", "cron"]) {
+    Ok(c) -> {
+      case cron.parse(c) {
+        Ok(_) -> c
+        Error(_) -> {
+          io.println("[config] Invalid dreaming.cron '" <> c <> "', using default")
+          "0 4 * * *"
+        }
+      }
+    }
+    Error(_) -> "0 4 * * *"
+  }
 
-  let dreaming_budget_percent =
-    tom.get_int(doc, ["dreaming", "budget_percent"])
-    |> result.unwrap(10)
+  let dreaming_budget_percent = case tom.get_int(doc, ["dreaming", "budget_percent"]) {
+    Ok(p) -> int.clamp(p, min: 1, max: 50)
+    Error(_) -> 10
+  }
 
   Ok(GlobalConfig(
     discord: DiscordConfig(

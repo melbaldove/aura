@@ -135,3 +135,21 @@ pub fn schema_v4_adds_flares_result_text_column_test() {
   )
   rows |> should.equal(["some result"])
 }
+
+/// Regression test: ALTER TABLE ADD COLUMN must be idempotent.
+/// Simulates a crash-after-ALTER-before-version-UPDATE scenario by manually
+/// adding the column, then verifying that a v3→v4 migration doesn't fail.
+pub fn schema_v4_alter_table_idempotent_test() {
+  let assert Ok(conn) = sqlight.open(":memory:")
+  // First initialization creates everything including result_text column
+  let assert Ok(_) = db_schema.initialize(conn)
+  // Manually revert version to 3 to force the v4 migration to run again
+  let assert Ok(_) = sqlight.exec("UPDATE schema_version SET version = 3", conn)
+  // Re-running initialize should NOT fail even though result_text already exists
+  db_schema.initialize(conn)
+  |> should.be_ok
+  // Verify version is back to 4
+  db_schema.get_version(conn)
+  |> should.be_ok
+  |> should.equal(4)
+}

@@ -427,6 +427,25 @@ fn run_phase_with_retry(
   paths: xdg.Paths,
   db_subject: process.Subject(db.DbMessage),
 ) -> Result(#(List(llm.Message), Int), String) {
+  let executor = fn(call) {
+    execute_dream_memory_tool(call, domain, paths, db_subject)
+  }
+  run_phase_with_retry_using(
+    llm_config, messages, tools, phase, prompt, domain, executor,
+  )
+}
+
+/// Run a single phase with retry logic using a custom tool executor.
+/// Used by the global dream pass to route writes to actual global paths.
+fn run_phase_with_retry_using(
+  llm_config: llm.LlmConfig,
+  messages: List(llm.Message),
+  tools: List(llm.ToolDefinition),
+  phase: String,
+  prompt: String,
+  domain_label: String,
+  executor: fn(llm.ToolCall) -> #(String, Option(#(String, String))),
+) -> Result(#(List(llm.Message), Int), String) {
   let phase_messages =
     list.append(messages, [llm.UserMessage(prompt)])
 
@@ -435,9 +454,8 @@ fn run_phase_with_retry(
     phase_messages,
     tools,
     phase,
-    domain,
-    paths,
-    db_subject,
+    domain_label,
+    executor,
     retry_delays_ms,
   )
 }
@@ -448,16 +466,15 @@ fn run_phase_attempt(
   messages: List(llm.Message),
   tools: List(llm.ToolDefinition),
   phase: String,
-  domain: String,
-  paths: xdg.Paths,
-  db_subject: process.Subject(db.DbMessage),
+  domain_label: String,
+  executor: fn(llm.ToolCall) -> #(String, Option(#(String, String))),
   remaining_delays: List(Int),
 ) -> Result(#(List(llm.Message), Int), String) {
   case dream_tool_loop(
     llm_config,
     messages,
     tools,
-    fn(call) { execute_dream_memory_tool(call, domain, paths, db_subject) },
+    executor,
     0,
     0,
   ) {
@@ -468,7 +485,7 @@ fn run_phase_attempt(
       case remaining_delays {
         [] -> {
           io.println(
-            "[dream] " <> domain <> " — phase " <> phase
+            "[dream] " <> domain_label <> " — phase " <> phase
             <> " failed after all retries: " <> err,
           )
           Error(
@@ -477,7 +494,7 @@ fn run_phase_attempt(
         }
         [delay, ..rest] -> {
           io.println(
-            "[dream] " <> domain <> " — phase " <> phase
+            "[dream] " <> domain_label <> " — phase " <> phase
             <> " failed (" <> err <> "), retrying in "
             <> int.to_string(delay) <> "ms",
           )
@@ -487,9 +504,8 @@ fn run_phase_attempt(
             messages,
             tools,
             phase,
-            domain,
-            paths,
-            db_subject,
+            domain_label,
+            executor,
             rest,
           )
         }
@@ -601,6 +617,59 @@ fn execute_dream_memory_tool(
             content,
             db_subject,
             domain,
+            target,
+          )
+      }
+    }
+  }
+}
+
+/// Execute a single memory tool call for the global dream pass.
+/// Writes to the actual global paths (MEMORY.md, USER.md) instead of
+/// domain-scoped paths, fixing the _global path mismatch.
+fn execute_global_memory_tool(
+  call: llm.ToolCall,
+  paths: xdg.Paths,
+  db_subject: process.Subject(db.DbMessage),
+) -> #(String, Option(#(String, String))) {
+  case parse_dream_args(call.arguments) {
+    Error(_) -> #(
+      "Error: failed to parse tool arguments as JSON: "
+        <> string.slice(call.arguments, 0, 100),
+      None,
+    )
+    Ok(args) -> {
+      let action = get_dream_arg(args, "action")
+      let target = get_dream_arg(args, "target")
+      let key = get_dream_arg(args, "key")
+      let content = get_dream_arg(args, "content")
+
+      // Resolve path — global pass writes to actual global files
+      let path_result = case target {
+        "memory" -> Ok(xdg.memory_path(paths))
+        "user" -> Ok(xdg.user_path(paths))
+        "state" ->
+          Error(
+            "Error: global dream pass has no state file. Use 'memory' or 'user'.",
+          )
+        unknown ->
+          Error(
+            "Error: unknown target '"
+            <> unknown
+            <> "'. Use 'memory' or 'user'.",
+          )
+      }
+
+      case path_result {
+        Error(e) -> #(e, None)
+        Ok(path) ->
+          execute_dream_memory_action(
+            action,
+            path,
+            key,
+            content,
+            db_subject,
+            "_global",
             target,
           )
       }
@@ -957,18 +1026,23 @@ fn dream_global(
   let tool = dream_memory_tool_definition()
   let tools = [tool]
 
+  // Global executor writes to actual global paths (MEMORY.md, USER.md)
+  // instead of domain-scoped paths under "_global"
+  let global_executor = fn(call) {
+    execute_global_memory_tool(call, paths, db_subject)
+  }
+
   // Phase 1: Consolidate global memory
   io.println("[dream] _global — phase 1: consolidate")
   let consolidate_result =
-    run_phase_with_retry(
+    run_phase_with_retry_using(
       llm_config,
       initial_messages,
       tools,
       "consolidate",
       build_consolidation_prompt(memory_content),
       "_global",
-      paths,
-      db_subject,
+      global_executor,
     )
 
   case consolidate_result {
@@ -980,15 +1054,14 @@ fn dream_global(
       // Phase 2: Reflect on cross-domain patterns
       io.println("[dream] _global — phase 2: reflect")
       let reflect_result =
-        run_phase_with_retry(
+        run_phase_with_retry_using(
           llm_config,
           messages_after_consolidate,
           tools,
           "reflect",
           build_reflection_prompt(),
           "_global",
-          paths,
-          db_subject,
+          global_executor,
         )
 
       case reflect_result {
@@ -1007,15 +1080,14 @@ fn dream_global(
           // Phase 3: Render final global working set
           io.println("[dream] _global — phase 3: render")
           let render_result =
-            run_phase_with_retry(
+            run_phase_with_retry_using(
               llm_config,
               messages_after_reflect,
               tools,
               "render",
               build_render_prompt(budget_tokens),
               "_global",
-              paths,
-              db_subject,
+              global_executor,
             )
 
           case render_result {

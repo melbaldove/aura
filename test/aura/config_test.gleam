@@ -337,3 +337,99 @@ global_max_concurrent = 4
   // budget_percent defaults to 10
   cfg.dreaming_budget_percent |> should.equal(10)
 }
+
+pub fn dreaming_budget_percent_clamped_high_test() {
+  let toml = "
+[discord]
+token = \"test-token\"
+guild = \"aura\"
+default_channel = \"aura\"
+
+[models]
+brain = \"zai/glm-5.1\"
+domain = \"zai/glm-5.1\"
+acp = \"claude/opus\"
+heartbeat = \"zai/glm-5-turbo\"
+monitor = \"zai/glm-5-turbo\"
+
+[notifications]
+digest_windows = [\"07:35\"]
+timezone = \"Asia/Manila\"
+urgent_bypass = true
+
+[acp]
+global_max_concurrent = 4
+
+[dreaming]
+budget_percent = 99
+"
+  let result = config.parse_global(toml)
+  result |> should.be_ok
+  let cfg = result |> result.unwrap(config.default_global())
+  // Should be clamped to 50
+  cfg.dreaming_budget_percent |> should.equal(50)
+}
+
+pub fn dreaming_budget_percent_clamped_low_test() {
+  let toml = "
+[discord]
+token = \"test-token\"
+guild = \"aura\"
+default_channel = \"aura\"
+
+[models]
+brain = \"zai/glm-5.1\"
+domain = \"zai/glm-5.1\"
+acp = \"claude/opus\"
+heartbeat = \"zai/glm-5-turbo\"
+monitor = \"zai/glm-5-turbo\"
+
+[notifications]
+digest_windows = [\"07:35\"]
+timezone = \"Asia/Manila\"
+urgent_bypass = true
+
+[acp]
+global_max_concurrent = 4
+
+[dreaming]
+budget_percent = 0
+"
+  let result = config.parse_global(toml)
+  result |> should.be_ok
+  let cfg = result |> result.unwrap(config.default_global())
+  // Should be clamped to 1
+  cfg.dreaming_budget_percent |> should.equal(1)
+}
+
+pub fn dreaming_invalid_cron_falls_back_to_default_test() {
+  let toml = "
+[discord]
+token = \"test-token\"
+guild = \"aura\"
+default_channel = \"aura\"
+
+[models]
+brain = \"zai/glm-5.1\"
+domain = \"zai/glm-5.1\"
+acp = \"claude/opus\"
+heartbeat = \"zai/glm-5-turbo\"
+monitor = \"zai/glm-5-turbo\"
+
+[notifications]
+digest_windows = [\"07:35\"]
+timezone = \"Asia/Manila\"
+urgent_bypass = true
+
+[acp]
+global_max_concurrent = 4
+
+[dreaming]
+cron = \"not a valid cron\"
+"
+  let result = config.parse_global(toml)
+  result |> should.be_ok
+  let cfg = result |> result.unwrap(config.default_global())
+  // Invalid cron should fall back to default
+  cfg.dreaming_cron |> should.equal("0 4 * * *")
+}

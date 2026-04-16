@@ -222,7 +222,9 @@ fn write_entries(path: String, entries: List(Entry)) -> Result(Nil, String) {
 }
 
 /// Security scan — blocks prompt injection and exfiltration patterns.
-fn security_scan(content: String) -> Result(Nil, String) {
+/// Public so that other modules (e.g., brain) can scan untrusted content
+/// before persisting it where it may later flow into LLM prompts.
+pub fn security_scan(content: String) -> Result(Nil, String) {
   let lower = string.lowercase(content)
   let threats = [
     "ignore previous instructions",
