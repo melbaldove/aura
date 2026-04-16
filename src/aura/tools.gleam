@@ -4,7 +4,7 @@ import aura/tier
 import aura/validator
 import gleam/dynamic/decode
 import gleam/int
-import gleam/io
+import logging
 import gleam/json
 import gleam/list
 import gleam/result
@@ -58,7 +58,7 @@ pub fn write_file(
   use _ <- result.try(check_tier(resolved, approved))
   use _ <- result.try(validator.validate(path, content, rules))
   ensure_parent_dir(resolved)
-  io.println("[tools] write_file: " <> resolved)
+  logging.log(logging.Info, "[tools] write_file: " <> resolved)
   simplifile.write(resolved, content)
   |> result.map_error(fn(e) {
     "Failed to write " <> path <> ": " <> string.inspect(e)
@@ -78,7 +78,7 @@ pub fn append_file(
   use _ <- result.try(check_tier(resolved, approved))
   use _ <- result.try(validator.validate(path, content, rules))
   ensure_parent_dir(resolved)
-  io.println("[tools] append_file: " <> resolved)
+  logging.log(logging.Info, "[tools] append_file: " <> resolved)
   simplifile.append(to: resolved, contents: content)
   |> result.map_error(fn(e) {
     "Failed to append to " <> path <> ": " <> string.inspect(e)
@@ -108,7 +108,7 @@ pub fn run_skill(
         Ok(parsed) -> parsed
         Error(_) -> split_shell_args(args_str)
       }
-      io.println("[tools] run_skill: " <> name <> " " <> string.inspect(args))
+      logging.log(logging.Info, "[tools] run_skill: " <> name <> " " <> string.inspect(args))
       case skill.invoke(skill_info, args, 30_000) {
         Ok(r) ->
           case r.exit_code {

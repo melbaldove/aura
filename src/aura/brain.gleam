@@ -28,7 +28,7 @@ import aura/xdg
 import gleam/dict
 import gleam/erlang/process
 import gleam/int
-import gleam/io
+import logging
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -265,7 +265,7 @@ pub fn start(
   {
     Ok(len) -> len
     Error(e) -> {
-      io.println("[brain] Warning: " <> e <> ", defaulting to 128000")
+      logging.log(logging.Warning, "[brain] Warning: " <> e <> ", defaulting to 128000")
       128_000
     }
   }
@@ -322,14 +322,14 @@ fn handle_message(
     HandleMessage(msg) -> {
       let domain_name = case route_message(msg.channel_id, state.domains) {
         DirectRoute(name) -> {
-          io.println("[brain] Route: " <> name)
+          logging.log(logging.Info, "[brain] Route: " <> name)
           Some(name)
         }
         NeedsClassification -> {
           // Check cache first, then Discord API for parent channel
           case dict.get(state.thread_domains, msg.channel_id) {
             Ok(name) -> {
-              io.println("[brain] Route: " <> name <> " (via thread cache)")
+              logging.log(logging.Info, "[brain] Route: " <> name <> " (via thread cache)")
               Some(name)
             }
             Error(_) -> {
@@ -338,14 +338,14 @@ fn handle_message(
                 rest.get_channel_parent(state.discord_token, msg.channel_id)
               {
                 Ok("") -> {
-                  io.println("[brain] Route: #aura")
+                  logging.log(logging.Info, "[brain] Route: #aura")
                   None
                 }
                 Ok(parent_id) -> {
                   // Check if parent is a domain channel
                   case route_message(parent_id, state.domains) {
                     DirectRoute(name) -> {
-                      io.println(
+                      logging.log(logging.Info, 
                         "[brain] Route: " <> name <> " (via thread parent)",
                       )
                       // Cache it for next time
@@ -363,13 +363,13 @@ fn handle_message(
                       Some(name)
                     }
                     NeedsClassification -> {
-                      io.println("[brain] Route: #aura")
+                      logging.log(logging.Info, "[brain] Route: #aura")
                       None
                     }
                   }
                 }
                 Error(_) -> {
-                  io.println("[brain] Route: #aura")
+                  logging.log(logging.Info, "[brain] Route: #aura")
                   None
                 }
               }
@@ -382,7 +382,7 @@ fn handle_message(
         case rescue(fn() { handle_with_llm(state, msg, subj, domain_name) }) {
           Ok(_) -> Nil
           Error(reason) -> {
-            io.println("[brain] CRASH in handle_with_llm: " <> reason)
+            logging.log(logging.Error, "[brain] CRASH in handle_with_llm: " <> reason)
             let _ =
               rest.send_message(
                 state.discord_token,
@@ -397,7 +397,7 @@ fn handle_message(
       actor.continue(state)
     }
     UpdateDomains(domains) -> {
-      io.println(
+      logging.log(logging.Info, 
         "[brain] Updated domains: "
         <> string.inspect(list.length(domains))
         <> " entries",
@@ -435,7 +435,7 @@ fn handle_message(
           let channel = state.aura_channel_id
           case channel {
             "" -> {
-              io.println(
+              logging.log(logging.Info, 
                 "[brain] No #aura channel configured for digest delivery",
               )
               Nil
@@ -503,7 +503,7 @@ fn handle_message(
         )
       {
         True -> {
-          io.println("[brain] Full compression triggered for " <> cache_key)
+          logging.log(logging.Info, "[brain] Full compression triggered for " <> cache_key)
           let snapshot_len = list.length(history)
           let llm_config = state.llm_config
           let db_subject = state.db_subject
@@ -524,7 +524,7 @@ fn handle_message(
                   paths,
                 )
               Error(e) -> {
-                io.println(
+                logging.log(logging.Info, 
                   "[brain] Flush skipped — monitor LLM config failed: " <> e,
                 )
                 Nil
@@ -574,7 +574,7 @@ fn handle_message(
                 )
               case count > 0 {
                 True ->
-                  io.println(
+                  logging.log(logging.Info, 
                     "[brain] Tool pruning: cleared "
                     <> int.to_string(count)
                     <> " output(s) for "
@@ -612,7 +612,7 @@ fn handle_message(
           // New messages arrived — append the delta to compressed history
           let delta = list.drop(current, snapshot_len)
           let delta_len = list.length(delta)
-          io.println(
+          logging.log(logging.Info, 
             "[brain] Compression complete for "
             <> channel_id
             <> " (merging "
@@ -622,7 +622,7 @@ fn handle_message(
           list.append(compressed_history, delta)
         }
         False -> {
-          io.println("[brain] Compression complete for " <> channel_id)
+          logging.log(logging.Info, "[brain] Compression complete for " <> channel_id)
           compressed_history
         }
       }
@@ -643,7 +643,7 @@ fn handle_message(
       actor.continue(BrainState(..state, thread_domains: new_threads))
     }
     SetScheduler(subject) -> {
-      io.println("[brain] Scheduler connected")
+      logging.log(logging.Info, "[brain] Scheduler connected")
       actor.continue(BrainState(..state, scheduler_subject: Some(subject)))
     }
     UpdateReviewCount(channel_id:, count:) -> {
@@ -664,7 +664,7 @@ fn handle_message(
       process.spawn_unlinked(fn() {
         case rest.send_interaction_response(interaction_id, interaction_token) {
           Ok(_) -> Nil
-          Error(e) -> io.println("[brain] Failed to ack interaction: " <> e)
+          Error(e) -> logging.log(logging.Error, "[brain] Failed to ack interaction: " <> e)
         }
       })
 
@@ -680,7 +680,7 @@ fn handle_message(
                 Ok(proposal) ->
                   handle_proposal_interaction(state, action, proposal)
                 Error(_) -> {
-                  io.println("[brain] Unknown approval: " <> approval_id)
+                  logging.log(logging.Info, "[brain] Unknown approval: " <> approval_id)
                   actor.continue(state)
                 }
               }
@@ -756,7 +756,7 @@ fn handle_proposal_interaction(
   let expired = now - proposal.requested_at_ms > 900_000
   case expired {
     True -> {
-      io.println("[brain] Proposal expired: " <> proposal.id)
+      logging.log(logging.Info, "[brain] Proposal expired: " <> proposal.id)
       process.send(proposal.reply_to, brain_tools.Expired)
       process.spawn_unlinked(fn() {
         let _ =
@@ -1072,7 +1072,7 @@ fn handle_acp_event(
       let domain_dir = xdg.domain_data_dir(state.paths, domain)
       case memory.append_domain_log(domain_dir, summary) {
         Ok(_) -> Nil
-        Error(e) -> io.println("[brain] Failed to write domain log: " <> e)
+        Error(e) -> logging.log(logging.Error, "[brain] Failed to write domain log: " <> e)
       }
 
       // Build elapsed time from session
@@ -1195,7 +1195,7 @@ fn handle_acp_event(
                 acp_progress_msgs: dict.insert(progress_msgs, sn, #(channel, message_id)),
               )
             Error(err) -> {
-              io.println("[brain] Failed to send progress: " <> err)
+              logging.log(logging.Error, "[brain] Failed to send progress: " <> err)
               state
             }
           }
@@ -1217,7 +1217,7 @@ fn persist_flare_result(
 ) -> Nil {
   case structured_memory.security_scan(result_text) {
     Error(reason) -> {
-      io.println(
+      logging.log(logging.Info, 
         "[brain] Blocked flare result_text for "
         <> session_name
         <> ": "
@@ -1395,7 +1395,7 @@ fn handle_handback(
   session_name: String,
   result_text: String,
 ) -> Nil {
-  io.println(
+  logging.log(logging.Info, 
     "[brain] Handback from " <> session_name <> " to channel " <> channel,
   )
 
@@ -1447,11 +1447,11 @@ fn handle_handback(
             )
           {
             Ok(_) -> Nil
-            Error(e) -> io.println("[brain] Handback DB save failed: " <> e)
+            Error(e) -> logging.log(logging.Error, "[brain] Handback DB save failed: " <> e)
           }
         }
         Error(e) ->
-          io.println(
+          logging.log(logging.Info, 
             "[brain] Handback conversation resolve failed: " <> e,
           )
       }
@@ -1471,7 +1471,7 @@ fn handle_handback(
       }
     }
     Error(e) -> {
-      io.println("[brain] Handback tool loop failed: " <> e)
+      logging.log(logging.Error, "[brain] Handback tool loop failed: " <> e)
       let fallback_msg =
         "**Flare reported back** ("
         <> session_name
@@ -1536,7 +1536,7 @@ fn send_discord_response(
   channel_id: String,
   content: String,
 ) -> Nil {
-  io.println(
+  logging.log(logging.Info, 
     "[brain] Sending to channel "
     <> channel_id
     <> ": "
@@ -1550,7 +1550,7 @@ fn send_discord_response(
   case rest.send_message(token, channel_id, safe_content, []) {
     Ok(_) -> Nil
     Error(err) -> {
-      io.println("[brain] Failed to send message: " <> err)
+      logging.log(logging.Error, "[brain] Failed to send message: " <> err)
       Nil
     }
   }
@@ -1562,7 +1562,7 @@ fn handle_with_llm(
   brain_subject_opt: Option(process.Subject(BrainMessage)),
   domain_name: Option(String),
 ) -> Nil {
-  io.println(
+  logging.log(logging.Info, 
     "[brain] Processing message from "
     <> msg.author_name
     <> " in channel "
@@ -1586,7 +1586,7 @@ fn handle_with_llm(
         )
       {
         Ok(thread_id) -> {
-          io.println(
+          logging.log(logging.Info, 
             "[brain] Created thread "
             <> thread_id
             <> " for message in "
@@ -1604,7 +1604,7 @@ fn handle_with_llm(
           thread_id
         }
         Error(e) -> {
-          io.println("[brain] Failed to create thread: " <> e)
+          logging.log(logging.Error, "[brain] Failed to create thread: " <> e)
           msg.channel_id
         }
       }
@@ -1685,7 +1685,7 @@ fn handle_with_llm(
       response_channel,
       now_ts,
     )
-  io.println(
+  logging.log(logging.Info, 
     "[brain] Loaded "
     <> int.to_string(list.length(history))
     <> " history messages for "
@@ -1750,13 +1750,13 @@ fn handle_with_llm(
           {
             Ok(_) -> Nil
             Error(e) ->
-              io.println(
+              logging.log(logging.Info, 
                 "[brain] DB save failed for " <> channel_id <> ": " <> e,
               )
           }
         }
         Error(e) ->
-          io.println(
+          logging.log(logging.Info, 
             "[brain] Failed to resolve conversation for "
             <> channel_id
             <> ": "
@@ -1846,7 +1846,7 @@ fn handle_with_llm(
       }
     }
     Error(err) -> {
-      io.println("[brain] Error: " <> err)
+      logging.log(logging.Error, "[brain] Error: " <> err)
       let _ =
         rest.send_message(
           token,
@@ -1884,7 +1884,7 @@ fn tool_loop_with_retry(
       case is_context_overflow && retries_left > 0 {
         True -> {
           let new_context = state.brain_context / 2
-          io.println(
+          logging.log(logging.Info, 
             "[brain] Context overflow detected, halving brain_context to "
             <> int.to_string(new_context),
           )
@@ -1900,7 +1900,7 @@ fn tool_loop_with_retry(
         False ->
           case retries_left > 0 && string.contains(err, "timeout") {
             True -> {
-              io.println(
+              logging.log(logging.Info, 
                 "[brain] Stream timeout, retrying ("
                 <> int.to_string(retries_left)
                 <> " left)...",
@@ -1942,7 +1942,7 @@ fn tool_loop_progressive(
         compressor.estimate_messages_tokens(messages) > state.brain_context
       {
         True -> {
-          io.println(
+          logging.log(logging.Info, 
             "[brain] Pre-flight: messages exceed context, pruning tool outputs",
           )
           let #(pruned, count) =
@@ -1952,7 +1952,7 @@ fn tool_loop_progressive(
             )
           case count > 0 {
             True ->
-              io.println(
+              logging.log(logging.Info, 
                 "[brain] Pre-flight: pruned "
                 <> int.to_string(count)
                 <> " tool output(s)",
@@ -2012,7 +2012,7 @@ fn tool_loop_progressive(
                   state.built_in_tools,
                 )
               // Execute tool calls and continue the loop
-              io.println(
+              logging.log(logging.Info, 
                 "[brain] "
                 <> int.to_string(list.length(calls))
                 <> " tool call(s)",
@@ -2022,14 +2022,14 @@ fn tool_loop_progressive(
               let #(rev_traces, rev_results) =
                 list.fold(calls, #([], []), fn(acc, call) {
                   let #(acc_traces, acc_results) = acc
-                  io.println(
+                  logging.log(logging.Info, 
                     "[brain] Tool: " <> call.name <> " args: " <> call.arguments,
                   )
                   let #(tool_result, parsed_args) =
                     brain_tools.execute_tool(tool_ctx, call)
                   let result_text = brain_tools.tool_result_text(tool_result)
                   let result_preview = string.slice(result_text, 0, 100)
-                  io.println("[brain] Result: " <> result_preview)
+                  logging.log(logging.Info, "[brain] Result: " <> result_preview)
 
                   let is_error = string.starts_with(result_text, "Error")
                   let trace =
@@ -2206,7 +2206,7 @@ fn parse_streaming_result(
       case llm.parse_flat_tool_calls_json(json_str) {
         Ok(calls) -> llm.LlmResponse(content: content, tool_calls: calls)
         Error(_) -> {
-          io.println(
+          logging.log(logging.Info, 
             "[brain] Failed to parse tool calls JSON: "
             <> string.slice(json_str, 0, 200),
           )
@@ -2233,7 +2233,7 @@ fn load_domain_context_files(
       let a_md = case simplifile.read(agents_path) {
         Ok(c) -> c
         Error(e) -> {
-          io.println(
+          logging.log(logging.Info, 
             "[brain] Failed to read AGENTS.md for "
             <> name
             <> ": "
@@ -2245,7 +2245,7 @@ fn load_domain_context_files(
       let s_md = case simplifile.read(state_path) {
         Ok(c) -> c
         Error(e) -> {
-          io.println(
+          logging.log(logging.Info, 
             "[brain] Failed to read STATE.md for "
             <> name
             <> ": "
@@ -2298,21 +2298,21 @@ fn preprocess_attachments(
             vision.resolve_vision_config(state.global_config, domain_config)
           case vision.is_enabled(vision_config) {
             False -> {
-              io.println("[brain] Vision not configured, skipping image")
+              logging.log(logging.Info, "[brain] Vision not configured, skipping image")
               base_content
             }
             True -> {
-              io.println("[brain] Processing image attachment: " <> first_url)
+              logging.log(logging.Info, "[brain] Processing image attachment: " <> first_url)
               case describe_image(vision_config, first_url) {
                 Ok(description) -> {
-                  io.println(
+                  logging.log(logging.Info, 
                     "[brain] Vision description: "
                     <> string.slice(description, 0, 100),
                   )
                   "[Image: " <> description <> "]\n\n" <> base_content
                 }
                 Error(err) -> {
-                  io.println("[brain] Vision error: " <> err)
+                  logging.log(logging.Error, "[brain] Vision error: " <> err)
                   base_content
                 }
               }
@@ -2333,14 +2333,14 @@ fn fetch_text_attachments(
     case is_text_attachment(att) {
       False -> Error(Nil)
       True -> {
-        io.println("[brain] Fetching text attachment: " <> att.filename)
+        logging.log(logging.Info, "[brain] Fetching text attachment: " <> att.filename)
         case web.fetch(att.url, 50_000) {
           Ok(content) -> {
-            io.println("[brain] Fetched " <> att.filename <> " (" <> int.to_string(string.length(content)) <> " chars)")
+            logging.log(logging.Info, "[brain] Fetched " <> att.filename <> " (" <> int.to_string(string.length(content)) <> " chars)")
             Ok("[File: " <> att.filename <> "]\n```\n" <> content <> "\n```")
           }
           Error(e) -> {
-            io.println("[brain] Failed to fetch " <> att.filename <> ": " <> e)
+            logging.log(logging.Error, "[brain] Failed to fetch " <> att.filename <> ": " <> e)
             Error(Nil)
           }
         }

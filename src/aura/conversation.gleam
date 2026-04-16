@@ -5,7 +5,7 @@ import aura/time
 import gleam/dict
 import gleam/erlang/process
 import gleam/int
-import gleam/io
+import logging
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -163,7 +163,7 @@ pub fn get_or_load_db(
           #(new_buffers, convo_id, messages)
         }
         Error(e) -> {
-          io.println("[conversation] Failed to load from DB for " <> cache_key <> ": " <> e)
+          logging.log(logging.Error, "[conversation] Failed to load from DB for " <> cache_key <> ": " <> e)
           #(buffers, cache_key, [])
         }
       }
@@ -285,7 +285,7 @@ pub fn compress_history(
       let #(pruned_history, prune_count) =
         compressor.prune_tool_outputs(history, protect_tail_count)
       case prune_count > 0 {
-        True -> io.println("[conversation] Pruned " <> int.to_string(prune_count) <> " tool output(s)")
+        True -> logging.log(logging.Info, "[conversation] Pruned " <> int.to_string(prune_count) <> " tool output(s)")
         False -> Nil
       }
 
@@ -302,7 +302,7 @@ pub fn compress_history(
       let now = time.now_ms()
       case now < compressor_state.cooldown_until {
         True -> {
-          io.println("[conversation] Compression in cooldown, pruning only")
+          logging.log(logging.Info, "[conversation] Compression in cooldown, pruning only")
           #(pruned_history, compressor_state)
         }
         False -> {
@@ -312,12 +312,12 @@ pub fn compress_history(
           }
           case compressor.compress(llm_config, middle, summary_input, domain_name, agents_md, state_md) {
             Ok(summary_text) -> {
-              io.println("[conversation] Compressed " <> int.to_string(list.length(middle)) <> " messages into summary")
+              logging.log(logging.Info, "[conversation] Compressed " <> int.to_string(list.length(middle)) <> " messages into summary")
               let summary_msg = llm.SystemMessage(summary_text)
               let new_history = compressor.sanitize_tool_pairs([summary_msg, ..tail])
               case db.update_compaction_summary(db_subject, convo_id, summary_text) {
                 Ok(_) -> Nil
-                Error(e) -> io.println("[conversation] Failed to persist compaction summary: " <> e)
+                Error(e) -> logging.log(logging.Error, "[conversation] Failed to persist compaction summary: " <> e)
               }
               let new_state = CompressorState(
                 previous_summary: Some(compressor.strip_summary_prefix(summary_text)),
@@ -328,7 +328,7 @@ pub fn compress_history(
               #(new_history, new_state)
             }
             Error(e) -> {
-              io.println("[conversation] Compression failed: " <> e <> ", cooldown 10 minutes")
+              logging.log(logging.Error, "[conversation] Compression failed: " <> e <> ", cooldown 10 minutes")
               #(pruned_history, CompressorState(..compressor_state, cooldown_until: now + compression_cooldown_ms))
             }
           }

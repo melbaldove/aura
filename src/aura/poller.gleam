@@ -6,7 +6,7 @@ import aura/discord/rest
 import aura/discord/types as discord_types
 import gleam/erlang/process
 import gleam/int
-import gleam/io
+import logging
 import gleam/list
 import gleam/option.{None}
 import gleam/otp/actor
@@ -31,15 +31,15 @@ fn start(
   brain_subject: process.Subject(brain.BrainMessage),
 ) -> Result(actor.Started(process.Subject(gateway.GatewayMessage)), actor.StartError) {
   let token = discord_config.token
-  io.println("[poller] Fetching gateway URL...")
+  logging.log(logging.Info, "[poller] Fetching gateway URL...")
 
   case rest.get_gateway_url(token) {
     Error(e) -> {
-      io.println("[poller] Failed to get gateway URL: " <> e)
+      logging.log(logging.Error, "[poller] Failed to get gateway URL: " <> e)
       Error(actor.InitTimeout)
     }
     Ok(gateway_url) -> {
-      io.println("[poller] Gateway URL: " <> gateway_url)
+      logging.log(logging.Info, "[poller] Gateway URL: " <> gateway_url)
 
       let on_event = fn(event: discord_types.GatewayEvent) {
         case event {
@@ -48,7 +48,7 @@ fn start(
               True -> Nil
               False -> {
                 let incoming = discord.from_received(msg, None)
-                io.println("[poller] Message from " <> msg.author.username <> " in " <> msg.channel_id <> " (attachments: " <> int.to_string(list.length(msg.attachments)) <> ")")
+                logging.log(logging.Info, "[poller] Message from " <> msg.author.username <> " in " <> msg.channel_id <> " (attachments: " <> int.to_string(list.length(msg.attachments)) <> ")")
                 process.send(brain_subject, brain.HandleMessage(incoming))
               }
             }
@@ -61,7 +61,7 @@ fn start(
             user_id,
             _message_id,
           ) -> {
-            io.println(
+            logging.log(logging.Info, 
               "[poller] Interaction from "
               <> user_id
               <> " in "
@@ -80,7 +80,7 @@ fn start(
             )
           }
           discord_types.Ready(_) -> {
-            io.println("[poller] Bot is ready!")
+            logging.log(logging.Info, "[poller] Bot is ready!")
           }
           _ -> Nil
         }
@@ -88,11 +88,11 @@ fn start(
 
       case gateway.connect(token, default_intents, gateway_url, on_event) {
         Ok(started) -> {
-          io.println("[poller] Connected to Discord gateway")
+          logging.log(logging.Info, "[poller] Connected to Discord gateway")
           Ok(started)
         }
         Error(e) -> {
-          io.println("[poller] Gateway connect failed: " <> e)
+          logging.log(logging.Error, "[poller] Gateway connect failed: " <> e)
           Error(actor.InitTimeout)
         }
       }

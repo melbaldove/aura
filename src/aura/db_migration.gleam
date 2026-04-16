@@ -3,7 +3,7 @@ import aura/time
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
-import gleam/io
+import logging
 import gleam/json
 import gleam/list
 import gleam/result
@@ -30,7 +30,7 @@ pub fn migrate_jsonl(
           // Check if we already have data (don't double-migrate)
           case db.has_messages(db_subject) {
             Ok(True) -> {
-              io.println(
+              logging.log(logging.Info, 
                 "[migration] Database already has data, skipping JSONL migration",
               )
               Ok(0)
@@ -48,7 +48,7 @@ pub fn migrate_jsonl(
                     )
                   {
                     Ok(n) -> {
-                      io.println(
+                      logging.log(logging.Info, 
                         "[migration] Migrated "
                         <> int.to_string(n)
                         <> " messages from "
@@ -57,7 +57,7 @@ pub fn migrate_jsonl(
                       acc + n
                     }
                     Error(e) -> {
-                      io.println(
+                      logging.log(logging.Info, 
                         "[migration] Failed to migrate " <> file <> ": " <> e,
                       )
                       acc

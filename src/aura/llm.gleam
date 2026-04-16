@@ -4,7 +4,7 @@ import gleam/http
 import gleam/http/request
 import gleam/httpc
 import gleam/int
-import gleam/io
+import logging
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -183,7 +183,7 @@ fn post_chat(
   label: String,
 ) -> Result(String, String) {
   let url = config.base_url <> "/chat/completions"
-  io.println("[llm] Calling " <> config.model <> " at " <> url <> label)
+  logging.log(logging.Info, "[llm] Calling " <> config.model <> " at " <> url <> label)
   use parsed_uri <- result.try(
     uri.parse(url)
     |> result.map_error(fn(_) { "Failed to parse URL: " <> url }),
@@ -207,7 +207,7 @@ fn post_chat(
   case resp.status {
     200 -> Ok(resp.body)
     status -> {
-      io.println("[llm] Error from " <> config.model <> ": status " <> int.to_string(status))
+      logging.log(logging.Error, "[llm] Error from " <> config.model <> ": status " <> int.to_string(status))
       Error(
         "LLM API error (status " <> int.to_string(status) <> "): "
         <> string.slice(resp.body, 0, 200),
@@ -337,7 +337,7 @@ pub fn chat_streaming_with_tools(
   callback_pid: process.Pid,
 ) -> Nil {
   let url = config.base_url <> "/chat/completions"
-  io.println("[llm] Streaming " <> config.model <> " at " <> url <> " (with tools)")
+  logging.log(logging.Info, "[llm] Streaming " <> config.model <> " at " <> url <> " (with tools)")
   let base_fields = [
     #("model", json.string(config.model)),
     #("messages", json.array(messages, message_to_json)),

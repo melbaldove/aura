@@ -1,7 +1,7 @@
 import aura/memory
 import aura/skill
 import aura/time
-import gleam/io
+import logging
 import gleam/list
 import gleam/string
 import simplifile
@@ -24,7 +24,7 @@ fn read_optional_file(path: String, label: String, domain: String) -> String {
     Ok(content) -> content
     Error(simplifile.Enoent) -> ""
     Error(e) -> {
-      io.println(
+      logging.log(logging.Info, 
         "[domain] Failed to read " <> label <> " for "
         <> domain <> ": " <> string.inspect(e),
       )
@@ -47,7 +47,7 @@ pub fn load_context(
   let description = case load_description(config_dir) {
     Ok(desc) -> desc
     Error(e) -> {
-      io.println("[domain] Failed to load description for " <> config_dir <> ": " <> string.inspect(e))
+      logging.log(logging.Error, "[domain] Failed to load description for " <> config_dir <> ": " <> string.inspect(e))
       ""
     }
   }
@@ -59,7 +59,7 @@ pub fn load_context(
   let todays_log = case memory.read_daily_log(data_dir, date) {
     Ok(log) -> log
     Error(e) -> {
-      io.println("[domain] Failed to read daily log for " <> domain_name <> ": " <> e)
+      logging.log(logging.Error, "[domain] Failed to read daily log for " <> domain_name <> ": " <> e)
       ""
     }
   }

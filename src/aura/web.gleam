@@ -4,7 +4,7 @@ import gleam/http
 import gleam/http/request
 import gleam/httpc
 import gleam/int
-import gleam/io
+import logging
 import gleam/json
 import gleam/list
 import gleam/result
@@ -31,7 +31,7 @@ pub fn search(query: String, limit: Int) -> Result(List(SearchResult), String) {
     <> "&count="
     <> int.to_string(limit)
 
-  io.println("[web] Searching: " <> query)
+  logging.log(logging.Info, "[web] Searching: " <> query)
 
   use parsed_uri <- result.try(
     uri.parse(url)
@@ -87,7 +87,7 @@ pub fn format_search_results(results: List(SearchResult)) -> String {
 /// Fetch a URL and return its text content (HTML stripped).
 /// Truncates to max_chars to avoid overwhelming the LLM context.
 pub fn fetch(url: String, max_chars: Int) -> Result(String, String) {
-  io.println("[web] Fetching: " <> url)
+  logging.log(logging.Info, "[web] Fetching: " <> url)
 
   use parsed_uri <- result.try(
     uri.parse(url)

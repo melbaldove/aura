@@ -5,7 +5,7 @@ import gleam/http
 import gleam/http/request
 import gleam/httpc
 import gleam/int
-import gleam/io
+import logging
 import gleam/json
 import gleam/option.{type Option, None}
 import gleam/result
@@ -179,7 +179,7 @@ pub fn parse_status(s: String) -> RunStatus {
     "cancelling" -> Cancelling
     "cancelled" -> Cancelled
     unknown -> {
-      io.println("[acp-client] Unknown run status: " <> unknown)
+      logging.log(logging.Warning, "[acp-client] Unknown run status: " <> unknown)
       InProgress
     }
   }
@@ -244,7 +244,7 @@ fn parse_run(body: String) -> Result(Run, String) {
 // ---------------------------------------------------------------------------
 
 fn http_get(url: String) -> Result(String, String) {
-  io.println("[acp-client] GET " <> url)
+  logging.log(logging.Info, "[acp-client] GET " <> url)
   use parsed_uri <- result.try(
     uri.parse(url) |> result.map_error(fn(_) { "Invalid URL: " <> url }),
   )
@@ -272,7 +272,7 @@ fn http_get(url: String) -> Result(String, String) {
 }
 
 fn http_post(url: String, body: String) -> Result(String, String) {
-  io.println("[acp-client] POST " <> url)
+  logging.log(logging.Info, "[acp-client] POST " <> url)
   use parsed_uri <- result.try(
     uri.parse(url) |> result.map_error(fn(_) { "Invalid URL: " <> url }),
   )

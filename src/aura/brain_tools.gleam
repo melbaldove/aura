@@ -20,7 +20,7 @@ import gleam/dict
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
-import gleam/io
+import logging
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -113,7 +113,7 @@ pub fn execute_tool(
   case get_arg(args, "_parse_error") {
     "" -> #(execute_tool_dispatch(ctx, call.name, args), args)
     raw -> {
-      io.println(
+      logging.log(logging.Info, 
         "[brain] Failed to parse tool args for "
         <> call.name
         <> ": "
@@ -763,7 +763,7 @@ fn execute_tool_dispatch(
       let is_skill = list.any(ctx.skill_infos, fn(s) { s.name == name })
       case is_skill {
         True -> {
-          io.println("[brain] Redirecting unknown tool '" <> name <> "' to run_skill (matches skill name)")
+          logging.log(logging.Info, "[brain] Redirecting unknown tool '" <> name <> "' to run_skill (matches skill name)")
           case
             tools.run_skill(ctx.skill_infos, name, get_arg(args, "args"))
           {

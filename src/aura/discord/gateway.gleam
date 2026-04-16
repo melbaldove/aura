@@ -1,7 +1,7 @@
 import aura/discord/types
 import gleam/dynamic/decode
 import gleam/erlang/process
-import gleam/io
+import logging
 import gleam/json
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -141,20 +141,20 @@ fn handle_message(
 ) -> actor.Next(GatewayState, GatewayMessage) {
   case message {
     WsText(text) -> {
-      io.println("[gateway] Frame received: " <> string.slice(text, 0, 80))
+      logging.log(logging.Info, "[gateway] Frame received: " <> string.slice(text, 0, 80))
       handle_text(state, text)
     }
     WsClosed -> {
-      io.println("[gateway] WsClosed received — connection will be restarted by supervisor")
+      logging.log(logging.Info, "[gateway] WsClosed received — connection will be restarted by supervisor")
       state.on_event(types.Reconnect)
       actor.stop_abnormal("WebSocket closed")
     }
     WsError(err) -> {
-      io.println("[gateway] WsError: " <> err)
+      logging.log(logging.Error, "[gateway] WsError: " <> err)
       actor.stop_abnormal("WebSocket error: " <> err)
     }
     SendHeartbeat -> {
-      io.println("[gateway] SendHeartbeat received")
+      logging.log(logging.Info, "[gateway] SendHeartbeat received")
       handle_heartbeat(state)
     }
   }
@@ -167,7 +167,7 @@ fn handle_message(
 fn handle_heartbeat(
   state: GatewayState,
 ) -> actor.Next(GatewayState, GatewayMessage) {
-  io.println("[gateway] Sending heartbeat (seq: " <> string.inspect(state.sequence) <> ")")
+  logging.log(logging.Info, "[gateway] Sending heartbeat (seq: " <> string.inspect(state.sequence) <> ")")
   let payload =
     types.heartbeat_payload(state.sequence)
     |> json.to_string
@@ -179,11 +179,11 @@ fn handle_heartbeat(
 fn schedule_heartbeat(state: GatewayState) -> Nil {
   case state.heartbeat_interval, state.self_subject {
     Some(interval), Some(subject) -> {
-      io.println("[gateway] Scheduling next heartbeat in " <> string.inspect(interval) <> "ms")
+      logging.log(logging.Info, "[gateway] Scheduling next heartbeat in " <> string.inspect(interval) <> "ms")
       schedule_heartbeat_ffi(interval, subject)
     }
     _, _ -> {
-      io.println("[gateway] WARNING: Cannot schedule heartbeat (interval or subject missing)")
+      logging.log(logging.Warning, "[gateway] WARNING: Cannot schedule heartbeat (interval or subject missing)")
       Nil
     }
   }
@@ -249,7 +249,7 @@ fn handle_opcode(
     }
     10 -> handle_hello(state, raw_text)
     11 -> {
-      io.println("[gateway] Heartbeat ACK received")
+      logging.log(logging.Info, "[gateway] Heartbeat ACK received")
       state.on_event(types.HeartbeatAck)
       actor.continue(state)
     }

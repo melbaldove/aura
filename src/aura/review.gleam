@@ -10,7 +10,7 @@ import gleam/dict.{type Dict}
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
-import gleam/io
+import logging
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -55,7 +55,7 @@ pub fn maybe_spawn_review(
           // Build LLM config for the monitor model
           case models.build_llm_config(monitor_model) {
             Error(e) -> {
-              io.println("[review] Failed to build LLM config: " <> e)
+              logging.log(logging.Error, "[review] Failed to build LLM config: " <> e)
               0
             }
             Ok(llm_config) -> {
@@ -91,7 +91,7 @@ pub fn maybe_spawn_review(
                 )
               })
 
-              io.println(
+              logging.log(logging.Info, 
                 "[review] Spawned state + memory review for " <> domain_name,
               )
               0
@@ -190,7 +190,7 @@ pub fn flush_before_compression(
 ) -> Nil {
   case list.length(history) < min_flush_messages {
     True -> {
-      io.println(
+      logging.log(logging.Info, 
         "[review] Flush skipped — fewer than "
         <> int.to_string(min_flush_messages)
         <> " messages",
@@ -234,7 +234,7 @@ pub fn flush_before_compression(
           let count = list.length(written)
           case count > 0 {
             True ->
-              io.println(
+              logging.log(logging.Info, 
                 "[review] Pre-compression flush for "
                 <> domain_name
                 <> ": "
@@ -242,7 +242,7 @@ pub fn flush_before_compression(
                 <> " entries saved",
               )
             False ->
-              io.println(
+              logging.log(logging.Info, 
                 "[review] Pre-compression flush for "
                 <> domain_name
                 <> ": nothing to save",
@@ -251,7 +251,7 @@ pub fn flush_before_compression(
           Nil
         }
         Error(e) -> {
-          io.println(
+          logging.log(logging.Info, 
             "[review] Pre-compression flush failed for "
             <> domain_name
             <> ": "
@@ -329,7 +329,7 @@ pub fn maybe_spawn_skill_review(
         True -> {
           case models.build_llm_config(monitor_model) {
             Error(e) -> {
-              io.println(
+              logging.log(logging.Info, 
                 "[review] Failed to build LLM config for skill review: " <> e,
               )
               0
@@ -346,7 +346,7 @@ pub fn maybe_spawn_skill_review(
                   paths,
                 )
               })
-              io.println("[review] Spawned skill review for " <> domain_name)
+              logging.log(logging.Info, "[review] Spawned skill review for " <> domain_name)
               0
             }
           }
@@ -387,7 +387,7 @@ fn run_review(
   let current_content = case structured_memory.format_for_display(target_path) {
     Ok(c) -> c
     Error(e) -> {
-      io.println("[review] Failed to read " <> target_path <> ": " <> e)
+      logging.log(logging.Error, "[review] Failed to read " <> target_path <> ": " <> e)
       "(empty — could not read current content)"
     }
   }
@@ -659,9 +659,9 @@ fn log_and_notify(
     ])
   case memory.append_domain_log(log_dir, json.to_string(log_entry)) {
     Ok(_) -> Nil
-    Error(e) -> io.println("[review] Failed to write log: " <> e)
+    Error(e) -> logging.log(logging.Error, "[review] Failed to write log: " <> e)
   }
-  io.println(
+  logging.log(logging.Info, 
     "[review] "
     <> review_type
     <> " review for "
@@ -686,7 +686,7 @@ fn log_and_notify(
       let msg = "\u{1F4BE} " <> icon <> ":\n" <> entries_text
       case rest.send_message(discord_token, channel_id, msg, []) {
         Ok(_) -> Nil
-        Error(e) -> io.println("[review] Discord notification failed: " <> e)
+        Error(e) -> logging.log(logging.Error, "[review] Discord notification failed: " <> e)
       }
     }
     False -> Nil
@@ -709,9 +709,9 @@ fn log_review_error(
   case memory.append_domain_log(log_dir, json.to_string(log_entry)) {
     Ok(_) -> Nil
     Error(log_err) ->
-      io.println("[review] Failed to write error log: " <> log_err)
+      logging.log(logging.Error, "[review] Failed to write error log: " <> log_err)
   }
-  io.println(
+  logging.log(logging.Info, 
     "[review] "
     <> review_type
     <> " review failed for "

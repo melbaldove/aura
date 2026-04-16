@@ -13,7 +13,7 @@ import aura/xdg
 import gleam/dict
 import gleam/erlang/process
 import gleam/int
-import gleam/io
+import logging
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -372,7 +372,7 @@ fn validate_schedules(entries: List(ScheduleEntry)) -> Nil {
         case notification.parse_interval(entry.config.every) {
           Ok(_) -> Nil
           Error(e) ->
-            io.println(
+            logging.log(logging.Info, 
               "[scheduler] WARNING: schedule '"
               <> entry.config.name
               <> "' has invalid interval '"
@@ -386,7 +386,7 @@ fn validate_schedules(entries: List(ScheduleEntry)) -> Nil {
         case cron.parse(entry.config.cron) {
           Ok(_) -> Nil
           Error(e) ->
-            io.println(
+            logging.log(logging.Info, 
               "[scheduler] WARNING: schedule '"
               <> entry.config.name
               <> "' has invalid cron '"
@@ -397,7 +397,7 @@ fn validate_schedules(entries: List(ScheduleEntry)) -> Nil {
         }
       }
       other ->
-        io.println(
+        logging.log(logging.Info, 
           "[scheduler] WARNING: schedule '"
           <> entry.config.name
           <> "' has unknown type '"
@@ -429,7 +429,7 @@ pub fn start(
     Ok(configs) ->
       list.map(configs, fn(c) { ScheduleEntry(config: c, last_run_ms: 0) })
     Error(e) -> {
-      io.println("[scheduler] Failed to parse schedules: " <> e)
+      logging.log(logging.Error, "[scheduler] Failed to parse schedules: " <> e)
       []
     }
   }
@@ -459,7 +459,7 @@ pub fn start(
 
   case actor.start(builder) {
     Ok(started) -> {
-      io.println(
+      logging.log(logging.Info, 
         "[scheduler] Started with "
         <> int.to_string(list.length(entries))
         <> " schedule(s)",
@@ -514,7 +514,7 @@ fn handle_message(
         Some(dream_cfg) -> {
           case is_dream_due(dream_cfg.cron, now_ms, state.last_dream_ms) {
             True -> {
-              io.println("[scheduler] Dreaming is due, spawning dream cycle")
+              logging.log(logging.Info, "[scheduler] Dreaming is due, spawning dream cycle")
               process.spawn_unlinked(fn() {
                 dreaming.dream_all(dreaming.DreamConfig(
                   model_spec: dream_cfg.model_spec,
@@ -564,12 +564,12 @@ fn handle_message(
           })
         }
         Error(e) -> {
-          io.println("[scheduler] Failed to reload schedules: " <> e)
+          logging.log(logging.Error, "[scheduler] Failed to reload schedules: " <> e)
           state.entries
         }
       }
       validate_schedules(new_entries)
-      io.println(
+      logging.log(logging.Info, 
         "[scheduler] Reloaded "
         <> int.to_string(list.length(new_entries))
         <> " schedule(s)",
@@ -588,7 +588,7 @@ fn handle_message(
     }
 
     SetDreamConfig(config:) -> {
-      io.println(
+      logging.log(logging.Info, 
         "[scheduler] Dream config set — cron: "
         <> config.cron
         <> ", domains: "
@@ -608,14 +608,14 @@ fn execute_schedule(
   skills: List(skill.SkillInfo),
   on_finding: fn(notification.Finding) -> Nil,
 ) -> Nil {
-  io.println("[scheduler] Executing schedule: " <> config.name)
+  logging.log(logging.Info, "[scheduler] Executing schedule: " <> config.name)
   case tools.run_skill(skills, config.skill, config.args) {
     Ok(output) -> {
       let urgency = classify_urgency(config, output)
       emit_findings(config, output, urgency, on_finding)
     }
     Error(e) -> {
-      io.println("[scheduler] " <> config.name <> " failed: " <> e)
+      logging.log(logging.Error, "[scheduler] " <> config.name <> " failed: " <> e)
       Nil
     }
   }
@@ -670,7 +670,7 @@ fn emit_findings(
 ) -> Nil {
   list.each(config.domains, fn(domain) {
     let summary = string.slice(output, 0, 50)
-    io.println("[scheduler:" <> config.name <> "] Finding: " <> summary)
+    logging.log(logging.Info, "[scheduler:" <> config.name <> "] Finding: " <> summary)
     let finding =
       notification.Finding(
         domain: domain,
@@ -897,9 +897,9 @@ fn write_schedules(state: SchedulerState) -> Nil {
   let toml_content = serialize_schedules(configs)
   case simplifile.write(state.config_path, toml_content) {
     Ok(_) ->
-      io.println("[scheduler] Wrote schedules to " <> state.config_path)
+      logging.log(logging.Info, "[scheduler] Wrote schedules to " <> state.config_path)
     Error(e) ->
-      io.println(
+      logging.log(logging.Info, 
         "[scheduler] Failed to write schedules: " <> string.inspect(e),
       )
   }

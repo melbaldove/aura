@@ -4,7 +4,7 @@ import aura/time
 import aura/xdg
 import gleam/erlang/process
 import gleam/int
-import gleam/io
+import logging
 import gleam/list
 import gleam/string
 
@@ -67,7 +67,7 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
     "ping" -> "pong"
 
     "dream" -> {
-      io.println("[ctl] Dream triggered via CLI")
+      logging.log(logging.Info, "[ctl] Dream triggered via CLI")
       process.spawn_unlinked(fn() {
         dreaming.dream_all(dreaming.DreamConfig(
           model_spec: ctx.dream_model,

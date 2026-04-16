@@ -5,7 +5,7 @@ import aura/models
 import aura/time
 import gleam/erlang/process
 import gleam/int
-import gleam/io
+import logging
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -96,7 +96,7 @@ pub fn start_push_monitor(
     model -> case models.build_llm_config(model) {
       Ok(c) -> Some(c)
       Error(e) -> {
-        io.println("[acp-monitor] No LLM config for " <> model <> ": " <> e)
+        logging.log(logging.Info, "[acp-monitor] No LLM config for " <> model <> ": " <> e)
         None
       }
     }
@@ -130,7 +130,7 @@ pub fn start_push_monitor(
   case actor.start(builder) {
     Ok(started) -> started.data
     Error(err) -> {
-      io.println(
+      logging.log(logging.Info, 
         "[acp-monitor] Failed to start push monitor: "
         <> string.inspect(err),
       )
@@ -369,7 +369,7 @@ fn generate_stdio_progress(
           ))
         }
         Error(e) -> {
-          io.println(
+          logging.log(logging.Info, 
             "[acp-monitor] Stdio progress LLM failed for "
             <> state.session_name <> ": " <> e,
           )
@@ -453,7 +453,7 @@ fn start_monitor_actor(
   let llm_config = case models.build_llm_config(monitor_model) {
     Ok(config) -> Some(config)
     Error(e) -> {
-      io.println("[acp-monitor] No LLM config for " <> monitor_model <> ": " <> e <> " — progress updates disabled")
+      logging.log(logging.Info, "[acp-monitor] No LLM config for " <> monitor_model <> ": " <> e <> " — progress updates disabled")
       None
     }
   }
@@ -490,7 +490,7 @@ fn start_monitor_actor(
         True -> "Monitor"
         False -> "Recovery monitor"
       }
-      io.println("[acp-monitor] " <> label <> " initialized for " <> session_name)
+      logging.log(logging.Info, "[acp-monitor] " <> label <> " initialized for " <> session_name)
 
       // Schedule the first check
       schedule_next(subject)
@@ -538,7 +538,7 @@ fn handle_message(
 fn handle_check(
   state: MonitorState,
 ) -> actor.Next(MonitorState, MonitorMessage) {
-  io.println("[acp-monitor] Checking " <> state.session_name)
+  logging.log(logging.Info, "[acp-monitor] Checking " <> state.session_name)
   // 1. Check if session still exists
   case tmux.session_exists(state.session_name) {
     False -> handle_session_ended(state)
@@ -549,7 +549,7 @@ fn handle_check(
 fn handle_session_ended(
   state: MonitorState,
 ) -> actor.Next(MonitorState, MonitorMessage) {
-  io.println("[acp-monitor] Session " <> state.session_name <> " tmux session disappeared")
+  logging.log(logging.Info, "[acp-monitor] Session " <> state.session_name <> " tmux session disappeared")
   state.on_event(AcpFailed(
     session_name: state.session_name,
     domain: state.task_spec.domain,
@@ -563,7 +563,7 @@ fn handle_session_alive(
 ) -> actor.Next(MonitorState, MonitorMessage) {
   case tmux.capture_pane(state.session_name) {
     Error(err) -> {
-      io.println("[acp-monitor] Failed to capture pane for " <> state.session_name <> ": " <> err)
+      logging.log(logging.Error, "[acp-monitor] Failed to capture pane for " <> state.session_name <> ": " <> err)
       schedule_next(state.self_subject)
       actor.continue(state)
     }
@@ -584,7 +584,7 @@ fn handle_session_alive(
       // Idle detection — surface status ONCE, then shut up until output changes
       case new_idle_checks >= idle_surface_threshold && !new_idle_surfaced {
         True -> {
-          io.println("[acp-monitor] Session " <> state.session_name <> " idle — surfacing status")
+          logging.log(logging.Info, "[acp-monitor] Session " <> state.session_name <> " idle — surfacing status")
           let s = state
           let o = output
           process.spawn_unlinked(fn() { generate_progress_update(s, o, True) })
@@ -713,7 +713,7 @@ fn generate_progress_update(state: MonitorState, output: String, is_idle: Bool) 
           ))
         }
         Error(e) -> {
-          io.println("[acp-monitor] Progress LLM call failed for " <> state.session_name <> ": " <> e)
+          logging.log(logging.Error, "[acp-monitor] Progress LLM call failed for " <> state.session_name <> ": " <> e)
         }
       }
     }

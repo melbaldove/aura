@@ -4,7 +4,7 @@ import gleam/http
 import gleam/http/request
 import gleam/httpc
 import gleam/int
-import gleam/io
+import logging
 import gleam/json
 import gleam/list
 import gleam/result
@@ -47,7 +47,7 @@ pub fn send_message(
   content: String,
   embeds: List(Embed),
 ) -> Result(String, String) {
-  io.println("[discord] Sending " <> int.to_string(string.length(content)) <> " chars to " <> channel_id)
+  logging.log(logging.Info, "[discord] Sending " <> int.to_string(string.length(content)) <> " chars to " <> channel_id)
   let url = api_url("/channels/" <> channel_id <> "/messages")
   let body = types.create_message_payload(content, embeds) |> json.to_string()
   use req <- result.try(authed_request(url, http.Post, token))
@@ -65,13 +65,13 @@ pub fn send_message(
       case json.parse(resp.body, decode.at(["id"], decode.string)) {
         Ok(id) -> Ok(id)
         Error(_) -> {
-          io.println("[discord] Failed to parse message ID from send response")
+          logging.log(logging.Error, "[discord] Failed to parse message ID from send response")
           Ok("")
         }
       }
     }
     status -> {
-      io.println("[discord] Error sending to " <> channel_id <> ": status " <> int.to_string(status))
+      logging.log(logging.Error, "[discord] Error sending to " <> channel_id <> ": status " <> int.to_string(status))
       Error(unexpected_status(status, "send message"))
     }
   }
@@ -84,7 +84,7 @@ pub fn edit_message(
   message_id: String,
   content: String,
 ) -> Result(Nil, String) {
-  io.println(
+  logging.log(logging.Info, 
     "[discord] Editing message " <> message_id <> " in " <> channel_id,
   )
   let url =
@@ -110,7 +110,7 @@ pub fn edit_message(
   case resp.status {
     200 -> Ok(Nil)
     status -> {
-      io.println(
+      logging.log(logging.Info, 
         "[discord] Error editing message: status "
         <> int.to_string(status),
       )
@@ -357,7 +357,7 @@ pub fn send_message_with_components(
   content: String,
   components: json.Json,
 ) -> Result(String, String) {
-  io.println("[discord] Sending message with components to " <> channel_id)
+  logging.log(logging.Info, "[discord] Sending message with components to " <> channel_id)
   let url = api_url("/channels/" <> channel_id <> "/messages")
   let body =
     json.object([

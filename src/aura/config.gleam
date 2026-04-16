@@ -1,6 +1,6 @@
 import aura/cron
 import gleam/int
-import gleam/io
+import logging
 import gleam/list
 import gleam/result
 import gleam/string
@@ -261,7 +261,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
       case cron.parse(c) {
         Ok(_) -> c
         Error(_) -> {
-          io.println("[config] Invalid dreaming.cron '" <> c <> "', using default")
+          logging.log(logging.Warning, "[config] Invalid dreaming.cron '" <> c <> "', using default")
           "0 4 * * *"
         }
       }

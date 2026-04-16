@@ -6,7 +6,7 @@ import aura/acp/stdio
 import aura/acp/tmux
 import aura/acp/types
 import gleam/erlang/process
-import gleam/io
+import logging
 import gleam/list
 import gleam/result
 import gleam/string
@@ -188,7 +188,7 @@ pub fn kill(
       case tmux.kill_session(session_name) {
         Ok(_) -> Ok(Nil)
         Error(e) -> {
-          io.println(
+          logging.log(logging.Info, 
             "[acp] tmux kill failed for " <> session_name <> ": " <> e,
           )
           Ok(Nil)
@@ -319,7 +319,7 @@ fn stdio_event_loop(
       }
     }
     stdio.Exit(code) -> {
-      io.println("[acp-stdio] Process exited with code " <> code <> " for " <> session_name)
+      logging.log(logging.Info, "[acp-stdio] Process exited with code " <> code <> " for " <> session_name)
       case code {
         "0" -> {
           // Clean exit — the agent process terminated normally
@@ -337,7 +337,7 @@ fn stdio_event_loop(
       }
     }
     stdio.Error(reason) -> {
-      io.println("[acp-stdio] Error for " <> session_name <> ": " <> reason)
+      logging.log(logging.Error, "[acp-stdio] Error for " <> session_name <> ": " <> reason)
       on_event(acp_monitor.AcpFailed(session_name, domain, reason))
     }
     stdio.Timeout -> {
@@ -457,7 +457,7 @@ pub fn http_event_loop(
       }
     }
     sse.Error(reason) -> {
-      io.println("[acp-sse] Error for " <> session_name <> ": " <> reason)
+      logging.log(logging.Error, "[acp-sse] Error for " <> session_name <> ": " <> reason)
       // Reconnect after delay
       process.sleep(5000)
       let self_pid = process.self()
@@ -467,11 +467,11 @@ pub fn http_event_loop(
       http_event_loop(on_event, session_name, domain, run_id, server_url)
     }
     sse.Done -> {
-      io.println("[acp-sse] Stream ended for " <> session_name)
+      logging.log(logging.Info, "[acp-sse] Stream ended for " <> session_name)
       Nil
     }
     sse.Timeout -> {
-      io.println("[acp-sse] Timeout for " <> session_name <> ", reconnecting")
+      logging.log(logging.Warning, "[acp-sse] Timeout for " <> session_name <> ", reconnecting")
       let self_pid = process.self()
       process.spawn_unlinked(fn() {
         client.subscribe_events(server_url, run_id, self_pid)

@@ -17,7 +17,7 @@ import aura/scaffold
 import aura/xdg
 import gleam/erlang/process
 import gleam/int
-import gleam/io
+import logging
 import gleam/list
 import simplifile
 import gleam/otp/static_supervisor
@@ -42,11 +42,11 @@ pub fn start(
   let all_skills = case skill.discover(xdg.skills_dir(paths)) {
     Ok(skills) -> skills
     Error(e) -> {
-      io.println("[supervisor] Skill discovery failed: " <> e)
+      logging.log(logging.Error, "[supervisor] Skill discovery failed: " <> e)
       []
     }
   }
-  io.println(
+  logging.log(logging.Info, 
     "[supervisor] Discovered "
     <> int.to_string(list.length(all_skills))
     <> " skills",
@@ -57,23 +57,23 @@ pub fn start(
     db.start(xdg.db_path(paths))
     |> result.map_error(fn(e) { "Failed to start database: " <> e })
   )
-  io.println("[supervisor] Database started")
+  logging.log(logging.Info, "[supervisor] Database started")
 
   // Migrate JSONL files if they exist
   case db_migration.migrate_jsonl(db_subject, paths.data) {
-    Ok(0) -> io.println("[supervisor] No JSONL files to migrate")
+    Ok(0) -> logging.log(logging.Info, "[supervisor] No JSONL files to migrate")
     Ok(n) ->
-      io.println(
+      logging.log(logging.Info, 
         "[supervisor] Migrated " <> int.to_string(n) <> " messages from JSONL",
       )
-    Error(e) -> io.println("[supervisor] JSONL migration error: " <> e)
+    Error(e) -> logging.log(logging.Error, "[supervisor] JSONL migration error: " <> e)
   }
 
   // 4. Resolve Discord channel name → ID mapping
   let channel_map = case rest.list_channels(global_config.discord.token, global_config.discord.guild) {
     Ok(channels) -> channels
     Error(e) -> {
-      io.println("[supervisor] Failed to list Discord channels: " <> e)
+      logging.log(logging.Error, "[supervisor] Failed to list Discord channels: " <> e)
       []
     }
   }
@@ -107,13 +107,13 @@ pub fn start(
                 ))
               }
               Error(e) -> {
-                io.println("[supervisor] Failed to parse domain " <> name <> ": " <> e)
+                logging.log(logging.Error, "[supervisor] Failed to parse domain " <> name <> ": " <> e)
                 Error(Nil)
               }
             }
           }
           Error(_) -> {
-            io.println("[supervisor] Failed to read config for domain " <> name)
+            logging.log(logging.Error, "[supervisor] Failed to read config for domain " <> name)
             Error(Nil)
           }
         }
@@ -124,7 +124,7 @@ pub fn start(
     }
     Error(_) -> #([], [])
   }
-  io.println(
+  logging.log(logging.Info, 
     "[supervisor] Domains: "
     <> string.join(list.map(brain_domains, fn(d) { d.name }), ", "),
   )
@@ -134,17 +134,17 @@ pub fn start(
     Ok(content) -> {
       case validator.parse_rules(content) {
         Ok(rules) -> {
-          io.println("[supervisor] Loaded " <> int.to_string(list.length(rules)) <> " validation rules")
+          logging.log(logging.Info, "[supervisor] Loaded " <> int.to_string(list.length(rules)) <> " validation rules")
           rules
         }
         Error(e) -> {
-          io.println("[supervisor] Failed to parse validation rules: " <> e)
+          logging.log(logging.Error, "[supervisor] Failed to parse validation rules: " <> e)
           []
         }
       }
     }
     Error(_) -> {
-      io.println("[supervisor] No validations.toml found, using no validation rules")
+      logging.log(logging.Info, "[supervisor] No validations.toml found, using no validation rules")
       []
     }
   }
@@ -165,7 +165,7 @@ pub fn start(
       db_subject,
     ),
   )
-  io.println("[supervisor] Flare manager started")
+  logging.log(logging.Info, "[supervisor] Flare manager started")
 
   // 6. Start brain (with flare_subject)
   use brain_subject <- result.try(
@@ -181,7 +181,7 @@ pub fn start(
       acp_subject: flare_subject,
     )),
   )
-  io.println("[supervisor] Brain started")
+  logging.log(logging.Info, "[supervisor] Brain started")
 
   // 6b. Wire flare events to brain
   process.send(flare_subject, flare_manager.SetBrainCallback(fn(event) {
@@ -196,18 +196,18 @@ pub fn start(
   let on_rekindle = fn(flare_id: String, context: String) {
     case flare_manager.rekindle(flare_subject, flare_id, context) {
       Ok(session_name) ->
-        io.println(
+        logging.log(logging.Info, 
           "[scheduler] Rekindled flare " <> flare_id <> " -> " <> session_name,
         )
       Error(e) ->
-        io.println(
+        logging.log(logging.Info, 
           "[scheduler] Failed to rekindle " <> flare_id <> ": " <> e,
         )
     }
   }
   case scheduler.start(schedules_path, all_skills, on_finding, on_rekindle) {
     Ok(scheduler_subject) -> {
-      io.println("[supervisor] Scheduler started")
+      logging.log(logging.Info, "[supervisor] Scheduler started")
       process.send(brain_subject, brain.SetScheduler(scheduler_subject))
       process.send(
         scheduler_subject,
@@ -228,7 +228,7 @@ pub fn start(
       process.send(scheduler_subject, scheduler.SetDreamConfig(dream_config))
     }
     Error(e) -> {
-      io.println("[supervisor] Failed to start scheduler: " <> e)
+      logging.log(logging.Error, "[supervisor] Failed to start scheduler: " <> e)
       Nil
     }
   }
@@ -246,7 +246,7 @@ pub fn start(
     ))
   {
     Ok(_) -> Nil
-    Error(e) -> io.println("[supervisor] Failed to start ctl: " <> e)
+    Error(e) -> logging.log(logging.Error, "[supervisor] Failed to start ctl: " <> e)
   }
 
   // 9. Start OTP supervisor with gateway as supervised child
@@ -259,7 +259,7 @@ pub fn start(
 
   case result {
     Ok(started) -> {
-      io.println("Aura supervisor started")
+      logging.log(logging.Info, "Aura supervisor started")
       Ok(started.pid)
     }
     Error(e) -> Error("Failed to start supervisor: " <> string.inspect(e))
@@ -274,7 +274,7 @@ fn migrate_directories(paths: xdg.Paths) -> Nil {
 
 fn migrate_dir(from: String, to: String, label: String) -> Nil {
   case simplifile.rename(from, to) {
-    Ok(_) -> io.println("[supervisor] Migrated " <> label <> "/workstreams → " <> label <> "/domains")
+    Ok(_) -> logging.log(logging.Info, "[supervisor] Migrated " <> label <> "/workstreams → " <> label <> "/domains")
     Error(_) -> Nil
   }
 }

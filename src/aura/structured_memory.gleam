@@ -2,7 +2,7 @@ import aura/db
 import aura/time
 import gleam/dict.{type Dict}
 import gleam/erlang/process
-import gleam/io
+import logging
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -126,7 +126,7 @@ pub fn set_with_archive(
               case db.supersede_memory_entry(db_subject, old_id, new_id, now) {
                 Ok(Nil) -> Nil
                 Error(err) ->
-                  io.println("[memory] Archive supersede failed: " <> err)
+                  logging.log(logging.Error, "[memory] Archive supersede failed: " <> err)
               }
             }
             Error(_) -> Nil
@@ -137,7 +137,7 @@ pub fn set_with_archive(
       Ok(Nil)
     }
     Error(err) -> {
-      io.println("[memory] Archive insert failed: " <> err)
+      logging.log(logging.Error, "[memory] Archive insert failed: " <> err)
       Ok(Nil)
     }
   }
@@ -171,7 +171,7 @@ pub fn remove_with_archive(
           case db.supersede_memory_entry(db_subject, old_id, 0, now) {
             Ok(Nil) -> Nil
             Error(err) ->
-              io.println("[memory] Archive supersede on remove failed: " <> err)
+              logging.log(logging.Error, "[memory] Archive supersede on remove failed: " <> err)
           }
         }
         Error(_) -> Nil

@@ -1,6 +1,6 @@
 import gleam/bool
 import gleam/int
-import gleam/io
+import logging
 import gleam/list
 import gleam/result
 import gleam/string
@@ -17,9 +17,9 @@ pub fn ask_secret(prompt: String) -> Result(String, String) {
 
 /// Prompt user to choose from numbered options. Returns 1-based index.
 pub fn choose(prompt: String, options: List(String)) -> Result(Int, String) {
-  io.println(prompt)
+  logging.log(logging.Info, prompt)
   list.index_map(options, fn(opt, i) {
-    io.println("  " <> int.to_string(i + 1) <> ". " <> opt)
+    logging.log(logging.Info, "  " <> int.to_string(i + 1) <> ". " <> opt)
   })
 
   use input <- result.try(get_line("> "))
