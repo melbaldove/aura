@@ -409,7 +409,16 @@ fn execute_tool_dispatch(
                   }
                 }
                 "read" -> {
-                  case structured_memory.format_for_display(path) {
+                  let read_domain = case get_arg(args, "domain") {
+                    "" -> ctx.domain_name
+                    d -> d
+                  }
+                  let read_path = case target {
+                    "user" -> xdg.user_path(ctx.paths)
+                    "state" -> xdg.domain_state_path(ctx.paths, read_domain)
+                    _ -> xdg.domain_memory_path(ctx.paths, read_domain)
+                  }
+                  case structured_memory.format_for_display(read_path) {
                     Ok(display) -> TextResult(display)
                     Error(e) -> TextResult("Error: " <> e)
                   }
@@ -1241,6 +1250,12 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "content",
           param_type: "string",
           description: "Entry content (for set)",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "domain",
+          param_type: "string",
+          description: "Domain to read from (for cross-domain read). Omit to use current domain.",
           required: False,
         ),
       ],

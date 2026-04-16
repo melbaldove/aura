@@ -164,6 +164,20 @@ pub fn expand_tool_calls_infers_name_from_param_keys_test() {
   }
 }
 
+pub fn memory_tool_has_domain_param_test() {
+  let tools = brain_tools.make_built_in_tools()
+  let memory_tool = list.find(tools, fn(t) {
+    case t { llm.ToolDefinition(name: "memory", ..) -> True _ -> False }
+  })
+  case memory_tool {
+    Ok(llm.ToolDefinition(parameters: params, ..)) -> {
+      let has_domain = list.any(params, fn(p) { p.name == "domain" })
+      has_domain |> should.be_true
+    }
+    _ -> should.fail()
+  }
+}
+
 pub fn expand_tool_calls_preserves_non_concat_test() {
   let calls = [
     llm.ToolCall(id: "1", name: "read_file", arguments: "{\"path\":\"foo.txt\"}"),
