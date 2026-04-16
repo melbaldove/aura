@@ -1,5 +1,6 @@
 import aura/config
 import aura/config_parser
+import aura/ctl
 import aura/doctor
 import aura/dotenv
 import aura/init
@@ -15,6 +16,18 @@ pub fn main() {
   case args {
     ["doctor"] -> {
       doctor.run()
+      halt(0)
+    }
+    ["dream"] -> {
+      run_ctl("dream")
+      halt(0)
+    }
+    ["status"] -> {
+      run_ctl("status")
+      halt(0)
+    }
+    ["ping"] -> {
+      run_ctl("ping")
       halt(0)
     }
     _ -> run_start()
@@ -61,6 +74,17 @@ fn run_start() {
       io.println("Aura running. Press Ctrl+C to stop.")
       sleep_forever()
     }
+    Error(e) -> {
+      io.println("ERROR: " <> e)
+      halt(1)
+    }
+  }
+}
+
+fn run_ctl(command: String) {
+  let paths = xdg.resolve()
+  case ctl.send(paths, command) {
+    Ok(response) -> io.println(response)
     Error(e) -> {
       io.println("ERROR: " <> e)
       halt(1)

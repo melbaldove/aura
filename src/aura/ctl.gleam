@@ -1,0 +1,130 @@
+import aura/db
+import aura/dreaming
+import aura/models
+import aura/scaffold
+import aura/time
+import aura/xdg
+import gleam/erlang/process
+import gleam/int
+import gleam/io
+import gleam/list
+import gleam/string
+
+// ---------------------------------------------------------------------------
+// FFI
+// ---------------------------------------------------------------------------
+
+@external(erlang, "aura_socket_ffi", "start_listener")
+fn start_listener_ffi(
+  socket_path: String,
+  handler: fn(String) -> String,
+) -> Result(process.Pid, String)
+
+@external(erlang, "aura_socket_ffi", "connect_and_send")
+fn connect_and_send_ffi(
+  socket_path: String,
+  command: String,
+) -> Result(String, String)
+
+@external(erlang, "aura_socket_ffi", "cleanup_socket")
+fn cleanup_socket_ffi(socket_path: String) -> Nil
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+/// Runtime context needed by the command handler. Passed at listener startup.
+pub type CtlContext {
+  CtlContext(
+    paths: xdg.Paths,
+    db_subject: process.Subject(db.DbMessage),
+    domains: List(String),
+    dream_model: String,
+    dream_budget_percent: Int,
+    brain_context: Int,
+    started_at_ms: Int,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Server (runs inside the daemon)
+// ---------------------------------------------------------------------------
+
+/// Start the control socket listener. Called during supervisor startup.
+pub fn start(ctx: CtlContext) -> Result(Nil, String) {
+  let socket_path = xdg.state_path(ctx.paths, "aura.sock")
+  case
+    start_listener_ffi(socket_path, fn(command) {
+      handle_command(command, ctx)
+    })
+  {
+    Ok(_pid) -> Ok(Nil)
+    Error(e) -> Error("Failed to start ctl listener: " <> e)
+  }
+}
+
+/// Handle a single command from a CLI client.
+fn handle_command(command: String, ctx: CtlContext) -> String {
+  case string.trim(command) {
+    "ping" -> "pong"
+
+    "dream" -> {
+      io.println("[ctl] Dream triggered via CLI")
+      process.spawn_unlinked(fn() {
+        dreaming.dream_all(dreaming.DreamConfig(
+          model_spec: ctx.dream_model,
+          paths: ctx.paths,
+          db_subject: ctx.db_subject,
+          domains: ctx.domains,
+          budget_percent: ctx.dream_budget_percent,
+          brain_context: ctx.brain_context,
+        ))
+      })
+      "OK: dream cycle started"
+    }
+
+    "status" -> {
+      let uptime_ms = time.now_ms() - ctx.started_at_ms
+      let uptime_min = uptime_ms / 60_000
+      let domain_list = string.join(ctx.domains, ", ")
+      let last_dream = case
+        list.find_map(ctx.domains, fn(d) {
+          case db.get_last_dream_ms(ctx.db_subject, d) {
+            Ok(ms) if ms > 0 -> Ok(ms)
+            _ -> Error(Nil)
+          }
+        })
+      {
+        Ok(ms) -> {
+          let ago_min = { time.now_ms() - ms } / 60_000
+          int.to_string(ago_min) <> "m ago"
+        }
+        Error(_) -> "never"
+      }
+      "uptime: "
+      <> int.to_string(uptime_min)
+      <> "m | domains: "
+      <> domain_list
+      <> " | last dream: "
+      <> last_dream
+    }
+
+    unknown -> "ERROR: unknown command '" <> unknown <> "'. Commands: ping, dream, status"
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Client (runs from the CLI)
+// ---------------------------------------------------------------------------
+
+/// Send a command to the running Aura daemon via Unix socket.
+pub fn send(paths: xdg.Paths, command: String) -> Result(String, String) {
+  let socket_path = xdg.state_path(paths, "aura.sock")
+  connect_and_send_ffi(socket_path, command)
+}
+
+/// Remove the socket file (called on shutdown).
+pub fn cleanup(paths: xdg.Paths) -> Nil {
+  let socket_path = xdg.state_path(paths, "aura.sock")
+  cleanup_socket_ffi(socket_path)
+}

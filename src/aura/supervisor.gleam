@@ -2,6 +2,7 @@ import aura/acp/flare_manager
 import aura/acp/transport
 import aura/brain
 import aura/config
+import aura/ctl
 import aura/db
 import aura/db_migration
 import aura/discord/rest
@@ -10,6 +11,7 @@ import aura/memory
 import aura/notification
 import aura/poller
 import aura/skill
+import aura/time
 import aura/validator
 import aura/scaffold
 import aura/xdg
@@ -231,7 +233,23 @@ pub fn start(
     }
   }
 
-  // 8. Start OTP supervisor with gateway as supervised child
+  // 8. Start control socket for CLI commands
+  case
+    ctl.start(ctl.CtlContext(
+      paths: paths,
+      db_subject: db_subject,
+      domains: list.map(brain_domains, fn(d) { d.name }),
+      dream_model: global_config.models.dream,
+      dream_budget_percent: global_config.dreaming_budget_percent,
+      brain_context: global_config.brain_context,
+      started_at_ms: time.now_ms(),
+    ))
+  {
+    Ok(_) -> Nil
+    Error(e) -> io.println("[supervisor] Failed to start ctl: " <> e)
+  }
+
+  // 9. Start OTP supervisor with gateway as supervised child
   let discord_config = global_config.discord
   let result =
     static_supervisor.new(static_supervisor.OneForOne)
