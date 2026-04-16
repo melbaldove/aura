@@ -1,10 +1,17 @@
 import aura/db
+import aura/llm
 import aura/structured_memory
+import aura/time
 import aura/xdg
+import gleam/dict
+import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
+import gleam/io
+import gleam/json
 import gleam/list
-import gleam/option.{type Option}
+import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 
 // ---------------------------------------------------------------------------
@@ -45,6 +52,14 @@ pub type DreamConfig {
     brain_context: Int,
   )
 }
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const max_dream_iterations = 12
+
+const retry_delays_ms = [5000, 15_000, 30_000]
 
 // ---------------------------------------------------------------------------
 // Prompt builders
@@ -249,5 +264,459 @@ fn format_compaction_summaries(summaries: List(String)) -> String {
   case summaries {
     [] -> "(no compaction summaries available)"
     _ -> string.join(summaries, "\n\n---\n\n")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dream cycle execution
+// ---------------------------------------------------------------------------
+
+/// Run the full four-phase dream cycle for a single domain.
+/// Phases run sequentially, each building on the shared message context:
+///   1. Consolidate — merge and compress memory entries
+///   2. Promote — extract durable knowledge from episodic sources
+///   3. Reflect — identify higher-level patterns
+///   4. Render — produce final working set via tool calls
+pub fn dream_domain(
+  llm_config: llm.LlmConfig,
+  domain: String,
+  paths: xdg.Paths,
+  db_subject: process.Subject(db.DbMessage),
+  budget_tokens: Int,
+) -> Result(DreamResult, String) {
+  let start_ms = time.now_ms()
+
+  // Gather all sources for this domain
+  let state_path = xdg.domain_state_path(paths, domain)
+  let memory_path = xdg.domain_memory_path(paths, domain)
+  let sources = gather_all_sources(state_path, memory_path, domain, db_subject)
+
+  // Build system prompt and initial messages
+  let system_prompt = build_dream_system_prompt(domain, sources)
+  let initial_messages = [llm.SystemMessage(system_prompt)]
+
+  let tool = dream_memory_tool_definition()
+  let tools = [tool]
+
+  // Phase 1: Consolidate
+  io.println("[dream] " <> domain <> " — phase 1: consolidate")
+  use #(messages_after_consolidate, consolidate_count) <- result.try(
+    run_phase_with_retry(
+      llm_config,
+      initial_messages,
+      tools,
+      "consolidate",
+      build_consolidation_prompt(sources.memory_content),
+      domain,
+      paths,
+      db_subject,
+    ),
+  )
+
+  // Phase 2: Promote
+  io.println("[dream] " <> domain <> " — phase 2: promote")
+  use #(messages_after_promote, promote_count) <- result.try(
+    run_phase_with_retry(
+      llm_config,
+      messages_after_consolidate,
+      tools,
+      "promote",
+      build_promotion_prompt(
+        sources.state_content,
+        sources.flare_outcomes,
+        sources.compaction_summaries,
+      ),
+      domain,
+      paths,
+      db_subject,
+    ),
+  )
+
+  // Phase 3: Reflect
+  io.println("[dream] " <> domain <> " — phase 3: reflect")
+  use #(messages_after_reflect, reflect_count) <- result.try(
+    run_phase_with_retry(
+      llm_config,
+      messages_after_promote,
+      tools,
+      "reflect",
+      build_reflection_prompt(),
+      domain,
+      paths,
+      db_subject,
+    ),
+  )
+
+  // Phase 4: Render
+  io.println("[dream] " <> domain <> " — phase 4: render")
+  use #(final_messages, _render_count) <- result.try(
+    run_phase_with_retry(
+      llm_config,
+      messages_after_reflect,
+      tools,
+      "render",
+      build_render_prompt(budget_tokens),
+      domain,
+      paths,
+      db_subject,
+    ),
+  )
+
+  let duration_ms = time.now_ms() - start_ms
+  let index_entry = extract_index_entry(final_messages)
+
+  Ok(DreamResult(
+    domain: domain,
+    phase_reached: "render",
+    entries_consolidated: consolidate_count,
+    entries_promoted: promote_count,
+    reflections_generated: reflect_count,
+    duration_ms: duration_ms,
+    index_entry: index_entry,
+  ))
+}
+
+/// Memory tool definition for dreaming.
+/// Focused variant — no domain param (dreaming always writes to its own domain).
+pub fn dream_memory_tool_definition() -> llm.ToolDefinition {
+  llm.ToolDefinition(
+    name: "memory",
+    description: "Save information to persistent memory. Use 'set' to create or update an entry by key. Use 'remove' to delete by key.",
+    parameters: [
+      llm.ToolParam(
+        name: "action",
+        param_type: "string",
+        description: "One of: set, remove",
+        required: True,
+      ),
+      llm.ToolParam(
+        name: "target",
+        param_type: "string",
+        description: "'state' for current status, 'memory' for durable knowledge",
+        required: True,
+      ),
+      llm.ToolParam(
+        name: "key",
+        param_type: "string",
+        description: "Entry key. Use descriptive keys like 'db-pattern', 'deploy-process'.",
+        required: True,
+      ),
+      llm.ToolParam(
+        name: "content",
+        param_type: "string",
+        description: "Entry content (for set)",
+        required: False,
+      ),
+    ],
+  )
+}
+
+/// Run a single phase with retry logic (initial + 3 retries with 5s/15s/30s delays).
+/// Returns the updated message list and the count of tool calls executed.
+fn run_phase_with_retry(
+  llm_config: llm.LlmConfig,
+  messages: List(llm.Message),
+  tools: List(llm.ToolDefinition),
+  phase: String,
+  prompt: String,
+  domain: String,
+  paths: xdg.Paths,
+  db_subject: process.Subject(db.DbMessage),
+) -> Result(#(List(llm.Message), Int), String) {
+  let phase_messages =
+    list.append(messages, [llm.UserMessage(prompt)])
+
+  run_phase_attempt(
+    llm_config,
+    phase_messages,
+    tools,
+    phase,
+    domain,
+    paths,
+    db_subject,
+    retry_delays_ms,
+  )
+}
+
+/// Recursive retry: try the LLM call, on failure sleep and retry with remaining delays.
+fn run_phase_attempt(
+  llm_config: llm.LlmConfig,
+  messages: List(llm.Message),
+  tools: List(llm.ToolDefinition),
+  phase: String,
+  domain: String,
+  paths: xdg.Paths,
+  db_subject: process.Subject(db.DbMessage),
+  remaining_delays: List(Int),
+) -> Result(#(List(llm.Message), Int), String) {
+  case dream_tool_loop(
+    llm_config,
+    messages,
+    tools,
+    fn(call) { execute_dream_memory_tool(call, domain, paths, db_subject) },
+    0,
+    0,
+  ) {
+    Ok(#(updated_messages, tool_count)) -> {
+      Ok(#(updated_messages, tool_count))
+    }
+    Error(err) -> {
+      case remaining_delays {
+        [] -> {
+          io.println(
+            "[dream] " <> domain <> " — phase " <> phase
+            <> " failed after all retries: " <> err,
+          )
+          Error(
+            "Phase " <> phase <> " failed after all retries: " <> err,
+          )
+        }
+        [delay, ..rest] -> {
+          io.println(
+            "[dream] " <> domain <> " — phase " <> phase
+            <> " failed (" <> err <> "), retrying in "
+            <> int.to_string(delay) <> "ms",
+          )
+          process.sleep(delay)
+          run_phase_attempt(
+            llm_config,
+            messages,
+            tools,
+            phase,
+            domain,
+            paths,
+            db_subject,
+            rest,
+          )
+        }
+      }
+    }
+  }
+}
+
+/// Tool loop for dreaming. Calls LLM with tools, executes any tool calls,
+/// appends results, and repeats until no tool calls or max iterations.
+/// Returns the updated message list and total tool call count.
+pub fn dream_tool_loop(
+  llm_config: llm.LlmConfig,
+  messages: List(llm.Message),
+  tools: List(llm.ToolDefinition),
+  tool_executor: fn(llm.ToolCall) -> #(String, Option(#(String, String))),
+  iteration: Int,
+  tool_count: Int,
+) -> Result(#(List(llm.Message), Int), String) {
+  case iteration >= max_dream_iterations {
+    True -> Ok(#(messages, tool_count))
+    False -> {
+      use response <- result.try(llm.chat_with_tools(
+        llm_config,
+        messages,
+        tools,
+      ))
+      case response.tool_calls {
+        [] -> {
+          // No tool calls — append assistant text response and return
+          let updated_messages = case response.content {
+            "" -> messages
+            content ->
+              list.append(messages, [llm.AssistantMessage(content)])
+          }
+          Ok(#(updated_messages, tool_count))
+        }
+        calls -> {
+          // Execute each tool call
+          let #(_written, result_messages) =
+            list.fold(calls, #([], []), fn(acc, call) {
+              let #(acc_written, acc_results) = acc
+              let #(result_text, entry) = tool_executor(call)
+              let new_written = case entry {
+                Some(e) -> [e, ..acc_written]
+                None -> acc_written
+              }
+              #(new_written, [
+                llm.ToolResultMessage(call.id, result_text),
+                ..acc_results
+              ])
+            })
+
+          let new_count = tool_count + list.length(calls)
+
+          // Build updated messages for next iteration
+          let updated_messages =
+            list.flatten([
+              messages,
+              [llm.AssistantToolCallMessage(response.content, calls)],
+              list.reverse(result_messages),
+            ])
+
+          dream_tool_loop(
+            llm_config,
+            updated_messages,
+            tools,
+            tool_executor,
+            iteration + 1,
+            new_count,
+          )
+        }
+      }
+    }
+  }
+}
+
+/// Execute a single memory tool call for dreaming.
+/// Uses set_with_archive and remove_with_archive for write-through to SQLite.
+fn execute_dream_memory_tool(
+  call: llm.ToolCall,
+  domain: String,
+  paths: xdg.Paths,
+  db_subject: process.Subject(db.DbMessage),
+) -> #(String, Option(#(String, String))) {
+  case parse_dream_args(call.arguments) {
+    Error(_) -> #(
+      "Error: failed to parse tool arguments as JSON: "
+        <> string.slice(call.arguments, 0, 100),
+      None,
+    )
+    Ok(args) -> {
+      let action = get_dream_arg(args, "action")
+      let target = get_dream_arg(args, "target")
+      let key = get_dream_arg(args, "key")
+      let content = get_dream_arg(args, "content")
+
+      // Resolve path — dreaming writes to state or memory
+      let path_result = case target {
+        "state" -> Ok(xdg.domain_state_path(paths, domain))
+        "memory" -> Ok(xdg.domain_memory_path(paths, domain))
+        unknown ->
+          Error(
+            "Error: unknown target '"
+            <> unknown
+            <> "'. Use 'state' or 'memory'.",
+          )
+      }
+
+      case path_result {
+        Error(e) -> #(e, None)
+        Ok(path) ->
+          execute_dream_memory_action(
+            action,
+            path,
+            key,
+            content,
+            db_subject,
+            domain,
+            target,
+          )
+      }
+    }
+  }
+}
+
+/// Execute a memory set/remove action with archive write-through.
+fn execute_dream_memory_action(
+  action: String,
+  path: String,
+  key: String,
+  content: String,
+  db_subject: process.Subject(db.DbMessage),
+  domain: String,
+  target: String,
+) -> #(String, Option(#(String, String))) {
+  case action {
+    "set" -> {
+      case key {
+        "" -> #("Error: key is required for set", None)
+        _ ->
+          case
+            structured_memory.set_with_archive(
+              path,
+              key,
+              content,
+              db_subject,
+              domain,
+              target,
+            )
+          {
+            Ok(_) -> #("Saved [" <> key <> "]", Some(#(key, content)))
+            Error(e) -> #("Error: " <> e, None)
+          }
+      }
+    }
+    "remove" -> {
+      case key {
+        "" -> #("Error: key is required for remove", None)
+        _ ->
+          case
+            structured_memory.remove_with_archive(
+              path,
+              key,
+              db_subject,
+              domain,
+              target,
+            )
+          {
+            Ok(_) -> #("Removed [" <> key <> "]", Some(#(key, "(removed)")))
+            Error(e) -> #("Error: " <> e, None)
+          }
+      }
+    }
+    _ -> #("Error: unknown action '" <> action <> "'. Use set or remove.", None)
+  }
+}
+
+/// Extract the domain-index entry from the message history.
+/// Scans for a tool call that set the key "domain-index" and returns its content.
+pub fn extract_index_entry(messages: List(llm.Message)) -> Option(String) {
+  list.fold(messages, None, fn(acc, msg) {
+    case msg {
+      llm.AssistantToolCallMessage(_, calls) -> {
+        // Check each tool call for a domain-index set
+        list.fold(calls, acc, fn(inner_acc, call) {
+          case call.name == "memory" {
+            False -> inner_acc
+            True -> {
+              case parse_dream_args(call.arguments) {
+                Error(_) -> inner_acc
+                Ok(args) -> {
+                  let action = get_dream_arg(args, "action")
+                  let key = get_dream_arg(args, "key")
+                  let content = get_dream_arg(args, "content")
+                  case action == "set" && key == "domain-index" {
+                    True -> Some(content)
+                    False -> inner_acc
+                  }
+                }
+              }
+            }
+          }
+        })
+      }
+      _ -> acc
+    }
+  })
+}
+
+/// Get the retry delays list (exposed for testing).
+pub fn get_retry_delays() -> List(Int) {
+  retry_delays_ms
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers for argument parsing
+// ---------------------------------------------------------------------------
+
+fn parse_dream_args(
+  json_str: String,
+) -> Result(dict.Dict(String, String), Nil) {
+  case json.parse(json_str, decode.dict(decode.string, decode.string)) {
+    Ok(d) -> Ok(d)
+    Error(_) -> Error(Nil)
+  }
+}
+
+fn get_dream_arg(args: dict.Dict(String, String), key: String) -> String {
+  case dict.get(args, key) {
+    Ok(v) -> v
+    Error(_) -> ""
   }
 }

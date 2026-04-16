@@ -1,5 +1,8 @@
 import aura/dreaming
+import aura/llm
 import aura/test_helpers
+import gleam/list
+import gleam/option.{None, Some}
 import gleam/string
 import gleeunit/should
 import simplifile
@@ -193,4 +196,149 @@ pub fn build_dream_system_prompt_empty_sources_test() {
   prompt |> string.contains("(empty)") |> should.be_true
   prompt |> string.contains("(no flare outcomes since last dream)") |> should.be_true
   prompt |> string.contains("(no compaction summaries available)") |> should.be_true
+}
+
+// ---------------------------------------------------------------------------
+// Dream cycle execution tests
+// ---------------------------------------------------------------------------
+
+pub fn retry_delays_has_three_entries_test() {
+  // 3 retry delays = 4 total attempts (initial + 3 retries)
+  let delays = dreaming.get_retry_delays()
+  list.length(delays) |> should.equal(3)
+}
+
+pub fn retry_delays_are_increasing_test() {
+  let delays = dreaming.get_retry_delays()
+  case delays {
+    [a, b, c] -> {
+      { a < b } |> should.be_true
+      { b < c } |> should.be_true
+    }
+    _ -> should.fail()
+  }
+}
+
+pub fn extract_index_entry_found_test() {
+  // Build a message list that contains an AssistantToolCallMessage
+  // with a "domain-index" set call
+  let messages = [
+    llm.SystemMessage("system prompt"),
+    llm.UserMessage("consolidate"),
+    llm.AssistantMessage("consolidated text"),
+    llm.UserMessage("render"),
+    llm.AssistantToolCallMessage("", [
+      llm.ToolCall(
+        id: "call_1",
+        name: "memory",
+        arguments: "{\"action\":\"set\",\"target\":\"memory\",\"key\":\"db-pattern\",\"content\":\"All DB through actor\"}",
+      ),
+      llm.ToolCall(
+        id: "call_2",
+        name: "memory",
+        arguments: "{\"action\":\"set\",\"target\":\"memory\",\"key\":\"domain-index\",\"content\":\"Backend domain covers DB, API, and deploy patterns.\"}",
+      ),
+    ]),
+    llm.ToolResultMessage("call_1", "Saved [db-pattern]"),
+    llm.ToolResultMessage("call_2", "Saved [domain-index]"),
+  ]
+
+  let result = dreaming.extract_index_entry(messages)
+  result
+  |> should.equal(Some("Backend domain covers DB, API, and deploy patterns."))
+}
+
+pub fn extract_index_entry_not_found_test() {
+  // No domain-index tool call in the messages
+  let messages = [
+    llm.SystemMessage("system prompt"),
+    llm.UserMessage("render"),
+    llm.AssistantToolCallMessage("", [
+      llm.ToolCall(
+        id: "call_1",
+        name: "memory",
+        arguments: "{\"action\":\"set\",\"target\":\"memory\",\"key\":\"db-pattern\",\"content\":\"value\"}",
+      ),
+    ]),
+    llm.ToolResultMessage("call_1", "Saved [db-pattern]"),
+  ]
+
+  dreaming.extract_index_entry(messages) |> should.equal(None)
+}
+
+pub fn extract_index_entry_empty_messages_test() {
+  dreaming.extract_index_entry([]) |> should.equal(None)
+}
+
+pub fn extract_index_entry_only_text_messages_test() {
+  let messages = [
+    llm.SystemMessage("system"),
+    llm.UserMessage("hello"),
+    llm.AssistantMessage("response"),
+  ]
+
+  dreaming.extract_index_entry(messages) |> should.equal(None)
+}
+
+pub fn extract_index_entry_uses_last_occurrence_test() {
+  // If domain-index is set multiple times, the last occurrence wins
+  let messages = [
+    llm.AssistantToolCallMessage("", [
+      llm.ToolCall(
+        id: "call_1",
+        name: "memory",
+        arguments: "{\"action\":\"set\",\"target\":\"memory\",\"key\":\"domain-index\",\"content\":\"First version.\"}",
+      ),
+    ]),
+    llm.ToolResultMessage("call_1", "Saved [domain-index]"),
+    llm.AssistantToolCallMessage("", [
+      llm.ToolCall(
+        id: "call_2",
+        name: "memory",
+        arguments: "{\"action\":\"set\",\"target\":\"memory\",\"key\":\"domain-index\",\"content\":\"Updated version.\"}",
+      ),
+    ]),
+    llm.ToolResultMessage("call_2", "Saved [domain-index]"),
+  ]
+
+  dreaming.extract_index_entry(messages)
+  |> should.equal(Some("Updated version."))
+}
+
+pub fn extract_index_entry_ignores_remove_action_test() {
+  // A remove action for domain-index should not be extracted
+  let messages = [
+    llm.AssistantToolCallMessage("", [
+      llm.ToolCall(
+        id: "call_1",
+        name: "memory",
+        arguments: "{\"action\":\"remove\",\"target\":\"memory\",\"key\":\"domain-index\"}",
+      ),
+    ]),
+    llm.ToolResultMessage("call_1", "Removed [domain-index]"),
+  ]
+
+  dreaming.extract_index_entry(messages) |> should.equal(None)
+}
+
+pub fn dream_memory_tool_definition_test() {
+  let tool = dreaming.dream_memory_tool_definition()
+
+  tool.name |> should.equal("memory")
+
+  // Has 4 parameters: action, target, key, content
+  list.length(tool.parameters) |> should.equal(4)
+
+  // action, target, key are required; content is optional
+  let required_names =
+    tool.parameters
+    |> list.filter(fn(p) { p.required })
+    |> list.map(fn(p) { p.name })
+  required_names |> should.equal(["action", "target", "key"])
+
+  let optional_names =
+    tool.parameters
+    |> list.filter(fn(p) { !p.required })
+    |> list.map(fn(p) { p.name })
+  optional_names |> should.equal(["content"])
 }
