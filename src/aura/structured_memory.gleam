@@ -1,13 +1,13 @@
+import aura/db
+import aura/time
 import gleam/dict.{type Dict}
+import gleam/erlang/process
+import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import simplifile
-
-const memory_char_limit = 2200
-
-const user_char_limit = 1375
 
 /// A keyed entry in a memory file.
 pub type Entry {
@@ -69,7 +69,7 @@ fn finalize_entry(
 }
 
 /// Upsert an entry by key. Creates if new, replaces if exists.
-/// Scans for security threats and enforces char limits.
+/// Scans for security threats before writing.
 pub fn set(path: String, key: String, content: String) -> Result(Nil, String) {
   use _ <- result.try(security_scan(content))
   use entries <- result.try(read_entries(path))
@@ -83,9 +83,100 @@ pub fn set(path: String, key: String, content: String) -> Result(Nil, String) {
     })
     False -> list.append(entries, [Entry(key: key, content: content)])
   }
-  let limit = char_limit_for_path(path)
-  use _ <- result.try(check_char_limit(updated, limit))
   write_entries(path, updated)
+}
+
+/// Upsert an entry by key with write-through to the SQLite archive.
+/// Does everything `set` does, plus inserts the new entry into the archive
+/// and supersedes the old one if it was an update. Archive writes are
+/// best-effort — flat file is source of truth during normal operation.
+pub fn set_with_archive(
+  path: String,
+  key: String,
+  content: String,
+  db_subject: process.Subject(db.DbMessage),
+  domain: String,
+  target: String,
+) -> Result(Nil, String) {
+  use _ <- result.try(security_scan(content))
+  use entries <- result.try(read_entries(path))
+  let exists = list.any(entries, fn(e) { e.key == key })
+  let updated = case exists {
+    True -> list.map(entries, fn(e) {
+      case e.key == key {
+        True -> Entry(key: key, content: content)
+        False -> e
+      }
+    })
+    False -> list.append(entries, [Entry(key: key, content: content)])
+  }
+  use _ <- result.try(write_entries(path, updated))
+
+  // Write-through to SQLite archive (best-effort)
+  let now = time.now_ms()
+  case db.insert_memory_entry(db_subject, domain, target, key, content, now) {
+    Ok(new_id) -> {
+      // If the key already existed, supersede the old archive entry
+      case exists {
+        True -> {
+          case db.get_active_entry_id(db_subject, domain, target, key, new_id) {
+            Ok(old_id) -> {
+              case db.supersede_memory_entry(db_subject, old_id, new_id, now) {
+                Ok(Nil) -> Nil
+                Error(err) ->
+                  io.println("[memory] Archive supersede failed: " <> err)
+              }
+            }
+            Error(_) -> Nil
+          }
+        }
+        False -> Nil
+      }
+      Ok(Nil)
+    }
+    Error(err) -> {
+      io.println("[memory] Archive insert failed: " <> err)
+      Ok(Nil)
+    }
+  }
+}
+
+/// Remove an entry by key with write-through to the SQLite archive.
+/// Does everything `remove` does, plus supersedes the active archive entry.
+/// Archive writes are best-effort — flat file is source of truth.
+pub fn remove_with_archive(
+  path: String,
+  key: String,
+  db_subject: process.Subject(db.DbMessage),
+  domain: String,
+  target: String,
+) -> Result(Nil, String) {
+  use entries <- result.try(read_entries(path))
+  let filtered = list.filter(entries, fn(e) { e.key != key })
+  case list.length(filtered) == list.length(entries) {
+    True -> {
+      let keys = list.map(entries, fn(e) { e.key })
+      Error("No entry with key '" <> key <> "'. Existing keys: " <> string.join(keys, ", "))
+    }
+    False -> {
+      use _ <- result.try(write_entries(path, filtered))
+
+      // Supersede the archive entry (best-effort)
+      // Use superseded_by = 0 to indicate explicit removal (no replacement)
+      let now = time.now_ms()
+      case db.get_active_entry_id(db_subject, domain, target, key, 0) {
+        Ok(old_id) -> {
+          case db.supersede_memory_entry(db_subject, old_id, 0, now) {
+            Ok(Nil) -> Nil
+            Error(err) ->
+              io.println("[memory] Archive supersede on remove failed: " <> err)
+          }
+        }
+        Error(_) -> Nil
+      }
+      Ok(Nil)
+    }
+  }
 }
 
 /// Remove an entry by key.
@@ -126,32 +217,6 @@ fn write_entries(path: String, entries: List(Entry)) -> Result(Nil, String) {
   |> result.map_error(fn(e) {
     "Failed to write memory file: " <> string.inspect(e)
   })
-}
-
-fn char_limit_for_path(path: String) -> Int {
-  case string.contains(path, "USER") {
-    True -> user_char_limit
-    False -> memory_char_limit
-  }
-}
-
-fn check_char_limit(
-  entries: List(Entry),
-  limit: Int,
-) -> Result(Nil, String) {
-  let total =
-    list.fold(entries, 0, fn(acc, e) { acc + string.length(e.key) + string.length(e.content) })
-  case total > limit {
-    True ->
-      Error(
-        "Memory limit exceeded ("
-        <> string.inspect(total)
-        <> "/"
-        <> string.inspect(limit)
-        <> " chars). Remove old entries first.",
-      )
-    False -> Ok(Nil)
-  }
 }
 
 /// Security scan — blocks prompt injection and exfiltration patterns.
