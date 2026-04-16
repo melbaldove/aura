@@ -81,3 +81,17 @@ pub fn build_llm_config_with_key_bare_model_errors_test() {
   models.build_llm_config_with_key("glm-5-turbo", "some-key")
   |> should.equal(Error("Unknown model provider in spec: glm-5-turbo"))
 }
+
+// --- memory_token_budget ---
+
+pub fn memory_token_budget_known_model_test() {
+  // zai/glm-5.1 has 204_800 context, 10% = 20_480
+  models.memory_token_budget("zai/glm-5.1", 0, 10)
+  |> should.equal(20_480)
+}
+
+pub fn memory_token_budget_unknown_model_fallback_test() {
+  // Unknown model with no config override falls back to 20_000
+  models.memory_token_budget("unknown/model", 0, 10)
+  |> should.equal(20_000)
+}

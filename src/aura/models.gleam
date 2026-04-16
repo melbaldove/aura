@@ -137,6 +137,18 @@ pub fn resolve_context_length(
   }
 }
 
+/// Calculate total memory token budget from context window and percentage.
+pub fn memory_token_budget(
+  model_spec: String,
+  config_context: Int,
+  percent: Int,
+) -> Int {
+  case resolve_context_length(model_spec, config_context) {
+    Ok(ctx) -> ctx * percent / 100
+    Error(_) -> 20_000
+  }
+}
+
 /// Build LLM config with an explicit API key (for validation during init).
 /// Similar to build_llm_config but uses the provided key instead of reading from env.
 pub fn build_llm_config_with_key(
