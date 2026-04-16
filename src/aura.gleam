@@ -9,6 +9,7 @@ import aura/xdg
 import gleam/io
 import gleam/result
 import gleam/string
+import logging
 import simplifile
 
 pub fn main() {
@@ -35,6 +36,7 @@ pub fn main() {
 }
 
 fn run_start() {
+  logging.configure()
   io.println("Aura v0.1.0")
   let paths = xdg.resolve()
 

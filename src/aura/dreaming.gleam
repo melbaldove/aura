@@ -14,25 +14,23 @@ import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import logging
 
 // ---------------------------------------------------------------------------
-// FFI — direct stderr logging for daemon observability
+// Logging — uses OTP logger (process-independent, works from any spawn)
 // ---------------------------------------------------------------------------
 
-@external(erlang, "aura_io_ffi", "log_stdout")
-fn log_stdout(message: String) -> Nil
-
-/// Log to both stdout (for operator/launchd) and domain log.jsonl (for structured history).
+/// Log to OTP logger + domain log.jsonl (structured history).
 fn dream_log(message: String, domain: String, paths: xdg.Paths) -> Nil {
-  log_stdout(message)
+  logging.log(logging.Info, message)
   let log_dir = xdg.domain_log_dir(paths, domain)
   let _ = memory.append_domain_log(log_dir, message)
   Nil
 }
 
-/// Log to stdout only (for messages without a domain context).
+/// Log to OTP logger only (for messages without a domain context).
 fn dream_log_global(message: String) -> Nil {
-  log_stdout(message)
+  logging.log(logging.Info, message)
 }
 import gleam/string
 
