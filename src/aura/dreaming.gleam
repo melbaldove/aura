@@ -9,7 +9,6 @@ import gleam/dict
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
-import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -515,7 +514,7 @@ fn run_phase_attempt(
     Error(err) -> {
       case remaining_delays {
         [] -> {
-          io.println(
+          logging.log(logging.Info,
             "[dream] " <> domain_label <> " — phase " <> phase
             <> " failed after all retries: " <> err,
           )
@@ -524,7 +523,7 @@ fn run_phase_attempt(
           )
         }
         [delay, ..rest] -> {
-          io.println(
+          logging.log(logging.Info,
             "[dream] " <> domain_label <> " — phase " <> phase
             <> " failed (" <> err <> "), retrying in "
             <> int.to_string(delay) <> "ms",
@@ -826,7 +825,7 @@ fn get_dream_arg(args: dict.Dict(String, String), key: String) -> String {
 /// then runs the global consolidation pass (reduce phase).
 pub fn dream_all(config: DreamConfig) -> Nil {
   let start_ms = time.now_ms()
-  io.println(
+  logging.log(logging.Info,
     "[dream] Starting dream cycle for "
     <> int.to_string(list.length(config.domains))
     <> " domains",
@@ -871,7 +870,7 @@ pub fn dream_all(config: DreamConfig) -> Nil {
       )
 
       let duration_ms = time.now_ms() - start_ms
-      io.println(
+      logging.log(logging.Info,
         "[dream] Cycle complete in " <> int.to_string(duration_ms / 1000) <> "s",
       )
     }
@@ -921,7 +920,7 @@ pub fn collect_results(
       let remaining_ms = deadline_ms - now
       case remaining_ms <= 0 {
         True -> {
-          io.println(
+          logging.log(logging.Info,
             "[dream] Timeout: "
             <> int.to_string(remaining)
             <> " domains still pending",
@@ -952,7 +951,7 @@ pub fn collect_results(
               )
             }
             Error(Nil) -> {
-              io.println(
+              logging.log(logging.Info,
                 "[dream] Timeout: "
                 <> int.to_string(remaining)
                 <> " domains still pending",
@@ -1005,7 +1004,7 @@ fn log_domain_results(
         {
           Ok(_) -> Nil
           Error(e) ->
-            io.println(
+            logging.log(logging.Info,
               "[dream] Failed to log dream run for "
               <> dr.domain
               <> ": "
@@ -1135,7 +1134,7 @@ fn dream_global(
             }
             Ok(#(_final_messages, _render_count)) -> {
               let duration_ms = time.now_ms() - start_ms
-              io.println(
+              logging.log(logging.Info,
                 "[dream] _global — complete ("
                 <> int.to_string(duration_ms / 1000)
                 <> "s)",
