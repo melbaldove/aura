@@ -10,7 +10,7 @@ Aura (Autonomous Unified Runtime Agent) is a local-first executive assistant fra
 
 ```bash
 gleam build          # Compile
-gleam test           # Run all tests (316 tests)
+gleam test           # Run all tests (486 tests)
 gleam run -- start   # Start the agent
 gleam run -- init    # First-run setup wizard
 ```
@@ -39,7 +39,7 @@ supervisor (OneForOne)
 ├── flare_manager Flare lifecycle actor — roster, dispatch, monitor, SQLite persist
 ├── brain       Routes messages, LLM tool loop, progressive streaming, review
 ├── (domains loaded as context, not actors)
-└── scheduler   Config-driven cron + interval schedules
+└── scheduler   Config-driven cron + interval + dreaming schedules
 ```
 
 ### Message flow
@@ -77,6 +77,7 @@ Two-model pipeline: vision model as preprocessor, orchestrator model for tool lo
 - **Skill** — a directory with a SKILL.md and optional CLI entrypoint. Instruction-only skills teach the LLM; external skills are invoked as subprocesses.
 - **Tool** — primitive operation the LLM can call. 13 built-in tools (filesystem, Discord, skills, memory, search, web, schedules, shell).
 - **Schedule** — a config-driven periodic task defined in `schedules.toml`. Supports fixed intervals ("15m") and cron expressions ("0 9 * * *"). Each schedule invokes a skill, classifies urgency via LLM, and emits findings.
+- **Dreaming** — periodic offline memory consolidation. Cron-triggered, per-domain, parallel. Four-phase LLM process (consolidate, promote, reflect, render) that synthesizes knowledge from memory, state, flare outcomes, and conversation summaries. Writes to flat files through SQLite archive for lossless lineage tracking.
 
 ## Source layout
 
@@ -96,7 +97,8 @@ src/aura/
   llm.gleam             OpenAI-compatible chat + streaming + tool calling
   tools.gleam           Built-in tool implementations
   web.gleam             Web search (Brave) and URL fetching with HTML stripping
-  scheduler.gleam       Config-driven scheduler actor (cron + interval)
+  dreaming.gleam        Offline memory consolidation — four-phase LLM synthesis, map-reduce orchestration
+  scheduler.gleam       Config-driven scheduler actor (cron + interval + dreaming)
   cron.gleam            Cron expression parser and matcher
   shell.gleam           Shell execution with layered security (patterns, normalization, approval)
   skill.gleam           Skill discovery, creation, invocation
@@ -151,7 +153,7 @@ src/
 - Use `gleeunit` + `should` assertions
 - Test pure functions directly. Test actors via their public convenience functions.
 - Temp files in `/tmp/aura-*-test`, clean up after
-- 370 tests currently. Don't regress.
+- 486 tests currently. Don't regress.
 - **HARD RULE: Every bug fix must include a regression test.** No exceptions for "it's hard to test" — if the buggy code has pure functions (encoding, parsing, extraction), test those. If the bug is in process/IO code that genuinely can't be unit tested, document why in the commit message. A `fix:` commit without a test is incomplete.
 
 ### Database
@@ -160,7 +162,9 @@ src/
 - WAL mode, 1s busy timeout
 - All access through the `db` actor (never open connections directly)
 - FTS5 for full-text search, auto-synced via triggers
-- Schema versioned via `schema_version` table
+- Schema versioned via `schema_version` table (currently v4)
+- `memory_entries` table for lossless memory archive with lineage tracking
+- `dream_runs` table for dream cycle history
 - Conversations keyed by `(platform, platform_id)` — multi-platform ready
 
 ### Tool system
@@ -197,9 +201,22 @@ src/
 - Keyed entry format: `§ key\ncontent` blocks, upserted by key (set/remove)
 - Three targets: `state` (per-domain STATE.md), `memory` (per-domain MEMORY.md), `user` (global USER.md)
 - XDG paths: STATE.md in `~/.local/state/aura/`, MEMORY.md in `~/.local/share/aura/`, USER.md in `~/.config/aura/`
+- Memory files are materialized views — flat files are source of truth during conversation, backed by SQLite archive (`memory_entries`) for lossless lineage tracking
+- Write-through: `set_with_archive` / `remove_with_archive` write flat file and archive entry atomically; archive writes are best-effort
+- Token budget (10% of context window, configurable via `dreaming.budget_percent`) replaces hard character caps. Dreaming enforces budget offline; LLM writes freely during conversation
 - Security scan blocks prompt injection and exfiltration patterns
 - Active memory review: every 10 turns, spawns background processes to auto-persist state + knowledge
 - Both global memory and user profile loaded into system prompt on every turn
+
+### Dreaming
+
+- Cron-triggered offline memory consolidation, runs all domains in parallel via map-reduce
+- Four phases per domain: consolidate (merge/compress entries), promote (extract durable knowledge from episodic sources), reflect (identify cross-domain patterns), render (produce final working set within token budget)
+- Global pass after all domains: consolidates global MEMORY.md and USER.md with domain index summaries
+- Config in global `config.toml`: `[models] dream` (model spec, defaults to brain model), `[dreaming] cron` (cron expression, default `"0 4 * * *"`), `[dreaming] budget_percent` (% of context window for memory, default `10`)
+- Dream results logged to `dream_runs` table; memory writes go through `set_with_archive` / `remove_with_archive` for lineage tracking
+- Retry logic: each phase retries up to 3 times with 5s/15s/30s backoff delays
+- Per-domain timeout: 10 minutes; timed-out domains are skipped gracefully
 
 ### Compression
 
@@ -319,7 +336,7 @@ When making a change that involves choosing between approaches (e.g., "should we
 
 ADRs are immutable once accepted. If a decision is reversed, write a new ADR that supersedes the old one.
 
-Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression (superseded), ACP manager actor, keyed memory entries, active memory review, tiered runtime compression, ACP protocol for agent dispatch.
+Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression (superseded), ACP manager actor, keyed memory entries, active memory review, tiered runtime compression, ACP protocol for agent dispatch, memory dreaming.
 
 ## Known limitations
 
