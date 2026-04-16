@@ -1,0 +1,168 @@
+.TH AURA\-CONFIG 5 "2026-04-16" "Aura 0.1.0" "Aura Manual"
+.SH NAME
+aura\-config \- configuration files and environment variables
+.SH DESCRIPTION
+Aura follows the XDG Base Directory specification.
+Configuration lives in ~/.config/aura/, data in ~/.local/share/aura/, and
+runtime state in ~/.local/state/aura/.
+.SH GLOBAL CONFIGURATION
+.SS config.toml
+Location: ~/.config/aura/config.toml
+.PP
+.nf
+[discord]
+token = "${AURA_DISCORD_TOKEN}"    # Discord bot token
+guild = "916608356586778655"       # Discord server ID
+default_channel = "aura"          # Fallback channel name
+
+[models]
+brain = "zai/glm\-5.1"             # Orchestrator model
+acp = "claude/opus"               # Flare coding model
+monitor = "zai/glm\-5\-turbo"       # Progress summarizer
+vision = "zai/glm\-4.6v"           # Image description model
+
+[acp]
+global_max_concurrent = 4         # Max simultaneous flares
+transport = "stdio"               # "stdio" | "http" | "tmux"
+command = "claude\-agent\-acp"      # Binary for stdio transport
+
+[memory]
+review_interval = 10              # Turns between auto\-review
+notify_on_review = true           # Post review findings to Discord
+
+[notifications]
+digest_windows = ["07:35", "09:10", "11:10", "15:00"]
+timezone = "Asia/Manila"
+urgent_bypass = true
+.fi
+.SH CLAUDE CODE PERMISSIONS
+Location: ~/.claude/settings.json on the host running claude\-agent\-acp.
+.PP
+Required for headless ACP sessions (flares) to write files:
+.PP
+.nf
+{
+  "permissions": {
+    "allow": ["Bash", "Read", "Edit", "Write",
+              "Glob", "Grep", "WebFetch", "WebSearch"],
+    "defaultMode": "bypassPermissions"
+  }
+}
+.fi
+.PP
+claude\-agent\-acp does not support \-\-permission\-mode CLI flags.
+Permissions are controlled exclusively through settings files.
+Without bypassPermissions, the agent auto\-denies file writes in headless
+mode.
+.PP
+.B Symptom if missing:
+Monitor reports "refused by user" or "write blocked".
+The permission system is denying the tool before it reaches the ACP
+protocol layer.
+.SH DOMAIN CONFIGURATION
+Location: ~/.config/aura/domains/<name>/config.toml
+.PP
+.nf
+name = "cm2"
+description = "CM2 project"
+cwd = "/path/to/repos"
+channel = "1234567890"
+
+[acp]
+provider = "claude\-code"    # "claude\-code" | "generic"
+worktree = true             # Use git worktrees for flares
+.fi
+.SH ENVIRONMENT VARIABLES
+.TP
+.B AURA_DISCORD_TOKEN
+Discord bot token.
+.TP
+.B ZAI_API_KEY
+z.ai/GLM API key.
+.TP
+.B ANTHROPIC_API_KEY
+Anthropic API key (for ACP).
+.TP
+.B CLAUDE_CODE_OAUTH_TOKEN
+Claude Code auth token (from
+.BR "claude setup\-token" ).
+.TP
+.B BRAVE_API_KEY
+Brave Search API key (optional).
+.TP
+.B HOME
+Used for XDG path resolution.
+.PP
+Configured in the launchd plist:
+~/Library/LaunchAgents/com.aura.agent.plist
+.SH DEPLOY
+.B Always use
+.IR "bash scripts/deploy.sh" .
+Never manual scp+build.
+.PP
+The script:
+.IP 1. 4
+rsync source .gleam and .erl files to Eisenhower
+.IP 2. 4
+gleam clean && gleam build \(em no stale beams
+.IP 3. 4
+Fix esqlite NIF \(em gleam clean wipes it, OTP 27+ needs erlc recompile
+.IP 4. 4
+Recompile Erlang FFI beams \(em gleam build doesn't compile .erl files
+.IP 5. 4
+launchctl kickstart \-k restarts the service
+.IP 6. 4
+Wait 5s, tail log to verify
+.SS What a deploy does to flares
+.IP \(bu 2
+All stdio ACP processes die (child processes of Erlang ports)
+.IP \(bu 2
+On restart, active flares auto\-rekindle with \-\-resume (staggered)
+.IP \(bu 2
+Parked flares reload from SQLite unchanged
+.IP \(bu 2
+The deploy script never kills tmux sessions \(em tmux flares survive
+.SH FILES
+.TP
+.I ~/.config/aura/config.toml
+Global configuration.
+.TP
+.I ~/.config/aura/SOUL.md
+Aura's identity and role.
+.TP
+.I ~/.config/aura/USER.md
+User profile (global).
+.TP
+.I ~/.config/aura/domains/<name>/
+Domain config directories.
+.TP
+.I ~/.config/aura/schedules.toml
+Scheduled task definitions.
+.TP
+.I ~/.local/share/aura/aura.db
+SQLite database (conversations, flares, FTS).
+.TP
+.I ~/.local/share/aura/skills/
+Skill directories.
+.TP
+.I ~/.local/share/aura/domains/<name>/MEMORY.md
+Domain knowledge.
+.TP
+.I ~/.local/state/aura/domains/<name>/STATE.md
+Domain current status.
+.TP
+.I ~/.claude/settings.json
+Claude Code permissions (on host).
+.TP
+.I ~/.claude/projects/.../<session_id>.jsonl
+Claude Code session history.
+.TP
+.I /tmp/aura.log
+Runtime log (on Eisenhower).
+.TP
+.I ~/Library/LaunchAgents/com.aura.agent.plist
+launchd service config.
+.SH SEE ALSO
+.BR aura (1),
+.BR aura\-flares (7),
+.BR aura\-diagnostics (7)

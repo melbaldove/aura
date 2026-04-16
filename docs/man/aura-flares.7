@@ -1,0 +1,146 @@
+.TH AURA\-FLARES 7 "2026-04-16" "Aura 0.1.0" "Aura Manual"
+.SH NAME
+aura\-flares \- flare lifecycle, states, and diagnostics
+.SH DESCRIPTION
+A flare is a persistent extension of Aura \(em a coding agent session dispatched
+to do work.
+Flares have identity that survives beyond any single process.
+.SS States
+.B Active
+\(->
+.BR Parked " | " Archived " | " Failed(reason)
+.SS Lifecycle
+.TP
+.B Ignite
+New flare record created in SQLite.
+Fresh ACP session.
+.TP
+.B Dispatch
+ACP process spawned.
+Session linked to flare.
+.TP
+.B Turn complete (end_turn)
+Handback fires.
+Flare stays Active.
+Session stays alive.
+Brain may send follow\-up prompts.
+.TP
+.B Process exit (code 0)
+AcpCompleted.
+Flare archived.
+.TP
+.B Process exit (non\-zero)
+AcpFailed.
+Flare marked failed.
+.TP
+.B Park
+Session killed.
+Flare persists with optional triggers.
+Can be rekindled.
+.TP
+.B Rekindle
+New session dispatched with \-\-resume to load prior conversation.
+Flare keeps same ID.
+.TP
+.B Kill
+Session killed.
+Flare marked Failed(killed).
+.TP
+.B Timeout
+Monitor timeout fires.
+Flare marked Failed(timed_out).
+.SS What kills a flare's session
+.IP \(bu 2
+Deploy/restart \(em the BEAM process stops, all Erlang ports die with it
+.IP \(bu 2
+Explicit kill via flare tool
+.IP \(bu 2
+Park command
+.IP \(bu 2
+Timeout
+.SS What survives a deploy
+.IP \(bu 2
+Flare records in SQLite (id, label, status, session_id, prompt, domain)
+.IP \(bu 2
+Claude Code session history on disk (~/.claude/projects/.../<session_id>.jsonl)
+.IP \(bu 2
+Nothing else.
+The ACP process, event loop, monitors \(em all gone.
+.SS Recovery on restart
+.IP \(bu 2
+load_flares reads non\-archived flares from SQLite
+.IP \(bu 2
+Active flares with dead sessions auto\-rekindle with \-\-resume, staggered at
+3s + idx*2s
+.IP \(bu 2
+Parked flares loaded into memory, no session started
+.IP \(bu 2
+The \-\-resume flag tells Claude Code to load the prior conversation from
+the JSONL file
+.SS Rekindle vs Ignite
+.B Rekindle
+preserves conversation history via \-\-resume.
+Use when continuing the same work.
+.PP
+.B Ignite
+starts a fresh session with no prior context.
+Use for new work only.
+.PP
+Never kill + ignite when the work is the same.
+Rekindle instead.
+.SS Handback
+When an ACP session completes a turn (end_turn), the brain receives the agent's
+results (last 5 tool names + agent's final text + monitor summary), appends
+them as a system message to the thread conversation, and re\-enters the tool
+loop.
+The brain responds naturally with the findings.
+If the tool loop fails, the raw result is posted as a fallback.
+Handback is never silent.
+.SS Domains
+A domain is a knowledge partition \(em an area of the user's work.
+Each domain has its own config, context, memory, state, and Discord channel.
+Domains are context selectors, not capability boundaries.
+All tools are available in all channels.
+.PP
+.B Directory layout (XDG):
+.nf
+~/.config/aura/domains/<name>/      Config: AGENTS.md, config.toml
+~/.local/share/aura/domains/<name>/  Data: MEMORY.md, log.jsonl, repos/
+~/.local/state/aura/domains/<name>/  State: STATE.md
+.fi
+.PP
+Brain routes by channel_id to domain name.
+Messages in a domain's channel load that domain's context.
+Messages in #aura get global context only.
+.SH DIAGNOSTICS
+.TP
+.B "Flare not found"
+Looking up by old session name.
+Session names change on rekindle.
+Use flare ID (f\-...) or label instead.
+.TP
+.B "refused by user" / writes blocked
+ACP permissions not configured.
+Set permissions.defaultMode in ~/.claude/settings.json.
+See
+.BR aura\-config (5).
+.TP
+.B Flare idle after restart
+Recovery rekindled with generic prompt.
+The \-\-resume loads prior conversation; brain should send specific follow\-up.
+.TP
+.B "event for unknown session"
+Event arrived after flare was archived.
+Harmless warning.
+.TP
+.B Context lost on rekindle
+Brain killed and re\-ignited instead of rekindling.
+Rekindle preserves context; ignite does not.
+.TP
+.B Multiple "ACP Started" messages
+Same flare dispatched twice (original + rekindle).
+Normal after restart.
+.SH SEE ALSO
+.BR aura (1),
+.BR aura\-config (5),
+.BR aura\-diagnostics (7)

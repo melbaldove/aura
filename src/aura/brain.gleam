@@ -243,6 +243,7 @@ pub fn build_system_prompt(
   <> "\n- Flare lifecycle: park when waiting on something external (approval, feedback, a condition). kill to abort. archive only when work is definitively done — ALWAYS ask the user before archiving."
   <> "\n- 'refused by user' means ACP permissions are misconfigured, not a human decision."
   <> "\n- Before acting on flare state, ALWAYS call flare(list). Do not guess."
+  <> "\n- flare(list) shows thread= for each flare. When the user says 'rekindle the flare' in a thread, match the current channel_id to the flare's thread_id. NEVER guess which flare — look it up."
   <> "\n- flare(list) and flare(status) show 'working' or 'idle'. If a flare is working, leave it alone. If idle, re-prompt with specific instructions or archive if done."
   <> "\n- Never say 'lost context', 'context wiped', or 'model switch'. These do not happen. If a flare seems unresponsive, re-prompt it with specific instructions."
 }

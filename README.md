@@ -141,6 +141,21 @@ A.U.R.A.: ACP dispatched.
          **Next:** Create PR
 ```
 
+## Documentation
+
+A.U.R.A. ships with Unix man pages:
+
+```bash
+man aura                # Overview, architecture, limitations
+man aura-flares         # Flare lifecycle, states, diagnostics
+man aura-config         # Configuration files, env vars, deploy
+man aura-diagnostics    # Troubleshooting, maintenance rules
+```
+
+The brain reads these same man pages via the shell tool for self-diagnosis.
+
+See also: [Engineering Practice](docs/ENGINEERING.md) and [Architecture Decision Records](docs/decisions/).
+
 ## License
 
 MIT

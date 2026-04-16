@@ -1,0 +1,109 @@
+.TH AURA 1 "2026-04-16" "Aura 0.1.0" "Aura Manual"
+.SH NAME
+aura \- autonomous assistant on BEAM that orchestrates work through persistent
+flares, scheduled tasks, and domain\-partitioned knowledge
+.SH SYNOPSIS
+.B gleam run \-\- start
+.br
+.B gleam run \-\- init
+.br
+.B bash scripts/deploy.sh
+.SH DESCRIPTION
+Aura is an OTP application.
+Every component is a supervised actor.
+The brain receives Discord messages, routes them to domains, runs an LLM tool
+loop, and dispatches flares for work that requires a coding agent.
+Memory, state, and conversation history persist across restarts via SQLite and
+structured markdown files.
+.PP
+Aura runs on Eisenhower (192.168.50.140) as a launchd service
+.RB ( com.aura.agent ).
+It communicates via Discord.
+.SS Supervision tree
+.nf
+supervisor (OneForOne)
+\(lq\(rq\(rq db               SQLite actor \(em serialized reads/writes
+\(lq\(rq\(rq poller           Discord gateway WebSocket
+\(lq\(rq\(rq flare_manager    Flare lifecycle \(em roster, dispatch, monitor, persist
+\(lq\(rq\(rq brain            Message routing, LLM tool loop, streaming, handback
+\(lq\(rq\(rq scheduler        Config\-driven cron + interval schedules
+.fi
+.PP
+All actors restart independently.
+A crash in one does not affect the others.
+.SS Subsystems
+.TP
+.B Flares
+Persistent coding agent sessions dispatched to do work.
+See
+.BR aura\-flares (7).
+.TP
+.B Domains
+Knowledge partitions \(em isolated config, memory, state, and Discord channel
+per area of work.
+Domains are context selectors, not capability boundaries.
+All tools are available in all channels.
+.TP
+.B Memory
+Three keyed\-entry targets: state (per\-domain status), memory (per\-domain
+knowledge), user (global profile).
+Only the brain writes memory; flares report back.
+Active review every 10 turns auto\-persists observations.
+.TP
+.B Conversations
+Per\-channel message history.
+In\-memory buffer backed by SQLite.
+Tiered auto\-compression: tool pruning at 50%, LLM summarization at 70% of
+context window.
+.TP
+.B Skills
+Directory with SKILL.md and optional CLI entrypoint.
+Instruction\-only skills teach the LLM; external skills run as subprocesses.
+.TP
+.B Schedules
+Config\-driven periodic tasks in schedules.toml.
+Supports fixed intervals ("15m") and cron expressions ("0 9 * * *").
+.TP
+.B Vision
+Two\-model pipeline: vision model describes images, orchestrator runs tool loop
+with enriched message.
+.TP
+.B Shell
+General\-purpose shell execution with layered security.
+41 dangerous command patterns, approval flow via Discord buttons.
+See
+.BR aura\-diagnostics (7).
+.SH LIMITATIONS
+.IP \(bu 2
+Stdio ACP sessions die on deploy.
+Conversation preserved via \-\-resume but in\-flight work is lost.
+.IP \(bu 2
+No graceful shutdown \(em process stops on SIGTERM.
+SQLite WAL handles crash recovery.
+.IP \(bu 2
+Brain is single\-threaded \(em one message at a time.
+Flares run in parallel but handback processing is sequential.
+.IP \(bu 2
+Streaming tool call parsing is manual JSON extraction \(em fragile for
+non\-standard APIs.
+.IP \(bu 2
+Discord only \(em Telegram/Slack gateway modules not yet built (schema ready).
+.IP \(bu 2
+claude\-agent\-acp does not support CLI permission flags.
+Permissions must be configured via ~/.claude/settings.json.
+.IP \(bu 2
+Orphan claude\-agent\-acp processes accumulate.
+No automated cleanup.
+.SH SEE ALSO
+.BR aura\-flares (7),
+.BR aura\-config (5),
+.BR aura\-diagnostics (7)
+.PP
+.I docs/ENGINEERING.md
+\(em Design principles and system invariants
+.br
+.I docs/decisions/
+\(em Architecture Decision Records
+.br
+.I CLAUDE.md
+\(em Developer guide for working on the codebase

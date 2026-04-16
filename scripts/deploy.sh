@@ -20,6 +20,10 @@ rsync -av --delete \
   --include='*.gleam' --include='*.erl' --include='*/' --exclude='*' \
   test/ "${REMOTE}:${REMOTE_DIR}/test/"
 
+echo "==> Syncing man pages + scripts..."
+rsync -av docs/man/ "${REMOTE}:${REMOTE_DIR}/docs/man/"
+rsync -av scripts/ "${REMOTE}:${REMOTE_DIR}/scripts/"
+
 echo "==> Clean build..."
 ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && cd ${REMOTE_DIR} && gleam clean && gleam build"
 
@@ -28,6 +32,9 @@ ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && cd ${REMOTE_DIR}/build/dev/erlang/
 
 echo "==> Recompiling Erlang FFI beams..."
 ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && cd ${REMOTE_DIR}/build/dev/erlang/aura && for f in _gleam_artefacts/aura_*_ffi.erl; do erlc -o ebin \"\$f\" && echo \"  compiled \$(basename \$f)\"; done"
+
+echo "==> Installing man pages..."
+ssh "$REMOTE" "bash ${REMOTE_DIR}/scripts/install-man-pages.sh"
 
 echo "==> Restarting Aura..."
 ssh "$REMOTE" "launchctl kickstart -k gui/\$(id -u)/com.aura.agent"

@@ -620,6 +620,7 @@ fn execute_tool_dispatch(
                 <> " \"" <> f.label <> "\""
                 <> " [" <> flare_manager.status_to_string(f.status) <> activity <> "]"
                 <> " domain=" <> f.domain
+                <> " thread=" <> f.thread_id
                 <> case f.session_name {
                   "" -> ""
                   sn -> " session=" <> sn

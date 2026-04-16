@@ -1,0 +1,100 @@
+.TH AURA\-DIAGNOSTICS 7 "2026-04-16" "Aura 0.1.0" "Aura Manual"
+.SH NAME
+aura\-diagnostics \- troubleshooting, diagnostics, and maintenance
+.SH DESCRIPTION
+Cross\-cutting symptoms that span subsystems.
+For flare\-specific diagnostics, see
+.BR aura\-flares (7).
+.SH SYSTEM DIAGNOSTICS
+.TP
+.B Bot not responding
+Gateway disconnected, brain crashed, or service down.
+Check /tmp/aura.log for crash or heartbeat timeout.
+.TP
+.B "Sorry, I crashed while processing"
+Tool loop exception in brain.
+Check log for the stack trace.
+Brain restarts automatically.
+.TP
+.B Flare writes blocked
+~/.claude/settings.json missing permission config.
+See
+.BR aura\-config (5),
+section CLAUDE CODE PERMISSIONS.
+.TP
+.B Flare loses context after restart
+Normal \(em stdio sessions die with BEAM.
+\-\-resume reloads conversation.
+Not a "model switch".
+Check if session_id was persisted.
+.TP
+.B Scheduled task failing
+Skill exited non\-zero, or API token expired.
+Log shows "[scheduler] <name> failed:" with error.
+.TP
+.B "Token has been expired or revoked"
+Google OAuth refresh token expired.
+Re\-authenticate via Aura CLI.
+.TP
+.B Orphan claude\-agent\-acp processes
+Sessions from killed/archived flares not cleaned up.
+Run: ps aux | grep claude\-agent\-acp \(em kill stale processes.
+.TP
+.B "Actor discarding unexpected message"
+Message sent to wrong process or after process restarted.
+Harmless.
+Usually a stale reply_to subject from recovery.
+.TP
+.B Conversation context missing
+Compression pruned it, or conversation not loaded from DB.
+Check if channel has conversation in SQLite.
+.TP
+.B Discord typing indicator stuck
+Typing loop process not killed after response.
+Brain should kill typing process.
+Clears after ~10s.
+.SH SHELL DIAGNOSTICS
+The shell tool
+.RB ( "shell" )
+has its own security pipeline.
+.TP
+.B "Command rejected by user"
+User clicked reject on approval.
+Normal \(em command was flagged as dangerous.
+.TP
+.B "Approval timed out"
+No user response within 15 minutes.
+User wasn't watching Discord.
+.TP
+.B Safe command flagged
+False positive in pattern list.
+Review pattern in shell.gleam:dangerous_patterns().
+.TP
+.B Shell output truncated
+Output exceeded 50K chars.
+Normal \(em 40% head and 60% tail preserved.
+.SH MAINTENANCE
+Man pages must stay accurate.
+The brain reads them via the shell tool for self\-diagnosis.
+Stale documentation is worse than no documentation \(em the brain will
+confidently act on wrong information.
+.PP
+Rules:
+.IP 1. 4
+Update on change, same commit.
+Not retroactively.
+.IP 2. 4
+Diagnostics come from bugs.
+Every new failure mode gets an entry.
+.IP 3. 4
+Delete before you add.
+Don't append "NOTE: no longer true."
+.IP 4. 4
+Configuration is verified, not assumed.
+Test before documenting.
+.IP 5. 4
+A pre\-commit hook (Haiku agent) checks if man pages need updating.
+.SH SEE ALSO
+.BR aura (1),
+.BR aura\-flares (7),
+.BR aura\-config (5)
