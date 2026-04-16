@@ -8,6 +8,7 @@ import aura/discord/types as discord_types
 import aura/llm
 import aura/memory
 import aura/scheduler
+import aura/shell
 import aura/skill
 import aura/structured_memory
 import aura/tier
@@ -55,6 +56,19 @@ pub type PendingProposal {
   )
 }
 
+/// A pending shell command awaiting user approval via Discord buttons.
+pub type PendingShellApproval {
+  PendingShellApproval(
+    id: String,
+    command: String,
+    reason: String,
+    channel_id: String,
+    message_id: String,
+    requested_at_ms: Int,
+    reply_to: process.Subject(ProposalResult),
+  )
+}
+
 /// Subset of BrainState fields needed for tool execution.
 /// Avoids a circular dependency between brain and brain_tools.
 pub type ToolContext {
@@ -79,6 +93,8 @@ pub type ToolContext {
     acp_server_url: String,
     acp_agent_name: String,
     on_propose: fn(PendingProposal) -> Nil,
+    shell_patterns: shell.CompiledPatterns,
+    on_shell_approve: fn(PendingShellApproval) -> Nil,
   )
 }
 
@@ -705,6 +721,31 @@ fn execute_tool_dispatch(
         unknown -> TextResult("Unknown flare action: " <> unknown <> ". Use: ignite, status, list, prompt, archive, kill, park, rekindle")
       }
     }
+    "shell" -> {
+      case require_arg(args, "command") {
+        Error(e) -> TextResult(e)
+        Ok(command) -> {
+          let timeout_s = case get_arg(args, "timeout") {
+            "" -> 180
+            t -> case int.parse(t) {
+              Ok(n) -> int.min(n, 600)
+              Error(_) -> 180
+            }
+          }
+          let timeout_ms = timeout_s * 1000
+          let cwd = case ctx.domain_cwd {
+            "" -> ctx.base_dir
+            c -> c
+          }
+
+          case shell.scan(command, ctx.shell_patterns) {
+            shell.Safe -> execute_shell(command, timeout_ms, cwd)
+            shell.Flagged(_, description) ->
+              request_shell_approval(ctx, command, description, timeout_ms, cwd)
+          }
+        }
+      }
+    }
     _ -> {
       // GLM-5.1 sometimes uses the skill name directly as the tool name
       // instead of "run_skill". If the unknown tool name matches a known skill,
@@ -730,6 +771,74 @@ fn execute_tool_dispatch(
 pub fn tool_result_text(result: ToolResult) -> String {
   case result {
     TextResult(text) -> text
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shell execution helpers
+// ---------------------------------------------------------------------------
+
+fn execute_shell(command: String, timeout_ms: Int, cwd: String) -> ToolResult {
+  case shell.execute(command, timeout_ms, cwd) {
+    Ok(result) -> {
+      let status = case result.exit_code {
+        0 -> ""
+        code -> "[exit " <> int.to_string(code) <> "] "
+      }
+      let truncated_note = case result.truncated {
+        True -> " (truncated)"
+        False -> ""
+      }
+      TextResult(status <> result.output <> truncated_note)
+    }
+    Error(e) -> TextResult("Error: " <> e)
+  }
+}
+
+fn request_shell_approval(
+  ctx: ToolContext,
+  command: String,
+  description: String,
+  timeout_ms: Int,
+  cwd: String,
+) -> ToolResult {
+  let approval_id = "sh" <> int.to_string(time.now_ms())
+  let msg_content =
+    ":warning: **Shell command flagged:** `"
+    <> command
+    <> "`\n**Reason:** "
+    <> description
+  let buttons = discord_types.approve_reject_buttons(approval_id)
+  case
+    rest.send_message_with_components(
+      ctx.discord_token,
+      ctx.channel_id,
+      msg_content,
+      buttons,
+    )
+  {
+    Ok(message_id) -> {
+      let reply_subject = process.new_subject()
+      let approval =
+        PendingShellApproval(
+          id: approval_id,
+          command: command,
+          reason: description,
+          channel_id: ctx.channel_id,
+          message_id: message_id,
+          requested_at_ms: time.now_ms(),
+          reply_to: reply_subject,
+        )
+      ctx.on_shell_approve(approval)
+      // Block until user clicks approve/reject (15 min timeout)
+      case process.receive(reply_subject, 900_000) {
+        Ok(Approved) -> execute_shell(command, timeout_ms, cwd)
+        Ok(Rejected) -> TextResult("Command rejected by user.")
+        Ok(Expired) -> TextResult("Approval expired.")
+        Error(_) -> TextResult("Approval timed out.")
+      }
+    }
+    Error(e) -> TextResult("Error posting approval request: " <> e)
   }
 }
 
@@ -1240,6 +1349,24 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "model",
           param_type: "string",
           description: "LLM model for urgency classification (for create, default zai/glm-5-turbo)",
+          required: False,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
+      name: "shell",
+      description: "Execute a shell command. Supports pipes, redirects, and full sh syntax. Use for: man pages, git operations, process inspection, file search, system diagnostics. Dangerous commands require user approval.",
+      parameters: [
+        llm.ToolParam(
+          name: "command",
+          param_type: "string",
+          description: "Shell command to execute (e.g. 'git log --oneline -5', 'man aura', 'ps aux | grep beam')",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "timeout",
+          param_type: "integer",
+          description: "Timeout in seconds (default 180, max 600)",
           required: False,
         ),
       ],

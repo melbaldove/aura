@@ -17,6 +17,7 @@ import aura/models
 import aura/notification
 import aura/review
 import aura/scheduler
+import aura/shell
 import aura/skill
 import aura/structured_memory
 import aura/time
@@ -102,6 +103,7 @@ pub type BrainMessage {
     channel_id: String,
   )
   RegisterProposal(proposal: brain_tools.PendingProposal)
+  RegisterShellApproval(approval: brain_tools.PendingShellApproval)
 }
 
 /// Configuration passed to brain.start — replaces positional params.
@@ -148,6 +150,8 @@ pub type BrainState {
     compressor_states: dict.Dict(String, conversation.CompressorState),
     brain_context: Int,
     pending_proposals: dict.Dict(String, brain_tools.PendingProposal),
+    pending_shell_approvals: dict.Dict(String, brain_tools.PendingShellApproval),
+    shell_patterns: shell.CompiledPatterns,
     acp_progress_msgs: dict.Dict(String, #(String, String)),
     // session_name -> #(channel_id, message_id)
   )
@@ -292,6 +296,8 @@ pub fn start(
       compressor_states: dict.new(),
       brain_context: brain_context,
       pending_proposals: dict.new(),
+      pending_shell_approvals: dict.new(),
+      shell_patterns: shell.compile_patterns(),
       acp_progress_msgs: dict.new(),
     )
 
@@ -661,120 +667,22 @@ fn handle_message(
         }
       })
 
-      // Parse action and proposal_id from custom_id
+      // Parse action and approval_id from custom_id
       case string.split_once(custom_id, ":") {
         Error(_) -> actor.continue(state)
-        Ok(#(action, proposal_id)) -> {
-          case dict.get(state.pending_proposals, proposal_id) {
-            Error(_) -> {
-              io.println("[brain] Unknown proposal: " <> proposal_id)
-              actor.continue(state)
-            }
-            Ok(proposal) -> {
-              // Check timeout (15 minutes = 900_000ms)
-              let now = time.now_ms()
-              let expired = now - proposal.requested_at_ms > 900_000
-              case expired {
-                True -> {
-                  io.println("[brain] Proposal expired: " <> proposal_id)
-                  process.send(proposal.reply_to, brain_tools.Expired)
-                  process.spawn_unlinked(fn() {
-                    let _ =
-                      rest.edit_message(
-                        state.discord_token,
-                        proposal.channel_id,
-                        proposal.message_id,
-                        "**Expired** -- proposal timed out after 15 minutes.",
-                      )
-                    Nil
-                  })
-                  let new_proposals =
-                    dict.delete(state.pending_proposals, proposal_id)
-                  actor.continue(
-                    BrainState(..state, pending_proposals: new_proposals),
-                  )
-                }
-                False -> {
-                  case action {
-                    "approve" -> {
-                      let new_proposals =
-                        dict.delete(state.pending_proposals, proposal_id)
-                      // Execute the write with validation (approved = True bypasses tier)
-                      case
-                        tools.write_file(
-                          proposal.path,
-                          state.paths.data,
-                          proposal.content,
-                          state.validation_rules,
-                          True,
-                        )
-                      {
-                        Ok(_) -> {
-                          // Notify the blocked propose tool that it's approved
-                          process.send(proposal.reply_to, brain_tools.Approved)
-                          process.spawn_unlinked(fn() {
-                            let _ =
-                              rest.edit_message(
-                                state.discord_token,
-                                proposal.channel_id,
-                                proposal.message_id,
-                                "**Approved** -- wrote `"
-                                  <> proposal.path
-                                  <> "`",
-                              )
-                            Nil
-                          })
-                        }
-                        Error(e) -> {
-                          // Write failed (validation error) — still notify the tool
-                          process.send(proposal.reply_to, brain_tools.Rejected)
-                          process.spawn_unlinked(fn() {
-                            let _ =
-                              rest.edit_message(
-                                state.discord_token,
-                                proposal.channel_id,
-                                proposal.message_id,
-                                "**Failed** -- " <> e,
-                              )
-                            Nil
-                          })
-                        }
-                      }
-                      actor.continue(
-                        BrainState(..state, pending_proposals: new_proposals),
-                      )
-                    }
-                    "reject" -> {
-                      let new_proposals =
-                        dict.delete(state.pending_proposals, proposal_id)
-                      process.send(proposal.reply_to, brain_tools.Rejected)
-                      process.spawn_unlinked(fn() {
-                        let _ =
-                          rest.edit_message(
-                            state.discord_token,
-                            proposal.channel_id,
-                            proposal.message_id,
-                            "**Rejected**",
-                          )
-                        Nil
-                      })
-                      actor.continue(
-                        BrainState(..state, pending_proposals: new_proposals),
-                      )
-                    }
-                    unknown -> {
-                      io.println(
-                        "[brain] Unknown interaction action: "
-                        <> unknown
-                        <> " for proposal "
-                        <> proposal_id,
-                      )
-                      actor.continue(state)
-                    }
-                  }
+        Ok(#(action, approval_id)) -> {
+          case dict.get(state.pending_shell_approvals, approval_id) {
+            Ok(shell_approval) ->
+              handle_shell_interaction(state, action, shell_approval)
+            Error(_) ->
+              case dict.get(state.pending_proposals, approval_id) {
+                Ok(proposal) ->
+                  handle_proposal_interaction(state, action, proposal)
+                Error(_) -> {
+                  io.println("[brain] Unknown approval: " <> approval_id)
+                  actor.continue(state)
                 }
               }
-            }
           }
         }
       }
@@ -805,6 +713,184 @@ fn handle_message(
       let new_proposals = dict.insert(new_proposals, proposal.id, proposal)
       actor.continue(BrainState(..state, pending_proposals: new_proposals))
     }
+    RegisterShellApproval(approval:) -> {
+      // One per channel — supersede existing
+      let new_approvals = case
+        list.find(dict.values(state.pending_shell_approvals), fn(a) {
+          a.channel_id == approval.channel_id
+        })
+      {
+        Ok(old) -> {
+          process.send(old.reply_to, brain_tools.Expired)
+          process.spawn_unlinked(fn() {
+            let _ =
+              rest.edit_message(
+                state.discord_token,
+                old.channel_id,
+                old.message_id,
+                "~~Superseded~~",
+              )
+            Nil
+          })
+          dict.delete(state.pending_shell_approvals, old.id)
+        }
+        Error(_) -> state.pending_shell_approvals
+      }
+      let new_approvals =
+        dict.insert(new_approvals, approval.id, approval)
+      actor.continue(
+        BrainState(..state, pending_shell_approvals: new_approvals),
+      )
+    }
+  }
+}
+
+fn handle_proposal_interaction(
+  state: BrainState,
+  action: String,
+  proposal: brain_tools.PendingProposal,
+) -> actor.Next(BrainState, BrainMessage) {
+  let new_proposals = dict.delete(state.pending_proposals, proposal.id)
+  let now = time.now_ms()
+  let expired = now - proposal.requested_at_ms > 900_000
+  case expired {
+    True -> {
+      io.println("[brain] Proposal expired: " <> proposal.id)
+      process.send(proposal.reply_to, brain_tools.Expired)
+      process.spawn_unlinked(fn() {
+        let _ =
+          rest.edit_message(
+            state.discord_token,
+            proposal.channel_id,
+            proposal.message_id,
+            "**Expired** -- proposal timed out after 15 minutes.",
+          )
+        Nil
+      })
+      actor.continue(BrainState(..state, pending_proposals: new_proposals))
+    }
+    False ->
+      case action {
+        "approve" -> {
+          case
+            tools.write_file(
+              proposal.path,
+              state.paths.data,
+              proposal.content,
+              state.validation_rules,
+              True,
+            )
+          {
+            Ok(_) -> {
+              process.send(proposal.reply_to, brain_tools.Approved)
+              process.spawn_unlinked(fn() {
+                let _ =
+                  rest.edit_message(
+                    state.discord_token,
+                    proposal.channel_id,
+                    proposal.message_id,
+                    "**Approved** -- wrote `" <> proposal.path <> "`",
+                  )
+                Nil
+              })
+            }
+            Error(e) -> {
+              process.send(proposal.reply_to, brain_tools.Rejected)
+              process.spawn_unlinked(fn() {
+                let _ =
+                  rest.edit_message(
+                    state.discord_token,
+                    proposal.channel_id,
+                    proposal.message_id,
+                    "**Failed** -- " <> e,
+                  )
+                Nil
+              })
+            }
+          }
+          actor.continue(BrainState(..state, pending_proposals: new_proposals))
+        }
+        "reject" -> {
+          process.send(proposal.reply_to, brain_tools.Rejected)
+          process.spawn_unlinked(fn() {
+            let _ =
+              rest.edit_message(
+                state.discord_token,
+                proposal.channel_id,
+                proposal.message_id,
+                "**Rejected**",
+              )
+            Nil
+          })
+          actor.continue(BrainState(..state, pending_proposals: new_proposals))
+        }
+        _ -> actor.continue(state)
+      }
+  }
+}
+
+fn handle_shell_interaction(
+  state: BrainState,
+  action: String,
+  approval: brain_tools.PendingShellApproval,
+) -> actor.Next(BrainState, BrainMessage) {
+  let new_approvals =
+    dict.delete(state.pending_shell_approvals, approval.id)
+  let now = time.now_ms()
+  let expired = now - approval.requested_at_ms > 900_000
+  case expired {
+    True -> {
+      process.send(approval.reply_to, brain_tools.Expired)
+      process.spawn_unlinked(fn() {
+        let _ =
+          rest.edit_message(
+            state.discord_token,
+            approval.channel_id,
+            approval.message_id,
+            "**Expired** -- approval timed out after 15 minutes.",
+          )
+        Nil
+      })
+      actor.continue(
+        BrainState(..state, pending_shell_approvals: new_approvals),
+      )
+    }
+    False ->
+  case action {
+    "approve" -> {
+      process.send(approval.reply_to, brain_tools.Approved)
+      process.spawn_unlinked(fn() {
+        let _ =
+          rest.edit_message(
+            state.discord_token,
+            approval.channel_id,
+            approval.message_id,
+            ":white_check_mark: **Approved** -- `" <> approval.command <> "`",
+          )
+        Nil
+      })
+      actor.continue(
+        BrainState(..state, pending_shell_approvals: new_approvals),
+      )
+    }
+    "reject" -> {
+      process.send(approval.reply_to, brain_tools.Rejected)
+      process.spawn_unlinked(fn() {
+        let _ =
+          rest.edit_message(
+            state.discord_token,
+            approval.channel_id,
+            approval.message_id,
+            ":x: **Rejected**",
+          )
+        Nil
+      })
+      actor.continue(
+        BrainState(..state, pending_shell_approvals: new_approvals),
+      )
+    }
+    _ -> actor.continue(state)
+  }
   }
 }
 
@@ -1230,6 +1316,8 @@ fn build_llm_context(
       acp_server_url: acp_server_url,
       acp_agent_name: acp_agent_name,
       on_propose: fn(_) { Nil },
+      shell_patterns: state.shell_patterns,
+      on_shell_approve: fn(_) { Nil },
     )
 
   // Build roster summary
@@ -1576,6 +1664,12 @@ fn handle_with_llm(
       on_propose: fn(proposal) {
         case brain_subject_opt {
           Some(subj) -> process.send(subj, RegisterProposal(proposal: proposal))
+          None -> Nil
+        }
+      },
+      on_shell_approve: fn(approval) {
+        case brain_subject_opt {
+          Some(subj) -> process.send(subj, RegisterShellApproval(approval: approval))
           None -> Nil
         }
       },

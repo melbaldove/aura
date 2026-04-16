@@ -75,7 +75,7 @@ Two-model pipeline: vision model as preprocessor, orchestrator model for tool lo
 - **Domain** — a knowledge partition representing an area of the user's life (job, project, responsibility). Has its own config, AGENTS.md, anchors, logs, skills, conversation history. One Discord channel per domain.
 - **Conversation** — per-channel message history. In-memory buffer (hot cache) backed by SQLite. Tiered auto-compression: tool pruning at 50%, LLM summarization at 70% of context window.
 - **Skill** — a directory with a SKILL.md and optional CLI entrypoint. Instruction-only skills teach the LLM; external skills are invoked as subprocesses.
-- **Tool** — primitive operation the LLM can call. 12 built-in tools (filesystem, Discord, skills, memory, search, web, schedules).
+- **Tool** — primitive operation the LLM can call. 13 built-in tools (filesystem, Discord, skills, memory, search, web, schedules, shell).
 - **Schedule** — a config-driven periodic task defined in `schedules.toml`. Supports fixed intervals ("15m") and cron expressions ("0 9 * * *"). Each schedule invokes a skill, classifies urgency via LLM, and emits findings.
 
 ## Source layout
@@ -98,6 +98,7 @@ src/aura/
   web.gleam             Web search (Brave) and URL fetching with HTML stripping
   scheduler.gleam       Config-driven scheduler actor (cron + interval)
   cron.gleam            Cron expression parser and matcher
+  shell.gleam           Shell execution with layered security (patterns, normalization, approval)
   skill.gleam           Skill discovery, creation, invocation
   tier.gleam            Path-based write permission tiers
   validator.gleam       TOML-defined validation rules engine
@@ -121,6 +122,7 @@ src/aura/
 src/
   aura_ws_ffi.erl       Raw WebSocket (SSL + RFC 6455 framing)
   aura_gateway_bridge.erl  Erlang↔Gleam Subject message bridge
+  aura_shell_ffi.erl    Shell execution (/bin/sh -c) + command normalization (ANSI, NFKC)
   aura_stream_ffi.erl   SSE streaming HTTP client (content + tool call deltas)
   aura_time_ffi.erl     erlang:system_time(millisecond) wrapper
   aura_poller_ffi.erl   EXIT message receiver for trap_exits
@@ -163,7 +165,7 @@ src/
 
 ### Tool system
 
-- 12 built-in tools defined in `brain.gleam:make_built_in_tools()`
+- 13 built-in tools defined in `brain.gleam:make_built_in_tools()`
 - Tools are static — constructed once at brain startup, stored in `BrainState.built_in_tools`
 - Skill-based tools invoked via `run_skill` tool → subprocess
 - New tools: add definition to `make_built_in_tools()`, add execution case to `execute_tool()`

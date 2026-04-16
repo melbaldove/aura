@@ -181,6 +181,43 @@ Config is tiered: domain `config.toml` overrides global overrides built-in
 defaults. `[models] vision` sets the model, `[vision] prompt` sets the
 description prompt.
 
+### Shell
+
+General-purpose shell execution tool (`/bin/sh -c`). Supports pipes, redirects,
+and full shell syntax. Used for: man pages, git operations, process inspection,
+file search, system diagnostics.
+
+**Security pipeline:**
+
+```
+command → normalize → fast regex reject → content scan → [approval] → execute
+```
+
+1. **Normalize:** Strip ANSI escapes, null bytes, NFKC normalization.
+2. **Fast reject:** 41 pre-compiled dangerous command patterns checked via single
+   union regex. Categories: destructive ops, SQL, system commands, remote code
+   execution, filesystem writes, git history rewriting, Aura self-protection.
+3. **Content scan:** Homograph detection for URLs in curl/wget commands.
+4. **Approval:** Flagged commands posted to Discord with approve/reject buttons.
+   Blocks until user responds (15 min timeout).
+5. **Execute:** `/bin/sh -c` with cwd from domain context. Output truncated at
+   50K chars (40% head, 60% tail). Timeout default 180s, max 600s.
+
+**Self-protection patterns:**
+
+Commands that could kill the BEAM VM, delete the SQLite database, remove XDG
+directories, modify the launchd service, or kill tmux sessions with active
+flares are always flagged.
+
+**Diagnostics:**
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| "Command rejected by user" | User clicked reject on approval | Normal — command was flagged as dangerous |
+| "Approval timed out" | No user response within 15 minutes | User wasn't watching Discord |
+| Safe command flagged | False positive in pattern list | Review pattern in `shell.gleam:dangerous_patterns()` |
+| Shell output truncated | Output exceeded 50K chars | Normal — head and tail preserved |
+
 ## CONFIGURATION
 
 ### config.toml
