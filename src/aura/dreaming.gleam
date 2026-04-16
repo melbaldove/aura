@@ -159,17 +159,29 @@ pub fn build_reflection_prompt() -> String {
 
 /// Build the prompt for the render phase.
 /// Instructs the LLM to produce the final working set within the token budget.
-pub fn build_render_prompt(budget_tokens: Int) -> String {
+/// Includes the previous working set so the LLM can preserve stable entries verbatim.
+pub fn build_render_prompt(
+  budget_tokens: Int,
+  previous_working_set: String,
+) -> String {
   let budget_str = int.to_string(budget_tokens)
   "You are producing the final memory working set. Use the memory tool to set and remove entries.
+
+## Previous Working Set
+
+" <> previous_working_set <> "
 
 ## Instructions
 
 - Your token budget is " <> budget_str <> " tokens. The final memory must fit within this budget.
 - Use the memory tool with action \"set\" to write entries and \"remove\" to delete entries.
+- **Stability rule: if an entry from the previous working set is already well-formed and the underlying knowledge has NOT changed during this dream cycle, keep it VERBATIM. Do not rephrase for style. Only touch entries where new information was consolidated, promoted, or reflected.**
+- When you do modify an entry, the change should reflect new information — not cosmetic rewording.
+- New entries from the consolidation, promotion, and reflection phases should be set.
+- Entries that are obsolete, fully subsumed by a consolidated entry, or no longer relevant should be removed.
 - Maximize information density — prefer fewer, denser entries over many sparse ones.
 - Every entry must earn its space. Cut entries that duplicate codebase knowledge.
-- Also emit a domain index entry with key \"domain-index\" summarizing what this domain knows — a one-paragraph overview of the domain's accumulated knowledge, useful for cross-domain queries.
+- Also emit a domain index entry with key \"domain-index\" summarizing what this domain knows — a one-paragraph overview of the domain's accumulated knowledge, useful for cross-domain queries. Update the index only if domain knowledge changed.
 - Emit tool calls only. No prose output."
 }
 
@@ -378,7 +390,7 @@ pub fn dream_domain(
       messages_after_reflect,
       tools,
       "render",
-      build_render_prompt(budget_tokens),
+      build_render_prompt(budget_tokens, sources.memory_content),
       domain,
       paths,
       db_subject,
@@ -1104,7 +1116,7 @@ fn dream_global(
               messages_after_reflect,
               tools,
               "render",
-              build_render_prompt(budget_tokens),
+              build_render_prompt(budget_tokens, memory_content),
               "_global",
               global_executor,
             )

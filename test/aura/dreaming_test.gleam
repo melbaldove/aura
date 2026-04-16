@@ -69,7 +69,7 @@ pub fn build_reflection_prompt_test() {
 }
 
 pub fn build_render_prompt_test() {
-  let prompt = dreaming.build_render_prompt(4096)
+  let prompt = dreaming.build_render_prompt(4096, "**key1:** old content")
 
   // Contains the budget number
   prompt |> string.contains("4096") |> should.be_true
@@ -80,10 +80,16 @@ pub fn build_render_prompt_test() {
 
   // Contains domain-index instruction
   prompt |> string.contains("domain-index") |> should.be_true
+
+  // Contains the previous working set
+  prompt |> string.contains("old content") |> should.be_true
+
+  // Contains stability guidance
+  prompt |> string.contains("VERBATIM") |> should.be_true
 }
 
 pub fn build_render_prompt_different_budget_test() {
-  let prompt = dreaming.build_render_prompt(8192)
+  let prompt = dreaming.build_render_prompt(8192, "(empty)")
   prompt |> string.contains("8192") |> should.be_true
 }
 
