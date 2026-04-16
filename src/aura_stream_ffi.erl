@@ -1,5 +1,5 @@
 -module(aura_stream_ffi).
--export([chat_stream/5, receive_stream_message/1]).
+-export([chat_stream/5, receive_stream_message/1, test_parse_delta_type/1]).
 
 %% ---------------------------------------------------------------------------
 %% chat_stream/5 — Streaming HTTP POST to an OpenAI-compatible endpoint.
@@ -178,18 +178,19 @@ parse_lines([Line | Rest], Acc) ->
 %% ---------------------------------------------------------------------------
 
 parse_delta(Json) ->
-    %% Check for content first (most common)
-    case extract_json_string_field(Json, <<"\"content\"">>) of
-        {ok, Content} -> {delta, Content};
-        error ->
-            %% Check reasoning_content (GLM-5.1 thinking phase)
-            case extract_json_string_field(Json, <<"\"reasoning_content\"">>) of
-                {ok, _} -> {reasoning, thinking};
+    %% Check tool_calls FIRST — some APIs send "content":"" alongside tool_calls
+    %% and the old content-first order silently dropped the tool call chunk.
+    case binary:match(Json, <<"\"tool_calls\"">>) of
+        {_, _} -> parse_tool_call_delta(Json);
+        nomatch ->
+            %% Check for content (most common non-tool delta)
+            case extract_json_string_field(Json, <<"\"content\"">>) of
+                {ok, Content} -> {delta, Content};
                 error ->
-                    %% Check tool_calls
-                    case binary:match(Json, <<"\"tool_calls\"">>) of
-                        {_, _} -> parse_tool_call_delta(Json);
-                        nomatch ->
+                    %% Check reasoning_content (GLM-5.1 thinking phase)
+                    case extract_json_string_field(Json, <<"\"reasoning_content\"">>) of
+                        {ok, _} -> {reasoning, thinking};
+                        error ->
                             %% Check usage (final chunk only — no content, no tools)
                             case binary:match(Json, <<"\"usage\"">>) of
                                 {_, _} ->
@@ -294,4 +295,18 @@ receive_stream_message(TimeoutMs) ->
         stream_done                                    -> {<<"done">>, <<>>, <<>>, 0}
     after TimeoutMs ->
         {<<"timeout">>, <<>>, <<>>, 0}
+    end.
+
+%% ---------------------------------------------------------------------------
+%% test_parse_delta_type/1 — Test helper: classify an SSE JSON line.
+%% Returns a binary tag so Gleam tests can assert parse_delta behaviour.
+%% ---------------------------------------------------------------------------
+
+test_parse_delta_type(Json) ->
+    case parse_delta(Json) of
+        {delta, <<>>}                  -> <<"empty">>;
+        {delta, _}                     -> <<"delta">>;
+        {reasoning, _}                 -> <<"reasoning">>;
+        {tool_call_delta, _, _, _, _}  -> <<"tool_call_delta">>;
+        {usage, _}                     -> <<"usage">>
     end.

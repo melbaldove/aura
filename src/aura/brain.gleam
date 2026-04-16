@@ -200,6 +200,7 @@ pub fn build_system_prompt(
 
   "You are responding in a Discord server. Stay in character.\n\n"
   <> soul_content
+  <> "\n\nCurrent time: " <> time.now_datetime_string() <> " (Asia/Manila)"
   <> "\n\nKeep responses concise and direct. Use Discord markdown where appropriate."
   <> domain_section
   <> skills_section
@@ -229,6 +230,15 @@ pub fn build_system_prompt(
   <> "\n\nSkills guidance:"
   <> "\nBefore using run_skill, call view_skill first to read the skill's full instructions. The instructions contain exact commands, argument format, and examples. Never guess CLI syntax."
   <> "\nWhen using a skill and finding it outdated, incomplete, or wrong, update it immediately with create_skill — don't wait to be asked."
+  <> "\n\nFlare self-knowledge:"
+  <> "\nYou are Aura. Flares are YOUR extensions — ACP sessions you dispatch to do work."
+  <> "\n- Deploys restart you. All stdio ACP sessions die. On restart, active flares auto-rekindle with --resume (loads prior conversation). This is NORMAL, not a 'model switch' or error."
+  <> "\n- Session names change on rekindle. The flare ID (f-...) stays the same. NEVER use old session names after a restart — call flare(list) to see current state."
+  <> "\n- Rekindle preserves conversation context via --resume. Ignite starts fresh. NEVER kill + ignite when continuing the same work — rekindle instead."
+  <> "\n- When a rekindled flare reports back with 'nothing to do' or 'idle', it means the agent didn't understand the generic recovery prompt. Send a specific follow-up prompt with the actual task."
+  <> "\n- 'refused by user' means ACP permissions are not configured, NOT that a human refused. Check ~/.claude/settings.json permissions."
+  <> "\n- Before diagnosing a flare issue, ALWAYS call flare(list) first. Do not guess or assume state."
+  <> "\n- Do not invent explanations for flare behavior. If you don't know why something happened, say so."
 }
 
 // ---------------------------------------------------------------------------
@@ -910,6 +920,32 @@ fn handle_acp_event(
           let new_msgs =
             dict.delete(state.acp_progress_msgs, session_name)
           actor.continue(BrainState(..state, acp_progress_msgs: new_msgs))
+        }
+      }
+    }
+    acp_monitor.AcpTurnCompleted(session_name, domain, result_text) -> {
+      // Turn completed but session still alive — handback the results
+      // so brain can respond naturally and optionally send follow-up prompts
+      let channel = resolve_acp_channel(state, session_name, domain)
+      case result_text {
+        "" -> actor.continue(state)
+        text -> {
+          let domain_name = case
+            list.find(state.domains, fn(d) { d.name == domain })
+          {
+            Ok(d) -> Some(d.name)
+            Error(_) -> None
+          }
+          process.spawn_unlinked(fn() {
+            handle_handback(
+              state,
+              channel,
+              domain_name,
+              session_name,
+              text,
+            )
+          })
+          actor.continue(state)
         }
       }
     }
@@ -1832,7 +1868,11 @@ fn tool_loop_progressive(
             }
             calls -> {
               // Expand concatenated JSON tool calls from GLM-5.1
-              let calls = brain_tools.expand_tool_calls(calls)
+              let calls =
+                brain_tools.expand_tool_calls_with_tools(
+                  calls,
+                  state.built_in_tools,
+                )
               // Execute tool calls and continue the loop
               io.println(
                 "[brain] "

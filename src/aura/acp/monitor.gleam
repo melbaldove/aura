@@ -29,6 +29,14 @@ pub type AcpEvent {
     report: types.AcpReport,
     result_text: String,
   )
+  /// A turn completed (end_turn) but the session is still alive.
+  /// Used by stdio transport where end_turn means "finished responding"
+  /// not "finished all work". The event loop continues after this.
+  AcpTurnCompleted(
+    session_name: String,
+    domain: String,
+    result_text: String,
+  )
   AcpTimedOut(session_name: String, domain: String)
   AcpFailed(session_name: String, domain: String, error: String)
   AcpProgress(
@@ -61,6 +69,7 @@ pub type StdioMonitorMsg {
   Tick
   UpdateStdioSummary(summary: String)
   GetLastSummary(reply_to: process.Subject(String))
+  LlmBackoff
 }
 
 /// Default monitor config using the existing constants.
@@ -112,6 +121,7 @@ pub fn start_push_monitor(
           llm_config: llm_config,
           on_event: on_event,
           self_subject: subject,
+          skip_ticks: 0,
         )
 
       Ok(actor.initialised(state) |> actor.returning(subject))
@@ -144,6 +154,7 @@ type PushMonitorState {
     llm_config: Option(llm.LlmConfig),
     on_event: fn(AcpEvent) -> Nil,
     self_subject: process.Subject(StdioMonitorMsg),
+    skip_ticks: Int,
   )
 }
 
@@ -165,6 +176,10 @@ fn handle_push_msg(
     GetLastSummary(reply_to) -> {
       process.send(reply_to, state.last_summary)
       actor.continue(state)
+    }
+    LlmBackoff -> {
+      // Back off for 4 ticks (~60s at 15s interval)
+      actor.continue(PushMonitorState(..state, skip_ticks: 4))
     }
   }
 }
@@ -188,52 +203,65 @@ fn handle_push_tick(
       actor.stop()
     }
     False -> {
-      let is_idle = !is_active
-      let should_emit =
-        is_active
-        || {
-          new_idle_checks >= state.config.idle_surface_threshold
-          && !state.idle_surfaced
-        }
-
-      let new_state = case should_emit {
+      // If backing off from LLM rate limit, decrement and skip LLM call
+      case state.skip_ticks > 0 {
         True -> {
-          // Spawn LLM summarization (non-blocking)
-          let s = state
-          let lines = state.raw_lines
-          process.spawn_unlinked(fn() {
-            generate_stdio_progress(s, lines, is_idle)
-          })
-
-          PushMonitorState(
+          process.send_after(state.self_subject, state.config.emit_interval_ms, Tick)
+          actor.continue(PushMonitorState(
             ..state,
-            raw_lines: [],
             idle_checks: new_idle_checks,
-            idle_surfaced: case is_idle {
-              True -> True
-              False -> False
-            },
-          )
+            skip_ticks: state.skip_ticks - 1,
+          ))
         }
-        False ->
-          PushMonitorState(
-            ..state,
-            idle_checks: new_idle_checks,
-            idle_surfaced: case is_active {
-              True -> False
-              False -> state.idle_surfaced
-            },
-          )
-      }
+        False -> {
+          let is_idle = !is_active
+          let should_emit =
+            is_active
+            || {
+              new_idle_checks >= state.config.idle_surface_threshold
+              && !state.idle_surfaced
+            }
 
-      let next_interval = case
-        new_idle_checks >= state.config.idle_surface_threshold
-      {
-        True -> state.config.idle_interval_ms
-        False -> state.config.emit_interval_ms
+          let new_state = case should_emit {
+            True -> {
+              // Spawn LLM summarization (non-blocking)
+              let s = state
+              let lines = state.raw_lines
+              process.spawn_unlinked(fn() {
+                generate_stdio_progress(s, lines, is_idle)
+              })
+
+              PushMonitorState(
+                ..state,
+                raw_lines: [],
+                idle_checks: new_idle_checks,
+                idle_surfaced: case is_idle {
+                  True -> True
+                  False -> False
+                },
+              )
+            }
+            False ->
+              PushMonitorState(
+                ..state,
+                idle_checks: new_idle_checks,
+                idle_surfaced: case is_active {
+                  True -> False
+                  False -> state.idle_surfaced
+                },
+              )
+          }
+
+          let next_interval = case
+            new_idle_checks >= state.config.idle_surface_threshold
+          {
+            True -> state.config.idle_interval_ms
+            False -> state.config.emit_interval_ms
+          }
+          process.send_after(state.self_subject, next_interval, Tick)
+          actor.continue(new_state)
+        }
       }
-      process.send_after(state.self_subject, next_interval, Tick)
-      actor.continue(new_state)
     }
   }
 }
@@ -357,6 +385,11 @@ fn generate_stdio_progress(
             "[acp-monitor] Stdio progress LLM failed for "
             <> state.session_name <> ": " <> e,
           )
+          // Back off on rate limit errors
+          case string.contains(e, "429") || string.contains(e, "overloaded") {
+            True -> process.send(state.self_subject, LlmBackoff)
+            False -> Nil
+          }
         }
       }
     }

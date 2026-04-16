@@ -177,3 +177,37 @@ pub fn estimate_tokens_unicode_test() {
   let result = compressor.estimate_tokens("Hello world! 你好世界")
   should.be_true(result > 0)
 }
+
+// ---------------------------------------------------------------------------
+// Streaming SSE parse_delta regression tests
+// ---------------------------------------------------------------------------
+
+@external(erlang, "aura_stream_ffi", "test_parse_delta_type")
+fn parse_delta_type(json: String) -> String
+
+/// Regression: when an SSE delta contains both "content":"" (empty) AND
+/// "tool_calls", parse_delta must classify it as tool_call_delta, not as an
+/// empty content delta.  Before the fix, the content check matched first and
+/// the tool call argument chunk was silently dropped.
+pub fn parse_delta_empty_content_with_tool_calls_test() {
+  // Simulates a delta chunk where content is empty but tool_calls are present
+  let json =
+    "{\"choices\":[{\"delta\":{\"content\":\"\",\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"web_search\",\"arguments\":\"{\\\"query\\\":\\\"test\\\"}\"}}]}}]}"
+  parse_delta_type(json)
+  |> should.equal("tool_call_delta")
+}
+
+/// Normal content delta should still be classified correctly.
+pub fn parse_delta_normal_content_test() {
+  let json = "{\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}"
+  parse_delta_type(json)
+  |> should.equal("delta")
+}
+
+/// Null content with tool calls should classify as tool_call_delta.
+pub fn parse_delta_null_content_with_tool_calls_test() {
+  let json =
+    "{\"choices\":[{\"delta\":{\"content\":null,\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"piece\"}}]}}]}"
+  parse_delta_type(json)
+  |> should.equal("tool_call_delta")
+}

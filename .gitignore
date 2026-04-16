@@ -34,6 +34,9 @@ docs/superpowers/
 # User skills (personal, not for open source)
 skills/
 
+# Claude Code local settings (personal, not shared)
+.claude/settings.local.json
+
 # Node.js
 node_modules/
 

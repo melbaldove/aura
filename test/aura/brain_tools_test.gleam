@@ -140,6 +140,30 @@ pub fn built_in_tools_no_acp_dispatch_test() {
   has_acp |> should.be_false
 }
 
+// Regression: GLM concatenates calls for different tools without embedding a
+// "name" key.  expand_tool_calls must infer the tool name from the parameter
+// keys so each part targets the correct tool.
+pub fn expand_tool_calls_infers_name_from_param_keys_test() {
+  let tools = brain_tools.make_built_in_tools()
+  let calls = [
+    llm.ToolCall(
+      id: "1",
+      name: "web_search",
+      arguments: "{\"query\":\"Extropic AI\"}{\"url\":\"https://example.com\"}",
+    ),
+  ]
+  let expanded = brain_tools.expand_tool_calls_with_tools(calls, tools)
+  list.length(expanded) |> should.equal(2)
+  case expanded {
+    [first, second] -> {
+      first.name |> should.equal("web_search")
+      // The second part has "url" — matches web_fetch, not web_search
+      second.name |> should.equal("web_fetch")
+    }
+    _ -> should.fail()
+  }
+}
+
 pub fn expand_tool_calls_preserves_non_concat_test() {
   let calls = [
     llm.ToolCall(id: "1", name: "read_file", arguments: "{\"path\":\"foo.txt\"}"),

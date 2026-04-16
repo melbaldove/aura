@@ -15,6 +15,20 @@ pub fn today_date_string() -> String {
   <> pad_zero(day)
 }
 
+/// Current date and time as "YYYY-MM-DD HH:MM" (local time).
+pub fn now_datetime_string() -> String {
+  let #(#(year, month, day), #(hour, minute, _second)) = erlang_localtime()
+  int.to_string(year)
+  <> "-"
+  <> pad_zero(month)
+  <> "-"
+  <> pad_zero(day)
+  <> " "
+  <> pad_zero(hour)
+  <> ":"
+  <> pad_zero(minute)
+}
+
 fn pad_zero(n: Int) -> String {
   case n < 10 {
     True -> "0" <> int.to_string(n)

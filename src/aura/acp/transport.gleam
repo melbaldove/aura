@@ -294,15 +294,15 @@ fn stdio_event_loop(
     stdio.Complete(stop_reason) -> {
       case stop_reason {
         "end_turn" -> {
-          // Request monitor's cumulative summary
+          // end_turn means "finished this response" not "finished all work".
+          // Emit turn-completed for handback, reset buffer, continue the loop
+          // so subsequent prompts (send_input) are processed.
           let monitor_summary = process.call(monitor, 5000, fn(reply_to) {
             acp_monitor.GetLastSummary(reply_to)
           })
           let result_text = format_result_text(buf, monitor_summary)
-          on_event(acp_monitor.AcpCompleted(session_name, domain, types.AcpReport(
-            outcome: types.Clean, files_changed: [], decisions: "",
-            tests: "", blockers: "", anchor: "Session completed",
-          ), result_text))
+          on_event(acp_monitor.AcpTurnCompleted(session_name, domain, result_text))
+          stdio_event_loop(session_name, domain, on_event, monitor, new_completion_buffer())
         }
         "cancelled" ->
           on_event(acp_monitor.AcpFailed(session_name, domain, "cancelled"))
@@ -314,7 +314,21 @@ fn stdio_event_loop(
     }
     stdio.Exit(code) -> {
       io.println("[acp-stdio] Process exited with code " <> code <> " for " <> session_name)
-      on_event(acp_monitor.AcpFailed(session_name, domain, "process exited (code " <> code <> ")"))
+      case code {
+        "0" -> {
+          // Clean exit — the agent process terminated normally
+          let monitor_summary = process.call(monitor, 5000, fn(reply_to) {
+            acp_monitor.GetLastSummary(reply_to)
+          })
+          let result_text = format_result_text(buf, monitor_summary)
+          on_event(acp_monitor.AcpCompleted(session_name, domain, types.AcpReport(
+            outcome: types.Clean, files_changed: [], decisions: "",
+            tests: "", blockers: "", anchor: "Session completed",
+          ), result_text))
+        }
+        _ ->
+          on_event(acp_monitor.AcpFailed(session_name, domain, "process exited (code " <> code <> ")"))
+      }
     }
     stdio.Error(reason) -> {
       io.println("[acp-stdio] Error for " <> session_name <> ": " <> reason)

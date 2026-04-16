@@ -1,6 +1,5 @@
 import aura/acp/flare_manager
 import aura/acp/provider
-import aura/acp/tmux as acp_tmux
 import aura/acp/types as acp_types
 import aura/db
 import aura/time
@@ -500,6 +499,16 @@ fn execute_tool_dispatch(
       }
     }
     "flare" -> {
+      let resolve_flare = fn(identifier) {
+        // Try session name first, then flare ID, then label
+        case flare_manager.get_flare_by_session_name(ctx.acp_subject, identifier) {
+          Ok(f) -> Ok(f)
+          Error(_) -> case flare_manager.get_flare(ctx.acp_subject, identifier) {
+            Ok(f) -> Ok(f)
+            Error(_) -> flare_manager.get_flare_by_label(ctx.acp_subject, identifier)
+          }
+        }
+      }
       case get_arg(args, "action") {
         "ignite" -> {
           case require_arg(args, "prompt") {
@@ -557,31 +566,21 @@ fn execute_tool_dispatch(
         "status" -> {
           case require_arg(args, "session_name") {
             Error(e) -> TextResult(e)
-            Ok(session_name) -> {
-              case flare_manager.get_session(ctx.acp_subject, session_name) {
+            Ok(identifier) -> {
+              case resolve_flare(identifier) {
                 Ok(flare) -> {
                   let elapsed_ms = time.now_ms() - flare.started_at_ms
                   let elapsed_min = elapsed_ms / 60_000
                   let state_str = " [" <> flare_manager.status_to_string(flare.status) <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
-                  case flare.session_id {
-                    "" -> {
-                      case acp_tmux.capture_pane(session_name) {
-                        Ok(output) -> {
-                          let tail = case string.length(output) > 500 {
-                            True -> "...\n" <> string.slice(output, string.length(output) - 500, 500)
-                            False -> output
-                          }
-                          TextResult("Flare: " <> session_name <> state_str <> "\n\n" <> tail)
-                        }
-                        Error(_) -> TextResult("Flare: " <> session_name <> state_str <> "\n\n(output not available)")
-                      }
-                    }
-                    session_id -> {
-                      TextResult("Flare: " <> session_name <> state_str <> "\nRun: " <> session_id <> "\nDomain: " <> flare.domain <> "\nPrompt: " <> string.slice(flare.original_prompt, 0, 200))
-                    }
-                  }
+                  TextResult(
+                    "Flare: " <> flare.id <> " \"" <> flare.label <> "\"" <> state_str
+                    <> "\nDomain: " <> flare.domain
+                    <> case flare.session_name { "" -> "" sn -> "\nSession: " <> sn }
+                    <> case flare.session_id { "" -> "" sid -> "\nRun: " <> sid }
+                    <> "\nPrompt: " <> string.slice(flare.original_prompt, 0, 200)
+                  )
                 }
-                Error(_) -> TextResult("Flare not found: " <> session_name)
+                Error(_) -> TextResult("Flare not found: " <> identifier)
               }
             }
           }
@@ -634,8 +633,8 @@ fn execute_tool_dispatch(
         "park" -> {
           case require_arg(args, "session_name") {
             Error(e) -> TextResult(e)
-            Ok(session_name) -> {
-              case flare_manager.get_session(ctx.acp_subject, session_name) {
+            Ok(identifier) -> {
+              case resolve_flare(identifier) {
                 Ok(flare) -> {
                   let triggers = get_arg(args, "triggers")
                   case flare_manager.park(ctx.acp_subject, flare.id, triggers) {
@@ -643,7 +642,7 @@ fn execute_tool_dispatch(
                     Error(e) -> TextResult("Error: " <> e)
                   }
                 }
-                Error(_) -> TextResult("Flare not found: " <> session_name)
+                Error(_) -> TextResult("Flare not found: " <> identifier)
               }
             }
           }
@@ -651,8 +650,8 @@ fn execute_tool_dispatch(
         "rekindle" -> {
           case require_arg(args, "session_name") {
             Error(e) -> TextResult(e)
-            Ok(session_name) -> {
-              case flare_manager.get_session(ctx.acp_subject, session_name) {
+            Ok(identifier) -> {
+              case resolve_flare(identifier) {
                 Ok(flare) -> {
                   let input = get_arg(args, "prompt")
                   case input {
@@ -663,7 +662,7 @@ fn execute_tool_dispatch(
                     }
                   }
                 }
-                Error(_) -> TextResult("Flare not found: " <> session_name)
+                Error(_) -> TextResult("Flare not found: " <> identifier)
               }
             }
           }
@@ -702,6 +701,16 @@ pub fn tool_result_text(result: ToolResult) -> String {
 // ---------------------------------------------------------------------------
 // Tool argument helpers
 // ---------------------------------------------------------------------------
+
+/// Expand concatenated JSON tool calls from GLM-5.1, using tool definitions
+/// to infer the correct tool name from parameter keys when no explicit "name"
+/// field is present.
+pub fn expand_tool_calls_with_tools(
+  calls: List(llm.ToolCall),
+  tools: List(llm.ToolDefinition),
+) -> List(llm.ToolCall) {
+  expand_tool_calls_inner(calls, tools)
+}
 
 /// Expand concatenated JSON tool calls from GLM-5.1.
 /// When the model sends `{"name":"a","args":"x"}{"name":"b","args":"y"}` as a
@@ -744,6 +753,103 @@ pub fn expand_tool_calls(calls: List(llm.ToolCall)) -> List(llm.ToolCall) {
       }
     }
   })
+}
+
+fn expand_tool_calls_inner(
+  calls: List(llm.ToolCall),
+  tools: List(llm.ToolDefinition),
+) -> List(llm.ToolCall) {
+  // Build a map from unique required-parameter names to tool names.
+  // e.g. "query" -> "web_search", "url" -> "web_fetch"
+  let param_to_tool = build_param_tool_map(tools)
+
+  list.flat_map(calls, fn(call) {
+    case string.contains(call.arguments, "}{") {
+      False -> [call]
+      True -> {
+        let parts = string.split(call.arguments, "}{")
+        let num_parts = list.length(parts)
+        list.index_map(parts, fn(part, idx) {
+          let json_str = case idx == 0, idx == num_parts - 1 {
+            True, True -> part
+            True, False -> part <> "}"
+            False, True -> "{" <> part
+            False, False -> "{" <> part <> "}"
+          }
+          // Try explicit "name" key first, then infer from parameter keys
+          let name = case
+            json.parse(json_str, decode.dict(decode.string, decode.string))
+          {
+            Ok(d) ->
+              case dict.get(d, "name") {
+                Ok(n) -> n
+                Error(_) -> infer_tool_name(d, param_to_tool, call.name)
+              }
+            Error(_) -> call.name
+          }
+          llm.ToolCall(
+            id: call.id <> "_" <> int.to_string(idx),
+            name: name,
+            arguments: json_str,
+          )
+        })
+      }
+    }
+  })
+}
+
+/// Build a map from parameter names that uniquely identify a tool to the
+/// tool's name.  Only required params that appear in exactly one tool are
+/// included — shared param names (like "action") are ambiguous and excluded.
+fn build_param_tool_map(
+  tools: List(llm.ToolDefinition),
+) -> dict.Dict(String, String) {
+  // Collect (param_name, tool_name) pairs for every required parameter
+  let pairs =
+    list.flat_map(tools, fn(tool) {
+      tool.parameters
+      |> list.filter(fn(p) { p.required })
+      |> list.map(fn(p) { #(p.name, tool.name) })
+    })
+  // Count how many tools use each param name
+  let counts =
+    list.fold(pairs, dict.new(), fn(acc, pair) {
+      let #(param, _) = pair
+      let n = case dict.get(acc, param) {
+        Ok(c) -> c
+        Error(_) -> 0
+      }
+      dict.insert(acc, param, n + 1)
+    })
+  // Keep only params that map to exactly one tool
+  list.fold(pairs, dict.new(), fn(acc, pair) {
+    let #(param, tool_name) = pair
+    case dict.get(counts, param) {
+      Ok(1) -> dict.insert(acc, param, tool_name)
+      _ -> acc
+    }
+  })
+}
+
+/// Given parsed argument keys, try to find a unique tool match via param names.
+fn infer_tool_name(
+  args: dict.Dict(String, String),
+  param_to_tool: dict.Dict(String, String),
+  fallback: String,
+) -> String {
+  let keys = dict.keys(args)
+  // Find the first argument key that uniquely identifies a tool
+  case
+    list.find_map(keys, fn(key) {
+      case dict.get(param_to_tool, key) {
+        Ok(tool_name) -> Ok(tool_name)
+        Error(_) -> Error(Nil)
+      }
+    })
+  {
+    Ok(name) -> name
+    Error(_) -> fallback
+  }
 }
 
 /// Parse a JSON string of tool arguments into a list of key-value pairs.

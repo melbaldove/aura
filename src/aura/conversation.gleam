@@ -357,14 +357,27 @@ pub fn format_traces(traces: List(ToolTrace)) -> String {
       True -> string.slice(result_collapsed, 0, 50) <> "..."
       False -> result_collapsed
     }
-    "> "
-    <> icon
-    <> " `"
-    <> trace.name
-    <> "("
-    <> args_preview
-    <> ")` → "
-    <> result_preview
+    let has_newlines = string.contains(args_preview, "\n")
+    case has_newlines {
+      False ->
+        "> "
+        <> icon
+        <> " `"
+        <> trace.name
+        <> "("
+        <> args_preview
+        <> ")` → "
+        <> result_preview
+      True ->
+        "> "
+        <> icon
+        <> " ```\n"
+        <> trace.name
+        <> "("
+        <> args_preview
+        <> ")``` → "
+        <> result_preview
+    }
   })
   |> string.join("\n")
 }
