@@ -990,6 +990,25 @@ fn handle_acp_event(
           actor.continue(BrainState(..state, acp_progress_msgs: new_msgs))
         }
         text -> {
+          // Persist result_text to flares table for dreaming synthesis
+          case
+            flare_manager.get_flare_by_session_name(
+              state.acp_subject,
+              session_name,
+            )
+          {
+            Ok(flare) -> {
+              let _ =
+                db.update_flare_result(
+                  state.db_subject,
+                  flare.id,
+                  text,
+                  time.now_ms(),
+                )
+              Nil
+            }
+            Error(_) -> Nil
+          }
           let domain_name = case
             list.find(state.domains, fn(d) { d.name == domain })
           {
@@ -1018,6 +1037,25 @@ fn handle_acp_event(
       case result_text {
         "" -> actor.continue(state)
         text -> {
+          // Persist result_text to flares table for dreaming synthesis
+          case
+            flare_manager.get_flare_by_session_name(
+              state.acp_subject,
+              session_name,
+            )
+          {
+            Ok(flare) -> {
+              let _ =
+                db.update_flare_result(
+                  state.db_subject,
+                  flare.id,
+                  text,
+                  time.now_ms(),
+                )
+              Nil
+            }
+            Error(_) -> Nil
+          }
           let domain_name = case
             list.find(state.domains, fn(d) { d.name == domain })
           {
