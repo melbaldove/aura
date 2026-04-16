@@ -15,3 +15,5 @@ Switch to keyed entries: `§ key\ncontent` format. Operations are `set` (upsert 
 - Simpler mental model — the tool is self-evident from its interface
 - Existing files migrated to keyed format on the deployment host
 - The `§` delimiter is preserved but now prefixes a key name instead of being a bare separator
+
+**Note:** ADR-020 extends this design — flat files become a materialized view over a SQLite archive (`memory_entries` table), and hard character caps are replaced by a proportional token budget enforced by offline dreaming.

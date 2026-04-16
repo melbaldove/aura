@@ -48,10 +48,11 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [017](017-background-agent-architecture.md) | Background agent architecture (OpenPoke pattern) | Superseded by ADR-018 |
 | [018](018-flare-architecture.md) | Flare architecture for background agents | Accepted |
 | [019](019-shell-tool-with-security.md) | Shell tool with layered security | Accepted |
+| [020](020-memory-dreaming.md) | Memory dreaming — offline consolidation system | Accepted |
 
 ## Adding a new ADR
 
 1. Copy the template above
-2. Number sequentially (next is 020)
+2. Number sequentially (next is 021)
 3. Add to the index in this README
 4. Commit with the code change it relates to
