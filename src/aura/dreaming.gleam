@@ -1,5 +1,6 @@
 import aura/db
 import aura/llm
+import aura/memory
 import aura/models
 import aura/structured_memory
 import aura/time
@@ -13,6 +14,26 @@ import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+
+// ---------------------------------------------------------------------------
+// FFI — direct stderr logging for daemon observability
+// ---------------------------------------------------------------------------
+
+@external(erlang, "aura_io_ffi", "log_stdout")
+fn log_stdout(message: String) -> Nil
+
+/// Log to both stdout (for operator/launchd) and domain log.jsonl (for structured history).
+fn dream_log(message: String, domain: String, paths: xdg.Paths) -> Nil {
+  log_stdout(message)
+  let log_dir = xdg.domain_log_dir(paths, domain)
+  let _ = memory.append_domain_log(log_dir, message)
+  Nil
+}
+
+/// Log to stdout only (for messages without a domain context).
+fn dream_log_global(message: String) -> Nil {
+  log_stdout(message)
+}
 import gleam/string
 
 // ---------------------------------------------------------------------------
@@ -303,7 +324,7 @@ pub fn dream_domain(
   let tools = [tool]
 
   // Phase 1: Consolidate
-  io.println("[dream] " <> domain <> " — phase 1: consolidate")
+  dream_log("[dream] " <> domain <> " — phase 1: consolidate", domain, paths)
   use #(messages_after_consolidate, consolidate_count) <- result.try(
     run_phase_with_retry(
       llm_config,
@@ -318,7 +339,7 @@ pub fn dream_domain(
   )
 
   // Phase 2: Promote
-  io.println("[dream] " <> domain <> " — phase 2: promote")
+  dream_log("[dream] " <> domain <> " — phase 2: promote", domain, paths)
   use #(messages_after_promote, promote_count) <- result.try(
     run_phase_with_retry(
       llm_config,
@@ -337,7 +358,7 @@ pub fn dream_domain(
   )
 
   // Phase 3: Reflect
-  io.println("[dream] " <> domain <> " — phase 3: reflect")
+  dream_log("[dream] " <> domain <> " — phase 3: reflect", domain, paths)
   use #(messages_after_reflect, reflect_count) <- result.try(
     run_phase_with_retry(
       llm_config,
@@ -352,7 +373,7 @@ pub fn dream_domain(
   )
 
   // Phase 4: Render
-  io.println("[dream] " <> domain <> " — phase 4: render")
+  dream_log("[dream] " <> domain <> " — phase 4: render", domain, paths)
   use #(final_messages, _render_count) <- result.try(
     run_phase_with_retry(
       llm_config,
@@ -802,7 +823,7 @@ pub fn dream_all(config: DreamConfig) -> Nil {
   )
 
   case models.build_llm_config(config.model_spec) {
-    Error(e) -> io.println("[dream] Failed to build LLM config: " <> e)
+    Error(e) -> dream_log_global("[dream] Failed to build LLM config: " <> e)
     Ok(llm_config) -> {
       let total_budget =
         models.memory_token_budget(
@@ -902,7 +923,7 @@ pub fn collect_results(
             Ok(#(domain, result)) -> {
               case result {
                 Ok(dr) ->
-                  io.println(
+                  dream_log_global(
                     "[dream] " <> domain <> " completed — phase: "
                     <> dr.phase_reached
                     <> ", consolidated: " <> int.to_string(dr.entries_consolidated)
@@ -911,7 +932,7 @@ pub fn collect_results(
                     <> " (" <> int.to_string(dr.duration_ms / 1000) <> "s)",
                   )
                 Error(e) ->
-                  io.println("[dream] " <> domain <> " failed: " <> e)
+                  dream_log_global("[dream] " <> domain <> " failed: " <> e)
               }
               collect_results(
                 subject,
@@ -996,7 +1017,7 @@ fn dream_global(
   domain_index_entries: List(String),
 ) -> Nil {
   let start_ms = time.now_ms()
-  io.println("[dream] Starting global consolidation pass")
+  dream_log_global("[dream] Starting global consolidation pass")
 
   let global_memory_path = xdg.memory_path(paths)
   let user_path = xdg.user_path(paths)
@@ -1033,7 +1054,7 @@ fn dream_global(
   }
 
   // Phase 1: Consolidate global memory
-  io.println("[dream] _global — phase 1: consolidate")
+  dream_log_global("[dream] _global — phase 1: consolidate")
   let consolidate_result =
     run_phase_with_retry_using(
       llm_config,
@@ -1047,12 +1068,12 @@ fn dream_global(
 
   case consolidate_result {
     Error(e) -> {
-      io.println("[dream] _global — consolidation failed: " <> e)
+      dream_log_global("[dream] _global — consolidation failed: " <> e)
       log_global_dream_run(db_subject, start_ms, "consolidate", 0, 0, 0)
     }
     Ok(#(messages_after_consolidate, consolidate_count)) -> {
       // Phase 2: Reflect on cross-domain patterns
-      io.println("[dream] _global — phase 2: reflect")
+      dream_log_global("[dream] _global — phase 2: reflect")
       let reflect_result =
         run_phase_with_retry_using(
           llm_config,
@@ -1066,7 +1087,7 @@ fn dream_global(
 
       case reflect_result {
         Error(e) -> {
-          io.println("[dream] _global — reflection failed: " <> e)
+          dream_log_global("[dream] _global — reflection failed: " <> e)
           log_global_dream_run(
             db_subject,
             start_ms,
@@ -1078,7 +1099,7 @@ fn dream_global(
         }
         Ok(#(messages_after_reflect, reflect_count)) -> {
           // Phase 3: Render final global working set
-          io.println("[dream] _global — phase 3: render")
+          dream_log_global("[dream] _global — phase 3: render")
           let render_result =
             run_phase_with_retry_using(
               llm_config,
@@ -1092,7 +1113,7 @@ fn dream_global(
 
           case render_result {
             Error(e) -> {
-              io.println("[dream] _global — render failed: " <> e)
+              dream_log_global("[dream] _global — render failed: " <> e)
               log_global_dream_run(
                 db_subject,
                 start_ms,
@@ -1172,6 +1193,6 @@ fn log_global_dream_run(
     )
   {
     Ok(_) -> Nil
-    Error(e) -> io.println("[dream] Failed to log global dream run: " <> e)
+    Error(e) -> dream_log_global("[dream] Failed to log global dream run: " <> e)
   }
 }
