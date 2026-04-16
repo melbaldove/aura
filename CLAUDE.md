@@ -139,6 +139,7 @@ src/
 - No unnecessary abstractions. Three similar lines > premature helper.
 - Pure functions where possible. Side effects in actors.
 - `use _ <- result.try(...)` for error propagation (Gleam's Result chaining).
+- **Use `logging.log()` for all runtime logging, never `io.println`.** The `logging` library wraps OTP's `logger` — process-independent, works from any spawned process (including gen_tcp handlers, spawn_unlinked). `io.println` goes through the Erlang group leader and may not reach the log file from spawned processes under launchd/systemd. Call `logging.configure()` once at startup.
 
 ### Naming
 
