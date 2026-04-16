@@ -190,6 +190,31 @@ pub type DbMessage {
     key: String,
     exclude_id: Int,
   )
+  InsertDreamRun(
+    reply_to: process.Subject(Result(Nil, String)),
+    domain: String,
+    completed_at_ms: Int,
+    phase_reached: String,
+    entries_consolidated: Int,
+    entries_promoted: Int,
+    reflections_generated: Int,
+    duration_ms: Int,
+  )
+  GetLastDreamMs(
+    reply_to: process.Subject(Result(Int, String)),
+    domain: String,
+  )
+  UpdateFlareResult(
+    reply_to: process.Subject(Result(Nil, String)),
+    id: String,
+    result_text: String,
+    updated_at_ms: Int,
+  )
+  GetFlareOutcomes(
+    reply_to: process.Subject(Result(List(#(String, String)), String)),
+    domain: String,
+    since_ms: Int,
+  )
 }
 
 type DbState {
@@ -504,6 +529,66 @@ pub fn get_active_entry_id(
   })
 }
 
+/// Insert a dream run record.
+pub fn insert_dream_run(
+  subject: process.Subject(DbMessage),
+  domain: String,
+  completed_at_ms: Int,
+  phase_reached: String,
+  entries_consolidated: Int,
+  entries_promoted: Int,
+  reflections_generated: Int,
+  duration_ms: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    InsertDreamRun(
+      reply_to:,
+      domain:,
+      completed_at_ms:,
+      phase_reached:,
+      entries_consolidated:,
+      entries_promoted:,
+      reflections_generated:,
+      duration_ms:,
+    )
+  })
+}
+
+/// Return the `completed_at_ms` of the most recent dream run for this domain.
+/// Returns 0 if no dream runs exist (safe default meaning "dream all history").
+pub fn get_last_dream_ms(
+  subject: process.Subject(DbMessage),
+  domain: String,
+) -> Result(Int, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetLastDreamMs(reply_to:, domain:)
+  })
+}
+
+/// Update the result_text and updated_at_ms on a flare.
+pub fn update_flare_result(
+  subject: process.Subject(DbMessage),
+  id: String,
+  result_text: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    UpdateFlareResult(reply_to:, id:, result_text:, updated_at_ms:)
+  })
+}
+
+/// Return (label, result_text) pairs for completed flares in this domain
+/// with non-null result_text, where updated_at_ms > since_ms.
+pub fn get_flare_outcomes(
+  subject: process.Subject(DbMessage),
+  domain: String,
+  since_ms: Int,
+) -> Result(List(#(String, String)), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetFlareOutcomes(reply_to:, domain:, since_ms:)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
@@ -628,6 +713,30 @@ fn handle_message(
 
     GetActiveEntryId(reply_to:, domain:, target:, key:, exclude_id:) -> {
       let result = do_get_active_entry_id(state.conn, domain, target, key, exclude_id)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    InsertDreamRun(reply_to:, domain:, completed_at_ms:, phase_reached:, entries_consolidated:, entries_promoted:, reflections_generated:, duration_ms:) -> {
+      let result = do_insert_dream_run(state.conn, domain, completed_at_ms, phase_reached, entries_consolidated, entries_promoted, reflections_generated, duration_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetLastDreamMs(reply_to:, domain:) -> {
+      let result = do_get_last_dream_ms(state.conn, domain)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    UpdateFlareResult(reply_to:, id:, result_text:, updated_at_ms:) -> {
+      let result = do_update_flare_result(state.conn, id, result_text, updated_at_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetFlareOutcomes(reply_to:, domain:, since_ms:) -> {
+      let result = do_get_flare_outcomes(state.conn, domain, since_ms)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -1074,6 +1183,94 @@ fn do_get_active_entry_id(
       [id] -> Ok(id)
       _ -> Error("No active entry found for key")
     }
+  })
+}
+
+fn do_insert_dream_run(
+  conn: sqlight.Connection,
+  domain: String,
+  completed_at_ms: Int,
+  phase_reached: String,
+  entries_consolidated: Int,
+  entries_promoted: Int,
+  reflections_generated: Int,
+  duration_ms: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "INSERT INTO dream_runs (domain, completed_at_ms, phase_reached, entries_consolidated, entries_promoted, reflections_generated, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    on: conn,
+    with: [
+      sqlight.text(domain),
+      sqlight.int(completed_at_ms),
+      sqlight.text(phase_reached),
+      sqlight.int(entries_consolidated),
+      sqlight.int(entries_promoted),
+      sqlight.int(reflections_generated),
+      sqlight.int(duration_ms),
+    ],
+    expecting: decode.success(Nil),
+  )
+  |> result.map(fn(_) { Nil })
+  |> result.map_error(fn(err) {
+    "Failed to insert dream run: " <> string.inspect(err)
+  })
+}
+
+fn do_get_last_dream_ms(
+  conn: sqlight.Connection,
+  domain: String,
+) -> Result(Int, String) {
+  case
+    sqlight.query(
+      "SELECT completed_at_ms FROM dream_runs WHERE domain = ? ORDER BY completed_at_ms DESC LIMIT 1",
+      on: conn,
+      with: [sqlight.text(domain)],
+      expecting: decode.at([0], decode.int),
+    )
+  {
+    Ok([ms]) -> Ok(ms)
+    Ok([]) -> Ok(0)
+    Ok(_) -> Ok(0)
+    Error(e) ->
+      Error("Failed to get last dream ms: " <> string.inspect(e))
+  }
+}
+
+fn do_update_flare_result(
+  conn: sqlight.Connection,
+  id: String,
+  result_text: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "UPDATE flares SET result_text = ?, updated_at_ms = ? WHERE id = ?",
+    on: conn,
+    with: [sqlight.text(result_text), sqlight.int(updated_at_ms), sqlight.text(id)],
+    expecting: decode.success(Nil),
+  )
+  |> result.map(fn(_) { Nil })
+  |> result.map_error(fn(err) {
+    "Failed to update flare result: " <> string.inspect(err)
+  })
+}
+
+fn do_get_flare_outcomes(
+  conn: sqlight.Connection,
+  domain: String,
+  since_ms: Int,
+) -> Result(List(#(String, String)), String) {
+  sqlight.query(
+    "SELECT label, result_text FROM flares WHERE domain = ? AND result_text IS NOT NULL AND updated_at_ms > ? ORDER BY updated_at_ms ASC",
+    on: conn,
+    with: [sqlight.text(domain), sqlight.int(since_ms)],
+    expecting: {
+      use label <- decode.field(0, decode.string)
+      use result_text <- decode.field(1, decode.string)
+      decode.success(#(label, result_text))
+    },
+  )
+  |> result.map_error(fn(err) {
+    "Failed to get flare outcomes: " <> string.inspect(err)
   })
 }
 

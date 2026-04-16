@@ -406,3 +406,373 @@ pub fn memory_entry_fields_roundtrip_test() {
 
   process.send(subject, db.Shutdown)
 }
+
+// ---------------------------------------------------------------------------
+// Dream run tests
+// ---------------------------------------------------------------------------
+
+pub fn insert_dream_run_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(Nil) =
+    db.insert_dream_run(
+      subject,
+      "work",
+      5000,
+      "consolidate",
+      3,
+      1,
+      2,
+      1200,
+    )
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_last_dream_ms_returns_latest_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  // Insert two dream runs for the same domain with different timestamps
+  let assert Ok(Nil) =
+    db.insert_dream_run(subject, "work", 1000, "consolidate", 2, 0, 1, 500)
+  let assert Ok(Nil) =
+    db.insert_dream_run(subject, "work", 3000, "promote", 1, 1, 0, 800)
+
+  // Should return the most recent completed_at_ms
+  let assert Ok(ms) = db.get_last_dream_ms(subject, "work")
+  ms |> should.equal(3000)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_last_dream_ms_returns_zero_when_none_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  // No dream runs exist — should return 0
+  let assert Ok(ms) = db.get_last_dream_ms(subject, "work")
+  ms |> should.equal(0)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_last_dream_ms_scoped_to_domain_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(Nil) =
+    db.insert_dream_run(subject, "work", 5000, "reflect", 0, 0, 3, 600)
+
+  // Different domain should return 0
+  let assert Ok(ms) = db.get_last_dream_ms(subject, "personal")
+  ms |> should.equal(0)
+
+  // Same domain should return the timestamp
+  let assert Ok(ms2) = db.get_last_dream_ms(subject, "work")
+  ms2 |> should.equal(5000)
+
+  process.send(subject, db.Shutdown)
+}
+
+// ---------------------------------------------------------------------------
+// Flare result_text tests
+// ---------------------------------------------------------------------------
+
+pub fn update_flare_result_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  // Insert a flare first
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f-res-1",
+        label: "Build feature",
+        status: "done",
+        domain: "work",
+        thread_id: "ch1",
+        original_prompt: "Build the thing",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "sess-1",
+        created_at_ms: 1000,
+        updated_at_ms: 1000,
+      ),
+    )
+
+  // Update its result_text
+  let assert Ok(Nil) =
+    db.update_flare_result(subject, "f-res-1", "Feature built successfully", 2000)
+
+  // Verify by loading the flare outcomes
+  let assert Ok(outcomes) = db.get_flare_outcomes(subject, "work", 0)
+  list.length(outcomes) |> should.equal(1)
+  let assert [#(label, result)] = outcomes
+  label |> should.equal("Build feature")
+  result |> should.equal("Feature built successfully")
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn update_flare_result_updates_timestamp_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f-ts-1",
+        label: "Test",
+        status: "done",
+        domain: "work",
+        thread_id: "ch1",
+        original_prompt: "Test",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 1000,
+      ),
+    )
+
+  let assert Ok(Nil) =
+    db.update_flare_result(subject, "f-ts-1", "Done", 5000)
+
+  // Load flares to verify updated_at_ms changed
+  let assert Ok(flares) = db.load_flares(subject, False)
+  let assert Ok(f) = list.first(flares)
+  f.updated_at_ms |> should.equal(5000)
+
+  process.send(subject, db.Shutdown)
+}
+
+// ---------------------------------------------------------------------------
+// Flare outcomes tests
+// ---------------------------------------------------------------------------
+
+pub fn get_flare_outcomes_filters_by_domain_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  // Insert flares in two domains
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f-d1",
+        label: "Work task",
+        status: "done",
+        domain: "work",
+        thread_id: "ch1",
+        original_prompt: "Do work",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 2000,
+      ),
+    )
+  let assert Ok(Nil) =
+    db.update_flare_result(subject, "f-d1", "Work done", 2000)
+
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f-d2",
+        label: "Personal task",
+        status: "done",
+        domain: "personal",
+        thread_id: "ch2",
+        original_prompt: "Do personal",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 3000,
+      ),
+    )
+  let assert Ok(Nil) =
+    db.update_flare_result(subject, "f-d2", "Personal done", 3000)
+
+  // Only work domain
+  let assert Ok(work_outcomes) = db.get_flare_outcomes(subject, "work", 0)
+  list.length(work_outcomes) |> should.equal(1)
+  let assert [#(label, _)] = work_outcomes
+  label |> should.equal("Work task")
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_flare_outcomes_filters_by_since_ms_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f-old",
+        label: "Old task",
+        status: "done",
+        domain: "work",
+        thread_id: "ch1",
+        original_prompt: "Old",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 1000,
+      ),
+    )
+  let assert Ok(Nil) =
+    db.update_flare_result(subject, "f-old", "Old result", 1000)
+
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f-new",
+        label: "New task",
+        status: "done",
+        domain: "work",
+        thread_id: "ch2",
+        original_prompt: "New",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 2000,
+        updated_at_ms: 3000,
+      ),
+    )
+  let assert Ok(Nil) =
+    db.update_flare_result(subject, "f-new", "New result", 3000)
+
+  // since_ms = 2000 should only return the newer flare (updated_at_ms > 2000)
+  let assert Ok(outcomes) = db.get_flare_outcomes(subject, "work", 2000)
+  list.length(outcomes) |> should.equal(1)
+  let assert [#(label, _)] = outcomes
+  label |> should.equal("New task")
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_flare_outcomes_excludes_null_result_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  // Flare without result_text
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f-nores",
+        label: "No result",
+        status: "active",
+        domain: "work",
+        thread_id: "ch1",
+        original_prompt: "Running",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 2000,
+      ),
+    )
+
+  // Flare with result_text
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f-hasres",
+        label: "Has result",
+        status: "done",
+        domain: "work",
+        thread_id: "ch2",
+        original_prompt: "Done",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 3000,
+      ),
+    )
+  let assert Ok(Nil) =
+    db.update_flare_result(subject, "f-hasres", "Completed", 3000)
+
+  let assert Ok(outcomes) = db.get_flare_outcomes(subject, "work", 0)
+  list.length(outcomes) |> should.equal(1)
+  let assert [#(label, _)] = outcomes
+  label |> should.equal("Has result")
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_flare_outcomes_ordered_by_updated_at_asc_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f-later",
+        label: "Later task",
+        status: "done",
+        domain: "work",
+        thread_id: "ch1",
+        original_prompt: "Later",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 5000,
+      ),
+    )
+  let assert Ok(Nil) =
+    db.update_flare_result(subject, "f-later", "Later result", 5000)
+
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f-earlier",
+        label: "Earlier task",
+        status: "done",
+        domain: "work",
+        thread_id: "ch2",
+        original_prompt: "Earlier",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 2000,
+      ),
+    )
+  let assert Ok(Nil) =
+    db.update_flare_result(subject, "f-earlier", "Earlier result", 2000)
+
+  // Results should be ordered by updated_at_ms ASC — earlier first
+  let assert Ok(outcomes) = db.get_flare_outcomes(subject, "work", 0)
+  list.length(outcomes) |> should.equal(2)
+  let assert [#(first_label, _), #(second_label, _)] = outcomes
+  first_label |> should.equal("Earlier task")
+  second_label |> should.equal("Later task")
+
+  process.send(subject, db.Shutdown)
+}
