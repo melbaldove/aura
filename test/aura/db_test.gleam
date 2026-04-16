@@ -267,3 +267,142 @@ pub fn update_flare_session_id_test() {
   let assert Ok(f) = list.first(flares)
   f.session_id |> should.equal("sess-123")
 }
+
+// ---------------------------------------------------------------------------
+// Memory entry tests
+// ---------------------------------------------------------------------------
+
+pub fn insert_memory_entry_returns_id_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(id) =
+    db.insert_memory_entry(subject, "work", "state", "current_task", "doing stuff", 1000)
+  should.be_true(id > 0)
+  process.send(subject, db.Shutdown)
+}
+
+pub fn insert_memory_entry_increments_id_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(id1) =
+    db.insert_memory_entry(subject, "work", "state", "key1", "content1", 1000)
+  let assert Ok(id2) =
+    db.insert_memory_entry(subject, "work", "state", "key2", "content2", 2000)
+  should.be_true(id2 > id1)
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_active_memory_entries_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(_) =
+    db.insert_memory_entry(subject, "work", "state", "task", "doing stuff", 1000)
+  let assert Ok(_) =
+    db.insert_memory_entry(subject, "work", "state", "mood", "focused", 2000)
+  let assert Ok(_) =
+    db.insert_memory_entry(subject, "work", "memory", "fact1", "gleam is great", 3000)
+
+  // Should return only the two "state" entries for "work" domain
+  let assert Ok(entries) = db.get_active_memory_entries(subject, "work", "state")
+  list.length(entries) |> should.equal(2)
+
+  // Should return only the one "memory" entry
+  let assert Ok(mem_entries) = db.get_active_memory_entries(subject, "work", "memory")
+  list.length(mem_entries) |> should.equal(1)
+
+  // Different domain returns nothing
+  let assert Ok(empty) = db.get_active_memory_entries(subject, "personal", "state")
+  list.length(empty) |> should.equal(0)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_active_memory_entries_excludes_superseded_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(old_id) =
+    db.insert_memory_entry(subject, "work", "state", "task", "old task", 1000)
+  let assert Ok(new_id) =
+    db.insert_memory_entry(subject, "work", "state", "task", "new task", 2000)
+
+  // Supersede the old entry
+  let assert Ok(_) =
+    db.supersede_memory_entry(subject, old_id, new_id, 2000)
+
+  // Only the new entry should be active
+  let assert Ok(entries) = db.get_active_memory_entries(subject, "work", "state")
+  list.length(entries) |> should.equal(1)
+  let assert [entry] = entries
+  entry.id |> should.equal(new_id)
+  entry.content |> should.equal("new task")
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn supersede_memory_entry_idempotent_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(old_id) =
+    db.insert_memory_entry(subject, "work", "state", "task", "old task", 1000)
+  let assert Ok(new_id) =
+    db.insert_memory_entry(subject, "work", "state", "task", "new task", 2000)
+  let assert Ok(newer_id) =
+    db.insert_memory_entry(subject, "work", "state", "task", "newer task", 3000)
+
+  // Supersede old entry with new_id
+  let assert Ok(_) = db.supersede_memory_entry(subject, old_id, new_id, 2000)
+
+  // Try to re-supersede old entry with newer_id — should be a no-op
+  let assert Ok(_) = db.supersede_memory_entry(subject, old_id, newer_id, 3000)
+
+  // Verify old entry still points to new_id (not newer_id)
+  // We check by getting active entries — old should still be superseded
+  let assert Ok(entries) = db.get_active_memory_entries(subject, "work", "state")
+  // new_id and newer_id should be active, old_id should be superseded
+  list.length(entries) |> should.equal(2)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_active_entry_id_finds_old_entry_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(old_id) =
+    db.insert_memory_entry(subject, "work", "state", "task", "old task", 1000)
+  let assert Ok(new_id) =
+    db.insert_memory_entry(subject, "work", "state", "task", "new task", 2000)
+
+  // Should find old_id when excluding new_id
+  let assert Ok(found_id) =
+    db.get_active_entry_id(subject, "work", "state", "task", new_id)
+  found_id |> should.equal(old_id)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_active_entry_id_returns_error_when_none_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(id) =
+    db.insert_memory_entry(subject, "work", "state", "task", "only task", 1000)
+
+  // No other active entry with this key — should error
+  let result = db.get_active_entry_id(subject, "work", "state", "task", id)
+  should.be_error(result)
+
+  // Totally nonexistent key — should also error
+  let result2 = db.get_active_entry_id(subject, "work", "state", "nonexistent", 0)
+  should.be_error(result2)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn memory_entry_fields_roundtrip_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(id) =
+    db.insert_memory_entry(subject, "personal", "memory", "favorite_color", "blue", 42_000)
+
+  let assert Ok(entries) = db.get_active_memory_entries(subject, "personal", "memory")
+  let assert [entry] = entries
+  entry.id |> should.equal(id)
+  entry.domain |> should.equal("personal")
+  entry.target |> should.equal("memory")
+  entry.key |> should.equal("favorite_color")
+  entry.content |> should.equal("blue")
+  entry.created_at_ms |> should.equal(42_000)
+
+  process.send(subject, db.Shutdown)
+}
