@@ -1,6 +1,7 @@
 import aura/dreaming
 import aura/llm
 import aura/test_helpers
+import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -341,4 +342,224 @@ pub fn dream_memory_tool_definition_test() {
     |> list.filter(fn(p) { !p.required })
     |> list.map(fn(p) { p.name })
   optional_names |> should.equal(["content"])
+}
+
+// ---------------------------------------------------------------------------
+// Map-Reduce Orchestration tests
+// ---------------------------------------------------------------------------
+
+pub fn extract_index_entries_from_successes_test() {
+  let results = [
+    Ok(dreaming.DreamResult(
+      domain: "backend",
+      phase_reached: "render",
+      entries_consolidated: 3,
+      entries_promoted: 1,
+      reflections_generated: 1,
+      duration_ms: 5000,
+      index_entry: Some("Backend covers DB and API patterns."),
+    )),
+    Ok(dreaming.DreamResult(
+      domain: "frontend",
+      phase_reached: "render",
+      entries_consolidated: 2,
+      entries_promoted: 0,
+      reflections_generated: 0,
+      duration_ms: 3000,
+      index_entry: Some("Frontend covers React and state management."),
+    )),
+  ]
+
+  let entries = dreaming.extract_index_entries(results)
+  list.length(entries) |> should.equal(2)
+
+  let first = case entries {
+    [a, ..] -> a
+    _ -> ""
+  }
+  first |> string.contains("backend") |> should.be_true
+  first |> string.contains("Backend covers DB and API patterns.") |> should.be_true
+
+  let second = case entries {
+    [_, b, ..] -> b
+    _ -> ""
+  }
+  second |> string.contains("frontend") |> should.be_true
+  second |> string.contains("React and state management") |> should.be_true
+}
+
+pub fn extract_index_entries_skips_failures_test() {
+  let results = [
+    Ok(dreaming.DreamResult(
+      domain: "backend",
+      phase_reached: "render",
+      entries_consolidated: 3,
+      entries_promoted: 1,
+      reflections_generated: 1,
+      duration_ms: 5000,
+      index_entry: Some("Backend index."),
+    )),
+    Error("Phase consolidate failed after all retries"),
+  ]
+
+  let entries = dreaming.extract_index_entries(results)
+  list.length(entries) |> should.equal(1)
+}
+
+pub fn extract_index_entries_skips_none_index_test() {
+  let results = [
+    Ok(dreaming.DreamResult(
+      domain: "backend",
+      phase_reached: "reflect",
+      entries_consolidated: 3,
+      entries_promoted: 1,
+      reflections_generated: 1,
+      duration_ms: 5000,
+      index_entry: None,
+    )),
+  ]
+
+  let entries = dreaming.extract_index_entries(results)
+  list.length(entries) |> should.equal(0)
+}
+
+pub fn extract_index_entries_empty_results_test() {
+  dreaming.extract_index_entries([]) |> should.equal([])
+}
+
+pub fn build_global_dream_system_prompt_test() {
+  let prompt = dreaming.build_global_dream_system_prompt(
+    "**db-pattern:** All DB through actor",
+    "**name:** Melbourne",
+    "backend: Covers DB and API patterns.\n\nfrontend: Covers React.",
+  )
+
+  // Contains global dreaming context
+  prompt |> string.contains("global dreaming process") |> should.be_true
+  prompt |> string.contains("cross-domain") |> should.be_true
+
+  // Contains global memory
+  prompt |> string.contains("db-pattern") |> should.be_true
+  prompt |> string.contains("All DB through actor") |> should.be_true
+
+  // Contains user profile
+  prompt |> string.contains("Melbourne") |> should.be_true
+
+  // Contains domain index entries
+  prompt |> string.contains("backend: Covers DB and API patterns.") |> should.be_true
+  prompt |> string.contains("frontend: Covers React.") |> should.be_true
+}
+
+pub fn build_global_dream_system_prompt_empty_sources_test() {
+  let prompt = dreaming.build_global_dream_system_prompt(
+    "(empty)",
+    "(empty)",
+    "(no domain index entries)",
+  )
+
+  prompt |> string.contains("(empty)") |> should.be_true
+  prompt |> string.contains("(no domain index entries)") |> should.be_true
+}
+
+pub fn collect_results_all_received_test() {
+  // Create a subject and pre-send results to it
+  let subject = process.new_subject()
+
+  process.send(subject, #(
+    "backend",
+    Ok(dreaming.DreamResult(
+      domain: "backend",
+      phase_reached: "render",
+      entries_consolidated: 3,
+      entries_promoted: 1,
+      reflections_generated: 1,
+      duration_ms: 5000,
+      index_entry: Some("Backend index."),
+    )),
+  ))
+
+  process.send(subject, #(
+    "frontend",
+    Ok(dreaming.DreamResult(
+      domain: "frontend",
+      phase_reached: "render",
+      entries_consolidated: 2,
+      entries_promoted: 0,
+      reflections_generated: 0,
+      duration_ms: 3000,
+      index_entry: None,
+    )),
+  ))
+
+  let results = dreaming.collect_results(subject, 2, [], 1000)
+  list.length(results) |> should.equal(2)
+
+  // Both should be Ok
+  list.all(results, fn(r) {
+    case r {
+      Ok(_) -> True
+      Error(_) -> False
+    }
+  })
+  |> should.be_true
+}
+
+pub fn collect_results_timeout_returns_partial_test() {
+  // Create a subject and send only 1 result when expecting 2
+  let subject = process.new_subject()
+
+  process.send(subject, #(
+    "backend",
+    Ok(dreaming.DreamResult(
+      domain: "backend",
+      phase_reached: "render",
+      entries_consolidated: 1,
+      entries_promoted: 0,
+      reflections_generated: 0,
+      duration_ms: 1000,
+      index_entry: None,
+    )),
+  ))
+
+  // Expect 2 but only 1 was sent — should timeout and return what we have
+  let results = dreaming.collect_results(subject, 2, [], 100)
+  list.length(results) |> should.equal(1)
+}
+
+pub fn collect_results_zero_remaining_test() {
+  // When remaining is 0, should return empty immediately
+  let subject = process.new_subject()
+  let results = dreaming.collect_results(subject, 0, [], 1000)
+  list.length(results) |> should.equal(0)
+}
+
+pub fn collect_results_includes_errors_test() {
+  let subject = process.new_subject()
+
+  process.send(subject, #("backend", Error("LLM call failed")))
+  process.send(subject, #(
+    "frontend",
+    Ok(dreaming.DreamResult(
+      domain: "frontend",
+      phase_reached: "render",
+      entries_consolidated: 2,
+      entries_promoted: 0,
+      reflections_generated: 0,
+      duration_ms: 3000,
+      index_entry: None,
+    )),
+  ))
+
+  let results = dreaming.collect_results(subject, 2, [], 1000)
+  list.length(results) |> should.equal(2)
+
+  // One should be Error, one Ok
+  let error_count =
+    list.count(results, fn(r) {
+      case r {
+        Error(_) -> True
+        _ -> False
+      }
+    })
+  error_count |> should.equal(1)
 }

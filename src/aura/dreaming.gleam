@@ -1,5 +1,6 @@
 import aura/db
 import aura/llm
+import aura/models
 import aura/structured_memory
 import aura/time
 import aura/xdg
@@ -60,6 +61,9 @@ pub type DreamConfig {
 const max_dream_iterations = 12
 
 const retry_delays_ms = [5000, 15_000, 30_000]
+
+/// Per-domain timeout for parallel dream execution (10 minutes).
+const domain_timeout_ms = 600_000
 
 // ---------------------------------------------------------------------------
 // Prompt builders
@@ -719,4 +723,363 @@ fn get_dream_arg(args: dict.Dict(String, String), key: String) -> String {
     Ok(v) -> v
     Error(_) -> ""
   }
+}
+
+// ---------------------------------------------------------------------------
+// Map-Reduce Orchestration
+// ---------------------------------------------------------------------------
+
+/// Entry point for the full dreaming cycle, called by the scheduler.
+/// Spawns one BEAM process per domain (map phase), waits for all to complete,
+/// then runs the global consolidation pass (reduce phase).
+pub fn dream_all(config: DreamConfig) -> Nil {
+  let start_ms = time.now_ms()
+  io.println(
+    "[dream] Starting dream cycle for "
+    <> int.to_string(list.length(config.domains))
+    <> " domains",
+  )
+
+  case models.build_llm_config(config.model_spec) {
+    Error(e) -> io.println("[dream] Failed to build LLM config: " <> e)
+    Ok(llm_config) -> {
+      let total_budget =
+        models.memory_token_budget(
+          config.model_spec,
+          config.brain_context,
+          config.budget_percent,
+        )
+      // Domain MEMORY.md gets ~40% of the total budget
+      let domain_budget = total_budget * 40 / 100
+
+      // Map: dream all domains in parallel
+      let results =
+        parallel_dream_domains(
+          llm_config,
+          config.domains,
+          config.paths,
+          config.db_subject,
+          domain_budget,
+        )
+
+      // Log each domain result to the dream_runs table
+      log_domain_results(results, config.db_subject)
+
+      // Collect index entries from successful domains
+      let index_entries = extract_index_entries(results)
+
+      // Reduce: global pass
+      let global_budget = total_budget * 20 / 100
+      dream_global(
+        llm_config,
+        config.paths,
+        config.db_subject,
+        global_budget,
+        index_entries,
+      )
+
+      let duration_ms = time.now_ms() - start_ms
+      io.println(
+        "[dream] Cycle complete in " <> int.to_string(duration_ms / 1000) <> "s",
+      )
+    }
+  }
+}
+
+/// Spawn one process per domain, collect results via a Subject.
+fn parallel_dream_domains(
+  llm_config: llm.LlmConfig,
+  domains: List(String),
+  paths: xdg.Paths,
+  db_subject: process.Subject(db.DbMessage),
+  budget_tokens: Int,
+) -> List(Result(DreamResult, String)) {
+  let result_subject = process.new_subject()
+  let count = list.length(domains)
+
+  // Spawn one unlinked process per domain
+  list.each(domains, fn(domain) {
+    process.spawn_unlinked(fn() {
+      let result =
+        dream_domain(llm_config, domain, paths, db_subject, budget_tokens)
+      process.send(result_subject, #(domain, result))
+    })
+    Nil
+  })
+
+  // Wait for all results (or timeout)
+  collect_results(result_subject, count, [], domain_timeout_ms)
+}
+
+/// Wait for N results with a timeout.
+/// Returns all results received before the deadline. On timeout, logs a warning
+/// and returns what was collected so far.
+pub fn collect_results(
+  subject: process.Subject(#(String, Result(DreamResult, String))),
+  remaining: Int,
+  acc: List(Result(DreamResult, String)),
+  timeout_ms: Int,
+) -> List(Result(DreamResult, String)) {
+  case remaining <= 0 {
+    True -> list.reverse(acc)
+    False -> {
+      case process.receive(subject, timeout_ms) {
+        Ok(#(domain, result)) -> {
+          case result {
+            Ok(dr) ->
+              io.println(
+                "[dream] " <> domain <> " completed — phase: "
+                <> dr.phase_reached
+                <> ", consolidated: " <> int.to_string(dr.entries_consolidated)
+                <> ", promoted: " <> int.to_string(dr.entries_promoted)
+                <> ", reflections: " <> int.to_string(dr.reflections_generated)
+                <> " (" <> int.to_string(dr.duration_ms / 1000) <> "s)",
+              )
+            Error(e) ->
+              io.println("[dream] " <> domain <> " failed: " <> e)
+          }
+          collect_results(
+            subject,
+            remaining - 1,
+            [result, ..acc],
+            timeout_ms,
+          )
+        }
+        Error(Nil) -> {
+          io.println(
+            "[dream] Timed out waiting for "
+            <> int.to_string(remaining)
+            <> " remaining domain(s)",
+          )
+          list.reverse(acc)
+        }
+      }
+    }
+  }
+}
+
+/// Extract index entries from successful domain dream results.
+/// Returns a list of "domain: index_entry" strings.
+pub fn extract_index_entries(
+  results: List(Result(DreamResult, String)),
+) -> List(String) {
+  list.filter_map(results, fn(r) {
+    case r {
+      Ok(dr) ->
+        case dr.index_entry {
+          Some(entry) -> Ok(dr.domain <> ": " <> entry)
+          None -> Error(Nil)
+        }
+      Error(_) -> Error(Nil)
+    }
+  })
+}
+
+/// Log each domain dream result to the dream_runs table.
+fn log_domain_results(
+  results: List(Result(DreamResult, String)),
+  db_subject: process.Subject(db.DbMessage),
+) -> Nil {
+  list.each(results, fn(r) {
+    case r {
+      Ok(dr) -> {
+        let _ =
+          db.insert_dream_run(
+            db_subject,
+            dr.domain,
+            time.now_ms(),
+            dr.phase_reached,
+            dr.entries_consolidated,
+            dr.entries_promoted,
+            dr.reflections_generated,
+            dr.duration_ms,
+          )
+        Nil
+      }
+      Error(_) -> Nil
+    }
+  })
+}
+
+/// The reduce pass — consolidates global MEMORY.md, USER.md, and domain index entries.
+fn dream_global(
+  llm_config: llm.LlmConfig,
+  paths: xdg.Paths,
+  db_subject: process.Subject(db.DbMessage),
+  budget_tokens: Int,
+  domain_index_entries: List(String),
+) -> Nil {
+  let start_ms = time.now_ms()
+  io.println("[dream] Starting global consolidation pass")
+
+  let global_memory_path = xdg.memory_path(paths)
+  let user_path = xdg.user_path(paths)
+
+  // Read global memory and user profile
+  let memory_content = case structured_memory.format_for_display(global_memory_path) {
+    Ok(content) -> content
+    Error(_) -> "(empty)"
+  }
+  let user_content = case structured_memory.format_for_display(user_path) {
+    Ok(content) -> content
+    Error(_) -> "(empty)"
+  }
+
+  let index_section = case domain_index_entries {
+    [] -> "(no domain index entries)"
+    entries -> string.join(entries, "\n\n")
+  }
+
+  let system_prompt = build_global_dream_system_prompt(
+    memory_content,
+    user_content,
+    index_section,
+  )
+
+  let initial_messages = [llm.SystemMessage(system_prompt)]
+  let tool = dream_memory_tool_definition()
+  let tools = [tool]
+
+  // Phase 1: Consolidate global memory
+  io.println("[dream] _global — phase 1: consolidate")
+  let consolidate_result =
+    run_phase_with_retry(
+      llm_config,
+      initial_messages,
+      tools,
+      "consolidate",
+      build_consolidation_prompt(memory_content),
+      "_global",
+      paths,
+      db_subject,
+    )
+
+  case consolidate_result {
+    Error(e) -> {
+      io.println("[dream] _global — consolidation failed: " <> e)
+      log_global_dream_run(db_subject, start_ms, "consolidate", 0, 0, 0)
+    }
+    Ok(#(messages_after_consolidate, consolidate_count)) -> {
+      // Phase 2: Reflect on cross-domain patterns
+      io.println("[dream] _global — phase 2: reflect")
+      let reflect_result =
+        run_phase_with_retry(
+          llm_config,
+          messages_after_consolidate,
+          tools,
+          "reflect",
+          build_reflection_prompt(),
+          "_global",
+          paths,
+          db_subject,
+        )
+
+      case reflect_result {
+        Error(e) -> {
+          io.println("[dream] _global — reflection failed: " <> e)
+          log_global_dream_run(
+            db_subject,
+            start_ms,
+            "reflect",
+            consolidate_count,
+            0,
+            0,
+          )
+        }
+        Ok(#(messages_after_reflect, reflect_count)) -> {
+          // Phase 3: Render final global working set
+          io.println("[dream] _global — phase 3: render")
+          let render_result =
+            run_phase_with_retry(
+              llm_config,
+              messages_after_reflect,
+              tools,
+              "render",
+              build_render_prompt(budget_tokens),
+              "_global",
+              paths,
+              db_subject,
+            )
+
+          case render_result {
+            Error(e) -> {
+              io.println("[dream] _global — render failed: " <> e)
+              log_global_dream_run(
+                db_subject,
+                start_ms,
+                "render",
+                consolidate_count,
+                0,
+                reflect_count,
+              )
+            }
+            Ok(#(_final_messages, _render_count)) -> {
+              let duration_ms = time.now_ms() - start_ms
+              io.println(
+                "[dream] _global — complete ("
+                <> int.to_string(duration_ms / 1000)
+                <> "s)",
+              )
+              log_global_dream_run(
+                db_subject,
+                start_ms,
+                "render",
+                consolidate_count,
+                0,
+                reflect_count,
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Build the system prompt for the global consolidation pass.
+/// Includes global MEMORY.md, USER.md, and domain index entries.
+pub fn build_global_dream_system_prompt(
+  memory_content: String,
+  user_content: String,
+  index_section: String,
+) -> String {
+  "You are the global dreaming process. Your job is to consolidate cross-domain knowledge.
+
+During the global pass, you review global memory and user profile alongside domain index summaries. Merge redundant global entries, identify cross-domain patterns, and produce a compact global working set.
+
+## Global Memory
+
+" <> memory_content <> "
+
+## User Profile
+
+" <> user_content <> "
+
+## Domain Index Summaries
+
+" <> index_section
+}
+
+/// Log a global dream run to the database.
+fn log_global_dream_run(
+  db_subject: process.Subject(db.DbMessage),
+  start_ms: Int,
+  phase_reached: String,
+  entries_consolidated: Int,
+  entries_promoted: Int,
+  reflections_generated: Int,
+) -> Nil {
+  let duration_ms = time.now_ms() - start_ms
+  let _ =
+    db.insert_dream_run(
+      db_subject,
+      "_global",
+      time.now_ms(),
+      phase_reached,
+      entries_consolidated,
+      entries_promoted,
+      reflections_generated,
+      duration_ms,
+    )
+  Nil
 }
