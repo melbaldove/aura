@@ -12,6 +12,9 @@ REMOTE="melbournebaldove@192.168.50.140"
 REMOTE_DIR="~/aura"
 RPATH="/opt/homebrew/bin"
 
+echo "==> Syncing config..."
+rsync -av gleam.toml manifest.toml "${REMOTE}:${REMOTE_DIR}/"
+
 echo "==> Syncing source + tests..."
 rsync -av --delete \
   --include='*.gleam' --include='*.erl' --include='*/' --exclude='*' \
