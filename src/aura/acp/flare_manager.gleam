@@ -44,6 +44,7 @@ pub type FlareRecord {
     handle: Option(transport.SessionHandle),
     started_at_ms: Int,
     updated_at_ms: Int,
+    awaiting_response: Bool,
   )
 }
 
@@ -411,9 +412,9 @@ fn handle_message(
       actor.continue(new_state)
     }
     SendInput(reply_to:, session_name:, input:) -> {
-      let result = handle_send_input(state, session_name, input)
+      let #(new_state, result) = handle_send_input(state, session_name, input)
       process.send(reply_to, result)
-      actor.continue(state)
+      actor.continue(new_state)
     }
     GetSession(reply_to:, session_name:) -> {
       let result = lookup_flare_by_session(state, session_name)
@@ -494,6 +495,7 @@ fn handle_ignite(
       handle: None,
       started_at_ms: now,
       updated_at_ms: now,
+      awaiting_response: False,
     )
 
   let stored = db.StoredFlare(
@@ -526,7 +528,7 @@ fn handle_ignite(
 }
 
 // ---------------------------------------------------------------------------
-// Archive — mark flare as archived
+// Archive — mark flare as archived (work is done)
 // ---------------------------------------------------------------------------
 
 fn handle_archive(
@@ -639,6 +641,7 @@ fn handle_dispatch(
                   thread_id: thread_id,
                   status: Active,
                   updated_at_ms: now,
+                  awaiting_response: True,
                 )
 
               case db.update_flare_session_id(state.db_subject, flare_id, result.run_id, now) {
@@ -733,22 +736,29 @@ fn handle_send_input(
   state: FlareManagerState,
   session_name: String,
   input: String,
-) -> Result(Nil, String) {
+) -> #(FlareManagerState, Result(Nil, String)) {
   case lookup_flare_by_session(state, session_name) {
     Ok(flare) -> {
       let handle = option.unwrap(flare.handle, transport.TmuxHandle)
-      transport.send_input(state.transport, handle, session_name, input)
+      case transport.send_input(state.transport, handle, session_name, input) {
+        Ok(_) -> {
+          let updated = FlareRecord(..flare, awaiting_response: True)
+          let new_flares = dict.insert(state.flares, flare.id, updated)
+          #(FlareManagerState(..state, flares: new_flares), Ok(Nil))
+        }
+        Error(e) -> #(state, Error(e))
+      }
     }
     Error(_) -> {
       // Fallback: for tmux transport, check if tmux session exists directly
       case state.transport {
         transport.Tmux -> {
           case tmux.session_exists(session_name) {
-            True -> tmux.send_input(session_name, input)
-            False -> Error("Session not found: " <> session_name)
+            True -> #(state, tmux.send_input(session_name, input))
+            False -> #(state, Error("Session not found: " <> session_name))
           }
         }
-        _ -> Error("Session not found: " <> session_name)
+        _ -> #(state, Error("Session not found: " <> session_name))
       }
     }
   }
@@ -893,6 +903,7 @@ fn handle_rekindle(
                       handle: Some(result.handle),
                       status: Active,
                       updated_at_ms: now,
+                      awaiting_response: True,
                     )
 
                   case db.update_flare_rekindle(state.db_subject, flare_id, result.run_id, status_to_string(Active), now) {
@@ -975,10 +986,18 @@ fn handle_monitor_event(
       update_flare_for_session(state, session_name, Failed("timed_out"))
     acp_monitor.AcpCompleted(..) ->
       update_flare_for_session(state, session_name, Archived)
-    acp_monitor.AcpTurnCompleted(..) ->
+    acp_monitor.AcpTurnCompleted(..) -> {
       // Turn completed but session still alive — don't archive.
-      // Brain handles the handback and may send follow-up prompts.
-      state
+      // Clear awaiting_response so status reports "idle".
+      case lookup_flare_by_session(state, session_name) {
+        Ok(flare) -> {
+          let updated = FlareRecord(..flare, awaiting_response: False)
+          let new_flares = dict.insert(state.flares, flare.id, updated)
+          FlareManagerState(..state, flares: new_flares)
+        }
+        Error(_) -> state
+      }
+    }
     acp_monitor.AcpFailed(_, _, reason) ->
       update_flare_for_session(state, session_name, Failed(reason))
     acp_monitor.AcpProgress(..) -> state
@@ -1147,7 +1166,7 @@ fn recover_flares(
             process.send_after(self_subject, delay, Rekindle(
               reply_to: process.new_subject(),
               flare_id: p.0.id,
-              input: "Your session was interrupted by a system restart. If you were not done, continue where you left off. If you were already done, do nothing.",
+              input: "Check your current state. If you have unfinished work, continue. If you are done, report what you accomplished.",
             ))
           })
           #(flare_dict, session_dict)
@@ -1251,6 +1270,7 @@ fn stored_flare_to_record(
     handle: handle,
     started_at_ms: sf.created_at_ms,
     updated_at_ms: sf.updated_at_ms,
+    awaiting_response: False,
   )
 }
 

@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "agent",
+            "if": "Bash(git commit*)",
+            "model": "haiku",
+            "prompt": "A commit is about to be made. Check if docs/MANUAL.md needs updating.\n\n1. Run `git diff --cached --name-only` to see what files are being committed.\n2. If any files in src/aura/acp/, src/aura/brain.gleam, src/aura/brain_tools.gleam, src/aura/scheduler.gleam, src/aura/config.gleam, src/aura/supervisor.gleam, src/aura/skill.gleam, src/aura/structured_memory.gleam, or src/aura/conversation.gleam changed, read the relevant section of docs/MANUAL.md.\n3. Compare the staged changes against what the manual says. Is the manual still accurate?\n4. If docs/MANUAL.md is already in the staged files, check that the updates are consistent with the code changes.\n\nReturn {\"ok\": true} if the manual is accurate or doesn't need updating (e.g. test-only changes, comments, formatting).\nReturn {\"ok\": false, \"reason\": \"<which section needs updating and why>\"} if the manual is now stale.",
+            "timeout": 30,
+            "tools": ["Bash", "Read", "Grep"]
+          }
+        ]
+      }
+    ]
+  }
+}

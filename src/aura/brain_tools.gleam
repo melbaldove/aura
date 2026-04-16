@@ -571,7 +571,11 @@ fn execute_tool_dispatch(
                 Ok(flare) -> {
                   let elapsed_ms = time.now_ms() - flare.started_at_ms
                   let elapsed_min = elapsed_ms / 60_000
-                  let state_str = " [" <> flare_manager.status_to_string(flare.status) <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
+                  let activity = case flare.awaiting_response {
+                    True -> " working"
+                    False -> " idle"
+                  }
+                  let state_str = " [" <> flare_manager.status_to_string(flare.status) <> activity <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
                   TextResult(
                     "Flare: " <> flare.id <> " \"" <> flare.label <> "\"" <> state_str
                     <> "\nDomain: " <> flare.domain
@@ -591,9 +595,14 @@ fn execute_tool_dispatch(
             [] -> TextResult("No flares.")
             _ -> {
               list.map(flares, fn(f) {
+                let activity = case f.status, f.awaiting_response {
+                  flare_manager.Active, True -> " working"
+                  flare_manager.Active, False -> " idle"
+                  _, _ -> ""
+                }
                 f.id
                 <> " \"" <> f.label <> "\""
-                <> " [" <> flare_manager.status_to_string(f.status) <> "]"
+                <> " [" <> flare_manager.status_to_string(f.status) <> activity <> "]"
                 <> " domain=" <> f.domain
                 <> case f.session_name {
                   "" -> ""
@@ -619,13 +628,39 @@ fn execute_tool_dispatch(
             }
           }
         }
+        "archive" -> {
+          case require_arg(args, "session_name") {
+            Error(e) -> TextResult(e)
+            Ok(identifier) -> {
+              case resolve_flare(identifier) {
+                Ok(flare) -> {
+                  case flare_manager.archive(ctx.acp_subject, flare.id) {
+                    Ok(_) -> TextResult("Flare archived: " <> flare.label)
+                    Error(e) -> TextResult("Error: " <> e)
+                  }
+                }
+                Error(_) -> TextResult("Flare not found: " <> identifier)
+              }
+            }
+          }
+        }
         "kill" -> {
           case require_arg(args, "session_name") {
             Error(e) -> TextResult(e)
-            Ok(session_name) -> {
-              case flare_manager.kill(ctx.acp_subject, session_name) {
-                Ok(_) -> TextResult("Flare killed: " <> session_name)
-                Error(e) -> TextResult("Error: " <> e)
+            Ok(identifier) -> {
+              case resolve_flare(identifier) {
+                Ok(flare) -> {
+                  case flare_manager.kill(ctx.acp_subject, flare.session_name) {
+                    Ok(_) -> TextResult("Flare aborted: " <> flare.label)
+                    Error(e) -> TextResult("Error: " <> e)
+                  }
+                }
+                Error(_) -> {
+                  case flare_manager.kill(ctx.acp_subject, identifier) {
+                    Ok(_) -> TextResult("Flare aborted: " <> identifier)
+                    Error(e) -> TextResult("Error: " <> e)
+                  }
+                }
               }
             }
           }
@@ -667,7 +702,7 @@ fn execute_tool_dispatch(
             }
           }
         }
-        unknown -> TextResult("Unknown flare action: " <> unknown <> ". Use: ignite, status, list, prompt, kill, park, rekindle")
+        unknown -> TextResult("Unknown flare action: " <> unknown <> ". Use: ignite, status, list, prompt, archive, kill, park, rekindle")
       }
     }
     _ -> {
