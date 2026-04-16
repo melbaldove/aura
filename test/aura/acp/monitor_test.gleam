@@ -150,6 +150,47 @@ pub fn monitor_get_last_summary_empty_test() {
   summary |> should.equal("")
 }
 
+pub fn monitor_survives_timeout_test() {
+  let event_subject = process.new_subject()
+  let on_event = fn(event) { process.send(event_subject, event) }
+
+  let monitor = acp_monitor.start_push_monitor(
+    acp_monitor.MonitorConfig(
+      emit_interval_ms: 50,
+      idle_interval_ms: 50,
+      idle_surface_threshold: 1,
+      timeout_ms: 100,
+    ),
+    "test-timeout-survive",
+    "test-domain",
+    "Analyze the code",
+    "",
+    on_event,
+  )
+
+  // Wait for timeout to fire
+  process.sleep(300)
+
+  // Drain events — should see AcpTimedOut
+  let got_timeout = drain_for_timeout(event_subject)
+  got_timeout |> should.be_true
+
+  // The monitor must still be alive — GetLastSummary must not crash
+  let summary = process.call(monitor, 1000, fn(reply_to) {
+    acp_monitor.GetLastSummary(reply_to)
+  })
+  // Summary is a string (empty or not) — the point is we didn't crash
+  { summary == summary } |> should.be_true
+}
+
+fn drain_for_timeout(subject: process.Subject(acp_monitor.AcpEvent)) -> Bool {
+  case process.receive(subject, 500) {
+    Ok(acp_monitor.AcpTimedOut(_, _)) -> True
+    Ok(_) -> drain_for_timeout(subject)
+    Error(_) -> False
+  }
+}
+
 fn drain_for_idle(subject: process.Subject(acp_monitor.AcpEvent)) -> Bool {
   case process.receive(subject, 500) {
     Ok(acp_monitor.AcpProgress(_, _, _, _, _, True)) -> True

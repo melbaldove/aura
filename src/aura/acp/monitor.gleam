@@ -70,6 +70,7 @@ pub type StdioMonitorMsg {
   UpdateStdioSummary(summary: String)
   GetLastSummary(reply_to: process.Subject(String))
   LlmBackoff
+  Shutdown
 }
 
 /// Default monitor config using the existing constants.
@@ -122,6 +123,7 @@ pub fn start_push_monitor(
           on_event: on_event,
           self_subject: subject,
           skip_ticks: 0,
+          timed_out: False,
         )
 
       Ok(actor.initialised(state) |> actor.returning(subject))
@@ -155,6 +157,7 @@ type PushMonitorState {
     on_event: fn(AcpEvent) -> Nil,
     self_subject: process.Subject(StdioMonitorMsg),
     skip_ticks: Int,
+    timed_out: Bool,
   )
 }
 
@@ -181,6 +184,7 @@ fn handle_push_msg(
       // Back off for 4 ticks (~60s at 15s interval)
       actor.continue(PushMonitorState(..state, skip_ticks: 4))
     }
+    Shutdown -> actor.stop()
   }
 }
 
@@ -194,15 +198,19 @@ fn handle_push_tick(
   }
 
   let elapsed_ms = time.now_ms() - state.started_at_ms
-  case elapsed_ms > state.config.timeout_ms {
+  case elapsed_ms > state.config.timeout_ms && !state.timed_out {
     True -> {
       state.on_event(AcpTimedOut(
         session_name: state.session_name,
         domain: state.domain,
       ))
-      actor.stop()
+      // Don't stop — the event loop still needs us for handback summaries.
+      // The timeout event propagates through flare_manager which kills the
+      // ACP process, causing the event loop to exit cleanly.
+      process.send_after(state.self_subject, state.config.emit_interval_ms, Tick)
+      actor.continue(PushMonitorState(..state, timed_out: True))
     }
-    False -> {
+    _ -> {
       // If backing off from LLM rate limit, decrement and skip LLM call
       case state.skip_ticks > 0 {
         True -> {

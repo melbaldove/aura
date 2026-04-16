@@ -111,7 +111,11 @@ pub type Transport {
 /// Handle to a running session — varies by transport.
 pub type SessionHandle {
   HttpHandle(run_id: String)
-  StdioHandle(owner: stdio.SessionOwner, session_id: String)
+  StdioHandle(
+    owner: stdio.SessionOwner,
+    session_id: String,
+    monitor: process.Subject(acp_monitor.StdioMonitorMsg),
+  )
   TmuxHandle
 }
 
@@ -158,7 +162,7 @@ pub fn send_input(
   case transport, handle {
     Http(server_url, _), HttpHandle(run_id) ->
       client.resume_run(server_url, run_id, input) |> result.map(fn(_) { Nil })
-    Stdio(_), StdioHandle(owner, session_id) ->
+    Stdio(_), StdioHandle(owner, session_id, _) ->
       stdio.send_input(owner, session_id, input)
     Tmux, TmuxHandle -> tmux.send_input(session_name, input)
     _, _ -> Error("Transport/handle mismatch")
@@ -174,7 +178,9 @@ pub fn kill(
   case transport, handle {
     Http(server_url, _), HttpHandle(run_id) ->
       client.cancel_run(server_url, run_id)
-    Stdio(_), StdioHandle(owner, _) -> {
+    Stdio(_), StdioHandle(owner, _, monitor) -> {
+      // Stop the monitor actor before closing the session
+      process.send(monitor, acp_monitor.Shutdown)
       stdio.close(owner)
       Ok(Nil)
     }
@@ -252,8 +258,6 @@ fn dispatch_stdio_inner(
     case start_fn() {
       Error(e) -> process.send(reply_subject, Error(e))
       Ok(#(owner, session_id)) -> {
-        process.send(reply_subject, Ok(#(owner, session_id)))
-        on_event(acp_monitor.AcpStarted(session_name, task_spec.domain, task_spec.id))
         let monitor = acp_monitor.start_push_monitor(
           acp_monitor.default_monitor_config(task_spec.timeout_ms),
           session_name,
@@ -262,16 +266,18 @@ fn dispatch_stdio_inner(
           monitor_model,
           on_event,
         )
+        process.send(reply_subject, Ok(#(owner, session_id, monitor)))
+        on_event(acp_monitor.AcpStarted(session_name, task_spec.domain, task_spec.id))
         stdio_event_loop(session_name, task_spec.domain, on_event, monitor, new_completion_buffer())
       }
     }
   })
 
   case process.receive(reply_subject, 30_000) {
-    Ok(Ok(#(owner, session_id))) ->
+    Ok(Ok(#(owner, session_id, monitor))) ->
       Ok(DispatchResult(
         run_id: session_id,
-        handle: StdioHandle(owner: owner, session_id: session_id),
+        handle: StdioHandle(owner: owner, session_id: session_id, monitor: monitor),
       ))
     Ok(Error(err)) -> Error("Stdio dispatch failed: " <> err)
     Error(_) -> Error("Stdio session timed out")
