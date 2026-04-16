@@ -215,6 +215,10 @@ pub type DbMessage {
     domain: String,
     since_ms: Int,
   )
+  GetCompactionSummaries(
+    reply_to: process.Subject(Result(List(String), String)),
+    domain: String,
+  )
 }
 
 type DbState {
@@ -589,6 +593,16 @@ pub fn get_flare_outcomes(
   })
 }
 
+/// Return non-empty compaction summaries for conversations in this domain.
+pub fn get_compaction_summaries(
+  subject: process.Subject(DbMessage),
+  domain: String,
+) -> Result(List(String), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetCompactionSummaries(reply_to:, domain:)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
@@ -737,6 +751,12 @@ fn handle_message(
 
     GetFlareOutcomes(reply_to:, domain:, since_ms:) -> {
       let result = do_get_flare_outcomes(state.conn, domain, since_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetCompactionSummaries(reply_to:, domain:) -> {
+      let result = do_get_compaction_summaries(state.conn, domain)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -1271,6 +1291,21 @@ fn do_get_flare_outcomes(
   )
   |> result.map_error(fn(err) {
     "Failed to get flare outcomes: " <> string.inspect(err)
+  })
+}
+
+fn do_get_compaction_summaries(
+  conn: sqlight.Connection,
+  domain: String,
+) -> Result(List(String), String) {
+  sqlight.query(
+    "SELECT compaction_summary FROM conversations WHERE domain = ? AND compaction_summary IS NOT NULL AND compaction_summary != ''",
+    on: conn,
+    with: [sqlight.text(domain)],
+    expecting: decode.at([0], decode.string),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to get compaction summaries: " <> string.inspect(err)
   })
 }
 
