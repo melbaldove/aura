@@ -1,7 +1,5 @@
 import aura/db
 import aura/dreaming
-import aura/models
-import aura/scaffold
 import aura/time
 import aura/xdg
 import gleam/erlang/process
