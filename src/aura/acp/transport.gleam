@@ -259,7 +259,7 @@ fn dispatch_stdio_inner(
       Error(e) -> process.send(reply_subject, Error(e))
       Ok(#(owner, session_id)) -> {
         let monitor = acp_monitor.start_push_monitor(
-          acp_monitor.default_monitor_config(task_spec.timeout_ms),
+          acp_monitor.default_monitor_config(),
           session_name,
           task_spec.domain,
           prompt_text,

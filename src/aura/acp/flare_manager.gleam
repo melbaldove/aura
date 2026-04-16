@@ -982,8 +982,6 @@ fn handle_monitor_event(
   let session_name = event_session_name(event)
   let new_state = case event {
     acp_monitor.AcpStarted(..) -> state
-    acp_monitor.AcpTimedOut(..) ->
-      update_flare_for_session(state, session_name, Failed("timed_out"))
     acp_monitor.AcpCompleted(..) ->
       update_flare_for_session(state, session_name, Archived)
     acp_monitor.AcpTurnCompleted(..) -> {
@@ -1016,7 +1014,6 @@ fn event_session_name(event: acp_monitor.AcpEvent) -> String {
     acp_monitor.AcpAlert(session_name, _, _, _) -> session_name
     acp_monitor.AcpCompleted(session_name, _, _, _) -> session_name
     acp_monitor.AcpTurnCompleted(session_name, _, _) -> session_name
-    acp_monitor.AcpTimedOut(session_name, _) -> session_name
     acp_monitor.AcpFailed(session_name, _, _) -> session_name
     acp_monitor.AcpProgress(session_name, _, _, _, _, _) -> session_name
   }

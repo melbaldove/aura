@@ -19,7 +19,6 @@ pub type SessionStatus {
   Blocked
   Dangerous
   Complete
-  TimedOut
   Unknown
 }
 
@@ -48,7 +47,6 @@ pub fn status_to_string(status: SessionStatus) -> String {
     Blocked -> "blocked"
     Dangerous -> "dangerous"
     Complete -> "complete"
-    TimedOut -> "timed_out"
     Unknown -> "unknown"
   }
 }

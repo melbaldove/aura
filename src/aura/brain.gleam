@@ -1052,17 +1052,6 @@ fn handle_acp_event(
         }
       }
     }
-    acp_monitor.AcpTimedOut(session_name, domain) -> {
-      let msg =
-        "**ACP Timeout** -- Session still alive. `tmux attach -t "
-        <> session_name
-        <> "`"
-      let channel = resolve_acp_channel(state, session_name, domain)
-      process.spawn_unlinked(fn() {
-        send_discord_response(state.discord_token, channel, msg)
-      })
-      actor.continue(state)
-    }
     acp_monitor.AcpFailed(session_name, domain, error) -> {
       let msg = "**ACP Failed** -- " <> error
       let channel = resolve_acp_channel(state, session_name, domain)

@@ -37,7 +37,7 @@ pub type AcpEvent {
     domain: String,
     result_text: String,
   )
-  AcpTimedOut(session_name: String, domain: String)
+  // AcpTimedOut removed — flares run until done or explicitly stopped
   AcpFailed(session_name: String, domain: String, error: String)
   AcpProgress(
     session_name: String,
@@ -59,7 +59,6 @@ pub type MonitorConfig {
     emit_interval_ms: Int,
     idle_interval_ms: Int,
     idle_surface_threshold: Int,
-    timeout_ms: Int,
   )
 }
 
@@ -74,12 +73,11 @@ pub type StdioMonitorMsg {
 }
 
 /// Default monitor config using the existing constants.
-pub fn default_monitor_config(timeout_ms: Int) -> MonitorConfig {
+pub fn default_monitor_config() -> MonitorConfig {
   MonitorConfig(
     emit_interval_ms: check_interval_ms,
     idle_interval_ms: idle_check_interval_ms,
     idle_surface_threshold: idle_surface_threshold,
-    timeout_ms: timeout_ms,
   )
 }
 
@@ -123,7 +121,6 @@ pub fn start_push_monitor(
           on_event: on_event,
           self_subject: subject,
           skip_ticks: 0,
-          timed_out: False,
         )
 
       Ok(actor.initialised(state) |> actor.returning(subject))
@@ -157,7 +154,6 @@ type PushMonitorState {
     on_event: fn(AcpEvent) -> Nil,
     self_subject: process.Subject(StdioMonitorMsg),
     skip_ticks: Int,
-    timed_out: Bool,
   )
 }
 
@@ -197,22 +193,8 @@ fn handle_push_tick(
     False -> state.idle_checks + 1
   }
 
-  let elapsed_ms = time.now_ms() - state.started_at_ms
-  case elapsed_ms > state.config.timeout_ms && !state.timed_out {
-    True -> {
-      state.on_event(AcpTimedOut(
-        session_name: state.session_name,
-        domain: state.domain,
-      ))
-      // Don't stop — the event loop still needs us for handback summaries.
-      // The timeout event propagates through flare_manager which kills the
-      // ACP process, causing the event loop to exit cleanly.
-      process.send_after(state.self_subject, state.config.emit_interval_ms, Tick)
-      actor.continue(PushMonitorState(..state, timed_out: True))
-    }
-    _ -> {
-      // If backing off from LLM rate limit, decrement and skip LLM call
-      case state.skip_ticks > 0 {
+  // If backing off from LLM rate limit, decrement and skip LLM call
+  case state.skip_ticks > 0 {
         True -> {
           process.send_after(state.self_subject, state.config.emit_interval_ms, Tick)
           actor.continue(PushMonitorState(
@@ -270,8 +252,6 @@ fn handle_push_tick(
           actor.continue(new_state)
         }
       }
-    }
-  }
 }
 
 /// Generate a structured progress update for stdio sessions using LLM.
@@ -633,9 +613,9 @@ fn handle_session_alive(
                 False -> state.last_progress_ms
               }
 
-              check_timeout_and_continue(
-                MonitorState(..state, last_progress_ms: new_progress_ms, idle_checks: new_idle_checks),
-                output,
+              schedule_next(state.self_subject)
+              actor.continue(
+                MonitorState(..state, last_output: output, last_progress_ms: new_progress_ms, idle_checks: new_idle_checks),
               )
             }
           }
@@ -645,25 +625,6 @@ fn handle_session_alive(
   }
 }
 
-fn check_timeout_and_continue(
-  state: MonitorState,
-  output: String,
-) -> actor.Next(MonitorState, MonitorMessage) {
-  let elapsed = time.now_ms() - state.started_at_ms
-  case elapsed > state.task_spec.timeout_ms {
-    True -> {
-      state.on_event(AcpTimedOut(
-        session_name: state.session_name,
-        domain: state.task_spec.domain,
-      ))
-      actor.stop()
-    }
-    False -> {
-      schedule_next(state.self_subject)
-      actor.continue(MonitorState(..state, last_output: output))
-    }
-  }
-}
 
 // ---------------------------------------------------------------------------
 // LLM classification
