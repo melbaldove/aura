@@ -1,12 +1,15 @@
 import aura/acp/flare_manager
 import aura/config
 import aura/cron
+import aura/db
+import aura/dreaming
 import aura/llm
 import aura/models
 import aura/notification
 import aura/skill
 import aura/time
 import aura/tools
+import aura/xdg
 import gleam/dict
 import gleam/erlang/process
 import gleam/int
@@ -41,6 +44,19 @@ pub type ScheduleEntry {
   ScheduleEntry(config: ScheduleConfig, last_run_ms: Int)
 }
 
+/// Configuration for the dreaming schedule, sent after startup.
+pub type DreamScheduleConfig {
+  DreamScheduleConfig(
+    cron: String,
+    model_spec: String,
+    paths: xdg.Paths,
+    db_subject: process.Subject(db.DbMessage),
+    domains: List(String),
+    budget_percent: Int,
+    brain_context: Int,
+  )
+}
+
 pub type SchedulerMessage {
   Tick
   ManageSchedule(
@@ -50,6 +66,7 @@ pub type SchedulerMessage {
   )
   ReloadSchedules
   SetFlareSubject(subject: process.Subject(flare_manager.FlareMsg))
+  SetDreamConfig(config: DreamScheduleConfig)
 }
 
 pub type SchedulerState {
@@ -61,6 +78,8 @@ pub type SchedulerState {
     config_path: String,
     self_subject: process.Subject(SchedulerMessage),
     flare_subject: Option(process.Subject(flare_manager.FlareMsg)),
+    dream_config: Option(DreamScheduleConfig),
+    last_dream_ms: Int,
   )
 }
 
@@ -264,6 +283,28 @@ fn is_due_cron(entry: ScheduleEntry, now_ms: Int) -> Bool {
   }
 }
 
+/// Check if the dreaming schedule is due to run.
+/// Uses the same cron matching + double-fire prevention as regular schedules.
+pub fn is_dream_due(cron_str: String, now_ms: Int, last_dream_ms: Int) -> Bool {
+  case cron.parse(cron_str) {
+    Ok(expr) -> {
+      let #(minute, hour, day, month, weekday) = ms_to_time_parts(now_ms)
+      let matches =
+        cron.matches(
+          expr,
+          minute: minute,
+          hour: hour,
+          day: day,
+          month: month,
+          weekday: weekday,
+        )
+      let start_of_minute = now_ms - { now_ms % 60_000 }
+      matches && last_dream_ms < start_of_minute
+    }
+    Error(_) -> False
+  }
+}
+
 /// Check if a flare's trigger JSON indicates it's due to fire.
 /// Supports:
 ///   {"type":"delay","rekindle_at_ms":TIMESTAMP}
@@ -405,6 +446,8 @@ pub fn start(
           config_path: config_path,
           self_subject: subject,
           flare_subject: None,
+          dream_config: None,
+          last_dream_ms: 0,
         )
 
       // Schedule first tick after 60 seconds
@@ -466,10 +509,38 @@ fn handle_message(
         }
       }
 
+      // Check dreaming schedule
+      let new_last_dream_ms = case state.dream_config {
+        Some(dream_cfg) -> {
+          case is_dream_due(dream_cfg.cron, now_ms, state.last_dream_ms) {
+            True -> {
+              io.println("[scheduler] Dreaming is due, spawning dream cycle")
+              process.spawn_unlinked(fn() {
+                dreaming.dream_all(dreaming.DreamConfig(
+                  model_spec: dream_cfg.model_spec,
+                  paths: dream_cfg.paths,
+                  db_subject: dream_cfg.db_subject,
+                  domains: dream_cfg.domains,
+                  budget_percent: dream_cfg.budget_percent,
+                  brain_context: dream_cfg.brain_context,
+                ))
+              })
+              now_ms
+            }
+            False -> state.last_dream_ms
+          }
+        }
+        None -> state.last_dream_ms
+      }
+
       // Schedule next tick in 60 seconds
       process.send_after(state.self_subject, 60_000, Tick)
 
-      actor.continue(SchedulerState(..state, entries: new_entries))
+      actor.continue(SchedulerState(
+        ..state,
+        entries: new_entries,
+        last_dream_ms: new_last_dream_ms,
+      ))
     }
 
     ReloadSchedules -> {
@@ -514,6 +585,16 @@ fn handle_message(
 
     SetFlareSubject(subject:) -> {
       actor.continue(SchedulerState(..state, flare_subject: Some(subject)))
+    }
+
+    SetDreamConfig(config:) -> {
+      io.println(
+        "[scheduler] Dream config set — cron: "
+        <> config.cron
+        <> ", domains: "
+        <> string.join(config.domains, ", "),
+      )
+      actor.continue(SchedulerState(..state, dream_config: Some(config)))
     }
   }
 }
