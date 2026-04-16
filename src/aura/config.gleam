@@ -1,3 +1,6 @@
+import aura/cron
+import gleam/int
+import gleam/io
 import gleam/list
 import gleam/result
 import gleam/string
@@ -8,7 +11,7 @@ pub type DiscordConfig {
   DiscordConfig(token: String, guild: String, default_channel: String)
 }
 
-/// Model IDs used by each agent role (brain, domain, ACP, heartbeat, monitor, vision).
+/// Model IDs used by each agent role (brain, domain, ACP, heartbeat, monitor, vision, dream).
 pub type ModelsConfig {
   ModelsConfig(
     brain: String,
@@ -17,6 +20,7 @@ pub type ModelsConfig {
     heartbeat: String,
     monitor: String,
     vision: String,
+    dream: String,
   )
 }
 
@@ -59,6 +63,8 @@ pub type GlobalConfig {
     acp_transport: String,
     acp_command: String,
     brain_context: Int,
+    dreaming_cron: String,
+    dreaming_budget_percent: Int,
   )
 }
 
@@ -94,6 +100,7 @@ pub fn default_global() -> GlobalConfig {
       heartbeat: "",
       monitor: "",
       vision: "",
+      dream: "",
     ),
     notifications: NotificationsConfig(
       digest_windows: [],
@@ -108,6 +115,8 @@ pub fn default_global() -> GlobalConfig {
     acp_transport: "stdio",
     acp_command: "claude-agent-acp",
     brain_context: 0,
+    dreaming_cron: "0 4 * * *",
+    dreaming_budget_percent: 10,
   )
 }
 
@@ -243,6 +252,28 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     tom.get_string(doc, ["acp", "command"])
     |> result.unwrap("claude-agent-acp")
 
+  let dream_model =
+    tom.get_string(doc, ["models", "dream"])
+    |> result.unwrap(brain)
+
+  let dreaming_cron = case tom.get_string(doc, ["dreaming", "cron"]) {
+    Ok(c) -> {
+      case cron.parse(c) {
+        Ok(_) -> c
+        Error(_) -> {
+          io.println("[config] Invalid dreaming.cron '" <> c <> "', using default")
+          "0 4 * * *"
+        }
+      }
+    }
+    Error(_) -> "0 4 * * *"
+  }
+
+  let dreaming_budget_percent = case tom.get_int(doc, ["dreaming", "budget_percent"]) {
+    Ok(p) -> int.clamp(p, min: 1, max: 50)
+    Error(_) -> 10
+  }
+
   Ok(GlobalConfig(
     discord: DiscordConfig(
       token: token,
@@ -256,6 +287,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
       heartbeat: heartbeat,
       monitor: monitor,
       vision: vision_model,
+      dream: dream_model,
     ),
     notifications: NotificationsConfig(
       digest_windows: extract_toml_strings(digest_windows_raw),
@@ -274,6 +306,8 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     acp_transport: acp_transport,
     acp_command: acp_command,
     brain_context: brain_context,
+    dreaming_cron: dreaming_cron,
+    dreaming_budget_percent: dreaming_budget_percent,
   ))
 }
 

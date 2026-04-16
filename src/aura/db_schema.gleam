@@ -3,7 +3,7 @@ import gleam/result
 import gleam/string
 import sqlight
 
-const current_version = 3
+const current_version = 4
 
 /// Create all tables, indexes, FTS5 virtual table, and triggers if they do not
 /// already exist, then run any pending schema migrations.
@@ -106,11 +106,42 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
       workspace TEXT,
       session_id TEXT,
       created_at_ms INTEGER NOT NULL,
-      updated_at_ms INTEGER NOT NULL
+      updated_at_ms INTEGER NOT NULL,
+      result_text TEXT
     )
   "))
   use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_flares_status ON flares(status)"))
   use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_flares_domain ON flares(domain)"))
+
+  use _ <- result.try(exec(conn, "
+    CREATE TABLE IF NOT EXISTS memory_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain TEXT NOT NULL,
+      target TEXT NOT NULL,
+      key TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      superseded_at_ms INTEGER,
+      superseded_by INTEGER REFERENCES memory_entries(id)
+    )
+  "))
+  use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_memory_entries_domain_target ON memory_entries(domain, target)"))
+  use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_memory_entries_superseded ON memory_entries(superseded_at_ms)"))
+  use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_memory_entries_active_key ON memory_entries(domain, target, key, superseded_at_ms)"))
+
+  use _ <- result.try(exec(conn, "
+    CREATE TABLE IF NOT EXISTS dream_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain TEXT NOT NULL,
+      completed_at_ms INTEGER NOT NULL,
+      phase_reached TEXT NOT NULL,
+      entries_consolidated INTEGER,
+      entries_promoted INTEGER,
+      reflections_generated INTEGER,
+      duration_ms INTEGER
+    )
+  "))
+  use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_dream_runs_domain ON dream_runs(domain)"))
 
   // Set or migrate schema version
   migrate_version(conn)
@@ -173,6 +204,50 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
           "))
           use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_flares_status ON flares(status)"))
           exec(conn, "CREATE INDEX IF NOT EXISTS idx_flares_domain ON flares(domain)")
+        }
+        False -> Ok(Nil)
+      })
+      use _ <- result.try(case v < 4 {
+        True -> {
+          use _ <- result.try(exec(conn, "
+            CREATE TABLE IF NOT EXISTS memory_entries (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              domain TEXT NOT NULL,
+              target TEXT NOT NULL,
+              key TEXT NOT NULL,
+              content TEXT NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              superseded_at_ms INTEGER,
+              superseded_by INTEGER REFERENCES memory_entries(id)
+            )
+          "))
+          use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_memory_entries_domain_target ON memory_entries(domain, target)"))
+          use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_memory_entries_superseded ON memory_entries(superseded_at_ms)"))
+          use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_memory_entries_active_key ON memory_entries(domain, target, key, superseded_at_ms)"))
+          use _ <- result.try(exec(conn, "
+            CREATE TABLE IF NOT EXISTS dream_runs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              domain TEXT NOT NULL,
+              completed_at_ms INTEGER NOT NULL,
+              phase_reached TEXT NOT NULL,
+              entries_consolidated INTEGER,
+              entries_promoted INTEGER,
+              reflections_generated INTEGER,
+              duration_ms INTEGER
+            )
+          "))
+          use _ <- result.try(exec(conn, "CREATE INDEX IF NOT EXISTS idx_dream_runs_domain ON dream_runs(domain)"))
+          // Check if result_text column already exists before ALTER (idempotent)
+          case sqlight.query(
+            "SELECT COUNT(*) FROM pragma_table_info('flares') WHERE name = 'result_text'",
+            on: conn,
+            with: [],
+            expecting: decode.at([0], decode.int),
+          ) {
+            Ok([0]) -> exec(conn, "ALTER TABLE flares ADD COLUMN result_text TEXT")
+            Ok(_) -> Ok(Nil)  // Column already exists
+            Error(_) -> exec(conn, "ALTER TABLE flares ADD COLUMN result_text TEXT")  // Fallback: try anyway
+          }
         }
         False -> Ok(Nil)
       })

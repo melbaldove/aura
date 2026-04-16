@@ -16,6 +16,7 @@ pub fn resolve_vision_config_global_only_test() {
         heartbeat: "",
         monitor: "",
         vision: "zai/glm-5v-turbo",
+        dream: "",
       ),
       vision: config.VisionConfig(prompt: "Describe this image."),
     )
@@ -35,6 +36,7 @@ pub fn resolve_vision_config_domain_override_test() {
         heartbeat: "",
         monitor: "",
         vision: "zai/glm-5v-turbo",
+        dream: "",
       ),
       vision: config.VisionConfig(prompt: "Global prompt."),
     )
@@ -60,6 +62,7 @@ pub fn resolve_vision_config_domain_partial_override_test() {
         heartbeat: "",
         monitor: "",
         vision: "zai/glm-5v-turbo",
+        dream: "",
       ),
       vision: config.VisionConfig(prompt: "Global prompt."),
     )

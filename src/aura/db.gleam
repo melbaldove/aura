@@ -61,6 +61,19 @@ pub type StoredFlare {
   )
 }
 
+/// A memory entry row from the memory_entries table.
+/// Represents a keyed piece of knowledge with optional supersession chain.
+pub type MemoryEntry {
+  MemoryEntry(
+    id: Int,
+    domain: String,
+    target: String,
+    key: String,
+    content: String,
+    created_at_ms: Int,
+  )
+}
+
 /// Internal actor message type for the DB actor.
 /// Callers should use the public convenience functions (`append_message`,
 /// `load_messages`, etc.) rather than sending these variants directly.
@@ -150,6 +163,61 @@ pub type DbMessage {
     session_id: String,
     status: String,
     updated_at_ms: Int,
+  )
+  InsertMemoryEntry(
+    reply_to: process.Subject(Result(Int, String)),
+    domain: String,
+    target: String,
+    key: String,
+    content: String,
+    created_at_ms: Int,
+  )
+  SupersedeMemoryEntry(
+    reply_to: process.Subject(Result(Nil, String)),
+    entry_id: Int,
+    superseded_by: Int,
+    superseded_at_ms: Int,
+  )
+  GetActiveMemoryEntries(
+    reply_to: process.Subject(Result(List(MemoryEntry), String)),
+    domain: String,
+    target: String,
+  )
+  GetActiveEntryId(
+    reply_to: process.Subject(Result(Int, String)),
+    domain: String,
+    target: String,
+    key: String,
+    exclude_id: Int,
+  )
+  InsertDreamRun(
+    reply_to: process.Subject(Result(Nil, String)),
+    domain: String,
+    completed_at_ms: Int,
+    phase_reached: String,
+    entries_consolidated: Int,
+    entries_promoted: Int,
+    reflections_generated: Int,
+    duration_ms: Int,
+  )
+  GetLastDreamMs(
+    reply_to: process.Subject(Result(Int, String)),
+    domain: String,
+  )
+  UpdateFlareResult(
+    reply_to: process.Subject(Result(Nil, String)),
+    id: String,
+    result_text: String,
+    updated_at_ms: Int,
+  )
+  GetFlareOutcomes(
+    reply_to: process.Subject(Result(List(#(String, String)), String)),
+    domain: String,
+    since_ms: Int,
+  )
+  GetCompactionSummaries(
+    reply_to: process.Subject(Result(List(String), String)),
+    domain: String,
   )
 }
 
@@ -412,6 +480,129 @@ pub fn update_flare_rekindle(
   })
 }
 
+/// Insert a new memory entry and return its auto-generated id.
+pub fn insert_memory_entry(
+  subject: process.Subject(DbMessage),
+  domain: String,
+  target: String,
+  key: String,
+  content: String,
+  created_at_ms: Int,
+) -> Result(Int, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    InsertMemoryEntry(reply_to:, domain:, target:, key:, content:, created_at_ms:)
+  })
+}
+
+/// Mark a memory entry as superseded by another entry.
+/// Only updates if the entry has not already been superseded (idempotent).
+pub fn supersede_memory_entry(
+  subject: process.Subject(DbMessage),
+  entry_id: Int,
+  superseded_by: Int,
+  superseded_at_ms: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    SupersedeMemoryEntry(reply_to:, entry_id:, superseded_by:, superseded_at_ms:)
+  })
+}
+
+/// Return all active (non-superseded) memory entries for a domain and target.
+pub fn get_active_memory_entries(
+  subject: process.Subject(DbMessage),
+  domain: String,
+  target: String,
+) -> Result(List(MemoryEntry), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetActiveMemoryEntries(reply_to:, domain:, target:)
+  })
+}
+
+/// Find the active entry matching domain/target/key, excluding a specific id.
+/// Used during write-through to find the old entry to supersede after inserting
+/// a new one. Returns Error if no matching entry is found.
+pub fn get_active_entry_id(
+  subject: process.Subject(DbMessage),
+  domain: String,
+  target: String,
+  key: String,
+  exclude_id: Int,
+) -> Result(Int, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetActiveEntryId(reply_to:, domain:, target:, key:, exclude_id:)
+  })
+}
+
+/// Insert a dream run record.
+pub fn insert_dream_run(
+  subject: process.Subject(DbMessage),
+  domain: String,
+  completed_at_ms: Int,
+  phase_reached: String,
+  entries_consolidated: Int,
+  entries_promoted: Int,
+  reflections_generated: Int,
+  duration_ms: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    InsertDreamRun(
+      reply_to:,
+      domain:,
+      completed_at_ms:,
+      phase_reached:,
+      entries_consolidated:,
+      entries_promoted:,
+      reflections_generated:,
+      duration_ms:,
+    )
+  })
+}
+
+/// Return the `completed_at_ms` of the most recent dream run for this domain.
+/// Returns 0 if no dream runs exist (safe default meaning "dream all history").
+pub fn get_last_dream_ms(
+  subject: process.Subject(DbMessage),
+  domain: String,
+) -> Result(Int, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetLastDreamMs(reply_to:, domain:)
+  })
+}
+
+/// Update the result_text and updated_at_ms on a flare.
+pub fn update_flare_result(
+  subject: process.Subject(DbMessage),
+  id: String,
+  result_text: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    UpdateFlareResult(reply_to:, id:, result_text:, updated_at_ms:)
+  })
+}
+
+/// Return (label, result_text) pairs for completed flares in this domain
+/// with non-null result_text, where updated_at_ms > since_ms.
+pub fn get_flare_outcomes(
+  subject: process.Subject(DbMessage),
+  domain: String,
+  since_ms: Int,
+) -> Result(List(#(String, String)), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetFlareOutcomes(reply_to:, domain:, since_ms:)
+  })
+}
+
+/// Return non-empty compaction summaries for conversations in this domain.
+pub fn get_compaction_summaries(
+  subject: process.Subject(DbMessage),
+  domain: String,
+) -> Result(List(String), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetCompactionSummaries(reply_to:, domain:)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
@@ -512,6 +703,60 @@ fn handle_message(
 
     UpdateFlareRekindle(reply_to:, id:, session_id:, status:, updated_at_ms:) -> {
       let result = do_update_flare_rekindle(state.conn, id, session_id, status, updated_at_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    InsertMemoryEntry(reply_to:, domain:, target:, key:, content:, created_at_ms:) -> {
+      let result = do_insert_memory_entry(state.conn, domain, target, key, content, created_at_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    SupersedeMemoryEntry(reply_to:, entry_id:, superseded_by:, superseded_at_ms:) -> {
+      let result = do_supersede_memory_entry(state.conn, entry_id, superseded_by, superseded_at_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetActiveMemoryEntries(reply_to:, domain:, target:) -> {
+      let result = do_get_active_memory_entries(state.conn, domain, target)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetActiveEntryId(reply_to:, domain:, target:, key:, exclude_id:) -> {
+      let result = do_get_active_entry_id(state.conn, domain, target, key, exclude_id)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    InsertDreamRun(reply_to:, domain:, completed_at_ms:, phase_reached:, entries_consolidated:, entries_promoted:, reflections_generated:, duration_ms:) -> {
+      let result = do_insert_dream_run(state.conn, domain, completed_at_ms, phase_reached, entries_consolidated, entries_promoted, reflections_generated, duration_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetLastDreamMs(reply_to:, domain:) -> {
+      let result = do_get_last_dream_ms(state.conn, domain)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    UpdateFlareResult(reply_to:, id:, result_text:, updated_at_ms:) -> {
+      let result = do_update_flare_result(state.conn, id, result_text, updated_at_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetFlareOutcomes(reply_to:, domain:, since_ms:) -> {
+      let result = do_get_flare_outcomes(state.conn, domain, since_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetCompactionSummaries(reply_to:, domain:) -> {
+      let result = do_get_compaction_summaries(state.conn, domain)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -863,6 +1108,207 @@ fn do_update_flare_rekindle(
   })
 }
 
+fn do_insert_memory_entry(
+  conn: sqlight.Connection,
+  domain: String,
+  target: String,
+  key: String,
+  content: String,
+  created_at_ms: Int,
+) -> Result(Int, String) {
+  sqlight.query(
+    "INSERT INTO memory_entries (domain, target, key, content, created_at_ms) VALUES (?, ?, ?, ?, ?) RETURNING id",
+    on: conn,
+    with: [
+      sqlight.text(domain),
+      sqlight.text(target),
+      sqlight.text(key),
+      sqlight.text(content),
+      sqlight.int(created_at_ms),
+    ],
+    expecting: decode.at([0], decode.int),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to insert memory entry: " <> string.inspect(err)
+  })
+  |> result.try(fn(rows) {
+    case rows {
+      [id] -> Ok(id)
+      _ -> Error("Expected one row from INSERT RETURNING, got " <> string.inspect(rows))
+    }
+  })
+}
+
+fn do_supersede_memory_entry(
+  conn: sqlight.Connection,
+  entry_id: Int,
+  superseded_by: Int,
+  superseded_at_ms: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "UPDATE memory_entries SET superseded_at_ms = ?, superseded_by = ? WHERE id = ? AND superseded_at_ms IS NULL",
+    on: conn,
+    with: [
+      sqlight.int(superseded_at_ms),
+      sqlight.int(superseded_by),
+      sqlight.int(entry_id),
+    ],
+    expecting: decode.success(Nil),
+  )
+  |> result.map(fn(_) { Nil })
+  |> result.map_error(fn(err) {
+    "Failed to supersede memory entry: " <> string.inspect(err)
+  })
+}
+
+fn do_get_active_memory_entries(
+  conn: sqlight.Connection,
+  domain: String,
+  target: String,
+) -> Result(List(MemoryEntry), String) {
+  sqlight.query(
+    "SELECT id, domain, target, key, content, created_at_ms FROM memory_entries WHERE domain = ? AND target = ? AND superseded_at_ms IS NULL ORDER BY created_at_ms ASC",
+    on: conn,
+    with: [sqlight.text(domain), sqlight.text(target)],
+    expecting: memory_entry_decoder(),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to get active memory entries: " <> string.inspect(err)
+  })
+}
+
+fn do_get_active_entry_id(
+  conn: sqlight.Connection,
+  domain: String,
+  target: String,
+  key: String,
+  exclude_id: Int,
+) -> Result(Int, String) {
+  sqlight.query(
+    "SELECT id FROM memory_entries WHERE domain = ? AND target = ? AND key = ? AND id != ? AND superseded_at_ms IS NULL LIMIT 1",
+    on: conn,
+    with: [
+      sqlight.text(domain),
+      sqlight.text(target),
+      sqlight.text(key),
+      sqlight.int(exclude_id),
+    ],
+    expecting: decode.at([0], decode.int),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to get active entry id: " <> string.inspect(err)
+  })
+  |> result.try(fn(rows) {
+    case rows {
+      [id] -> Ok(id)
+      _ -> Error("No active entry found for key")
+    }
+  })
+}
+
+fn do_insert_dream_run(
+  conn: sqlight.Connection,
+  domain: String,
+  completed_at_ms: Int,
+  phase_reached: String,
+  entries_consolidated: Int,
+  entries_promoted: Int,
+  reflections_generated: Int,
+  duration_ms: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "INSERT INTO dream_runs (domain, completed_at_ms, phase_reached, entries_consolidated, entries_promoted, reflections_generated, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    on: conn,
+    with: [
+      sqlight.text(domain),
+      sqlight.int(completed_at_ms),
+      sqlight.text(phase_reached),
+      sqlight.int(entries_consolidated),
+      sqlight.int(entries_promoted),
+      sqlight.int(reflections_generated),
+      sqlight.int(duration_ms),
+    ],
+    expecting: decode.success(Nil),
+  )
+  |> result.map(fn(_) { Nil })
+  |> result.map_error(fn(err) {
+    "Failed to insert dream run: " <> string.inspect(err)
+  })
+}
+
+fn do_get_last_dream_ms(
+  conn: sqlight.Connection,
+  domain: String,
+) -> Result(Int, String) {
+  case
+    sqlight.query(
+      "SELECT completed_at_ms FROM dream_runs WHERE domain = ? ORDER BY completed_at_ms DESC LIMIT 1",
+      on: conn,
+      with: [sqlight.text(domain)],
+      expecting: decode.at([0], decode.int),
+    )
+  {
+    Ok([ms]) -> Ok(ms)
+    Ok([]) -> Ok(0)
+    Ok(_) -> Ok(0)
+    Error(e) ->
+      Error("Failed to get last dream ms: " <> string.inspect(e))
+  }
+}
+
+fn do_update_flare_result(
+  conn: sqlight.Connection,
+  id: String,
+  result_text: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "UPDATE flares SET result_text = ?, updated_at_ms = ? WHERE id = ?",
+    on: conn,
+    with: [sqlight.text(result_text), sqlight.int(updated_at_ms), sqlight.text(id)],
+    expecting: decode.success(Nil),
+  )
+  |> result.map(fn(_) { Nil })
+  |> result.map_error(fn(err) {
+    "Failed to update flare result: " <> string.inspect(err)
+  })
+}
+
+fn do_get_flare_outcomes(
+  conn: sqlight.Connection,
+  domain: String,
+  since_ms: Int,
+) -> Result(List(#(String, String)), String) {
+  sqlight.query(
+    "SELECT label, result_text FROM flares WHERE domain = ? AND result_text IS NOT NULL AND updated_at_ms > ? ORDER BY updated_at_ms ASC",
+    on: conn,
+    with: [sqlight.text(domain), sqlight.int(since_ms)],
+    expecting: {
+      use label <- decode.field(0, decode.string)
+      use result_text <- decode.field(1, decode.string)
+      decode.success(#(label, result_text))
+    },
+  )
+  |> result.map_error(fn(err) {
+    "Failed to get flare outcomes: " <> string.inspect(err)
+  })
+}
+
+fn do_get_compaction_summaries(
+  conn: sqlight.Connection,
+  domain: String,
+) -> Result(List(String), String) {
+  sqlight.query(
+    "SELECT compaction_summary FROM conversations WHERE domain = ? AND compaction_summary IS NOT NULL AND compaction_summary != ''",
+    on: conn,
+    with: [sqlight.text(domain)],
+    expecting: decode.at([0], decode.string),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to get compaction summaries: " <> string.inspect(err)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Decoders
 // ---------------------------------------------------------------------------
@@ -917,6 +1363,23 @@ fn nullable_string_decoder() -> decode.Decoder(String) {
   decode.one_of(decode.string, [
     decode.success(""),
   ])
+}
+
+fn memory_entry_decoder() -> decode.Decoder(MemoryEntry) {
+  use id <- decode.field(0, decode.int)
+  use domain <- decode.field(1, decode.string)
+  use target <- decode.field(2, decode.string)
+  use key <- decode.field(3, decode.string)
+  use content <- decode.field(4, decode.string)
+  use created_at_ms <- decode.field(5, decode.int)
+  decode.success(MemoryEntry(
+    id: id,
+    domain: domain,
+    target: target,
+    key: key,
+    content: content,
+    created_at_ms: created_at_ms,
+  ))
 }
 
 fn flare_decoder() -> decode.Decoder(StoredFlare) {

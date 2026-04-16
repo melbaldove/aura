@@ -991,6 +991,13 @@ fn handle_acp_event(
           actor.continue(BrainState(..state, acp_progress_msgs: new_msgs))
         }
         text -> {
+          // Persist result_text to flares table for dreaming synthesis
+          persist_flare_result(
+            state.acp_subject,
+            state.db_subject,
+            session_name,
+            text,
+          )
           let domain_name = case
             list.find(state.domains, fn(d) { d.name == domain })
           {
@@ -1019,6 +1026,13 @@ fn handle_acp_event(
       case result_text {
         "" -> actor.continue(state)
         text -> {
+          // Persist result_text to flares table for dreaming synthesis
+          persist_flare_result(
+            state.acp_subject,
+            state.db_subject,
+            session_name,
+            text,
+          )
           let domain_name = case
             list.find(state.domains, fn(d) { d.name == domain })
           {
@@ -1200,6 +1214,44 @@ fn handle_acp_event(
       }
       actor.continue(new_state)
     }
+  }
+}
+
+/// Persist a flare's result_text to the DB for dreaming synthesis.
+/// Shared by AcpCompleted and AcpTurnCompleted handlers.
+/// Security scan before persisting — this text flows into dreaming LLM prompts.
+fn persist_flare_result(
+  acp_subject: process.Subject(flare_manager.FlareMsg),
+  db_subject: process.Subject(db.DbMessage),
+  session_name: String,
+  result_text: String,
+) -> Nil {
+  case structured_memory.security_scan(result_text) {
+    Error(reason) -> {
+      io.println(
+        "[brain] Blocked flare result_text for "
+        <> session_name
+        <> ": "
+        <> reason,
+      )
+      Nil
+    }
+    Ok(_) ->
+      case
+        flare_manager.get_flare_by_session_name(acp_subject, session_name)
+      {
+        Ok(flare) -> {
+          let _ =
+            db.update_flare_result(
+              db_subject,
+              flare.id,
+              result_text,
+              time.now_ms(),
+            )
+          Nil
+        }
+        Error(_) -> Nil
+      }
   }
 }
 

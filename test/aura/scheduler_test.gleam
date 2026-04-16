@@ -1,4 +1,5 @@
 import aura/scheduler
+import gleam/int
 import gleam/list
 import gleeunit/should
 
@@ -238,5 +239,69 @@ pub fn flare_empty_trigger_not_due_test() {
 
 pub fn flare_invalid_trigger_not_due_test() {
   scheduler.is_flare_trigger_due("not json", 2000)
+  |> should.be_false
+}
+
+// ---------------------------------------------------------------------------
+// is_dream_due
+// ---------------------------------------------------------------------------
+
+pub fn dream_due_when_cron_matches_and_not_recently_run_test() {
+  // "0 4 * * *" = 4:00 AM every day
+  // Use ms_to_time_parts to find a time that matches 4:00
+  // 4:00 AM = minute 0, hour 4
+  // We need a now_ms where ms_to_time_parts returns (0, 4, _, _, _)
+  // and last_dream_ms is before the start of this minute
+  let now_ms = 1_713_232_800_000
+  // Verify this is actually at minute 0, hour 4
+  let #(minute, hour, _day, _month, _weekday) =
+    scheduler.ms_to_time_parts(now_ms)
+  // If this timestamp doesn't land on 4:00, adjust the cron to match
+  let cron_str =
+    int.to_string(minute)
+    <> " "
+    <> int.to_string(hour)
+    <> " * * *"
+  // last_dream was over a minute ago
+  let last_dream_ms = now_ms - 120_000
+  scheduler.is_dream_due(cron_str, now_ms, last_dream_ms)
+  |> should.be_true
+}
+
+pub fn dream_not_due_when_cron_does_not_match_test() {
+  // Use a cron that definitely won't match: minute 59, hour 23
+  // and a now_ms where that's not the time
+  let now_ms = 1_713_232_800_000
+  let #(minute, hour, _day, _month, _weekday) =
+    scheduler.ms_to_time_parts(now_ms)
+  // Pick a different hour to guarantee no match
+  let wrong_hour = { hour + 6 } % 24
+  let cron_str =
+    int.to_string(minute)
+    <> " "
+    <> int.to_string(wrong_hour)
+    <> " * * *"
+  scheduler.is_dream_due(cron_str, now_ms, 0)
+  |> should.be_false
+}
+
+pub fn dream_not_due_when_already_ran_this_minute_test() {
+  let now_ms = 1_713_232_800_000
+  let #(minute, hour, _day, _month, _weekday) =
+    scheduler.ms_to_time_parts(now_ms)
+  let cron_str =
+    int.to_string(minute)
+    <> " "
+    <> int.to_string(hour)
+    <> " * * *"
+  // last_dream_ms is in the current minute (start_of_minute = now_ms - now_ms % 60000)
+  let start_of_minute = now_ms - { now_ms % 60_000 }
+  let last_dream_ms = start_of_minute + 5000
+  scheduler.is_dream_due(cron_str, now_ms, last_dream_ms)
+  |> should.be_false
+}
+
+pub fn dream_not_due_with_invalid_cron_test() {
+  scheduler.is_dream_due("not a cron", 1_713_232_800_000, 0)
   |> should.be_false
 }

@@ -211,6 +211,19 @@ pub fn start(
         scheduler_subject,
         scheduler.SetFlareSubject(flare_subject),
       )
+
+      // Configure dreaming schedule
+      let dream_config =
+        scheduler.DreamScheduleConfig(
+          cron: global_config.dreaming_cron,
+          model_spec: global_config.models.dream,
+          paths: paths,
+          db_subject: db_subject,
+          domains: list.map(brain_domains, fn(d) { d.name }),
+          budget_percent: global_config.dreaming_budget_percent,
+          brain_context: global_config.brain_context,
+        )
+      process.send(scheduler_subject, scheduler.SetDreamConfig(dream_config))
     }
     Error(e) -> {
       io.println("[supervisor] Failed to start scheduler: " <> e)
