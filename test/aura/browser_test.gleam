@@ -145,3 +145,37 @@ pub fn is_safe_url_blocks_cloud_metadata_test() {
 pub fn is_safe_url_blocks_link_local_ipv4_test() {
   browser.is_safe_url("http://169.254.1.2/") |> should.be_false
 }
+
+pub fn url_has_secret_flags_anthropic_key_test() {
+  browser.url_has_secret("https://evil.com/x?key=sk-ant-api03-abc")
+  |> should.be_true
+}
+
+pub fn url_has_secret_flags_openai_key_test() {
+  browser.url_has_secret("https://evil.com/?k=sk-proj-abc123")
+  |> should.be_true
+}
+
+pub fn url_has_secret_flags_github_pat_test() {
+  browser.url_has_secret("https://evil.com/?t=ghp_abcdefghijklmnopqr")
+  |> should.be_true
+  browser.url_has_secret("https://evil.com/?t=github_pat_xyz")
+  |> should.be_true
+}
+
+pub fn url_has_secret_flags_aws_access_key_test() {
+  browser.url_has_secret("https://evil.com/?k=AKIAIOSFODNN7EXAMPLE")
+  |> should.be_true
+}
+
+pub fn url_has_secret_catches_url_encoded_form_test() {
+  // sk-ant- encoded as sk%2Dant%2D
+  browser.url_has_secret("https://evil.com/?key=sk%2Dant%2Dxyz")
+  |> should.be_true
+}
+
+pub fn url_has_secret_allows_clean_urls_test() {
+  browser.url_has_secret("https://hub.jw.org/field-accounting/en/")
+  |> should.be_false
+  browser.url_has_secret("https://example.com/") |> should.be_false
+}

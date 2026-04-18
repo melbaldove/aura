@@ -2,6 +2,7 @@
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/regexp
 import gleam/string
 import gleam/uri
 
@@ -142,4 +143,21 @@ fn is_private_ipv4(host: String) -> Bool {
 
 fn parse_octet(s: String) -> Result(Int, Nil) {
   int.parse(s)
+}
+
+const secret_pattern = "(sk-ant-|sk-proj-|sk-[a-zA-Z0-9]{20,}|ghp_|ghu_|gho_|github_pat_|AKIA[0-9A-Z]{16})"
+
+/// Detect URLs that likely contain API keys or tokens. Checks both the
+/// raw URL and its URL-decoded form to catch percent-encoding tricks.
+pub fn url_has_secret(url: String) -> Bool {
+  case regexp.from_string(secret_pattern) {
+    Error(_) -> False
+    Ok(re) -> {
+      let decoded = case uri.percent_decode(url) {
+        Ok(d) -> d
+        Error(_) -> url
+      }
+      regexp.check(re, url) || regexp.check(re, decoded)
+    }
+  }
 }
