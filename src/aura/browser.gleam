@@ -1,7 +1,9 @@
 // src/aura/browser.gleam
 import gleam/int
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/string
+import gleam/uri
 
 pub type Action {
   Navigate
@@ -88,4 +90,56 @@ fn take_lines_under(
       }
     }
   }
+}
+
+/// Return True if the URL is safe to navigate to — False if it targets
+/// a private/internal IP, localhost, link-local, or cloud metadata endpoint.
+pub fn is_safe_url(url: String) -> Bool {
+  case uri.parse(url) {
+    Error(_) -> False
+    Ok(parsed) -> {
+      case parsed.host {
+        None -> False
+        Some(host) -> host_is_safe(string.lowercase(host))
+      }
+    }
+  }
+}
+
+fn host_is_safe(host: String) -> Bool {
+  !is_private_host(host)
+}
+
+fn is_private_host(host: String) -> Bool {
+  case host {
+    "localhost" -> True
+    "[::1]" -> True
+    "::1" -> True
+    "metadata.google.internal" -> True
+    _ ->
+      string.ends_with(host, ".local")
+      || is_private_ipv4(host)
+  }
+}
+
+fn is_private_ipv4(host: String) -> Bool {
+  case string.split(host, ".") {
+    [a, b, _, _] -> {
+      let a_i = parse_octet(a)
+      let b_i = parse_octet(b)
+      case a_i, b_i {
+        Ok(10), _ -> True
+        Ok(127), _ -> True
+        Ok(192), Ok(168) -> True
+        Ok(172), Ok(n) if n >= 16 && n <= 31 -> True
+        Ok(169), Ok(254) -> True
+        _, _ -> False
+      }
+    }
+    _ -> False
+  }
+}
+
+fn parse_octet(s: String) -> Result(Int, Nil) {
+  int.parse(s)
 }

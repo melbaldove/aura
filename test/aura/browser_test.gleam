@@ -96,3 +96,52 @@ pub fn detect_auth_required_title_case_insensitive_test() {
   browser.detect_auth_required("https://example.com/home", "LOGIN")
   |> should.be_true
 }
+
+pub fn is_safe_url_allows_public_test() {
+  browser.is_safe_url("https://example.com/foo")
+  |> should.be_true
+  browser.is_safe_url("https://hub.jw.org/overview")
+  |> should.be_true
+}
+
+pub fn is_safe_url_blocks_loopback_ipv4_test() {
+  browser.is_safe_url("http://127.0.0.1/admin") |> should.be_false
+  browser.is_safe_url("http://127.45.67.89/") |> should.be_false
+}
+
+pub fn is_safe_url_blocks_private_ranges_test() {
+  browser.is_safe_url("http://10.0.0.1/") |> should.be_false
+  browser.is_safe_url("http://192.168.1.1/") |> should.be_false
+  browser.is_safe_url("http://172.16.5.5/") |> should.be_false
+  browser.is_safe_url("http://172.31.255.255/") |> should.be_false
+}
+
+pub fn is_safe_url_allows_172_outside_private_range_test() {
+  // 172.15.x and 172.32.x are public
+  browser.is_safe_url("http://172.15.1.1/") |> should.be_true
+  browser.is_safe_url("http://172.32.1.1/") |> should.be_true
+}
+
+pub fn is_safe_url_blocks_localhost_test() {
+  browser.is_safe_url("http://localhost:3000/") |> should.be_false
+  browser.is_safe_url("http://LocalHost/") |> should.be_false
+}
+
+pub fn is_safe_url_blocks_mdns_local_test() {
+  browser.is_safe_url("http://mymac.local/") |> should.be_false
+}
+
+pub fn is_safe_url_blocks_ipv6_loopback_test() {
+  browser.is_safe_url("http://[::1]/") |> should.be_false
+}
+
+pub fn is_safe_url_blocks_cloud_metadata_test() {
+  browser.is_safe_url("http://169.254.169.254/latest/meta-data/")
+  |> should.be_false
+  browser.is_safe_url("http://metadata.google.internal/")
+  |> should.be_false
+}
+
+pub fn is_safe_url_blocks_link_local_ipv4_test() {
+  browser.is_safe_url("http://169.254.1.2/") |> should.be_false
+}
