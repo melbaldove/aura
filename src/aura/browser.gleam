@@ -162,6 +162,121 @@ pub fn parse_action(s: String) -> Result(Action, String) {
   }
 }
 
+/// Injection point for the FFI call. Tests pass a fake `run_fn`;
+/// production uses `run_ffi` defined below.
+pub type ExecContext {
+  ExecContext(
+    session: String,
+    cdp_url: String,
+    timeout_ms: Int,
+    run_fn: fn(String, String, String, List(String), Int) ->
+      Result(String, String),
+  )
+}
+
+/// Dispatch an action: validate args, run safety checks, invoke the FFI,
+/// return a JSON string suitable for tool output.
+pub fn execute(
+  action: Action,
+  args: List(#(String, String)),
+  ctx: ExecContext,
+) -> String {
+  case action {
+    Navigate -> dispatch_navigate(args, ctx)
+    Snapshot -> dispatch_simple("snapshot", snapshot_args(args), ctx)
+    Click -> dispatch_simple("click", ref_args(args), ctx)
+    Type -> dispatch_simple("type", type_args(args), ctx)
+    Press -> dispatch_simple("press", key_args(args), ctx)
+    Back -> dispatch_simple("back", [], ctx)
+    Vision -> dispatch_simple("screenshot", [], ctx)
+    // Vision returns a screenshot; the caller (brain_tools) runs it
+    // through the vision pipeline.
+  }
+}
+
+fn dispatch_navigate(
+  args: List(#(String, String)),
+  ctx: ExecContext,
+) -> String {
+  case get_arg(args, "url") {
+    "" -> error_json("url is required for navigate")
+    url -> {
+      case url_has_secret(url) {
+        True ->
+          error_json(
+            "Blocked: URL contains what appears to be an API key or token",
+          )
+        False ->
+          case is_safe_url(url) {
+            False ->
+              error_json("Blocked: URL targets a private or internal address")
+            True -> call_ffi("open", [url], ctx)
+          }
+      }
+    }
+  }
+}
+
+fn dispatch_simple(
+  action_name: String,
+  args: List(String),
+  ctx: ExecContext,
+) -> String {
+  call_ffi(action_name, args, ctx)
+}
+
+fn call_ffi(
+  action_name: String,
+  args: List(String),
+  ctx: ExecContext,
+) -> String {
+  case ctx.run_fn(ctx.session, ctx.cdp_url, action_name, args, ctx.timeout_ms) {
+    Ok(output) -> output
+    Error(reason) -> error_json("agent-browser failed: " <> reason)
+  }
+}
+
+fn get_arg(args: List(#(String, String)), key: String) -> String {
+  case list.find(args, fn(p) { p.0 == key }) {
+    Ok(#(_, v)) -> v
+    Error(_) -> ""
+  }
+}
+
+fn snapshot_args(args: List(#(String, String))) -> List(String) {
+  case get_arg(args, "full") {
+    "true" -> []
+    // agent-browser's `snapshot -c` is the compact default
+    _ -> ["-c"]
+  }
+}
+
+fn ref_args(args: List(#(String, String))) -> List(String) {
+  [get_arg(args, "ref")]
+}
+
+fn type_args(args: List(#(String, String))) -> List(String) {
+  [get_arg(args, "ref"), get_arg(args, "text")]
+}
+
+fn key_args(args: List(#(String, String))) -> List(String) {
+  [get_arg(args, "key")]
+}
+
+fn error_json(msg: String) -> String {
+  "{\"success\": false, \"error\": \"" <> msg <> "\"}"
+}
+
+/// Production FFI binding. Use this in `ExecContext.run_fn` in production.
+@external(erlang, "aura_browser_ffi", "run")
+pub fn run_ffi(
+  session: String,
+  cdp_url: String,
+  action: String,
+  args: List(String),
+  timeout_ms: Int,
+) -> Result(String, String)
+
 /// Detect URLs that likely contain API keys or tokens. Checks both the
 /// raw URL and its URL-decoded form to catch percent-encoding tricks.
 pub fn url_has_secret(url: String) -> Bool {
