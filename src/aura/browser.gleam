@@ -1,4 +1,6 @@
 // src/aura/browser.gleam
+import gleam/int
+import gleam/list
 import gleam/string
 
 pub type Action {
@@ -25,5 +27,51 @@ pub fn resolve_session(
       )
     "", ch -> Ok("aura-ch-" <> ch)
     name, _ -> Ok("aura-named-" <> name)
+  }
+}
+
+const truncate_footer_reserve = 80
+
+/// Structure-aware head-truncation for snapshots. Cuts at line boundaries
+/// so accessibility tree elements are never split mid-line. Returns the
+/// original text unchanged when under the threshold.
+pub fn truncate_snapshot(text: String, max_chars: Int) -> String {
+  case string.length(text) <= max_chars {
+    True -> text
+    False -> {
+      let lines = string.split(text, "\n")
+      let #(kept, remaining) =
+        take_lines_under(lines, max_chars - truncate_footer_reserve, 0, [])
+      let kept_text = string.join(list.reverse(kept), "\n")
+      case remaining {
+        0 -> kept_text
+        n ->
+          kept_text
+          <> "\n[... "
+          <> int.to_string(n)
+          <> " more lines truncated, use browser_snapshot with full=true for full content]"
+      }
+    }
+  }
+}
+
+fn take_lines_under(
+  lines: List(String),
+  budget: Int,
+  used: Int,
+  acc: List(String),
+) -> #(List(String), Int) {
+  case lines {
+    [] -> #(acc, 0)
+    [line, ..rest] -> {
+      // +1 accounts for the newline we rejoin with
+      let cost = string.length(line) + 1
+      case used + cost > budget, acc {
+        // Always include at least one line so the result is never empty
+        True, [] -> take_lines_under(rest, budget, used + cost, [line])
+        True, _ -> #(acc, list.length(lines))
+        False, _ -> take_lines_under(rest, budget, used + cost, [line, ..acc])
+      }
+    }
   }
 }
