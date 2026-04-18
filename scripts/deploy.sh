@@ -28,12 +28,12 @@ rsync -av docs/man/ "${REMOTE}:${REMOTE_DIR}/docs/man/"
 rsync -av scripts/ "${REMOTE}:${REMOTE_DIR}/scripts/"
 
 echo "==> Bootstrapping agent-browser (if missing)..."
-ssh "$REMOTE" 'if ! command -v agent-browser >/dev/null 2>&1; then
-  echo "Installing agent-browser..."
+ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && if ! command -v agent-browser >/dev/null 2>&1; then
+  echo 'Installing agent-browser...'
   npm install -g agent-browser && agent-browser install
 else
-  echo "agent-browser already installed: $(agent-browser --version)"
-fi'
+  echo \"agent-browser already installed: \$(agent-browser --version)\"
+fi"
 
 echo "==> Clean build..."
 ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && cd ${REMOTE_DIR} && gleam clean && gleam build"
