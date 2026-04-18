@@ -1,6 +1,71 @@
 -module(aura_browser_ffi).
 -export([run/5]).
 
-%% Placeholder — will be implemented in Task 8.
-run(_Session, _CdpUrl, _Action, _Args, _TimeoutMs) ->
-    {error, <<"not implemented">>}.
+%% Invoke `npx agent-browser <backend-flag> --json <action> [args...]`.
+%% Session is either a local session name (used with --session) or ignored
+%% when CdpUrl is non-empty (used with --cdp).
+%% Returns {ok, Output} | {error, Reason}.
+run(Session, CdpUrl, Action, Args, TimeoutMs) ->
+    try
+        SessionStr = binary_to_list(Session),
+        CdpStr = binary_to_list(CdpUrl),
+        ActionStr = binary_to_list(Action),
+        ArgsList = [binary_to_list(A) || A <- Args],
+        BackendFlag = case CdpStr of
+            "" -> ["--session", SessionStr];
+            Url -> ["--cdp", Url]
+        end,
+        SocketDir = filename:join(
+            "/tmp",
+            "aura-browser-" ++ SessionStr
+        ),
+        ok = filelib:ensure_dir(SocketDir ++ "/"),
+        case file:make_dir(SocketDir) of
+            ok -> ok;
+            {error, eexist} -> ok;
+            {error, MakeErr} -> throw({socket_dir_failed, MakeErr})
+        end,
+        CmdArgs = ["agent-browser" | BackendFlag]
+            ++ ["--json", ActionStr | ArgsList],
+        Npx = case os:find_executable("npx") of
+            false -> throw(npx_not_found);
+            Path -> Path
+        end,
+        BrowserEnv = [
+            {"PATH", os:getenv("PATH")},
+            {"HOME", os:getenv("HOME")},
+            {"AGENT_BROWSER_SOCKET_DIR", SocketDir}
+        ],
+        PortOpts = [
+            {args, CmdArgs},
+            {env, BrowserEnv},
+            exit_status,
+            binary,
+            stderr_to_stdout
+        ],
+        Port = open_port({spawn_executable, Npx}, PortOpts),
+        collect_output(Port, <<>>, TimeoutMs)
+    catch
+        throw:npx_not_found ->
+            {error, <<"npx not found on PATH. Install Node.js.">>};
+        throw:{socket_dir_failed, Err} ->
+            {error, list_to_binary(io_lib:format("socket_dir_failed: ~p", [Err]))};
+        _:Reason ->
+            {error, list_to_binary(io_lib:format("~p", [Reason]))}
+    end.
+
+collect_output(Port, Acc, TimeoutMs) ->
+    receive
+        {Port, {data, Data}} ->
+            collect_output(Port, <<Acc/binary, Data/binary>>, TimeoutMs);
+        {Port, {exit_status, 0}} ->
+            {ok, Acc};
+        {Port, {exit_status, Status}} ->
+            {error, list_to_binary(
+                io_lib:format("agent-browser exited with status ~p: ~s",
+                              [Status, Acc])
+            )}
+    after TimeoutMs ->
+        port_close(Port),
+        {error, <<"timeout">>}
+    end.
