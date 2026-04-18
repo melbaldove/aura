@@ -1,0 +1,100 @@
+.TH AURA-BROWSER 7 "2026-04-18" "Aura 0.1.0" "Aura Manual"
+.SH NAME
+aura\-browser \- browser automation tool
+.SH SYNOPSIS
+Control a headless browser from aura. Backed by the
+.B agent-browser
+CLI.
+.SH DESCRIPTION
+The browser tool enables the LLM to drive a real Chromium instance for
+authenticated, JS-rendered, or form-based sites. Sessions persist cookies
+and local storage across tool calls within the same Discord thread.
+.SH ACTIONS
+.TP
+.B navigate
+Open a URL. Returns a compact snapshot of the page automatically.
+.TP
+.B snapshot
+Return the current page's accessibility tree with element refs
+.RB ( @e1 ,
+.BR @e2 ,
+...). Pass
+.B full=true
+for the complete tree.
+.TP
+.B click
+Click the element identified by
+.BR ref .
+.TP
+.B type
+Type
+.B text
+into the input identified by
+.BR ref .
+.TP
+.B press
+Press a key
+.RB ( Enter ,
+.BR Tab ,
+.BR Escape ,
+.BR ArrowDown ,
+...).
+.TP
+.B back
+Navigate back in history.
+.TP
+.B vision
+Screenshot the page and ask the vision model about it. Useful for
+captcha, visual layout, or things the accessibility tree misses.
+.SH SESSIONS
+Sessions are auto-scoped per Discord thread via
+.BR channel_id .
+Two threads get two isolated browsers. Use the
+.B session
+argument for a named session shared across threads or for scheduled
+tasks with no thread context.
+.SH CDP ATTACH
+Pass
+.B cdp_url
+to attach to a user-controlled Chromium with
+.B --remote-debugging-port
+enabled. Useful when auth is maintained in openclaw or the user's own
+Chrome profile.
+.SH AUTHENTICATION
+Aura does not log in automatically. For authenticated sites:
+.IP \(bu 2
+Start
+.B agent-browser
+interactively on Eisenhower, log in manually. The session persists.
+.IP \(bu 2
+OR start a browser with remote debugging enabled and pass
+.B cdp_url
+to aura.
+.PP
+If a navigation lands on a login page, the tool returns
+.B AUTH_REQUIRED
+and stops. The LLM surfaces this to you.
+.SH SAFETY
+Two tool-layer blocks, no user override in v1:
+.IP \(bu 2
+URLs targeting private/internal IPs or localhost are blocked (SSRF).
+.IP \(bu 2
+URLs containing API keys / tokens in query parameters are blocked
+(exfiltration via prompt injection).
+.SH FILES
+.TP
+.I /tmp/aura-browser-<session>/
+Per-session socket directory for the agent-browser daemon.
+.SH ENVIRONMENT
+.TP
+.B AURA_BROWSER_CDP_URL
+Optional default CDP endpoint. Can still be overridden per tool call.
+.TP
+.B AURA_BROWSER_TIMEOUT_MS
+Override default per-action timeout (default 30000).
+.SH SEE ALSO
+.BR aura (1),
+.BR aura\-flares (7),
+.BR aura\-config (5),
+.BR aura\-diagnostics (7),
+.BR agent-browser (1).
