@@ -50,6 +50,7 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [019](019-shell-tool-with-security.md) | Shell tool with layered security | Accepted |
 | [020](020-memory-dreaming.md) | Memory dreaming — offline consolidation system | Accepted |
 | [021](021-unix-socket-ipc.md) | Unix socket IPC for CLI-to-daemon communication | Accepted |
+| [022](022-browser-tool-agent-browser.md) | Browser tool via agent-browser CLI | Accepted |
 
 ## Adding a new ADR
 
