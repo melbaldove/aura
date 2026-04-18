@@ -16,6 +16,7 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Gatewa
 - **ACP** — dispatch coding agents (provider-agnostic) into isolated worktrees, monitor in real-time, get structured reports
 - **Active memory** — automatic post-response review persists state and knowledge. Domain-aware compression preserves what matters.
 - **Skills** — language-agnostic CLI tools. Drop a script in a directory, it becomes a capability. A.U.R.A. auto-creates skills from learned workflows.
+- `browser` — headless browser automation (navigate/snapshot/click/type) via agent-browser
 - **Schedules** — config-driven cron + interval tasks that monitor Linear, calendar, PRs, and Slack
 - **Self-configuration** — create domains, update config, manage identity — all through conversation with propose/approve flow
 - **Pluggable gateways** — Discord ships first. Multi-platform conversation schema from day one.
@@ -27,6 +28,7 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Gatewa
 - tmux
 - A Discord bot token ([create one here](https://discord.com/developers/applications))
 - An LLM API key (ZAI/GLM or Anthropic/Claude)
+- agent-browser (npm) for the browser tool: `npm install -g agent-browser && agent-browser install`
 
 ## Quick Start
 
