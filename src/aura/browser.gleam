@@ -147,6 +147,21 @@ fn parse_octet(s: String) -> Result(Int, Nil) {
 
 const secret_pattern = "(sk-ant-|sk-proj-|sk-[a-zA-Z0-9]{20,}|ghp_|ghu_|gho_|github_pat_|AKIA[0-9A-Z]{16})"
 
+/// Parse the LLM's `action` string into the Action type.
+pub fn parse_action(s: String) -> Result(Action, String) {
+  case s {
+    "navigate" -> Ok(Navigate)
+    "snapshot" -> Ok(Snapshot)
+    "click" -> Ok(Click)
+    "type" -> Ok(Type)
+    "press" -> Ok(Press)
+    "back" -> Ok(Back)
+    "vision" -> Ok(Vision)
+    "" -> Error("action is required")
+    other -> Error("unknown action: " <> other)
+  }
+}
+
 /// Detect URLs that likely contain API keys or tokens. Checks both the
 /// raw URL and its URL-decoded form to catch percent-encoding tricks.
 pub fn url_has_secret(url: String) -> Bool {

@@ -179,3 +179,21 @@ pub fn url_has_secret_allows_clean_urls_test() {
   |> should.be_false
   browser.url_has_secret("https://example.com/") |> should.be_false
 }
+
+pub fn parse_action_navigate_test() {
+  browser.parse_action("navigate") |> should.equal(Ok(browser.Navigate))
+}
+
+pub fn parse_action_all_variants_test() {
+  browser.parse_action("snapshot") |> should.equal(Ok(browser.Snapshot))
+  browser.parse_action("click") |> should.equal(Ok(browser.Click))
+  browser.parse_action("type") |> should.equal(Ok(browser.Type))
+  browser.parse_action("press") |> should.equal(Ok(browser.Press))
+  browser.parse_action("back") |> should.equal(Ok(browser.Back))
+  browser.parse_action("vision") |> should.equal(Ok(browser.Vision))
+}
+
+pub fn parse_action_rejects_unknown_test() {
+  browser.parse_action("zoom") |> should.be_error
+  browser.parse_action("") |> should.be_error
+}
