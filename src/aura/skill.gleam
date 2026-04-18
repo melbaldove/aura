@@ -94,6 +94,66 @@ fn find_entrypoint(skill_path: String) -> Result(String, String) {
 }
 
 fn extract_description(content: String) -> String {
+  let #(frontmatter, body) = split_frontmatter(content)
+  case frontmatter_description(frontmatter) {
+    Ok(desc) -> desc
+    Error(_) -> first_paragraph(body)
+  }
+}
+
+/// Split content into (frontmatter_lines, body). If the content doesn't start
+/// with a YAML frontmatter block, frontmatter_lines is empty and body is the
+/// full content.
+fn split_frontmatter(content: String) -> #(List(String), String) {
+  let lines = string.split(content, "\n")
+  case lines {
+    ["---", ..rest] -> {
+      case take_until_closing_delim(rest, []) {
+        Ok(#(fm, body_lines)) -> #(fm, string.join(body_lines, "\n"))
+        Error(_) -> #([], content)
+      }
+    }
+    _ -> #([], content)
+  }
+}
+
+fn take_until_closing_delim(
+  lines: List(String),
+  acc: List(String),
+) -> Result(#(List(String), List(String)), Nil) {
+  case lines {
+    [] -> Error(Nil)
+    ["---", ..rest] -> Ok(#(list.reverse(acc), rest))
+    [line, ..rest] -> take_until_closing_delim(rest, [line, ..acc])
+  }
+}
+
+fn frontmatter_description(frontmatter: List(String)) -> Result(String, Nil) {
+  case list.find(frontmatter, fn(l) { string.starts_with(l, "description:") }) {
+    Ok(line) -> {
+      let raw = string.drop_start(line, 12)
+      let trimmed = string.trim(raw)
+      case trimmed {
+        "" -> Error(Nil)
+        _ -> Ok(unquote(trimmed))
+      }
+    }
+    Error(_) -> Error(Nil)
+  }
+}
+
+fn unquote(s: String) -> String {
+  case string.starts_with(s, "\"") && string.ends_with(s, "\"") {
+    True -> string.slice(s, 1, string.length(s) - 2)
+    False ->
+      case string.starts_with(s, "'") && string.ends_with(s, "'") {
+        True -> string.slice(s, 1, string.length(s) - 2)
+        False -> s
+      }
+  }
+}
+
+fn first_paragraph(content: String) -> String {
   let lines = string.split(content, "\n")
   let non_heading_non_empty =
     list.filter(lines, fn(line) {

@@ -109,6 +109,73 @@ pub fn create_skill_rejects_collision_test() {
   let _ = simplifile.delete_all([dir])
 }
 
+pub fn discover_uses_frontmatter_description_test() {
+  let base = "/tmp/aura-skill-frontmatter-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(base <> "/skills/google")
+  let content =
+    "---\nname: google\ndescription: Google Workspace CLI (Gmail, Calendar, Drive). Pass args as JSON array.\n---\n\n# Google Workspace\n\nBody content here.\n"
+  let _ = simplifile.write(base <> "/skills/google/SKILL.md", content)
+  let _ =
+    simplifile.write(base <> "/skills/google/google.sh", "#!/bin/bash\necho ok")
+
+  let skills = skill.discover(base <> "/skills") |> should.be_ok
+  let assert Ok(google) = list.find(skills, fn(s) { s.name == "google" })
+  google.description
+  |> should.equal(
+    "Google Workspace CLI (Gmail, Calendar, Drive). Pass args as JSON array.",
+  )
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn discover_frontmatter_without_description_falls_back_to_body_test() {
+  let base = "/tmp/aura-skill-frontmatter-fallback-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(base <> "/skills/alpha")
+  let content = "---\ntier: 2\nentrypoint: scripts/run.py\n---\n\n# Alpha\n\nAlpha body description.\n"
+  let _ = simplifile.write(base <> "/skills/alpha/SKILL.md", content)
+  let _ = simplifile.write(base <> "/skills/alpha/run.sh", "#!/bin/bash\necho ok")
+
+  let skills = skill.discover(base <> "/skills") |> should.be_ok
+  let assert Ok(alpha) = list.find(skills, fn(s) { s.name == "alpha" })
+  alpha.description |> should.equal("Alpha body description.")
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn discover_no_frontmatter_uses_first_paragraph_test() {
+  let base = "/tmp/aura-skill-nofm-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(base <> "/skills/plain")
+  let content = "# Plain\n\nPlain description text.\n"
+  let _ = simplifile.write(base <> "/skills/plain/SKILL.md", content)
+  let _ = simplifile.write(base <> "/skills/plain/run.sh", "#!/bin/bash\necho ok")
+
+  let skills = skill.discover(base <> "/skills") |> should.be_ok
+  let assert Ok(plain) = list.find(skills, fn(s) { s.name == "plain" })
+  plain.description |> should.equal("Plain description text.")
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn discover_frontmatter_with_quoted_description_test() {
+  let base = "/tmp/aura-skill-quoted-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(base <> "/skills/slack")
+  let content =
+    "---\nname: slack\ndescription: \"Read Slack, draft replies. Multi-workspace.\"\n---\n\n# Slack\n"
+  let _ = simplifile.write(base <> "/skills/slack/SKILL.md", content)
+  let _ = simplifile.write(base <> "/skills/slack/run.sh", "#!/bin/bash\necho ok")
+
+  let skills = skill.discover(base <> "/skills") |> should.be_ok
+  let assert Ok(slack) = list.find(skills, fn(s) { s.name == "slack" })
+  slack.description
+  |> should.equal("Read Slack, draft replies. Multi-workspace.")
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
 pub fn list_with_details_test() {
   let dir = "/tmp/aura-skill-list-" <> test_helpers.random_suffix()
   let _ = simplifile.create_directory_all(dir <> "/alpha")
