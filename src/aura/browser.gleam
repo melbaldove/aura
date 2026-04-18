@@ -1,8 +1,7 @@
-// src/aura/browser.gleam
 import gleam/int
+import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
-import gleam/regexp
 import gleam/string
 import gleam/uri
 
@@ -98,17 +97,12 @@ fn take_lines_under(
 pub fn is_safe_url(url: String) -> Bool {
   case uri.parse(url) {
     Error(_) -> False
-    Ok(parsed) -> {
+    Ok(parsed) ->
       case parsed.host {
         None -> False
-        Some(host) -> host_is_safe(string.lowercase(host))
+        Some(host) -> !is_private_host(string.lowercase(host))
       }
-    }
   }
-}
-
-fn host_is_safe(host: String) -> Bool {
-  !is_private_host(host)
 }
 
 fn is_private_host(host: String) -> Bool {
@@ -117,18 +111,14 @@ fn is_private_host(host: String) -> Bool {
     "[::1]" -> True
     "::1" -> True
     "metadata.google.internal" -> True
-    _ ->
-      string.ends_with(host, ".local")
-      || is_private_ipv4(host)
+    _ -> string.ends_with(host, ".local") || is_private_ipv4(host)
   }
 }
 
 fn is_private_ipv4(host: String) -> Bool {
   case string.split(host, ".") {
-    [a, b, _, _] -> {
-      let a_i = parse_octet(a)
-      let b_i = parse_octet(b)
-      case a_i, b_i {
+    [a, b, _, _] ->
+      case int.parse(a), int.parse(b) {
         Ok(10), _ -> True
         Ok(127), _ -> True
         Ok(192), Ok(168) -> True
@@ -136,16 +126,9 @@ fn is_private_ipv4(host: String) -> Bool {
         Ok(169), Ok(254) -> True
         _, _ -> False
       }
-    }
     _ -> False
   }
 }
-
-fn parse_octet(s: String) -> Result(Int, Nil) {
-  int.parse(s)
-}
-
-const secret_pattern = "(sk-ant-|sk-proj-|sk-[a-zA-Z0-9]{20,}|ghp_|ghu_|gho_|github_pat_|AKIA[0-9A-Z]{16})"
 
 /// Parse the LLM's `action` string into the Action type.
 pub fn parse_action(s: String) -> Result(Action, String) {
@@ -183,14 +166,13 @@ pub fn execute(
 ) -> String {
   case action {
     Navigate -> dispatch_navigate(args, ctx)
-    Snapshot -> dispatch_simple("snapshot", snapshot_args(args), ctx)
-    Click -> dispatch_simple("click", ref_args(args), ctx)
-    Type -> dispatch_simple("type", type_args(args), ctx)
-    Press -> dispatch_simple("press", key_args(args), ctx)
-    Back -> dispatch_simple("back", [], ctx)
-    Vision -> dispatch_simple("screenshot", [], ctx)
-    // Vision returns a screenshot; the caller (brain_tools) runs it
-    // through the vision pipeline.
+    Snapshot -> call_ffi("snapshot", snapshot_args(args), ctx)
+    Click -> call_ffi("click", [get_arg(args, "ref")], ctx)
+    Type ->
+      call_ffi("type", [get_arg(args, "ref"), get_arg(args, "text")], ctx)
+    Press -> call_ffi("press", [get_arg(args, "key")], ctx)
+    Back -> call_ffi("back", [], ctx)
+    Vision -> call_ffi("screenshot", [], ctx)
   }
 }
 
@@ -200,29 +182,17 @@ fn dispatch_navigate(
 ) -> String {
   case get_arg(args, "url") {
     "" -> error_json("url is required for navigate")
-    url -> {
-      case url_has_secret(url) {
-        True ->
+    url ->
+      case url_has_secret(url), is_safe_url(url) {
+        True, _ ->
           error_json(
             "Blocked: URL contains what appears to be an API key or token",
           )
-        False ->
-          case is_safe_url(url) {
-            False ->
-              error_json("Blocked: URL targets a private or internal address")
-            True -> call_ffi("open", [url], ctx)
-          }
+        _, False ->
+          error_json("Blocked: URL targets a private or internal address")
+        False, True -> call_ffi("open", [url], ctx)
       }
-    }
   }
-}
-
-fn dispatch_simple(
-  action_name: String,
-  args: List(String),
-  ctx: ExecContext,
-) -> String {
-  call_ffi(action_name, args, ctx)
 }
 
 fn call_ffi(
@@ -245,26 +215,16 @@ fn get_arg(args: List(#(String, String)), key: String) -> String {
 
 fn snapshot_args(args: List(#(String, String))) -> List(String) {
   case get_arg(args, "full") {
-    "true" -> []
     // agent-browser's `snapshot -c` is the compact default
+    "true" -> []
     _ -> ["-c"]
   }
 }
 
-fn ref_args(args: List(#(String, String))) -> List(String) {
-  [get_arg(args, "ref")]
-}
-
-fn type_args(args: List(#(String, String))) -> List(String) {
-  [get_arg(args, "ref"), get_arg(args, "text")]
-}
-
-fn key_args(args: List(#(String, String))) -> List(String) {
-  [get_arg(args, "key")]
-}
-
 fn error_json(msg: String) -> String {
-  "{\"success\": false, \"error\": \"" <> msg <> "\"}"
+  json.to_string(
+    json.object([#("success", json.bool(False)), #("error", json.string(msg))]),
+  )
 }
 
 /// Production FFI binding. Use this in `ExecContext.run_fn` in production.
@@ -279,15 +239,6 @@ pub fn run_ffi(
 
 /// Detect URLs that likely contain API keys or tokens. Checks both the
 /// raw URL and its URL-decoded form to catch percent-encoding tricks.
-pub fn url_has_secret(url: String) -> Bool {
-  case regexp.from_string(secret_pattern) {
-    Error(_) -> False
-    Ok(re) -> {
-      let decoded = case uri.percent_decode(url) {
-        Ok(d) -> d
-        Error(_) -> url
-      }
-      regexp.check(re, url) || regexp.check(re, decoded)
-    }
-  }
-}
+/// Regex is compiled once and cached in persistent_term (see FFI).
+@external(erlang, "aura_browser_ffi", "url_has_secret")
+pub fn url_has_secret(url: String) -> Bool
