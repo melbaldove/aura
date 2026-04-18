@@ -643,12 +643,28 @@ fn execute_tool_dispatch(
         "prompt" -> {
           case require_arg(args, "session_name") {
             Error(e) -> TextResult(e)
-            Ok(session_name) -> case require_arg(args, "prompt") {
+            Ok(identifier) -> case require_arg(args, "prompt") {
               Error(e) -> TextResult(e)
               Ok(message) -> {
-                case flare_manager.send_input(ctx.acp_subject, session_name, message) {
-                  Ok(_) -> TextResult("Sent to " <> session_name)
-                  Error(e) -> TextResult("Error: " <> e)
+                case resolve_flare(identifier) {
+                  Error(_) -> TextResult("Flare not found: " <> identifier)
+                  Ok(flare) -> {
+                    case flare_manager.resolve_prompt_action(flare.status, flare.id, flare.session_name, message) {
+                      flare_manager.SendToLive(sn) -> {
+                        case flare_manager.send_input(ctx.acp_subject, sn, message) {
+                          Ok(_) -> TextResult("Sent to " <> sn)
+                          Error(e) -> TextResult("Error: " <> e)
+                        }
+                      }
+                      flare_manager.RekindleFlare(flare_id, prompt) -> {
+                        case flare_manager.rekindle(ctx.acp_subject, flare_id, prompt) {
+                          Ok(new_session) -> TextResult("Flare rekindled: " <> new_session)
+                          Error(e) -> TextResult("Error: " <> e)
+                        }
+                      }
+                      flare_manager.RejectPrompt(reason) -> TextResult("Error: " <> reason)
+                    }
+                  }
                 }
               }
             }
@@ -1389,7 +1405,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "flare",
-      description: "Extend yourself to work on a task. Flares are persistent — they can be parked and rekindled later. Actions: ignite (start new), status (check progress), list (show all), prompt (send follow-up), kill (terminate), park (suspend with triggers), rekindle (resume parked flare).",
+      description: "Extend yourself to work on a task. Flares are long-running — treat them like persistent workspaces. Actions: ignite (start new), status (check progress), list (show all), prompt (send follow-up; auto-rekindles a parked flare), park (suspend — default after handback, flare can be resumed), rekindle (explicitly resume a parked flare with a prompt), kill (terminate — only when user asks), archive (retire — only when user asks).",
       parameters: [
         llm.ToolParam(
           name: "action",

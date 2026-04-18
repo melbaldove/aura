@@ -105,3 +105,55 @@ pub fn status_from_string_empty_failed_reason_test() {
   flare_manager.status_from_string("failed:")
   |> should.equal(flare_manager.Failed(""))
 }
+
+// ---------------------------------------------------------------------------
+// resolve_prompt_action — policy for flare prompt tool action
+// ---------------------------------------------------------------------------
+
+pub fn resolve_prompt_active_sends_to_live_test() {
+  flare_manager.resolve_prompt_action(
+    flare_manager.Active,
+    "f-123",
+    "acp-cm2-f-123",
+    "do the thing",
+  )
+  |> should.equal(flare_manager.SendToLive("acp-cm2-f-123"))
+}
+
+pub fn resolve_prompt_parked_rekindles_test() {
+  flare_manager.resolve_prompt_action(
+    flare_manager.Parked,
+    "f-123",
+    "",
+    "pick it back up",
+  )
+  |> should.equal(flare_manager.RekindleFlare("f-123", "pick it back up"))
+}
+
+pub fn resolve_prompt_failed_rejects_test() {
+  let action =
+    flare_manager.resolve_prompt_action(
+      flare_manager.Failed("killed"),
+      "f-123",
+      "",
+      "please continue",
+    )
+  case action {
+    flare_manager.RejectPrompt(_) -> Nil
+    _ -> should.fail()
+  }
+}
+
+pub fn resolve_prompt_archived_rejects_test() {
+  let action =
+    flare_manager.resolve_prompt_action(
+      flare_manager.Archived,
+      "f-123",
+      "",
+      "hello",
+    )
+  case action {
+    flare_manager.RejectPrompt(_) -> Nil
+    _ -> should.fail()
+  }
+}

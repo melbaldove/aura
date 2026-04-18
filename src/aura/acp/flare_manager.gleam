@@ -27,6 +27,41 @@ pub type FlareStatus {
   Failed(reason: String)
 }
 
+/// Policy decision for the flare(prompt) tool. Pure — no I/O.
+pub type PromptAction {
+  SendToLive(session_name: String)
+  RekindleFlare(flare_id: String, prompt: String)
+  RejectPrompt(reason: String)
+}
+
+/// Decide what `prompt` should do given the flare's current state.
+/// Active → send to the live session. Parked → auto-rekindle (flares are
+/// long-running; a parked flare is the expected post-handback state).
+/// Failed/Archived → reject; user must explicitly rekindle or ignite.
+pub fn resolve_prompt_action(
+  status: FlareStatus,
+  flare_id: String,
+  session_name: String,
+  prompt: String,
+) -> PromptAction {
+  case status {
+    Active -> SendToLive(session_name)
+    Parked -> RekindleFlare(flare_id, prompt)
+    Failed(reason) ->
+      RejectPrompt(
+        "Flare "
+        <> flare_id
+        <> " is failed ("
+        <> reason
+        <> ") — rekindle explicitly to resume, or ignite a new flare",
+      )
+    Archived ->
+      RejectPrompt(
+        "Flare " <> flare_id <> " is archived — ignite a new flare instead",
+      )
+  }
+}
+
 pub type FlareRecord {
   FlareRecord(
     id: String,

@@ -240,11 +240,15 @@ pub fn build_system_prompt(
   <> "\n- If a rekindled flare reports 'idle' or 'nothing to do', it's waiting for direction — not confused. Send a follow-up prompt telling it what to do next."
   <> "\n- Session names change on rekindle. The flare ID (f-...) is permanent. After a restart, call flare(list) to see current session names."
   <> "\n- Rekindle continues existing work. Ignite starts fresh. NEVER kill + ignite to continue the same work."
-  <> "\n- Flare lifecycle: park when waiting on something external (approval, feedback, a condition). kill to abort. archive only when work is definitively done — ALWAYS ask the user before archiving."
+  <> "\n- Flares are long-running. Treat them like persistent workspaces, not single-use commands."
+  <> "\n- After handback: park. Park is the default terminal action — the flare may be useful again."
+  <> "\n- park when you're done prompting for now (handback arrived, waiting on user, waiting on something external). A parked flare auto-rekindles on the next prompt."
+  <> "\n- kill and archive require explicit user request. Never decide to kill or archive on your own. 'Looks done' is not enough — ask first."
+  <> "\n- If a handback reports failure, still park (not kill). The user may want to diagnose or retry."
   <> "\n- 'refused by user' means ACP permissions are misconfigured, not a human decision."
   <> "\n- Before acting on flare state, ALWAYS call flare(list). Do not guess."
   <> "\n- flare(list) shows thread= for each flare. When the user says 'rekindle the flare' in a thread, match the current channel_id to the flare's thread_id. NEVER guess which flare — look it up."
-  <> "\n- flare(list) and flare(status) show 'working' or 'idle'. If a flare is working, leave it alone. If idle, re-prompt with specific instructions or archive if done."
+  <> "\n- flare(list) and flare(status) show 'working' or 'idle'. If a flare is working, leave it alone. If idle, re-prompt with specific instructions or park if nothing more to say right now."
   <> "\n- Never say 'lost context', 'context wiped', or 'model switch'. These do not happen. If a flare seems unresponsive, re-prompt it with specific instructions."
 }
 
