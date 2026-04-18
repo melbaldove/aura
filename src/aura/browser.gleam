@@ -55,6 +55,20 @@ pub fn truncate_snapshot(text: String, max_chars: Int) -> String {
   }
 }
 
+/// Detect login-wall redirects by examining the final URL and page title.
+/// Returns True when the navigation landed on a login/auth page.
+pub fn detect_auth_required(url: String, title: String) -> Bool {
+  let url_lower = string.lowercase(url)
+  let title_lower = string.lowercase(title)
+  let url_patterns = [
+    "/signin", "/login", "/auth/", "/oauth/", "signin-oidc", "/sign-in",
+    "/log-in",
+  ]
+  let title_patterns = ["sign in", "log in", "login", "signin"]
+  list.any(url_patterns, fn(p) { string.contains(url_lower, p) })
+  || list.any(title_patterns, fn(p) { string.contains(title_lower, p) })
+}
+
 fn take_lines_under(
   lines: List(String),
   budget: Int,

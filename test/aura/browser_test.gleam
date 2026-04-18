@@ -59,3 +59,40 @@ pub fn truncate_snapshot_no_footer_when_not_cut_test() {
   |> string.contains("truncated")
   |> should.be_false
 }
+
+pub fn detect_auth_required_catches_signin_url_test() {
+  browser.detect_auth_required(
+    "https://example.com/signin",
+    "Sign In",
+  )
+  |> should.be_true
+}
+
+pub fn detect_auth_required_catches_oauth_redirect_test() {
+  browser.detect_auth_required(
+    "https://auth.example.com/oauth/authorize?client_id=x",
+    "Log In",
+  )
+  |> should.be_true
+}
+
+pub fn detect_auth_required_catches_oidc_test() {
+  browser.detect_auth_required(
+    "https://hub.jw.org/signin-oidc",
+    "Redirecting...",
+  )
+  |> should.be_true
+}
+
+pub fn detect_auth_required_false_for_normal_page_test() {
+  browser.detect_auth_required(
+    "https://example.com/dashboard",
+    "Dashboard — My App",
+  )
+  |> should.be_false
+}
+
+pub fn detect_auth_required_title_case_insensitive_test() {
+  browser.detect_auth_required("https://example.com/home", "LOGIN")
+  |> should.be_true
+}
