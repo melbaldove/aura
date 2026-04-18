@@ -1,6 +1,7 @@
 import aura/acp/flare_manager
 import aura/acp/provider
 import aura/acp/types as acp_types
+import aura/browser
 import aura/db
 import aura/time
 import aura/discord/rest
@@ -772,6 +773,33 @@ fn execute_tool_dispatch(
         }
       }
     }
+    "browser" -> {
+      case require_arg(args, "action") {
+        Error(e) -> TextResult(e)
+        Ok(action_str) -> {
+          case browser.parse_action(action_str) {
+            Error(e) -> TextResult("Error: " <> e)
+            Ok(action) -> {
+              let session_arg = get_arg(args, "session")
+              let cdp_url = get_arg(args, "cdp_url")
+              case browser.resolve_session(session_arg, ctx.channel_id) {
+                Error(e) -> TextResult("Error: " <> e)
+                Ok(session) -> {
+                  let exec_ctx =
+                    browser.ExecContext(
+                      session: session,
+                      cdp_url: cdp_url,
+                      timeout_ms: 30_000,
+                      run_fn: browser.run_ffi,
+                    )
+                  TextResult(browser.execute(action, args, exec_ctx))
+                }
+              }
+            }
+          }
+        }
+      }
+    }
     _ -> {
       // GLM-5.1 sometimes uses the skill name directly as the tool name
       // instead of "run_skill". If the unknown tool name matches a known skill,
@@ -1399,6 +1427,66 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "timeout",
           param_type: "integer",
           description: "Timeout in seconds (default 180, max 600)",
+          required: False,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
+      name: "browser",
+      description: "Control a headless browser. Use for interactive pages (auth, forms, JS-rendered content). For read-only static HTML, prefer web_fetch. Sessions persist cookies/auth across calls within the same Discord thread. Actions: navigate, snapshot, click, type, press, back, vision. First call should be `navigate`. After navigate, a compact snapshot is returned automatically — no separate snapshot call needed unless the page changed.",
+      parameters: [
+        llm.ToolParam(
+          name: "action",
+          param_type: "string",
+          description: "navigate | snapshot | click | type | press | back | vision",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "url",
+          param_type: "string",
+          description: "For navigate.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "ref",
+          param_type: "string",
+          description: "Element ref like @e5, for click/type.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "text",
+          param_type: "string",
+          description: "Text to type, for type action.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "key",
+          param_type: "string",
+          description: "Key to press (Enter, Tab, Escape, ArrowDown, ...), for press.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "question",
+          param_type: "string",
+          description: "What to ask the vision model, for vision action.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "full",
+          param_type: "boolean",
+          description: "For snapshot: return full accessibility tree (default false = compact).",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "session",
+          param_type: "string",
+          description: "Optional session name; defaults to current channel. Use to share auth across channels.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "cdp_url",
+          param_type: "string",
+          description: "Optional CDP endpoint to attach to an already-running browser (BYO auth).",
           required: False,
         ),
       ],
