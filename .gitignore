@@ -56,3 +56,6 @@ _build/
 
 # Temporary test files
 /tmp/
+
+# Git worktrees (isolated dev workspaces)
+/.worktrees/
