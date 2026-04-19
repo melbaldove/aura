@@ -338,8 +338,34 @@ pub fn compress_history(
   }
 }
 
-/// Format tool traces for Discord display.
-/// Format: `> ICON \`tool_name(args_preview)\` → result_preview`
+const max_spoiler_chars = 1500
+
+/// Split `full` into (preview, spoiler). The spoiler contains everything
+/// past `preview_len`, wrapped in Discord's `||...||` tags so the user can
+/// click to reveal it. Returns empty spoiler when nothing overflows.
+/// Any literal `||` inside the overflow is broken up to avoid closing the
+/// spoiler prematurely. Overflow past `max_spoiler_chars` is capped.
+fn preview_with_spoiler(full: String, preview_len: Int) -> #(String, String) {
+  let full_len = string.length(full)
+  case full_len > preview_len {
+    False -> #(full, "")
+    True -> {
+      let preview = string.slice(full, 0, preview_len)
+      let rest_len = full_len - preview_len
+      let rest = case rest_len > max_spoiler_chars {
+        True ->
+          string.slice(full, preview_len, max_spoiler_chars)
+          <> " …[truncated]"
+        False -> string.slice(full, preview_len, rest_len)
+      }
+      let safe = string.replace(rest, each: "||", with: "| |")
+      #(preview, " ||" <> safe <> "||")
+    }
+  }
+}
+
+/// Format tool traces for Discord display. Shows a short inline preview
+/// and puts overflow behind `||spoilers||` so the user can expand.
 pub fn format_traces(traces: List(ToolTrace)) -> String {
   list.map(traces, fn(trace) {
     let icon = case trace.is_error {
@@ -350,13 +376,12 @@ pub fn format_traces(traces: List(ToolTrace)) -> String {
       "flare" -> 500
       _ -> 40
     }
-    let args_preview = string.slice(trace.args, 0, args_limit)
+    let #(args_preview, args_spoiler) =
+      preview_with_spoiler(trace.args, args_limit)
     let result_collapsed =
       string.replace(trace.result, each: "\n", with: ", ")
-    let result_preview = case string.length(result_collapsed) > 50 {
-      True -> string.slice(result_collapsed, 0, 50) <> "..."
-      False -> result_collapsed
-    }
+    let #(result_preview, result_spoiler) =
+      preview_with_spoiler(result_collapsed, 50)
     let has_newlines = string.contains(args_preview, "\n")
     case has_newlines {
       False ->
@@ -366,8 +391,11 @@ pub fn format_traces(traces: List(ToolTrace)) -> String {
         <> trace.name
         <> "("
         <> args_preview
-        <> ")` → "
+        <> ")`"
+        <> args_spoiler
+        <> " → "
         <> result_preview
+        <> result_spoiler
       True ->
         "> "
         <> icon
@@ -375,8 +403,11 @@ pub fn format_traces(traces: List(ToolTrace)) -> String {
         <> trace.name
         <> "("
         <> args_preview
-        <> ")``` → "
+        <> ")```"
+        <> args_spoiler
+        <> " → "
         <> result_preview
+        <> result_spoiler
     }
   })
   |> string.join("\n")
