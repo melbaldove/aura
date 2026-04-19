@@ -786,11 +786,18 @@ fn execute_tool_dispatch(
               case browser.resolve_session(session_arg, ctx.channel_id) {
                 Error(e) -> TextResult("Error: " <> e)
                 Ok(session) -> {
+                  let timeout_ms = case get_arg(args, "timeout") {
+                    "" -> 90_000
+                    t -> case int.parse(t) {
+                      Ok(n) -> int.min(n * 1000, 600_000)
+                      Error(_) -> 90_000
+                    }
+                  }
                   let exec_ctx =
                     browser.ExecContext(
                       session: session,
                       cdp_url: cdp_url,
-                      timeout_ms: 30_000,
+                      timeout_ms: timeout_ms,
                       run_fn: browser.run_ffi,
                       vision_fn: ctx.vision_fn,
                     )
