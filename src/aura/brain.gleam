@@ -2085,12 +2085,13 @@ fn tool_loop_progressive(
               let #(next_traces, next_message_id) = case split_next_iteration {
                 True -> {
                   let finalized = response.content <> "\n\n" <> traces_text
-                  // Discard the returned id — next iteration will POST fresh.
+                  // Edit (don't POST a duplicate of) the message the stream
+                  // just created with its narrative text.
                   let _ =
                     send_or_edit(
                       state.discord_token,
                       channel_id,
-                      message_id,
+                      msg_id,
                       finalized,
                     )
                   #([], "")
@@ -2101,7 +2102,7 @@ fn tool_loop_progressive(
                     send_or_edit(
                       state.discord_token,
                       channel_id,
-                      message_id,
+                      msg_id,
                       progress_text,
                     )
                   #(new_traces, mid)
