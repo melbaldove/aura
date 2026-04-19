@@ -338,76 +338,57 @@ pub fn compress_history(
   }
 }
 
-const max_spoiler_chars = 1500
+const max_trace_field_chars = 1500
 
-/// Split `full` into (preview, spoiler). The spoiler contains everything
-/// past `preview_len`, wrapped in Discord's `||...||` tags so the user can
-/// click to reveal it. Returns empty spoiler when nothing overflows.
-/// Any literal `||` inside the overflow is broken up to avoid closing the
-/// spoiler prematurely. Overflow past `max_spoiler_chars` is capped.
-fn preview_with_spoiler(full: String, preview_len: Int) -> #(String, String) {
-  let full_len = string.length(full)
-  case full_len > preview_len {
-    False -> #(full, "")
-    True -> {
-      let preview = string.slice(full, 0, preview_len)
-      let rest_len = full_len - preview_len
-      let rest = case rest_len > max_spoiler_chars {
-        True ->
-          string.slice(full, preview_len, max_spoiler_chars)
-          <> " …[truncated]"
-        False -> string.slice(full, preview_len, rest_len)
-      }
-      let safe = string.replace(rest, each: "||", with: "| |")
-      #(preview, " ||" <> safe <> "||")
-    }
+/// Safety cap against a single trace field (args or result) overflowing
+/// Discord's 2000-char message limit. Appends `…[N more chars]` when cut.
+fn cap_field(text: String, max: Int) -> String {
+  let len = string.length(text)
+  case len > max {
+    False -> text
+    True ->
+      string.slice(text, 0, max)
+      <> " …["
+      <> int.to_string(len - max)
+      <> " more chars]"
   }
 }
 
-/// Format tool traces for Discord display. Shows a short inline preview
-/// and puts overflow behind `||spoilers||` so the user can expand.
+/// Format tool traces for Discord display. Shows the full call (name +
+/// args) and the full result verbatim — no truncation, no spoilers. If
+/// either field is pathologically long, caps at max_trace_field_chars to
+/// protect the 2000-char message limit.
 pub fn format_traces(traces: List(ToolTrace)) -> String {
   list.map(traces, fn(trace) {
     let icon = case trace.is_error {
       True -> "\u{274C}"
       False -> "\u{1F527}"
     }
-    let args_limit = case trace.name {
-      "flare" -> 500
-      _ -> 40
-    }
-    let #(args_preview, args_spoiler) =
-      preview_with_spoiler(trace.args, args_limit)
-    let result_collapsed =
-      string.replace(trace.result, each: "\n", with: ", ")
-    let #(result_preview, result_spoiler) =
-      preview_with_spoiler(result_collapsed, 50)
-    let has_newlines = string.contains(args_preview, "\n")
-    case has_newlines {
+    let args = cap_field(trace.args, max_trace_field_chars)
+    let result = cap_field(trace.result, max_trace_field_chars)
+    // Keep newlines in the result but reflow into Discord's quote-block
+    // continuation by prefixing with `> `.
+    let result_indented = string.replace(result, each: "\n", with: "\n> ")
+    let args_has_newlines = string.contains(args, "\n")
+    case args_has_newlines {
       False ->
         "> "
         <> icon
         <> " `"
         <> trace.name
         <> "("
-        <> args_preview
-        <> ")`"
-        <> args_spoiler
-        <> " → "
-        <> result_preview
-        <> result_spoiler
+        <> args
+        <> ")` → "
+        <> result_indented
       True ->
         "> "
         <> icon
         <> " ```\n"
         <> trace.name
         <> "("
-        <> args_preview
-        <> ")```"
-        <> args_spoiler
-        <> " → "
-        <> result_preview
-        <> result_spoiler
+        <> args
+        <> ")```\n> → "
+        <> result_indented
     }
   })
   |> string.join("\n")
