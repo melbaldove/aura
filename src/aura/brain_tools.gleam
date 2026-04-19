@@ -1580,7 +1580,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "describe_image",
-      description: "Ask the vision model about a local image file. Use this for user-uploaded attachments (auto-downloaded to /tmp/aura-attachments/<msg_id>/), screenshots on disk, or any image you want described. Pass a specific question to focus the analysis. This is the right tool for follow-up vision queries on attached receipts, diagrams, or photos — DO NOT route through browser(navigate file://) + browser(vision), which is slower and browser-scoped.",
+      description: "Ask the vision model about a local image file. Use this for user-uploaded attachments (auto-downloaded to /tmp/aura-attachments/<msg_id>/), screenshots on disk, or any image you want described. Pass a specific question to focus the analysis. This is the right tool for follow-up vision queries on attached receipts, diagrams, or photos — DO NOT route through browser(navigate file://) + browser(vision), which is slower and browser-scoped.\n\nCALL AT MOST ONCE per image in most cases. Front-load everything you need into the `question` argument — date, amounts, totals, signatures, checked boxes — in one call. Vision models are non-deterministic on handwriting: re-querying will often return different digits without being more correct. If the first answer is ambiguous (handwriting unclear, conflicting amounts, math doesn't add up), STOP and ask the user to clarify or confirm. Do not try to triangulate across multiple calls.",
       parameters: [
         llm.ToolParam(
           name: "path",
