@@ -153,11 +153,24 @@ src/
 
 ### Testing
 
-- Tests in `test/aura/<module>_test.gleam`
-- Use `gleeunit` + `should` assertions
+Behavior tests run on every commit and deploy (`gleam test` for units,
+`gleam run -m features/runner` for BDD scenarios). Contract tests against
+live providers are opt-in (reserved under `test/contract/`; manual runs
+before releases). Every feature ships with a test per principle #10; the
+trivial-test hook catches tautologies.
+
+- Unit tests (gleeunit): `test/aura/`
+- Feature tests (dream_test + Gherkin): `test/features/`
+- Fakes: `test/fakes/`
+- Contract tests (gleeunit, opt-in): `test/contract/`
+
+Full guide: `man aura-testing`.
+
+Additional conventions:
+- Use `gleeunit` + `should` assertions for unit tests
 - Test pure functions directly. Test actors via their public convenience functions.
 - Temp files in `/tmp/aura-*-test`, clean up after
-- 486 tests currently. Don't regress.
+- 586 tests currently. Don't regress.
 - **HARD RULE: Every bug fix must include a regression test.** No exceptions for "it's hard to test" — if the buggy code has pure functions (encoding, parsing, extraction), test those. If the bug is in process/IO code that genuinely can't be unit tested, document why in the commit message. A `fix:` commit without a test is incomplete.
 
 ### Database
