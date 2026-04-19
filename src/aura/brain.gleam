@@ -48,7 +48,7 @@ fn rescue(fun: fn() -> a) -> Result(a, String)
 // Constants
 // ---------------------------------------------------------------------------
 
-const max_tool_iterations = 40
+const max_tool_iterations = 80
 
 const stream_idle_timeout_ms = 120_000
 
@@ -1841,13 +1841,22 @@ fn handle_with_llm(
       }
 
       // Post-response skill review
-      let skill_review_count = case
+      let current_count = case
         dict.get(state.skill_review_counts, response_channel)
       {
         Ok(c) -> c
         Error(_) -> 0
       }
-      let new_tool_calls = list.length(traces)
+      // Reset counter when the LLM saved a skill itself — a fresh save
+      // makes the review redundant.
+      let #(skill_review_count, new_iterations) = case traces {
+        [] -> #(current_count, 0)
+        _ ->
+          case list.any(traces, fn(t) { t.name == "skill_manage" }) {
+            True -> #(0, 0)
+            False -> #(current_count, 1)
+          }
+      }
       let new_skill_review_count =
         review.maybe_spawn_skill_review(
           state.global_config.memory.skill_review_interval,
@@ -1856,7 +1865,7 @@ fn handle_with_llm(
           state.discord_token,
           full_history,
           skill_review_count,
-          new_tool_calls,
+          new_iterations,
           state.paths,
           state.global_config.models.monitor,
           state.skills_dir,
@@ -2140,6 +2149,73 @@ fn tool_loop_progressive(
   }
 }
 
+/// Per-stream instrumentation counters. Captured in the collect_stream_loop
+/// state so a heartbeat log line can surface reasoning-vs-delta progress
+/// every ~30s, and a final summary fires at termination. Exists purely for
+/// observability — no control flow depends on these fields.
+type StreamStats {
+  StreamStats(
+    start_ms: Int,
+    reasoning_count: Int,
+    delta_count: Int,
+    last_heartbeat_ms: Int,
+  )
+}
+
+const stream_heartbeat_interval_ms = 30_000
+
+fn new_stream_stats() -> StreamStats {
+  let now = time.now_ms()
+  StreamStats(
+    start_ms: now,
+    reasoning_count: 0,
+    delta_count: 0,
+    last_heartbeat_ms: now,
+  )
+}
+
+fn maybe_heartbeat(stats: StreamStats, content_chars: Int) -> StreamStats {
+  let now = time.now_ms()
+  case now - stats.last_heartbeat_ms >= stream_heartbeat_interval_ms {
+    True -> {
+      logging.log(logging.Info,
+        "[llm] stream progress: "
+        <> int.to_string(stats.reasoning_count)
+        <> " reasoning, "
+        <> int.to_string(stats.delta_count)
+        <> " delta ("
+        <> int.to_string(content_chars)
+        <> " chars), "
+        <> int.to_string({ now - stats.start_ms } / 1000)
+        <> "s elapsed",
+      )
+      StreamStats(..stats, last_heartbeat_ms: now)
+    }
+    False -> stats
+  }
+}
+
+fn log_stream_summary(
+  stats: StreamStats,
+  outcome: String,
+  content_chars: Int,
+) -> Nil {
+  let elapsed = { time.now_ms() - stats.start_ms } / 1000
+  logging.log(logging.Info,
+    "[llm] stream "
+    <> outcome
+    <> ": "
+    <> int.to_string(stats.reasoning_count)
+    <> " reasoning, "
+    <> int.to_string(stats.delta_count)
+    <> " delta ("
+    <> int.to_string(content_chars)
+    <> " chars), "
+    <> int.to_string(elapsed)
+    <> "s total",
+  )
+}
+
 /// Collect a streaming LLM response, progressively editing Discord.
 /// Returns (content, tool_calls_json, message_id, prompt_tokens).
 fn collect_stream_response(
@@ -2149,7 +2225,16 @@ fn collect_stream_response(
   traces: List(conversation.ToolTrace),
   timeout_ms: Int,
 ) -> Result(#(String, String, String, Int), String) {
-  collect_stream_loop(token, channel_id, message_id, traces, "", 0, timeout_ms)
+  collect_stream_loop(
+    token,
+    channel_id,
+    message_id,
+    traces,
+    "",
+    0,
+    timeout_ms,
+    new_stream_stats(),
+  )
 }
 
 fn collect_stream_loop(
@@ -2160,9 +2245,13 @@ fn collect_stream_loop(
   accumulated: String,
   last_edit_len: Int,
   remaining_ms: Int,
+  stats: StreamStats,
 ) -> Result(#(String, String, String, Int), String) {
   case remaining_ms <= 0 {
-    True -> Error("Stream timeout")
+    True -> {
+      log_stream_summary(stats, "idle-timeout", string.length(accumulated))
+      Error("Stream timeout")
+    }
     False -> {
       let wait = case remaining_ms > stream_check_interval_ms {
         True -> stream_check_interval_ms
@@ -2185,6 +2274,9 @@ fn collect_stream_loop(
             }
             False -> #(msg_id, last_edit_len)
           }
+          let new_stats =
+            StreamStats(..stats, delta_count: stats.delta_count + 1)
+            |> maybe_heartbeat(string.length(new_acc))
           // Data received — reset idle timeout to 120s
           collect_stream_loop(
             token,
@@ -2194,9 +2286,13 @@ fn collect_stream_loop(
             new_acc,
             new_edit_len,
             stream_idle_timeout_ms,
+            new_stats,
           )
         }
         StreamReasoning -> {
+          let new_stats =
+            StreamStats(..stats, reasoning_count: stats.reasoning_count + 1)
+            |> maybe_heartbeat(string.length(accumulated))
           // GLM-5.1 thinking — stream is alive, reset idle timeout
           collect_stream_loop(
             token,
@@ -2206,9 +2302,11 @@ fn collect_stream_loop(
             accumulated,
             last_edit_len,
             stream_idle_timeout_ms,
+            new_stats,
           )
         }
         StreamComplete(content, tool_calls_json, prompt_tokens) -> {
+          log_stream_summary(stats, "complete", string.length(content))
           // Stream finished — do final Discord edit if we have content
           let final_msg_id = case
             string.length(content) > 0
@@ -2223,11 +2321,19 @@ fn collect_stream_loop(
           Ok(#(content, tool_calls_json, final_msg_id, prompt_tokens))
         }
         StreamDone -> {
+          log_stream_summary(stats, "done", string.length(accumulated))
           // Legacy done signal — treat as complete with no tool calls
           Ok(#(accumulated, "[]", msg_id, 0))
         }
-        StreamError(err) -> Error("Stream error: " <> err)
+        StreamError(err) -> {
+          log_stream_summary(stats, "error", string.length(accumulated))
+          Error("Stream error: " <> err)
+        }
         StreamTimeout -> {
+          // Inner check-interval tick (default 500ms) with no event. Not an
+          // error — the outer `remaining_ms` budget governs the real idle
+          // timeout. Still run the heartbeat so silent periods are visible.
+          let new_stats = maybe_heartbeat(stats, string.length(accumulated))
           collect_stream_loop(
             token,
             channel_id,
@@ -2236,6 +2342,7 @@ fn collect_stream_loop(
             accumulated,
             last_edit_len,
             remaining_ms - wait,
+            new_stats,
           )
         }
       }

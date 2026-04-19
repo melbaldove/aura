@@ -305,8 +305,10 @@ pub fn skill_tool_definitions() -> List(llm.ToolDefinition) {
   ]
 }
 
-/// Check if a skill review should be spawned based on accumulated tool calls.
-/// Returns the new tool call count (0 if review spawned, count + tool_calls otherwise).
+/// Check if a skill review should be spawned based on accumulated iterations.
+/// Caller passes `new_iterations = 1` per turn with tool use, 0 otherwise —
+/// matching Hermes's one-increment-per-LLM-iteration semantics. Returns the
+/// new running count (0 if review spawned, otherwise count + new_iterations).
 /// If skill_review_interval is 0, reviews are disabled.
 pub fn maybe_spawn_skill_review(
   skill_review_interval: Int,
@@ -314,16 +316,16 @@ pub fn maybe_spawn_skill_review(
   channel_id: String,
   discord_token: String,
   conversation_history: List(llm.Message),
-  tool_call_count: Int,
-  new_tool_calls: Int,
+  iteration_count: Int,
+  new_iterations: Int,
   paths: xdg.Paths,
   monitor_model: String,
   skills_dir: String,
 ) -> Int {
   case skill_review_interval {
-    0 -> tool_call_count + new_tool_calls
+    0 -> iteration_count + new_iterations
     interval -> {
-      let new_count = tool_call_count + new_tool_calls
+      let new_count = iteration_count + new_iterations
       case new_count >= interval {
         False -> new_count
         True -> {

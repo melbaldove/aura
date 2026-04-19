@@ -108,7 +108,7 @@ pub fn default_global() -> GlobalConfig {
       urgent_bypass: False,
     ),
     vision: VisionConfig(prompt: ""),
-    memory: MemoryConfig(review_interval: 10, notify_on_review: True, skill_review_interval: 30),
+    memory: MemoryConfig(review_interval: 10, notify_on_review: True, skill_review_interval: 10),
     acp_global_max_concurrent: 0,
     acp_server_url: "",
     acp_agent_name: "claude-code",
