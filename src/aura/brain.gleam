@@ -3,6 +3,10 @@ import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
 import aura/brain_tools
 import aura/browser
+import aura/clients/browser_runner.{type BrowserRunner}
+import aura/clients/discord_client.{type DiscordClient}
+import aura/clients/llm_client.{type LLMClient}
+import aura/clients/skill_runner.{type SkillRunner}
 import aura/compressor
 import aura/config
 import aura/conversation
@@ -119,6 +123,10 @@ pub type BrainConfig {
     validation_rules: List(validator.Rule),
     db_subject: process.Subject(db.DbMessage),
     acp_subject: process.Subject(flare_manager.FlareMsg),
+    discord: DiscordClient,
+    llm: LLMClient,
+    skill_runner: SkillRunner,
+    browser_runner: BrowserRunner,
   )
 }
 
@@ -155,6 +163,10 @@ pub type BrainState {
     shell_patterns: shell.CompiledPatterns,
     acp_progress_msgs: dict.Dict(String, #(String, String)),
     // session_name -> #(channel_id, message_id)
+    discord: DiscordClient,
+    llm_client: LLMClient,
+    skill_runner: SkillRunner,
+    browser_runner: BrowserRunner,
   )
 }
 
@@ -305,6 +317,10 @@ pub fn start(
       pending_shell_approvals: dict.new(),
       shell_patterns: shell.compile_patterns(),
       acp_progress_msgs: dict.new(),
+      discord: brain_config.discord,
+      llm_client: brain_config.llm,
+      skill_runner: brain_config.skill_runner,
+      browser_runner: brain_config.browser_runner,
     )
 
   actor.new_with_initialiser(10_000, fn(self_subject) {
@@ -340,7 +356,7 @@ fn handle_message(
             Error(_) -> {
               // Look up parent channel from Discord — is this a thread?
               case
-                rest.get_channel_parent(state.discord_token, msg.channel_id)
+                state.discord.get_channel_parent(msg.channel_id)
               {
                 Ok("") -> {
                   logging.log(logging.Info, "[brain] Route: #aura")
@@ -389,11 +405,9 @@ fn handle_message(
           Error(reason) -> {
             logging.log(logging.Error, "[brain] CRASH in handle_with_llm: " <> reason)
             let _ =
-              rest.send_message(
-                state.discord_token,
+              state.discord.send_message(
                 msg.channel_id,
                 "Sorry, I crashed while processing your message. Check the logs.",
-                [],
               )
             Nil
           }
@@ -416,7 +430,7 @@ fn handle_message(
           let channel = resolve_finding_channel(state, finding)
           process.spawn_unlinked(fn() {
             send_discord_response(
-              state.discord_token,
+              state.discord,
               channel,
               "**URGENT** [" <> finding.source <> "] " <> finding.summary,
             )
@@ -447,7 +461,7 @@ fn handle_message(
             }
             _ -> {
               process.spawn_unlinked(fn() {
-                send_discord_response(state.discord_token, channel, digest)
+                send_discord_response(state.discord, channel, digest)
               })
               Nil
             }
@@ -462,7 +476,7 @@ fn handle_message(
           let msg =
             "Aura is online. No domains configured yet. Tell me about your first project and I'll set one up."
           process.spawn_unlinked(fn() {
-            send_discord_response(state.discord_token, channel_id, msg)
+            send_discord_response(state.discord, channel_id, msg)
           })
           actor.continue(BrainState(..state, aura_channel_id: channel_id))
         }
@@ -704,8 +718,7 @@ fn handle_message(
           process.send(old.reply_to, brain_tools.Expired)
           process.spawn_unlinked(fn() {
             let _ =
-              rest.edit_message(
-                state.discord_token,
+              state.discord.edit_message(
                 old.channel_id,
                 old.message_id,
                 "~~Superseded~~",
@@ -730,8 +743,7 @@ fn handle_message(
           process.send(old.reply_to, brain_tools.Expired)
           process.spawn_unlinked(fn() {
             let _ =
-              rest.edit_message(
-                state.discord_token,
+              state.discord.edit_message(
                 old.channel_id,
                 old.message_id,
                 "~~Superseded~~",
@@ -765,8 +777,7 @@ fn handle_proposal_interaction(
       process.send(proposal.reply_to, brain_tools.Expired)
       process.spawn_unlinked(fn() {
         let _ =
-          rest.edit_message(
-            state.discord_token,
+          state.discord.edit_message(
             proposal.channel_id,
             proposal.message_id,
             "**Expired** -- proposal timed out after 15 minutes.",
@@ -791,8 +802,7 @@ fn handle_proposal_interaction(
               process.send(proposal.reply_to, brain_tools.Approved)
               process.spawn_unlinked(fn() {
                 let _ =
-                  rest.edit_message(
-                    state.discord_token,
+                  state.discord.edit_message(
                     proposal.channel_id,
                     proposal.message_id,
                     "**Approved** -- wrote `" <> proposal.path <> "`",
@@ -804,8 +814,7 @@ fn handle_proposal_interaction(
               process.send(proposal.reply_to, brain_tools.Rejected)
               process.spawn_unlinked(fn() {
                 let _ =
-                  rest.edit_message(
-                    state.discord_token,
+                  state.discord.edit_message(
                     proposal.channel_id,
                     proposal.message_id,
                     "**Failed** -- " <> e,
@@ -820,8 +829,7 @@ fn handle_proposal_interaction(
           process.send(proposal.reply_to, brain_tools.Rejected)
           process.spawn_unlinked(fn() {
             let _ =
-              rest.edit_message(
-                state.discord_token,
+              state.discord.edit_message(
                 proposal.channel_id,
                 proposal.message_id,
                 "**Rejected**",
@@ -849,8 +857,7 @@ fn handle_shell_interaction(
       process.send(approval.reply_to, brain_tools.Expired)
       process.spawn_unlinked(fn() {
         let _ =
-          rest.edit_message(
-            state.discord_token,
+          state.discord.edit_message(
             approval.channel_id,
             approval.message_id,
             "**Expired** -- approval timed out after 15 minutes.",
@@ -867,8 +874,7 @@ fn handle_shell_interaction(
       process.send(approval.reply_to, brain_tools.Approved)
       process.spawn_unlinked(fn() {
         let _ =
-          rest.edit_message(
-            state.discord_token,
+          state.discord.edit_message(
             approval.channel_id,
             approval.message_id,
             ":white_check_mark: **Approved** -- `" <> approval.command <> "`",
@@ -883,8 +889,7 @@ fn handle_shell_interaction(
       process.send(approval.reply_to, brain_tools.Rejected)
       process.spawn_unlinked(fn() {
         let _ =
-          rest.edit_message(
-            state.discord_token,
+          state.discord.edit_message(
             approval.channel_id,
             approval.message_id,
             ":x: **Rejected**",
@@ -914,7 +919,7 @@ fn handle_acp_event(
         <> "`"
       let channel = resolve_acp_channel(state, session_name, domain)
       process.spawn_unlinked(fn() {
-        send_discord_response(state.discord_token, channel, msg)
+        send_discord_response(state.discord, channel, msg)
       })
       // Clear progress message ID so next progress creates a new message
       let new_msgs = dict.delete(state.acp_progress_msgs, session_name)
@@ -977,7 +982,7 @@ fn handle_acp_event(
 
       let channel = resolve_acp_channel(state, session_name, domain)
       process.spawn_unlinked(fn() {
-        send_discord_response(state.discord_token, channel, msg)
+        send_discord_response(state.discord, channel, msg)
       })
       actor.continue(state)
     }
@@ -989,7 +994,7 @@ fn handle_acp_event(
           let msg =
             "**ACP Complete** [" <> outcome <> "] -- " <> report.anchor
           process.spawn_unlinked(fn() {
-            send_discord_response(state.discord_token, channel, msg)
+            send_discord_response(state.discord, channel, msg)
           })
           let new_msgs =
             dict.delete(state.acp_progress_msgs, session_name)
@@ -1061,7 +1066,7 @@ fn handle_acp_event(
       let msg = "**ACP Failed** -- " <> error
       let channel = resolve_acp_channel(state, session_name, domain)
       process.spawn_unlinked(fn() {
-        send_discord_response(state.discord_token, channel, msg)
+        send_discord_response(state.discord, channel, msg)
       })
       actor.continue(state)
     }
@@ -1169,7 +1174,7 @@ fn handle_acp_event(
 
       let msg = header <> "\n\n" <> body
       let channel = resolve_acp_channel(state, session_name, domain)
-      let token = state.discord_token
+      let discord = state.discord
 
       // Edit existing progress message or send new one
       let new_state = case dict.get(state.acp_progress_msgs, session_name) {
@@ -1179,7 +1184,7 @@ fn handle_acp_event(
               True -> string.slice(msg, 0, 1990) <> " ..."
               False -> msg
             }
-            case rest.edit_message(token, ch, mid, safe) {
+            case discord.edit_message(ch, mid, safe) {
               Ok(_) -> Nil
               Error(_) -> Nil
             }
@@ -1194,7 +1199,7 @@ fn handle_acp_event(
             True -> string.slice(msg, 0, 1990) <> " ..."
             False -> msg
           }
-          case rest.send_message(token, channel, safe, []) {
+          case discord.send_message(channel, safe) {
             Ok(message_id) ->
               BrainState(..state,
                 acp_progress_msgs: dict.insert(progress_msgs, sn, #(channel, message_id)),
@@ -1388,6 +1393,10 @@ fn build_llm_context(
       shell_patterns: state.shell_patterns,
       on_shell_approve: fn(_) { Nil },
       vision_fn: tool_vision_fn,
+      discord: state.discord,
+      llm_client: state.llm_client,
+      skill_runner: state.skill_runner,
+      browser_runner: state.browser_runner,
     )
 
   // Build roster summary
@@ -1430,7 +1439,7 @@ fn handle_handback(
   let system_msg =
     "[Flare reported back: \"" <> session_name <> "\"]\n\n" <> result_text
 
-  let typing_stop = start_typing_loop(state.discord_token, channel)
+  let typing_stop = start_typing_loop(state.discord, channel)
 
   let #(system_prompt, tool_ctx) = build_llm_context(state, channel, domain_name)
 
@@ -1485,7 +1494,7 @@ fn handle_handback(
       }
 
       let full = conversation.format_full_message(traces, response_text)
-      let _ = send_or_edit(state.discord_token, channel, msg_id, full)
+      let _ = send_or_edit(state.discord, channel, msg_id, full)
 
       case state.self_subject {
         Some(subj) -> {
@@ -1505,7 +1514,7 @@ fn handle_handback(
         <> session_name
         <> ")\n\n"
         <> result_text
-      send_discord_response(state.discord_token, channel, fallback_msg)
+      send_discord_response(state.discord, channel, fallback_msg)
     }
   }
 }
@@ -1519,19 +1528,22 @@ fn resolve_finding_channel(
 
 /// Spawn a process that sends typing indicators every 8 seconds.
 /// Returns the PID of the typing process. Kill it to stop.
-fn start_typing_loop(token: String, channel_id: String) -> process.Pid {
-  process.spawn_unlinked(fn() { typing_loop(token, channel_id) })
+fn start_typing_loop(
+  discord: DiscordClient,
+  channel_id: String,
+) -> process.Pid {
+  process.spawn_unlinked(fn() { typing_loop(discord, channel_id) })
 }
 
-fn typing_loop(token: String, channel_id: String) -> Nil {
-  let _ = rest.trigger_typing(token, channel_id)
+fn typing_loop(discord: DiscordClient, channel_id: String) -> Nil {
+  let _ = discord.trigger_typing(channel_id)
   process.sleep(8000)
-  typing_loop(token, channel_id)
+  typing_loop(discord, channel_id)
 }
 
 /// Send a new message or edit an existing one. Returns the message ID.
 fn send_or_edit(
-  token: String,
+  discord: DiscordClient,
   channel_id: String,
   msg_id: String,
   content: String,
@@ -1543,13 +1555,13 @@ fn send_or_edit(
   }
   case msg_id {
     "" -> {
-      case rest.send_message(token, channel_id, safe_content, []) {
+      case discord.send_message(channel_id, safe_content) {
         Ok(id) -> id
         Error(_) -> ""
       }
     }
     existing -> {
-      let _ = rest.edit_message(token, channel_id, existing, safe_content)
+      let _ = discord.edit_message(channel_id, existing, safe_content)
       existing
     }
   }
@@ -1560,7 +1572,7 @@ fn stop_typing_loop(pid: process.Pid) -> Nil {
 }
 
 fn send_discord_response(
-  token: String,
+  discord: DiscordClient,
   channel_id: String,
   content: String,
 ) -> Nil {
@@ -1575,7 +1587,7 @@ fn send_discord_response(
     True -> string.slice(content, 0, 1990) <> " ..."
     False -> content
   }
-  case rest.send_message(token, channel_id, safe_content, []) {
+  case discord.send_message(channel_id, safe_content) {
     Ok(_) -> Nil
     Error(err) -> {
       logging.log(logging.Error, "[brain] Failed to send message: " <> err)
@@ -1606,8 +1618,7 @@ fn handle_with_llm(
       // Top-level domain message — create a thread
       let thread_name = string.slice(msg.content, 0, 50)
       case
-        rest.create_thread_from_message(
-          state.discord_token,
+        state.discord.create_thread_from_message(
           msg.channel_id,
           msg.message_id,
           thread_name,
@@ -1641,7 +1652,7 @@ fn handle_with_llm(
   }
 
   // Start a typing indicator loop that refreshes every 8 seconds
-  let typing_stop = start_typing_loop(state.discord_token, response_channel)
+  let typing_stop = start_typing_loop(state.discord, response_channel)
 
   let #(base_prompt, base_tool_ctx) = build_llm_context(state, response_channel, domain_name)
 
@@ -1751,7 +1762,7 @@ fn handle_with_llm(
   // Stop typing indicator before any final edits
   stop_typing_loop(typing_stop)
 
-  let token = state.discord_token
+  let discord = state.discord
   let channel_id = response_channel
 
   case result {
@@ -1793,7 +1804,7 @@ fn handle_with_llm(
       }
 
       let full = conversation.format_full_message(traces, response_text)
-      let _ = send_or_edit(token, channel_id, msg_id, full)
+      let _ = send_or_edit(discord, channel_id, msg_id, full)
 
       // Update in-memory cache (async via actor mailbox — not blocking)
       case brain_subject_opt {
@@ -1885,11 +1896,9 @@ fn handle_with_llm(
     Error(err) -> {
       logging.log(logging.Error, "[brain] Error: " <> err)
       let _ =
-        rest.send_message(
-          token,
+        discord.send_message(
           channel_id,
           "Sorry, I encountered an error.",
-          [],
         )
       Nil
     }
@@ -2005,7 +2014,7 @@ fn tool_loop_progressive(
       let self_pid = process.self()
       let _ =
         process.spawn_unlinked(fn() {
-          llm.chat_streaming_with_tools(
+          state.llm_client.stream_with_tools(
             state.llm_config,
             messages,
             state.built_in_tools,
@@ -2016,7 +2025,7 @@ fn tool_loop_progressive(
       // Collect the streaming response (content + tool calls)
       case
         collect_stream_response(
-          state.discord_token,
+          state.discord,
           channel_id,
           message_id,
           traces,
@@ -2098,7 +2107,7 @@ fn tool_loop_progressive(
                   // just created with its narrative text.
                   let _ =
                     send_or_edit(
-                      state.discord_token,
+                      state.discord,
                       channel_id,
                       msg_id,
                       finalized,
@@ -2109,7 +2118,7 @@ fn tool_loop_progressive(
                   let progress_text = traces_text <> "\n\n*Thinking...*"
                   let mid =
                     send_or_edit(
-                      state.discord_token,
+                      state.discord,
                       channel_id,
                       msg_id,
                       progress_text,
@@ -2219,14 +2228,14 @@ fn log_stream_summary(
 /// Collect a streaming LLM response, progressively editing Discord.
 /// Returns (content, tool_calls_json, message_id, prompt_tokens).
 fn collect_stream_response(
-  token: String,
+  discord: DiscordClient,
   channel_id: String,
   message_id: String,
   traces: List(conversation.ToolTrace),
   timeout_ms: Int,
 ) -> Result(#(String, String, String, Int), String) {
   collect_stream_loop(
-    token,
+    discord,
     channel_id,
     message_id,
     traces,
@@ -2238,7 +2247,7 @@ fn collect_stream_response(
 }
 
 fn collect_stream_loop(
-  token: String,
+  discord: DiscordClient,
   channel_id: String,
   msg_id: String,
   traces: List(conversation.ToolTrace),
@@ -2268,7 +2277,7 @@ fn collect_stream_loop(
               let display =
                 conversation.format_full_message(traces, new_acc <> " ...")
               #(
-                send_or_edit(token, channel_id, msg_id, display),
+                send_or_edit(discord, channel_id, msg_id, display),
                 string.length(new_acc),
               )
             }
@@ -2279,7 +2288,7 @@ fn collect_stream_loop(
             |> maybe_heartbeat(string.length(new_acc))
           // Data received — reset idle timeout to 120s
           collect_stream_loop(
-            token,
+            discord,
             channel_id,
             new_msg_id,
             traces,
@@ -2295,7 +2304,7 @@ fn collect_stream_loop(
             |> maybe_heartbeat(string.length(accumulated))
           // GLM-5.1 thinking — stream is alive, reset idle timeout
           collect_stream_loop(
-            token,
+            discord,
             channel_id,
             msg_id,
             traces,
@@ -2314,7 +2323,7 @@ fn collect_stream_loop(
           {
             True -> {
               let display = conversation.format_full_message(traces, content)
-              send_or_edit(token, channel_id, msg_id, display)
+              send_or_edit(discord, channel_id, msg_id, display)
             }
             False -> msg_id
           }
@@ -2335,7 +2344,7 @@ fn collect_stream_loop(
           // timeout. Still run the heartbeat so silent periods are visible.
           let new_stats = maybe_heartbeat(stats, string.length(accumulated))
           collect_stream_loop(
-            token,
+            discord,
             channel_id,
             msg_id,
             traces,
@@ -2647,6 +2656,7 @@ fn describe_image(
       image_url: image_url,
     ),
   ]
+  // TODO(Task 16): route vision through LLMClient when its chat field is extended
   llm.chat_with_options(llm_config, messages, None)
 }
 

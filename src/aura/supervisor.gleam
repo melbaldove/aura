@@ -1,6 +1,10 @@
 import aura/acp/flare_manager
 import aura/acp/transport
 import aura/brain
+import aura/clients/browser_runner
+import aura/clients/discord_client
+import aura/clients/llm_client
+import aura/clients/skill_runner
 import aura/config
 import aura/ctl
 import aura/db
@@ -168,6 +172,10 @@ pub fn start(
   logging.log(logging.Info, "[supervisor] Flare manager started")
 
   // 6. Start brain (with flare_subject)
+  let discord_client_val = discord_client.production(global_config.discord.token)
+  let llm_client_val = llm_client.production()
+  let skill_runner_val = skill_runner.production()
+  let browser_runner_val = browser_runner.production()
   use brain_subject <- result.try(
     brain.start(brain.BrainConfig(
       global: global_config,
@@ -179,6 +187,10 @@ pub fn start(
       validation_rules: validation_rules,
       db_subject: db_subject,
       acp_subject: flare_subject,
+      discord: discord_client_val,
+      llm: llm_client_val,
+      skill_runner: skill_runner_val,
+      browser_runner: browser_runner_val,
     )),
   )
   logging.log(logging.Info, "[supervisor] Brain started")

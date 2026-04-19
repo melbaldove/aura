@@ -2,6 +2,10 @@ import aura/acp/flare_manager
 import aura/acp/provider
 import aura/acp/types as acp_types
 import aura/browser
+import aura/clients/browser_runner.{type BrowserRunner}
+import aura/clients/discord_client.{type DiscordClient}
+import aura/clients/llm_client.{type LLMClient}
+import aura/clients/skill_runner.{type SkillRunner}
 import aura/db
 import aura/time
 import aura/discord/rest
@@ -98,6 +102,10 @@ pub type ToolContext {
     shell_patterns: shell.CompiledPatterns,
     on_shell_approve: fn(PendingShellApproval) -> Nil,
     vision_fn: fn(String, String) -> Result(String, String),
+    discord: DiscordClient,
+    llm_client: LLMClient,
+    skill_runner: SkillRunner,
+    browser_runner: BrowserRunner,
   )
 }
 
@@ -227,7 +235,12 @@ fn execute_tool_dispatch(
         Error(e) -> TextResult(e)
         Ok(skill_name) -> {
           case
-            tools.run_skill(ctx.skill_infos, skill_name, get_arg(args, "args"))
+            tools.run_skill(
+              ctx.skill_runner,
+              ctx.skill_infos,
+              skill_name,
+              get_arg(args, "args"),
+            )
           {
             Ok(output) -> TextResult(output)
             Error(e) -> TextResult("Error: " <> e)
@@ -767,8 +780,9 @@ fn execute_tool_dispatch(
                       session: session,
                       cdp_url: cdp_url,
                       timeout_ms: timeout_ms,
-                      run_fn: browser.run_ffi,
+                      run_fn: ctx.browser_runner.run,
                       vision_fn: ctx.vision_fn,
+                      url_has_secret_fn: ctx.browser_runner.url_has_secret,
                     )
                   TextResult(browser.execute(action, args, exec_ctx))
                 }
@@ -789,12 +803,10 @@ fn execute_tool_dispatch(
             n -> n
           }
           case
-            rest.send_message_with_attachment(
-              ctx.discord_token,
+            ctx.discord.send_message_with_attachment(
               ctx.channel_id,
               content,
               resolved,
-              filename,
             )
           {
             Ok(_) -> TextResult("Attachment sent: " <> filename)
@@ -832,7 +844,12 @@ fn execute_tool_dispatch(
         True -> {
           logging.log(logging.Info, "[brain] Redirecting unknown tool '" <> name <> "' to run_skill (matches skill name)")
           case
-            tools.run_skill(ctx.skill_infos, name, get_arg(args, "args"))
+            tools.run_skill(
+              ctx.skill_runner,
+              ctx.skill_infos,
+              name,
+              get_arg(args, "args"),
+            )
           {
             Ok(output) -> TextResult(output)
             Error(e) -> TextResult("Error: " <> e)

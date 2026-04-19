@@ -1,3 +1,4 @@
+import aura/clients/skill_runner.{type SkillRunner}
 import aura/env
 import aura/skill
 import aura/tier
@@ -97,6 +98,7 @@ pub fn list_directory(path: String, base_dir: String) -> Result(String, String) 
 /// Invoke a skill by `name` with space-separated `args_str`, with a 30 s
 /// timeout. Returns stdout on exit code 0, or an error describing the failure.
 pub fn run_skill(
+  runner: SkillRunner,
   skills: List(skill.SkillInfo),
   name: String,
   args_str: String,
@@ -109,7 +111,7 @@ pub fn run_skill(
         Error(_) -> split_shell_args(args_str)
       }
       logging.log(logging.Info, "[tools] run_skill: " <> name <> " " <> string.inspect(args))
-      case skill.invoke(skill_info, args, 30_000) {
+      case runner.invoke(skill_info, args, 30_000) {
         Ok(r) ->
           case r.exit_code {
             0 -> Ok(r.stdout)

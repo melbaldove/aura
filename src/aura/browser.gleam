@@ -166,6 +166,7 @@ pub type ExecContext {
     run_fn: fn(String, String, String, List(String), Int) ->
       Result(String, String),
     vision_fn: fn(String, String) -> Result(String, String),
+    url_has_secret_fn: fn(String) -> Bool,
   )
 }
 
@@ -198,7 +199,7 @@ fn dispatch_navigate(
   case get_arg(args, "url") {
     "" -> error_json("url is required for navigate")
     url ->
-      case url_has_secret(url), is_safe_url(url) {
+      case ctx.url_has_secret_fn(url), is_safe_url(url) {
         True, _ ->
           error_json(
             "Blocked: URL contains what appears to be an API key or token",

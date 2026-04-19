@@ -1,4 +1,5 @@
 import aura/acp/flare_manager
+import aura/clients/skill_runner
 import aura/config
 import aura/cron
 import aura/db
@@ -609,7 +610,7 @@ fn execute_schedule(
   on_finding: fn(notification.Finding) -> Nil,
 ) -> Nil {
   logging.log(logging.Info, "[scheduler] Executing schedule: " <> config.name)
-  case tools.run_skill(skills, config.skill, config.args) {
+  case tools.run_skill(skill_runner.production(), skills, config.skill, config.args) {
     Ok(output) -> {
       let urgency = classify_urgency(config, output)
       emit_findings(config, output, urgency, on_finding)

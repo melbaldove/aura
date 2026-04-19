@@ -6,6 +6,10 @@ fn no_vision(_image_url: String, _question: String) -> Result(String, String) {
   Ok("")
 }
 
+fn no_secret(_url: String) -> Bool {
+  False
+}
+
 fn test_ctx(
   run_fn: fn(String, String, String, List(String), Int) ->
     Result(String, String),
@@ -16,6 +20,7 @@ fn test_ctx(
     timeout_ms: 90_000,
     run_fn: run_fn,
     vision_fn: no_vision,
+    url_has_secret_fn: no_secret,
   )
 }
 
@@ -225,6 +230,7 @@ pub fn execute_navigate_rejects_private_url_test() {
         timeout_ms: 30_000,
         run_fn: fn(_, _, _, _, _) { Ok("{\"success\": true}") },
         vision_fn: no_vision,
+        url_has_secret_fn: browser.url_has_secret,
       ),
     )
   result
@@ -243,6 +249,7 @@ pub fn execute_navigate_rejects_secret_url_test() {
         timeout_ms: 30_000,
         run_fn: fn(_, _, _, _, _) { Ok("{}") },
         vision_fn: no_vision,
+        url_has_secret_fn: browser.url_has_secret,
       ),
     )
   result
@@ -263,6 +270,7 @@ pub fn execute_navigate_calls_run_fn_for_safe_url_test() {
           Ok("{\"success\": true, \"data\": {\"url\": \"https://example.com/\", \"title\": \"Example\"}}")
         },
         vision_fn: no_vision,
+        url_has_secret_fn: browser.url_has_secret,
       ),
     )
   result
@@ -285,6 +293,7 @@ pub fn execute_navigate_detects_auth_wall_test() {
           )
         },
         vision_fn: no_vision,
+        url_has_secret_fn: browser.url_has_secret,
       ),
     )
   result |> string.contains("AUTH_REQUIRED") |> should.be_true
