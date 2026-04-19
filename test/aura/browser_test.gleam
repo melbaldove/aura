@@ -334,3 +334,24 @@ pub fn execute_wait_with_seconds_test() {
   // 3 seconds → 3000 ms, sent to agent-browser's `wait <ms>`.
   result |> string.contains("\"args\":\"3000\"") |> should.be_true
 }
+
+pub fn execute_wait_requires_ref_or_seconds_test() {
+  let called = fn(_, _, _, _, _) {
+    Ok("should not be called")
+  }
+  let result =
+    browser.execute(
+      browser.Wait,
+      [],
+      browser.ExecContext(
+        session: "s",
+        cdp_url: "",
+        timeout_ms: 90_000,
+        run_fn: called,
+        vision_fn: no_vision,
+      ),
+    )
+  result
+  |> string.contains("wait requires 'ref' or 'seconds'")
+  |> should.be_true
+}
