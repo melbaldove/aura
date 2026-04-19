@@ -1,13 +1,8 @@
-//// Dependency-injected Discord REST client.
-////
-//// Production code constructs via `production(token)`, passing the result
-//// into places that previously called `rest.*` directly. Tests construct
-//// fake clients via `test/fakes/fake_discord.new()` (later tasks) which
-//// returns a compatible `DiscordClient` whose function fields record calls
-//// instead of hitting Discord.
+//// Dependency-injected Discord REST client. Production code routes all
+//// Discord calls through this; tests inject fakes.
 
 import aura/discord/rest
-import gleam/string
+import aura/path_utils
 
 pub type DiscordClient {
   DiscordClient(
@@ -41,15 +36,7 @@ pub fn production(token: String) -> DiscordClient {
       rest.get_channel_parent(token, channel_id)
     },
     send_message_with_attachment: fn(channel_id, content, file_path) {
-      // Derive filename from path — take the last path component.
-      let filename = case string.split(file_path, "/") {
-        [] -> file_path
-        parts ->
-          case list_last(parts) {
-            "" -> file_path
-            name -> name
-          }
-      }
+      let filename = path_utils.basename_or(file_path, file_path)
       rest.send_message_with_attachment(
         token,
         channel_id,
@@ -62,12 +49,4 @@ pub fn production(token: String) -> DiscordClient {
       rest.create_thread_from_message(token, channel_id, msg_id, name)
     },
   )
-}
-
-fn list_last(items: List(String)) -> String {
-  case items {
-    [] -> ""
-    [x] -> x
-    [_, ..rest] -> list_last(rest)
-  }
 }

@@ -1,6 +1,5 @@
-//// Dependency-injected LLM client. Wraps streaming and non-streaming chat
-//// calls from `aura/llm`. Tests substitute a fake client via
-//// `test/fakes/fake_llm.new()` (later tasks).
+//// Dependency-injected LLM client. Production code routes all LLM calls
+//// through this; tests inject fakes.
 
 import aura/llm
 import gleam/erlang/process.{type Pid}

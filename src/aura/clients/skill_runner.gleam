@@ -1,6 +1,5 @@
-//// Dependency-injected skill runner. Wraps `skill.invoke` so tests can
-//// substitute scripted skill results via `test/fakes/fake_skill_runner.new()`
-//// (later tasks).
+//// Dependency-injected skill runner. Production wraps `skill.invoke`;
+//// tests inject scripted fakes.
 
 import aura/skill
 

@@ -1,6 +1,5 @@
-//// Dependency-injected browser runner. Wraps `browser.run_ffi` (agent-browser
-//// subprocess) and `browser.url_has_secret` (URL sanity check). Tests
-//// substitute via `test/fakes/fake_browser.new()` (later tasks).
+//// Dependency-injected browser runner. Production wraps `browser.run_ffi`
+//// and `browser.url_has_secret`; tests inject scripted fakes.
 
 import aura/browser
 

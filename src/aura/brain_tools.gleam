@@ -8,6 +8,7 @@ import aura/discord/rest
 import aura/discord/types as discord_types
 import aura/llm
 import aura/memory
+import aura/path_utils
 import aura/scheduler
 import aura/shell
 import aura/skill
@@ -784,7 +785,7 @@ fn execute_tool_dispatch(
           let resolved = tools.resolve_path(path, ctx.base_dir)
           let content = get_arg(args, "content")
           let filename = case get_arg(args, "filename") {
-            "" -> basename_or(resolved, "attachment")
+            "" -> path_utils.basename_or(resolved, "attachment")
             n -> n
           }
           case
@@ -1105,15 +1106,6 @@ pub fn format_tool_args(args: List(#(String, String))) -> String {
   |> string.join(", ")
 }
 
-/// Extract the last path segment. Returns `fallback` if the last segment
-/// is empty (trailing slash or empty input).
-fn basename_or(path: String, fallback: String) -> String {
-  case list.last(string.split(path, "/")) {
-    Ok("") -> fallback
-    Ok(name) -> name
-    Error(_) -> fallback
-  }
-}
 
 /// Get an argument value by key, returning empty string if not found.
 pub fn get_arg(args: List(#(String, String)), key: String) -> String {
