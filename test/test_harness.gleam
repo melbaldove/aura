@@ -26,6 +26,7 @@ import aura/brain
 import aura/clients/browser_runner
 import aura/config
 import aura/db
+import aura/skill
 import aura/xdg
 import fakes/fake_discord.{type FakeDiscord}
 import fakes/fake_llm.{type FakeLLM}
@@ -134,6 +135,13 @@ pub fn fresh_system() -> TestSystem {
       brain_context: 128_000,
     )
 
+  // Seed a default jira skill so tests that call `run_skill` with name="jira"
+  // can find it in skill_infos. The path is never accessed because the
+  // fake_skill_runner intercepts the invocation — this is registry metadata only.
+  let default_skill_infos = [
+    skill.SkillInfo(name: "jira", description: "test", path: "/tmp/nonexistent-jira"),
+  ]
+
   let brain_config =
     brain.BrainConfig(
       global: global,
@@ -141,7 +149,7 @@ pub fn fresh_system() -> TestSystem {
       soul: "You are Aura, under test.",
       domains: [],
       domain_configs: [],
-      skill_infos: [],
+      skill_infos: default_skill_infos,
       validation_rules: [],
       db_subject: db_subject,
       acp_subject: flare_subject,
@@ -241,6 +249,12 @@ pub fn fresh_system_with_domain(
 
   let domain_info = brain.DomainInfo(name: domain_name, channel_id: channel_id)
 
+  // Seed the same default jira skill as fresh_system/0 so domain-scoped
+  // tests can also exercise run_skill without extra setup steps.
+  let default_skill_infos = [
+    skill.SkillInfo(name: "jira", description: "test", path: "/tmp/nonexistent-jira"),
+  ]
+
   let brain_config =
     brain.BrainConfig(
       global: global,
@@ -248,7 +262,7 @@ pub fn fresh_system_with_domain(
       soul: "You are Aura, under test.",
       domains: [domain_info],
       domain_configs: [],
-      skill_infos: [],
+      skill_infos: default_skill_infos,
       validation_rules: [],
       db_subject: db_subject,
       acp_subject: flare_subject,
