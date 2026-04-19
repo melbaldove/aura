@@ -5,7 +5,7 @@ Feature: run_skill tool — stdout surfaces in final reply
   Scenario: jira skill stdout flows to Discord
     Given a fresh Aura system
     And skill "jira" will return stdout "PROJECT-123 updated"
-    And the LLM will call "run_skill" with "{\"name\": \"jira\", \"args\": \"update ticket\"}"
+    And the LLM will call run_skill with name "jira" and args "update ticket"
     And the LLM will respond with "Done: PROJECT-123 updated"
     When a user message "update jira" arrives in "aura-channel"
     Then a Discord message is sent to "aura-channel"

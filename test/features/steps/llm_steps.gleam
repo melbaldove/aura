@@ -24,6 +24,14 @@ pub fn register(reg: StepRegistry) -> StepRegistry {
     "the LLM will call {string} with {string}",
     given_llm_tool_call,
   )
+  // Workaround: dream_test's .feature parser mangles {string} captures
+  // that contain many backslash-escaped quotes. Specialized steps that
+  // take plain scalar values and build JSON server-side sidestep the
+  // issue. UPSTREAM_CANDIDATE: fix or document escape handling in dream_test.
+  |> steps.step(
+    "the LLM will call run_skill with name {string} and args {string}",
+    given_llm_run_skill_tool_call,
+  )
   |> steps.step("the LLM will fail with {string}", given_llm_error)
   |> steps.step("the LLM will reason indefinitely", given_llm_reasoning_forever)
   |> steps.step(
@@ -77,6 +85,23 @@ fn given_llm_tool_call(
     |> string.replace(each: "\\\"", with: "\"")
     |> string.replace(each: "\\\\", with: "\\")
   fake_llm.script_tool_call(sys.fake_llm, tool_name, args_json)
+  Ok(succeed())
+}
+
+fn given_llm_run_skill_tool_call(
+  ctx: StepContext,
+) -> Result(dream_types.AssertionResult, String) {
+  use name <- result_try(get_string(ctx.captures, 0))
+  use args <- result_try(get_string(ctx.captures, 1))
+  use system <- result_try(world.get(ctx.world, "system"))
+  let sys: TestSystem = system
+  let args_json =
+    "{\"name\":\""
+    <> name
+    <> "\",\"args\":\""
+    <> args
+    <> "\"}"
+  fake_llm.script_tool_call(sys.fake_llm, "run_skill", args_json)
   Ok(succeed())
 }
 
