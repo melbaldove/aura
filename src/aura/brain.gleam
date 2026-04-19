@@ -2073,19 +2073,18 @@ fn tool_loop_progressive(
                 })
               let new_traces = list.flatten([traces, list.reverse(rev_traces)])
               let tool_results = list.reverse(rev_results)
+              let traces_text = conversation.format_traces(new_traces)
 
               // If the model narrated text before these tool calls, finalize
-              // the current Discord message with that text + traces so it
-              // stays visible, and start a fresh message for the next
-              // iteration. Otherwise keep editing in place.
-              let #(next_traces, next_message_id) = case
-                string.length(response.content) > 0
-              {
+              // the current Discord message with that text + its traces
+              // (chronological: narrative → tools it then ran), and start a
+              // fresh message for the next iteration. Pure tool-call
+              // iterations keep editing the same message in place.
+              let split_next_iteration = !string.is_empty(response.content)
+              let #(next_traces, next_message_id) = case split_next_iteration {
                 True -> {
-                  let finalized =
-                    response.content
-                    <> "\n\n"
-                    <> conversation.format_traces(new_traces)
+                  let finalized = response.content <> "\n\n" <> traces_text
+                  // Discard the returned id — next iteration will POST fresh.
                   let _ =
                     send_or_edit(
                       state.discord_token,
@@ -2096,9 +2095,7 @@ fn tool_loop_progressive(
                   #([], "")
                 }
                 False -> {
-                  let progress_text =
-                    conversation.format_traces(new_traces)
-                    <> "\n\n*Thinking...*"
+                  let progress_text = traces_text <> "\n\n*Thinking...*"
                   let mid =
                     send_or_edit(
                       state.discord_token,
