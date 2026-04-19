@@ -19,6 +19,7 @@ pub type Action {
   Back
   Vision
   Console
+  Wait
 }
 
 /// Resolve the agent-browser session name from an optional LLM-provided
@@ -147,6 +148,7 @@ pub fn parse_action(s: String) -> Result(Action, String) {
     "back" -> Ok(Back)
     "vision" -> Ok(Vision)
     "console" -> Ok(Console)
+    "wait" -> Ok(Wait)
     "" -> Error("action is required")
     other -> Error("unknown action: " <> other)
   }
@@ -182,6 +184,7 @@ pub fn execute(
     Back -> call_ffi("back", [], ctx)
     Vision -> dispatch_vision(args, ctx)
     Console -> dispatch_console(args, ctx)
+    Wait -> error_json("wait dispatcher not yet implemented")
   }
 }
 

@@ -281,3 +281,7 @@ pub fn execute_navigate_detects_auth_wall_test() {
 pub fn parse_action_console_test() {
   browser.parse_action("console") |> should.equal(Ok(browser.Console))
 }
+
+pub fn parse_action_wait_test() {
+  browser.parse_action("wait") |> should.equal(Ok(browser.Wait))
+}
