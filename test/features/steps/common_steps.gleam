@@ -145,7 +145,16 @@ fn then_discord_contains(
   use expected <- result_try(get_string(ctx.captures, 1))
   use system <- result_try(world.get(ctx.world, "system"))
   let sys: TestSystem = system
-  let content = fake_discord.assert_sent_to(sys.fake_discord, channel_id, 2000)
+  // Poll for the latest content (Sent or Edited) that contains the expected
+  // string. This handles both plain text replies and multi-tool turns where
+  // the final answer lands in a progressive edit rather than a fresh send.
+  let content =
+    fake_discord.assert_latest_contains(
+      sys.fake_discord,
+      channel_id,
+      expected,
+      3000,
+    )
   content
   |> should
   |> contain_string(expected)

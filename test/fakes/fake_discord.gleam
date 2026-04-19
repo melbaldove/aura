@@ -4,6 +4,7 @@ import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/otp/actor
+import gleam/string
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -66,6 +67,10 @@ type Msg {
   GetAll(reply: process.Subject(List(DiscordEvent)))
   Seed(channel: String, parent: String)
   GetParent(channel_id: String, reply: process.Subject(Result(String, String)))
+  GetLatestContentFor(
+    channel_id: String,
+    reply: process.Subject(Result(String, Nil)),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +178,23 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       let result =
         Ok(dict.get(state.parents, channel_id) |> unwrap_or(""))
       process.send(reply, result)
+      actor.continue(state)
+    }
+
+    GetLatestContentFor(channel_id:, reply:) -> {
+      // Walk events in reverse-chronological order (state.events is newest first).
+      // Return the content of the latest Edited or Sent event for this channel.
+      let latest =
+        list.find_map(state.events, fn(event) {
+          case event {
+            Edited(channel_id: cid, new_content: c, ..) if cid == channel_id ->
+              Ok(c)
+            Sent(channel_id: cid, content: c, ..) if cid == channel_id ->
+              Ok(c)
+            _ -> Error(Nil)
+          }
+        })
+      process.send(reply, latest)
       actor.continue(state)
     }
   }
@@ -295,6 +317,63 @@ fn do_assert_sent_to(
           // the current process for 10ms then retry.
           let _ = process.sleep(10)
           do_assert_sent_to(fake, channel_id, timeout_ms, elapsed + 10)
+        }
+      }
+    }
+  }
+}
+
+/// Poll (every 10ms) until a message containing `expected` has been sent OR
+/// edited to `channel_id`, then return its content. This handles the
+/// progressive-edit pattern where the brain edits in-place rather than
+/// sending new messages. Panics with a clear message on timeout.
+pub fn assert_latest_contains(
+  fake: FakeDiscord,
+  channel_id: String,
+  expected: String,
+  timeout_ms: Int,
+) -> String {
+  do_assert_latest_contains(fake, channel_id, expected, timeout_ms, 0)
+}
+
+fn do_assert_latest_contains(
+  fake: FakeDiscord,
+  channel_id: String,
+  expected: String,
+  timeout_ms: Int,
+  elapsed: Int,
+) -> String {
+  let latest =
+    process.call(fake.subject, 1000, fn(reply) {
+      GetLatestContentFor(channel_id:, reply:)
+    })
+  let found = case latest {
+    Ok(content) -> string.contains(content, expected)
+    Error(Nil) -> False
+  }
+  case found {
+    True -> {
+      let assert Ok(content) = latest
+      content
+    }
+    False -> {
+      case elapsed >= timeout_ms {
+        True ->
+          panic as {
+            "assert_latest_contains: channel "
+            <> channel_id
+            <> " never had content containing: "
+            <> expected
+          }
+        False -> {
+          let _ = process.sleep(10)
+          do_assert_latest_contains(
+            fake,
+            channel_id,
+            expected,
+            timeout_ms,
+            elapsed + 10,
+          )
         }
       }
     }

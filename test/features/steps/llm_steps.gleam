@@ -58,9 +58,16 @@ fn given_llm_tool_call(
   ctx: StepContext,
 ) -> Result(dream_types.AssertionResult, String) {
   use tool_name <- result_try(get_string(ctx.captures, 0))
-  use args_json <- result_try(get_string(ctx.captures, 1))
+  use args_json_raw <- result_try(get_string(ctx.captures, 1))
   use system <- result_try(world.get(ctx.world, "system"))
   let sys: TestSystem = system
+  // dream_test's {string} capture strips outer quotes but does NOT unescape
+  // backslash sequences. Gherkin uses \" inside quoted strings, so we must
+  // unescape \\" -> " and \\\\ -> \\ before passing to script_tool_call.
+  let args_json =
+    args_json_raw
+    |> string.replace(each: "\\\"", with: "\"")
+    |> string.replace(each: "\\\\", with: "\\")
   fake_llm.script_tool_call(sys.fake_llm, tool_name, args_json)
   Ok(succeed())
 }
