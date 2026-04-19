@@ -1352,16 +1352,13 @@ fn build_llm_context(
   let tool_vision_fn = fn(image_url: String, question: String) -> Result(String, String) {
     case vision.is_enabled(vision_config) {
       False -> Error("vision not configured (set [models] vision in config.toml)")
-      True ->
-        case models.build_llm_config(vision_config.model_spec) {
-          Error(e) -> Error(e)
-          Ok(llm_cfg) ->
-            llm.chat_with_options(
-              llm_cfg,
-              [llm.UserMessageWithImage(content: question, image_url: image_url)],
-              None,
-            )
+      True -> {
+        let cfg = case question {
+          "" -> vision_config
+          q -> vision.ResolvedVisionConfig(..vision_config, prompt: q)
         }
+        describe_image(cfg, image_url)
+      }
     }
   }
 

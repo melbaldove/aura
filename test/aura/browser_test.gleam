@@ -1,7 +1,10 @@
-// test/aura/browser_test.gleam
 import aura/browser
 import gleam/string
 import gleeunit/should
+
+fn no_vision(_image_url: String, _question: String) -> Result(String, String) {
+  Ok("")
+}
 
 pub fn browser_module_compiles_test() {
   browser.Navigate |> should.equal(browser.Navigate)
@@ -208,7 +211,7 @@ pub fn execute_navigate_rejects_private_url_test() {
         cdp_url: "",
         timeout_ms: 30_000,
         run_fn: fn(_, _, _, _, _) { Ok("{\"success\": true}") },
-        vision_fn: fn(_, _) { Ok("") },
+        vision_fn: no_vision,
       ),
     )
   result
@@ -226,7 +229,7 @@ pub fn execute_navigate_rejects_secret_url_test() {
         cdp_url: "",
         timeout_ms: 30_000,
         run_fn: fn(_, _, _, _, _) { Ok("{}") },
-        vision_fn: fn(_, _) { Ok("") },
+        vision_fn: no_vision,
       ),
     )
   result
@@ -246,7 +249,7 @@ pub fn execute_navigate_calls_run_fn_for_safe_url_test() {
         run_fn: fn(_session, _cdp, _action, _args, _timeout) {
           Ok("{\"success\": true, \"data\": {\"url\": \"https://example.com/\", \"title\": \"Example\"}}")
         },
-        vision_fn: fn(_, _) { Ok("") },
+        vision_fn: no_vision,
       ),
     )
   result
@@ -268,7 +271,7 @@ pub fn execute_navigate_detects_auth_wall_test() {
             "{\"success\":true,\"data\":{\"url\":\"https://login.jw.org/signin-oidc\",\"title\":\"Sign In\"}}",
           )
         },
-        vision_fn: fn(_, _) { Ok("") },
+        vision_fn: no_vision,
       ),
     )
   result |> string.contains("AUTH_REQUIRED") |> should.be_true

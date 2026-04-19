@@ -1,3 +1,5 @@
+import aura/discord/rest
+import aura/vision
 import gleam/bit_array
 import gleam/dynamic/decode
 import gleam/int
@@ -199,7 +201,7 @@ fn dispatch_navigate(
           error_json("Blocked: URL targets a private or internal address")
         False, True -> {
           let raw = call_ffi("open", [url], ctx)
-          maybe_intercept_auth_wall(raw)
+          intercept_auth_wall(raw)
         }
       }
   }
@@ -208,7 +210,7 @@ fn dispatch_navigate(
 /// If the navigate response lands on a recognizable login/auth page,
 /// replace it with an AUTH_REQUIRED signal so the LLM short-circuits.
 /// Otherwise return the raw response unchanged.
-fn maybe_intercept_auth_wall(raw_json: String) -> String {
+fn intercept_auth_wall(raw_json: String) -> String {
   let decoder = {
     use url <- decode.optional_field("url", "", decode.string)
     use title <- decode.optional_field("title", "", decode.string)
@@ -222,7 +224,7 @@ fn maybe_intercept_auth_wall(raw_json: String) -> String {
           json.to_string(
             json.object([
               #("success", json.bool(False)),
-              #("error", json.string("AUTH_REQUIRED: " <> url)),
+              #("error", json.string("AUTH_REQUIRED")),
               #("needs_auth", json.bool(True)),
               #("url", json.string(url)),
             ]),
@@ -238,7 +240,7 @@ fn dispatch_vision(
   ctx: ExecContext,
 ) -> String {
   let question = case get_arg(args, "question") {
-    "" -> "Describe this page concisely. Focus on text content, numbers, structure, and any actionable information."
+    "" -> vision.default_vision_prompt
     q -> q
   }
   let raw = call_ffi("screenshot", [], ctx)
@@ -280,30 +282,20 @@ fn dispatch_console(
 }
 
 /// Read a local image file and encode it as a base64 data URL suitable
-/// for OpenAI-compatible vision APIs.
+/// for OpenAI-compatible vision APIs. Unknown extensions default to
+/// image/png since screenshots are always PNG.
 fn read_as_data_url(path: String) -> Result(String, String) {
   case simplifile.read_bits(path) {
     Error(e) ->
       Error("Failed to read " <> path <> ": " <> simplifile.describe_error(e))
     Ok(bytes) -> {
-      let mime = mime_for_path(path)
+      let mime = case rest.content_type_for_filename(path) {
+        "application/octet-stream" -> "image/png"
+        m -> m
+      }
       let encoded = bit_array.base64_encode(bytes, True)
       Ok("data:" <> mime <> ";base64," <> encoded)
     }
-  }
-}
-
-fn mime_for_path(path: String) -> String {
-  let lower = string.lowercase(path)
-  let suffixes = [
-    #(".png", "image/png"),
-    #(".jpg", "image/jpeg"),
-    #(".jpeg", "image/jpeg"),
-    #(".webp", "image/webp"),
-  ]
-  case list.find(suffixes, fn(pair) { string.ends_with(lower, pair.0) }) {
-    Ok(#(_, mime)) -> mime
-    Error(_) -> "image/png"
   }
 }
 

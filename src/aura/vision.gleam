@@ -9,7 +9,7 @@ pub type ResolvedVisionConfig {
   ResolvedVisionConfig(model_spec: String, prompt: String)
 }
 
-const default_vision_prompt = "Describe this image concisely. Focus on text content, numbers, structure, and any actionable information. Be specific about what you see."
+pub const default_vision_prompt = "Describe this image concisely. Focus on text content, numbers, structure, and any actionable information. Be specific about what you see."
 
 /// Resolve vision config: domain overrides global, built-in defaults as fallback.
 pub fn resolve_vision_config(
