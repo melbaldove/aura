@@ -1,5 +1,5 @@
 import aura/llm
-import dream_test/gherkin/steps.{type StepContext, type StepRegistry, get_string}
+import dream_test/gherkin/steps.{type StepContext, type StepRegistry, get_int, get_string}
 import dream_test/gherkin/world
 import dream_test/matchers.{contain_string, or_fail_with, should, succeed}
 import dream_test/types as dream_types  // AssertionResult used in handler return types
@@ -41,6 +41,10 @@ pub fn register(reg: StepRegistry) -> StepRegistry {
   |> steps.step(
     "the LLM last call messages contain {string}",
     then_llm_last_call_messages_contain,
+  )
+  |> steps.step(
+    "the LLM will stream {int} deltas of {int} characters each",
+    given_llm_stream_deltas,
   )
 }
 
@@ -104,6 +108,33 @@ fn given_vision_description(
   fake_llm.script_chat_text_response(sys.fake_llm, text)
   Ok(succeed())
 }
+
+/// Script `delta_count` Delta events, each of `char_count` repeated "a"
+/// characters, followed by a Complete carrying the full accumulated content.
+/// This drives enough streamed content to trigger multiple progressive edits
+/// in brain's `collect_stream_loop` (which fires every 150 chars).
+fn given_llm_stream_deltas(
+  ctx: StepContext,
+) -> Result(dream_types.AssertionResult, String) {
+  use delta_count <- result_try(get_int(ctx.captures, 0))
+  use char_count <- result_try(get_int(ctx.captures, 1))
+  use system <- result_try(world.get(ctx.world, "system"))
+  let sys: TestSystem = system
+  let delta_text = string.repeat("a", char_count)
+  let deltas = list.repeat(fake_llm.Delta(text: delta_text), delta_count)
+  let full_content = string.repeat(delta_text, delta_count)
+  let events =
+    list.append(deltas, [
+      fake_llm.Complete(
+        content: full_content,
+        tool_calls_json: "[]",
+        prompt_tokens: 0,
+      ),
+    ])
+  fake_llm.script(sys.fake_llm, events)
+  Ok(succeed())
+}
+
 
 /// Assert that any recorded `stream_with_tools` call carried a user
 /// message whose content contains the given substring. Proves vision

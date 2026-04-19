@@ -58,6 +58,10 @@ pub fn register(reg: StepRegistry) -> StepRegistry {
     "a tmp file at {string} containing {string}",
     given_tmp_file,
   )
+  |> steps.step(
+    "Discord received at least {int} edits to the same message",
+    then_discord_at_least_n_edits,
+  )
 }
 
 /// Convert a duration expressed as an integer plus a unit string to milliseconds.
@@ -202,6 +206,67 @@ fn given_tmp_file(
   use content <- result_try(get_string(ctx.captures, 1))
   let _ = simplifile.write(path, content)
   Ok(succeed())
+}
+
+/// Assert that at least `expected` Edited events were recorded for the same
+/// msg_id. Polls for up to 2000ms since the stream is processed asynchronously.
+fn then_discord_at_least_n_edits(
+  ctx: StepContext,
+) -> Result(dream_types.AssertionResult, String) {
+  use expected <- result_try(get_int(ctx.captures, 0))
+  use system <- result_try(world.get(ctx.world, "system"))
+  let sys: TestSystem = system
+  case poll_for_edit_count(sys.fake_discord, expected, 0, 2000) {
+    True -> Ok(succeed())
+    False -> {
+      let events = fake_discord.all_events(sys.fake_discord)
+      let edit_count =
+        list.filter(events, fn(e) {
+          case e {
+            fake_discord.Edited(_, _, _) -> True
+            _ -> False
+          }
+        })
+        |> list.length
+      Error(
+        "expected >= "
+        <> int.to_string(expected)
+        <> " edits to same message, got "
+        <> int.to_string(edit_count),
+      )
+    }
+  }
+}
+
+/// Poll every 10ms until `fake_discord` has recorded at least `expected`
+/// Edited events, or until `timeout_ms` elapses. Returns True on success.
+fn poll_for_edit_count(
+  fake: fake_discord.FakeDiscord,
+  expected: Int,
+  elapsed: Int,
+  timeout_ms: Int,
+) -> Bool {
+  let events = fake_discord.all_events(fake)
+  let edit_count =
+    list.filter(events, fn(e) {
+      case e {
+        fake_discord.Edited(_, _, _) -> True
+        _ -> False
+      }
+    })
+    |> list.length
+  case edit_count >= expected {
+    True -> True
+    False -> {
+      case elapsed >= timeout_ms {
+        True -> False
+        False -> {
+          let _ = process.sleep(10)
+          poll_for_edit_count(fake, expected, elapsed + 10, timeout_ms)
+        }
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
