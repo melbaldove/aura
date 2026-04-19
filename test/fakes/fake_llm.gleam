@@ -48,7 +48,11 @@ pub opaque type FakeLLM {
 // ---------------------------------------------------------------------------
 
 type State {
-  State(scripts: List(List(ScriptedEvent)), calls: List(LlmCall))
+  State(
+    scripts: List(List(ScriptedEvent)),
+    calls: List(LlmCall),
+    chat_text_scripts: List(String),
+  )
 }
 
 type Msg {
@@ -59,14 +63,16 @@ type Msg {
     reply: process.Subject(Nil),
   )
   GetCalls(reply: process.Subject(List(LlmCall)))
+  PushChatTextScript(text: String)
+  PopChatText(reply: process.Subject(Result(String, String)))
 }
 
 fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     PushScript(events:) ->
       actor.continue(State(
+        ..state,
         scripts: list.append(state.scripts, [events]),
-        calls: state.calls,
       ))
 
     Consume(call:, callback_pid:, reply:) -> {
@@ -79,6 +85,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       let _ = process.spawn_unlinked(fn() { replay(events, callback_pid) })
       process.send(reply, Nil)
       actor.continue(State(
+        ..state,
         scripts: rest,
         calls: list.append(state.calls, [call]),
       ))
@@ -87,6 +94,25 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
     GetCalls(reply:) -> {
       process.send(reply, state.calls)
       actor.continue(state)
+    }
+
+    PushChatTextScript(text:) ->
+      actor.continue(State(
+        ..state,
+        chat_text_scripts: list.append(state.chat_text_scripts, [text]),
+      ))
+
+    PopChatText(reply:) -> {
+      case state.chat_text_scripts {
+        [] -> {
+          process.send(reply, Error("fake_llm: no chat_text script"))
+          actor.continue(state)
+        }
+        [first, ..tail] -> {
+          process.send(reply, Ok(first))
+          actor.continue(State(..state, chat_text_scripts: tail))
+        }
+      }
     }
   }
 }
@@ -150,7 +176,7 @@ fn send_stream_error(pid: Pid, reason: String) -> Nil
 pub fn new() -> #(FakeLLM, LLMClient) {
   let builder =
     actor.new_with_initialiser(5000, fn(subject) {
-      let state = State(scripts: [], calls: [])
+      let state = State(scripts: [], calls: [], chat_text_scripts: [])
       Ok(actor.initialised(state) |> actor.returning(subject))
     })
     |> actor.on_message(handle_message)
@@ -169,6 +195,9 @@ pub fn new() -> #(FakeLLM, LLMClient) {
       },
       chat: fn(_config, _messages, _tools) {
         Error("fake_llm: non-streaming chat not scripted in this test")
+      },
+      chat_text: fn(_config, _messages, _temperature) {
+        process.call(subj, 1000, fn(reply) { PopChatText(reply: reply) })
       },
     )
 
@@ -238,4 +267,12 @@ pub fn script_reasoning_forever(fake: FakeLLM) -> Nil {
 /// Return every recorded call to `stream_with_tools`, in order.
 pub fn calls(fake: FakeLLM) -> List(LlmCall) {
   process.call(fake.subject, 1000, fn(reply) { GetCalls(reply: reply) })
+}
+
+/// Push a scripted response onto the `chat_text` queue. Each call to the
+/// client's `chat_text` field (used by vision preprocessing) consumes one
+/// scripted response in FIFO order and returns `Ok(text)`. An empty queue
+/// returns `Error("fake_llm: no chat_text script")`.
+pub fn script_chat_text_response(fake: FakeLLM, text: String) -> Nil {
+  process.send(fake.subject, PushChatTextScript(text: text))
 }

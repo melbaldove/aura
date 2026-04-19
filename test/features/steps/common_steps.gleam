@@ -1,5 +1,6 @@
 import aura/brain
 import aura/discord
+import aura/discord/types as discord_types
 import dream_test/gherkin/steps.{
   type StepContext, type StepRegistry, get_int, get_string, get_word,
 }
@@ -27,6 +28,10 @@ pub fn register(reg: StepRegistry) -> StepRegistry {
   |> steps.step(
     "a user message {string} arrives in {string}",
     when_user_message_arrives,
+  )
+  |> steps.step(
+    "a user message with image {string} arrives in {string}",
+    when_user_message_with_image_arrives,
   )
   |> steps.step(
     "a Discord message is sent to {string}",
@@ -82,6 +87,18 @@ fn when_user_message_arrives(
   use system <- result_try(world.get(ctx.world, "system"))
   let sys: TestSystem = system
   let msg = build_incoming(channel_id, content)
+  process.send(sys.brain_subject, brain.HandleMessage(msg))
+  Ok(succeed())
+}
+
+fn when_user_message_with_image_arrives(
+  ctx: StepContext,
+) -> Result(dream_types.AssertionResult, String) {
+  use content <- result_try(get_string(ctx.captures, 0))
+  use channel_id <- result_try(get_string(ctx.captures, 1))
+  use system <- result_try(world.get(ctx.world, "system"))
+  let sys: TestSystem = system
+  let msg = build_incoming_with_image(channel_id, content)
   process.send(sys.brain_subject, brain.HandleMessage(msg))
   Ok(succeed())
 }
@@ -157,6 +174,34 @@ fn build_incoming(channel_id: String, content: String) -> discord.IncomingMessag
     content: content,
     is_bot: False,
     attachments: [],
+  )
+}
+
+/// Build an incoming message carrying a single image attachment. The URL is
+/// deliberately non-routable — the brain's attachment downloader will fail
+/// fast, and the vision path's data-URL fallback will also fail (no local
+/// file). `describe_image` then calls `LLMClient.chat_text` with the URL
+/// string, which the fake LLM intercepts with its scripted response.
+fn build_incoming_with_image(
+  channel_id: String,
+  content: String,
+) -> discord.IncomingMessage {
+  discord.IncomingMessage(
+    message_id: "fake-img-" <> content,
+    channel_id: channel_id,
+    channel_name: None,
+    guild_id: "test-guild",
+    author_id: "test",
+    author_name: "test",
+    content: content,
+    is_bot: False,
+    attachments: [
+      discord_types.Attachment(
+        url: "fake://test-image/not-a-real-url",
+        content_type: "image/jpeg",
+        filename: "test.jpg",
+      ),
+    ],
   )
 }
 

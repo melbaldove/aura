@@ -3,6 +3,7 @@
 
 import aura/llm
 import gleam/erlang/process.{type Pid}
+import gleam/option.{type Option}
 
 pub type LLMClient {
   LLMClient(
@@ -17,6 +18,11 @@ pub type LLMClient {
       List(llm.Message),
       List(llm.ToolDefinition),
     ) -> Result(llm.LlmResponse, String),
+    chat_text: fn(
+      llm.LlmConfig,
+      List(llm.Message),
+      Option(Float),
+    ) -> Result(String, String),
   )
 }
 
@@ -24,5 +30,6 @@ pub fn production() -> LLMClient {
   LLMClient(
     stream_with_tools: llm.chat_streaming_with_tools,
     chat: llm.chat_with_tools,
+    chat_text: llm.chat_with_options,
   )
 }

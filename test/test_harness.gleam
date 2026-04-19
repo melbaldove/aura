@@ -108,8 +108,11 @@ pub fn fresh_system() -> TestSystem {
       state: tmp_root <> "/state",
     )
 
-  // `models.brain = "zai/glm-5-turbo"` so build_llm_config succeeds. All
-  // other model roles default to empty; no test path exercises them.
+  // `models.brain = "zai/glm-5-turbo"` so build_llm_config succeeds. The
+  // vision model is set so `vision.is_enabled` returns True when a test
+  // sends an image attachment — actual HTTP never goes out because the
+  // fake LLMClient's `chat_text` intercepts the call. Other model roles
+  // default to empty; no test path exercises them.
   let global =
     config.GlobalConfig(
       ..config.default_global(),
@@ -119,7 +122,7 @@ pub fn fresh_system() -> TestSystem {
         acp: "",
         heartbeat: "",
         monitor: "",
-        vision: "",
+        vision: "zai/glm-5v-turbo",
         dream: "",
       ),
       brain_context: 128_000,

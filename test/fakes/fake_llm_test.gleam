@@ -2,6 +2,7 @@ import aura/llm
 import fakes/fake_llm
 import gleam/erlang/process
 import gleam/list
+import gleam/option.{None}
 import gleeunit/should
 
 fn fake_config() -> llm.LlmConfig {
@@ -89,4 +90,30 @@ pub fn fake_llm_records_call_history_test() {
 
   let calls = fake_llm.calls(fake)
   list.length(calls) |> should.equal(2)
+}
+
+pub fn fake_llm_chat_text_returns_scripted_response_test() {
+  let #(fake, client) = fake_llm.new()
+  fake_llm.script_chat_text_response(fake, "a blue sky")
+
+  client.chat_text(fake_config(), [llm.UserMessage("describe")], None)
+  |> should.equal(Ok("a blue sky"))
+}
+
+pub fn fake_llm_chat_text_errors_when_no_script_test() {
+  let #(_fake, client) = fake_llm.new()
+
+  case client.chat_text(fake_config(), [], None) {
+    Error(_) -> Nil
+    Ok(_) -> should.fail()
+  }
+}
+
+pub fn fake_llm_chat_text_scripts_are_fifo_test() {
+  let #(fake, client) = fake_llm.new()
+  fake_llm.script_chat_text_response(fake, "first")
+  fake_llm.script_chat_text_response(fake, "second")
+
+  client.chat_text(fake_config(), [], None) |> should.equal(Ok("first"))
+  client.chat_text(fake_config(), [], None) |> should.equal(Ok("second"))
 }

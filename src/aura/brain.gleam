@@ -1363,7 +1363,7 @@ fn build_llm_context(
           "" -> vision_config
           q -> vision.ResolvedVisionConfig(..vision_config, prompt: q)
         }
-        describe_image(cfg, image_url)
+        describe_image(state.llm_client, cfg, image_url)
       }
     }
   }
@@ -2491,7 +2491,7 @@ fn preprocess_attachments(
                 }
               }
               logging.log(logging.Info, "[brain] Processing image attachment: " <> att.filename)
-              case describe_image(vision_config, image_ref) {
+              case describe_image(state.llm_client, vision_config, image_ref) {
                 Ok(description) -> {
                   logging.log(logging.Info,
                     "[brain] Vision description: "
@@ -2644,8 +2644,10 @@ fn is_text_attachment(att: discord_types.Attachment) -> Bool {
   || ct == "application/toml"
 }
 
-/// Call the vision model to describe an image.
+/// Call the vision model to describe an image. Routed through
+/// `LLMClient.chat_text` so tests can inject a fake vision response.
 fn describe_image(
+  client: LLMClient,
   vision_config: vision.ResolvedVisionConfig,
   image_url: String,
 ) -> Result(String, String) {
@@ -2656,11 +2658,7 @@ fn describe_image(
       image_url: image_url,
     ),
   ]
-  // Direct call — LLMClient.chat wraps `chat_with_tools` (tool-capable,
-  // returns LlmResponse). Vision preprocessing uses `chat_with_options`
-  // (no tools, returns plain String). Fakeable via LLMClient once the
-  // interface grows a `chat_text` field.
-  llm.chat_with_options(llm_config, messages, None)
+  client.chat_text(llm_config, messages, None)
 }
 
 // ---------------------------------------------------------------------------
