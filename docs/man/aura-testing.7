@@ -1,0 +1,850 @@
+.TH AURA\-TESTING 7 "2026-04-19" "Aura 0.1.0" "Aura Manual"
+.SH NAME
+aura\-testing \- testing conventions, fakes, and feature\-file organization
+.SH SYNOPSIS
+.B gleam test
+.br
+.B gleam run \-m features/runner
+.br
+.B gleam test \-\-tag @slow
+.RI "(future)"
+.br
+.B gleam test \-\-contract
+.RI "(future)"
+.SH DESCRIPTION
+Aura's test suite is built on two frameworks with a hard separation between
+what each covers.
+.PP
+.B gleeunit
+(the Gleam standard test framework) owns all unit tests in
+.IR test/aura/ .
+These tests exist today and cover individual modules in isolation: pure
+functions, actor state machines, data transformations.
+.PP
+.B dream_test
+owns all behavior tests in
+.IR test/features/ .
+These tests run Gherkin
+.I .feature
+files through a composed step registry.
+They exercise complete workflows: a user message arrives, a real BEAM
+supervision subtree processes it using faked external clients, and the
+outcome is asserted on the fake's event log.
+.PP
+The separation is permanent.
+Migrating unit tests to dream_test would be weeks of mechanical work with
+silent-regression risk and no gain.
+Each test fits the framework that makes its intent clearest.
+.SS Two\-layer model
+.TP
+.B Behavior tests
+Does my code do the right thing?
+Unit tests of pure functions and integration tests of actors running in a
+real BEAM with faked network boundaries.
+Fast, deterministic.
+This is the bulk of the suite.
+.TP
+.B Contract tests
+Does the external world behave as assumed?
+Live calls to z.ai, Discord, Google, Jira.
+Run on demand.
+A failure means a provider changed something, not that we broke.
+.TP
+.B Fault\-injection tests
+Does my code recover when things break?
+A named subset of behavior tests.
+Inject stream stalls, worker crashes, malformed responses.
+Tagged
+.B @fault\-injection
+so they can be counted and audited; included in the default run.
+.PP
+These categories come from principle #9 in
+.IR docs/ENGINEERING.md .
+Principle #10 requires every feature to ship with a behavior test that
+fails without the change and passes with it.
+The trivial-test hook (see
+.BR HOOKS )
+enforces this mechanically.
+.SH DIRECTORY STRUCTURE
+.nf
+test/
+\[u251C]\[u2500]\[u2500] aura/                    existing gleeunit unit tests
+\[u2502]   \[u251C]\[u2500]\[u2500] brain_tools_test.gleam
+\[u2502]   \[u251C]\[u2500]\[u2500] channel_actor_test.gleam
+\[u2502]   \[u2514]\[u2500]\[u2500] ...
+\[u251C]\[u2500]\[u2500] features/                dream_test scenarios
+\[u2502]   \[u251C]\[u2500]\[u2500] README.md            points to man aura\-testing
+\[u2502]   \[u251C]\[u2500]\[u2500] workflows/           user\-observable journeys
+\[u2502]   \[u2502]   \[u251C]\[u2500]\[u2500] send\-message\-to\-aura.feature
+\[u2502]   \[u2502]   \[u251C]\[u2500]\[u2500] domain\-context\-loaded.feature
+\[u2502]   \[u2502]   \[u251C]\[u2500]\[u2500] upload\-with\-vision.feature
+\[u2502]   \[u2502]   \[u251C]\[u2500]\[u2500] tool\-call\-read\-file.feature
+\[u2502]   \[u2502]   \[u251C]\[u2500]\[u2500] multi\-tool\-turn.feature
+\[u2502]   \[u2502]   \[u251C]\[u2500]\[u2500] tool\-error\-recovery.feature
+\[u2502]   \[u2502]   \[u251C]\[u2500]\[u2500] memory\-persistence.feature
+\[u2502]   \[u2502]   \[u251C]\[u2500]\[u2500] run\-skill\-stdout.feature
+\[u2502]   \[u2502]   \[u2514]\[u2500]\[u2500] progressive\-edits.feature
+\[u2502]   \[u251C]\[u2500]\[u2500] capabilities/        per\-tool / per\-module behavior (future)
+\[u2502]   \[u251C]\[u2500]\[u2500] fault\-tolerance/     failure mode scenarios (future)
+\[u2502]   \[u2514]\[u2500]\[u2500] steps/               step definitions grouped by concept
+\[u2502]       \[u251C]\[u2500]\[u2500] common_steps.gleam
+\[u2502]       \[u251C]\[u2500]\[u2500] llm_steps.gleam
+\[u2502]       \[u2514]\[u2500]\[u2500] tool_steps.gleam
+\[u251C]\[u2500]\[u2500] fakes/                   shared fake clients
+\[u2502]   \[u251C]\[u2500]\[u2500] README.md
+\[u2502]   \[u251C]\[u2500]\[u2500] fake_discord.gleam
+\[u2502]   \[u251C]\[u2500]\[u2500] fake_llm.gleam
+\[u2502]   \[u2514]\[u2500]\[u2500] fake_skill_runner.gleam
+\[u251C]\[u2500]\[u2500] contract/                live external contract tests
+\[u2502]   \[u2514]\[u2500]\[u2500] ...
+\[u251C]\[u2500]\[u2500] test_harness.gleam       TestSystem constructor + teardown
+\[u2514]\[u2500]\[u2500] test_helpers.gleam       shared helpers
+.fi
+.PP
+The
+.I capabilities/
+and
+.I fault\-tolerance/
+subdirectories are defined in the spec and will be populated in subsequent
+plan phases.
+.I workflows/
+holds the nine safety\-net scenarios shipped in Plan A.
+.SH WRITING A FEATURE TEST
+A feature file describes one capability or workflow.
+Each scenario is independent: no ordering dependencies, no shared state.
+.SS Step\-by\-step recipe
+.TP
+.B 1. Create the .feature file
+Place it under the subdirectory that matches its scope:
+.IR workflows/ ,
+.IR capabilities/ ,
+or
+.IR fault\-tolerance/ .
+.TP
+.B 2. Write the Gherkin
+Follow the structure below.
+One scenario = one behavior.
+Use present tense, user\-observable language.
+.TP
+.B 3. Check that all steps are already registered
+Consult the
+.B STEP DEFINITIONS
+section below.
+If a step is missing, add it to the appropriate steps module.
+.TP
+.B 4. Run
+.nf
+gleam test
+.fi
+.TP
+.B 5. Verify
+Confirm the new scenario appears in output and passes.
+.SS Concrete example
+From
+.IR test/features/workflows/tool\-error\-recovery.feature :
+.PP
+.nf
+Feature: tool error recovery \[em] LLM sees errors and adapts
+  When a tool call fails, the error is returned to the LLM as a tool
+  result message. The LLM's next iteration can reference that error.
+
+  Scenario: read_file on missing path returns error; LLM acknowledges
+    Given a fresh Aura system
+    And the LLM will call "read_file" with "{\"path\": \"/tmp/missing\"}"
+    And the LLM will respond with "Sorry, that file doesn't exist"
+    When a user message "read that file" arrives in "aura\-channel"
+    Then a Discord message is sent to "aura\-channel"
+    And the Discord message sent to "aura\-channel" contains "doesn't exist"
+    And the LLM last call messages contain "Error:"
+.fi
+.PP
+The
+.B Given
+steps establish the initial fake state.
+The
+.B When
+step sends a real message to the brain actor.
+The
+.B Then
+steps assert on the fake Discord event log and fake LLM call log.
+No mocks; no stubs; no patching — the full BEAM supervision tree runs.
+.SS Feature file structure
+.nf
+Feature: <capability or workflow name>
+  <one\-line description>
+
+  Background:
+    Given <shared setup for all scenarios in this file>
+
+  Scenario: <user\-observable behavior, present tense>
+    Given <initial state>
+    When <one triggering action>
+    Then <one observable outcome>
+    And <additional outcomes>
+.fi
+.SH STEP DEFINITIONS
+Steps are registered in three modules under
+.IR test/features/steps/ .
+All modules are composed in
+.I test/features/runner.gleam
+and passed to dream_test.
+.SS common_steps.gleam
+.TP
+.B "a fresh Aura system"
+Constructs a
+.B TestSystem
+with fresh actors, a unique SQLite path, and all fake clients.
+Stores it as
+.I "system"
+in the world.
+.TP
+.BI "a fresh Aura system with domain " {string} " containing AGENTS.md " {string}
+Constructs a
+.B TestSystem
+and writes the given AGENTS.md content to the domain's config directory
+before brain starts.
+Channel ID is derived as
+.IR <domain_name>\-channel .
+.TP
+.BI "a user message " {string} " arrives in " {string}
+Sends a
+.B HandleMessage
+to the brain actor for the given channel.
+.TP
+.BI "a user message with image " {string} " arrives in " {string}
+Same as above but includes a fake image attachment
+.RI ( "fake://test-image/not-a-real-url" )
+to drive the vision preprocessing path.
+.TP
+.BI "a Discord message is sent to " {string}
+Polls
+.B fake_discord.assert_sent_to
+with a 2000ms timeout.
+Passes as soon as one send event is recorded for the channel.
+.TP
+.BI "the Discord message sent to " {string} " contains " {string}
+Polls
+.B fake_discord.assert_latest_contains
+(Sent or Edited) with a 3000ms timeout.
+Covers both plain sends and progressive\-edit replies.
+.TP
+.BI "no Discord message is sent to " {string}
+Sleeps 200ms then asserts zero Sent events for the channel.
+.TP
+.BI "the turn deadline fires after " {int} " " {word}
+Duration placeholder; assertion body lands with the channel_actor refactor.
+Unit is parsed by
+.B duration_to_ms
+(see below).
+.TP
+.BI "a tmp file at " {string} " containing " {string}
+Writes the given content to the given absolute path via simplifile.
+.TP
+.BI "Discord received at least " {int} " edits to the same message"
+Polls for at least N
+.B Edited
+events within 2000ms.
+Used to verify progressive streaming edits.
+.SS Duration helper
+.nf
+duration_to_ms(n, "ms")          \[->] n
+duration_to_ms(n, "millisecond") \[->] n
+duration_to_ms(n, "second")      \[->] n * 1000
+duration_to_ms(n, "seconds")     \[->] n * 1000
+duration_to_ms(n, "minute")      \[->] n * 60_000
+duration_to_ms(n, "minutes")     \[->] n * 60_000
+.fi
+.SS llm_steps.gleam
+.TP
+.BI "the LLM will respond with " {string}
+Scripts a
+.BR Delta + Complete
+response on the fake LLM.
+.TP
+.BI "the LLM will call " {string} " with " {string}
+Scripts a
+.B Complete
+carrying one tool call.
+The JSON args string uses Gherkin
+.B \e"
+escapes; the step unescapes before passing to
+.BR fake_llm.script_tool_call .
+.TP
+.BI "the LLM will call run_skill with name " {string} " and args " {string}
+Convenience step that builds
+.B run_skill
+JSON server-side, avoiding Gherkin escape issues with nested JSON.
+.TP
+.BI "the LLM will fail with " {string}
+Scripts an
+.B ErrorEvent
+response.
+.TP
+.B "the LLM will reason indefinitely"
+Scripts 500
+.B Reasoning
+events (no content progress).
+Used for stuck\-stream fault\-injection scenarios.
+.TP
+.BI "the vision model will describe the image as " {string}
+Scripts a response on the
+.B chat_text
+queue (vision preprocessing path).
+.TP
+.BI "the LLM user message contains " {string}
+Asserts that any recorded
+.B stream_with_tools
+call carried a user message containing the substring.
+.TP
+.BI "the LLM system prompt contains " {string}
+Polls up to 2000ms for a system message containing the substring.
+Proves domain context assembly.
+.TP
+.BI "the LLM last call messages contain " {string}
+Polls up to 2000ms; asserts any message in the
+.I most\-recent
+.B stream_with_tools
+call contains the substring.
+Used to verify tool errors surfaced as
+.B ToolResultMessage
+entries.
+.TP
+.BI "the LLM will stream " {int} " deltas of " {int} " characters each"
+Scripts N
+.B Delta
+events of M characters each, followed by a
+.B Complete
+carrying the full accumulated content.
+Drives multiple progressive edits in brain's stream collector (fires every
+150 chars).
+.SS tool_steps.gleam
+.TP
+.BI "skill " {string} " will return stdout " {string}
+Scripts a successful
+.B SkillResult
+(exit_code 0) for the named skill.
+.TP
+.BI "skill " {string} " will fail with stderr " {string}
+Scripts a failing
+.B SkillResult
+(exit_code 1) for the named skill.
+.TP
+.BI "skill " {string} " was invoked"
+Asserts the named skill appears in the fake skill runner's invocation log.
+.SH FAKES
+Every fake follows the same pattern:
+.B "new() -> #(FakeXxx, XxxClient)"
+returns a handle for test assertions and a client satisfying the production
+interface.
+.PP
+Fakes are actors.
+They survive across steps in the same scenario (state accumulates in the
+event log).
+They are torn down with the
+.B TestSystem
+at scenario end.
+.SS fake_discord
+Intercepts all Discord REST operations.
+.PP
+.B Construction:
+.nf
+fake_discord.new() \[->] #(FakeDiscord, DiscordClient)
+.fi
+.PP
+.B Event types:
+.nf
+Sent(channel_id, content, msg_id)
+Edited(channel_id, msg_id, new_content)
+TypingTriggered(channel_id)
+AttachmentSent(channel_id, content, path)
+ThreadCreated(parent_channel_id, msg_id, name, thread_id)
+.fi
+.PP
+.B Assertion API:
+.TP
+.BI "assert_sent_to(fake, channel_id, timeout_ms) \[->] String"
+Polls until a message is sent to the channel; returns its content.
+Panics on timeout.
+.TP
+.BI "assert_latest_contains(fake, channel_id, expected, timeout_ms) \[->] String"
+Polls until the latest Sent or Edited event for the channel contains
+.IR expected .
+Handles progressive edits where the final content arrives via an edit, not
+a fresh send.
+.TP
+.BI "all_sent_to(fake, channel_id) \[->] List(String)"
+Returns content of all Sent events to the channel, in order.
+.TP
+.BI "all_events(fake) \[->] List(DiscordEvent)"
+Returns every recorded event in chronological order.
+.TP
+.BI "seed_channel_parent(fake, channel, parent)"
+Pre-populates the channel\[->]parent mapping for
+.B get_channel_parent
+calls.
+.SS fake_llm
+Intercepts LLM streaming calls.
+Scripted responses are consumed FIFO by
+.BR stream_with_tools .
+A separate queue handles
+.BR chat_text
+(vision preprocessing).
+.PP
+.B Construction:
+.nf
+fake_llm.new() \[->] #(FakeLLM, LLMClient)
+.fi
+.PP
+.B Event types:
+.nf
+Delta(text)
+Reasoning
+Complete(content, tool_calls_json, prompt_tokens)
+ErrorEvent(reason)
+.fi
+.PP
+.B Scripting API:
+.TP
+.BI "script(fake, List(ScriptedEvent))"
+Push a custom event sequence.
+.TP
+.BI "script_text_response(fake, text)"
+Shortcut: Delta(text) + Complete(text, "[]", 0).
+.TP
+.BI "script_tool_call(fake, tool_name, args_json)"
+Shortcut: Complete carrying one tool call in the flat JSON format
+.B aura_stream_ffi
+produces.
+.TP
+.BI "script_hang(fake)"
+Push an empty script — the next call returns but emits nothing.
+Simulates a stuck stream.
+.TP
+.BI "script_error(fake, reason)"
+Push a single ErrorEvent.
+.TP
+.B "script_reasoning_forever(fake)"
+Push 500 Reasoning events.
+Simulates a model stuck in thinking with no content progress.
+.TP
+.BI "script_chat_text_response(fake, text)"
+Push a response onto the chat_text (vision) queue.
+.PP
+.B Assertion API:
+.TP
+.BI "calls(fake) \[->] List(LlmCall)"
+Returns every recorded
+.B stream_with_tools
+invocation in order.
+Each
+.B LlmCall
+carries
+.I messages
+and
+.IR tools ,
+so assertions can inspect what the brain sent to the LLM.
+.SS fake_skill_runner
+Intercepts
+.B run_skill
+tool invocations.
+Results are scripted per skill name (FIFO per name).
+.PP
+.B Construction:
+.nf
+fake_skill_runner.new() \[->] #(FakeSkillRunner, SkillRunner)
+.fi
+.PP
+.B Scripting API:
+.TP
+.BI "script_for(fake, skill_name, SkillResult)"
+Push one
+.B SkillResult
+for the named skill.
+.B SkillResult
+has fields
+.IR exit_code ,
+.IR stdout ,
+.IR stderr .
+.PP
+.B Assertion API:
+.TP
+.BI "invocations(fake) \[->] List(SkillInvocation)"
+Returns every invocation in chronological order.
+Each
+.B SkillInvocation
+has fields
+.I name
+and
+.IR args .
+.SH RUNNING TESTS
+.TP
+.B gleam test
+Runs everything: gleeunit unit tests
+.RI ( test/aura/ )
+plus dream_test feature tests
+.RI ( test/features/ ).
+Excludes
+.B @slow
+and
+.B @wip
+scenarios.
+Includes
+.B @fault\-injection
+scenarios.
+Run on every commit and before every deploy.
+.TP
+.B gleam run \-m features/runner
+Runs only the dream_test feature suite directly.
+Useful when iterating on a feature file without waiting for the full unit
+suite.
+.TP
+.B gleam test \-\-tag @slow
+.RI "(future)"
+Adds scenarios using production\-scale timing constants.
+Run before major deploys.
+Not yet implemented — the
+.B @slow
+tag is reserved; scenarios using it exist in the spec but are not yet
+written.
+.TP
+.B gleam test \-\-contract
+.RI "(future)"
+Runs live external contract tests from
+.IR test/contract/ .
+Requires network and valid credentials.
+Failures indicate provider API drift, not regressions in Aura code.
+On demand only.
+.SH TAGS
+Three tags are defined.
+The set is intentionally small.
+.TP
+.B @slow
+Scenarios that use production timing constants
+.RB ( production_timing )
+rather than the test miniatures.
+They may take tens of seconds.
+Excluded by default; include pre\-deploy.
+.TP
+.B @fault\-injection
+Scenarios that inject failures: stuck streams, stream errors, worker
+crashes, malformed responses.
+Included in the default run.
+The fault\-injection category is important enough to name explicitly even
+though it is a subset of behavior tests — these scenarios verify the "let
+it crash" promise, not just the happy path.
+.TP
+.B @wip
+Scenarios that are in progress or known\-failing.
+Excluded by default.
+A scenario should not stay
+.B @wip
+beyond the task that introduced it.
+.PP
+Tags appear above
+.B Scenario
+lines in feature files:
+.PP
+.nf
+@fault\-injection
+Scenario: stream error causes brain to report failure
+  ...
+.fi
+.SH ISOLATION
+Every scenario runs against a fresh supervision subtree with no shared
+state.
+.SS TestSystem
+.nf
+pub type TestSystem {
+  TestSystem(
+    brain_subject:     Subject(BrainMessage),
+    fake_discord:      FakeDiscord,
+    fake_llm:          FakeLLM,
+    fake_skill_runner: FakeSkillRunner,
+    db_path:           String,
+  )
+}
+.fi
+.TP
+.B fresh_system()
+Constructs a new
+.BR TestSystem :
+starts a DB actor pointing at a unique SQLite file under
+.IR /tmp/aura\-test\-<uuid>/ ,
+starts a brain actor wired to all fake clients, returns the
+.BR TestSystem .
+.TP
+.B fresh_system_with_domain(name, agents_md, channel_id)
+Same, plus writes the given AGENTS.md content to the domain config
+directory so
+.B domain.load_context
+picks it up on the first message.
+.TP
+.B teardown(system)
+Stops the supervision subtree and removes the scratch SQLite file.
+.PP
+Scenarios call
+.B fresh_system
+in a
+.B Background
+or
+.B Given
+step.
+Teardown is called by the dream_test lifecycle hook after each scenario.
+Pattern matches Elixir's Ecto sandbox: construction\-time isolation, no
+reset logic.
+.PP
+Parallel scenario execution is safe: each scenario runs on its own BEAM
+schedulers against its own DB file.
+.SH DETERMINISTIC TIMING
+Production timing constants are too large for a fast test suite.
+.B test_timing
+substitutes smaller values for every actor that has a timer:
+.PP
+.nf
+production_timing = Timing(
+  turn_deadline_ms:      600_000,
+  stream_retry_delays_ms: [0, 500, 2000],
+  heartbeat_interval_ms:  30_000,
+  typing_refresh_ms:       8_000,
+)
+
+test_timing = Timing(
+  turn_deadline_ms:      200,
+  stream_retry_delays_ms: [0, 5, 10],
+  heartbeat_interval_ms:  50,
+  typing_refresh_ms:      100,
+)
+.fi
+.PP
+The
+.B TestSystem
+wires
+.B test_timing
+into the brain and channel actors.
+Scenarios that want to verify real\-time behavior (e.g., that a stream
+actually hangs for 30s) tag themselves
+.B @slow
+and receive
+.B production_timing
+instead.
+.PP
+There is no clock mocking and no virtual scheduler.
+Actors sleep for real.
+The miniature timing constants make the sleeps harmless.
+.SH FAULT INJECTION
+Fault\-injection tests inject failures at the fake boundary, then assert the
+supervision tree recovers.
+.SS LLM stream hang
+.nf
+fake_llm.script_hang(sys.fake_llm)
+.fi
+The next
+.B stream_with_tools
+call returns but sends no events to the callback Pid.
+Brain's turn\-deadline timer (200ms in test timing) fires and the brain
+reports the hang to Discord.
+.SS LLM stream error
+.nf
+fake_llm.script_error(sys.fake_llm, "provider unavailable")
+.fi
+An
+.B ErrorEvent
+arrives at the callback Pid.
+Brain logs the error and sends a failure message to Discord.
+.SS LLM reasoning forever
+.nf
+fake_llm.script_reasoning_forever(sys.fake_llm)
+.fi
+500
+.B Reasoning
+events arrive with no
+.B Complete
+or
+.B Delta
+content.
+Combined with the turn\-deadline timer, this exercises the stuck\-reasoning
+recovery path without any HTTP machinery.
+.SS Skill failure
+.nf
+fake_skill_runner.script_for(
+  sys.fake_skill_runner,
+  "my\-skill",
+  skill.SkillResult(exit_code: 1, stdout: "", stderr: "disk full"),
+)
+.fi
+The
+.B run_skill
+tool returns a failure result.
+The LLM receives the error text and its reply surfaces it to the user.
+.PP
+These patterns originate from the stream hang Aura hit in production on
+2026\-04\-19 (see
+.IR MEMORY.md :
+Stratus WebSocket bug).
+The fakes make the failure reproducible in milliseconds.
+.SH CONTRACT TESTS
+Contract tests live under
+.IR test/contract/
+and use gleeunit (no dream_test overhead).
+They make real network calls to external providers.
+.PP
+.B Purpose:
+catch provider API drift.
+If z.ai changes a response field, if Discord deprecates an endpoint, the
+contract suite catches it — not a user report.
+.PP
+.B When to run:
+on demand, before a major release, or when a provider publishes breaking
+changes.
+Not per\-commit.
+.PP
+.B Credentials:
+must be available as environment variables (see
+.I docs/ENGINEERING.md
+environment section).
+.PP
+.B Failure semantics:
+a failing contract test means a provider changed, not a regression.
+Investigate the provider's changelog.
+Never let a contract failure block a commit.
+.SH UPSTREAM CONTRIBUTION
+Aura is an early adopter of dream_test.
+This suite doubles as a stress test of the framework.
+Generalizable patterns are marked with
+.B // UPSTREAM_CANDIDATE:
+comments in the code.
+.PP
+Contribution process:
+.TP
+1.
+Ship locally; use the pattern in 3\-5 scenarios.
+.TP
+2.
+Open a dream_test issue describing the pattern.
+.TP
+3.
+PR after maintainer acknowledgment; extract a minimal upstream shape.
+.TP
+4.
+Migrate Aura on the next dream_test version bump.
+.PP
+Current candidates:
+.TP
+.B Custom capture type registration
+dream_test has no
+.B ParameterType
+API.
+Today
+.B {int} {word}
+pairs parsed by
+.B duration_to_ms
+work around this.
+An upstream
+.B {duration}
+type would eliminate the workaround at every step that handles time.
+.TP
+.B Actor lifecycle helpers
+BEAM\-native test utilities for starting/stopping supervised actors, waiting
+for process registration, asserting mailbox state.
+.TP
+.B Fake\-client patterns
+Function\-field record DI paired with scripted fake actors.
+The
+.B new() \-\> #(Fake, Client)
+pattern is general enough to generalize.
+.TP
+.B Fault\-injection utilities
+.B script_hang ,
+.B script_error ,
+.B script_reasoning_forever
+as a first\-class dream_test library, not just Aura\-specific helpers.
+.TP
+.B Step\-module composition helpers
+.B list.append
+chaining across step modules works but is verbose.
+An upstream
+.B steps.merge([mod1.all(), mod2.all(), ...])
+helper would read better.
+.SH HOOKS
+.SS Trivial\-test enforcement
+A
+.B PostToolUse
+hook in
+.I .claude/settings.json
+runs a haiku subagent on every test\-file write.
+.PP
+The hook catches:
+.TP
+.B Literal\-against\-literal assertions
+.B should.equal(1, 1)
+\(em the assertion passes regardless of the code under test.
+.TP
+.B No assertions
+A test that calls functions but asserts nothing.
+.TP
+.B Mocks asserting their own return values
+Scripting the LLM to return X and then asserting the LLM returned X
+(without any real code path in between).
+.PP
+A commit that adds a test file only trips the hook once; iterative edits
+within a session trip it on each save.
+When the hook identifies a tautological test it blocks and requests a fix.
+This is principle #10's verification bar enforced mechanically, not just
+culturally.
+.SH EXAMPLES
+.SS Example 1: Plain text workflow
+.nf
+Feature: send a message to the aura channel and get a text response
+  Baseline tool loop.
+
+  Scenario: aura channel text response
+    Given a fresh Aura system
+    And the LLM will respond with "Hello, Melbs"
+    When a user message "hi" arrives in "aura\-channel"
+    Then a Discord message is sent to "aura\-channel"
+    And the Discord message sent to "aura\-channel" contains "Hello, Melbs"
+.fi
+.SS Example 2: Domain context
+.nf
+Feature: domain context loaded into system prompt
+
+  Scenario: AGENTS.md content appears in LLM system prompt
+    Given a fresh Aura system with domain "work" containing AGENTS.md
+          "You are an expert in linear algebra"
+    And the LLM will respond with "ok"
+    When a user message "hello" arrives in "work\-channel"
+    Then the LLM system prompt contains "linear algebra"
+.fi
+.SS Example 3: Skill invocation
+.nf
+Feature: run_skill stdout surfaces in reply
+
+  Scenario: skill output reaches Discord
+    Given a fresh Aura system
+    And skill "summarise\-pr" will return stdout "LGTM"
+    And the LLM will call run_skill with name "summarise\-pr" and args ""
+    And the LLM will respond with "The skill said: LGTM"
+    When a user message "run the skill" arrives in "aura\-channel"
+    Then skill "summarise\-pr" was invoked
+    And the Discord message sent to "aura\-channel" contains "LGTM"
+.fi
+.SH SEE ALSO
+.BR aura (1),
+.BR aura\-config (5),
+.BR aura\-diagnostics (7),
+.BR aura\-flares (7)
+.PP
+.I docs/ENGINEERING.md
+\(em Principles #9 (test layers) and #10 (verification is non-negotiable)
+.br
+.I docs/decisions/023\-client\-dependency\-injection.md
+\(em ADR for DI client boundaries
+.br
+.I docs/decisions/024\-dual\-framework\-testing.md
+\(em ADR for gleeunit + dream_test split
+.br
+.I test/features/README.md
+\(em Quick\-start pointer and minimal recipe
+.br
+.I test/fakes/README.md
+\(em Fake inventory
