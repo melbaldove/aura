@@ -52,6 +52,7 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [021](021-unix-socket-ipc.md) | Unix socket IPC for CLI-to-daemon communication | Accepted |
 | [022](022-browser-tool-agent-browser.md) | Browser tool via agent-browser CLI | Accepted |
 | [023](023-client-dependency-injection.md) | Client dependency injection for external boundaries | Accepted |
+| [024](024-dual-framework-testing.md) | Dual-framework testing (gleeunit + dream_test) | Accepted |
 
 ## Adding a new ADR
 
