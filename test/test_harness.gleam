@@ -108,6 +108,12 @@ pub fn fresh_system() -> TestSystem {
       state: tmp_root <> "/state",
     )
 
+  // Pre-create XDG directories so file writes (e.g. memory tool writing
+  // USER.md to paths.config) succeed without needing parent-dir creation.
+  let assert Ok(_) = simplifile.create_directory_all(paths.config)
+  let assert Ok(_) = simplifile.create_directory_all(paths.data)
+  let assert Ok(_) = simplifile.create_directory_all(paths.state)
+
   // `models.brain = "zai/glm-5-turbo"` so build_llm_config succeeds. The
   // vision model is set so `vision.is_enabled` returns True when a test
   // sends an image attachment — actual HTTP never goes out because the
