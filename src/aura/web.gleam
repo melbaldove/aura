@@ -129,6 +129,44 @@ pub fn fetch(url: String, max_chars: Int) -> Result(String, String) {
   }
 }
 
+/// Fetch a URL and return the raw response body as BitArray.
+/// For binary downloads (images, PDFs, etc.) where strip_html is wrong.
+pub fn fetch_bytes(url: String, timeout_ms: Int) -> Result(BitArray, String) {
+  logging.log(logging.Info, "[web] Fetching bytes: " <> url)
+
+  use parsed_uri <- result.try(
+    uri.parse(url)
+    |> result.map_error(fn(_) { "Failed to parse URL: " <> url }),
+  )
+  use req <- result.try(
+    request.from_uri(parsed_uri)
+    |> result.map_error(fn(_) { "Failed to build request for: " <> url }),
+  )
+  let req =
+    req
+    |> request.set_method(http.Get)
+    |> request.set_header("user-agent", "Aura/0.1 (bot)")
+    |> request.set_body(<<>>)
+
+  use resp <- result.try(
+    httpc.configure()
+    |> httpc.timeout(timeout_ms)
+    |> httpc.dispatch_bits(req)
+    |> result.map_error(fn(e) { "Fetch failed: " <> string.inspect(e) }),
+  )
+
+  case resp.status {
+    status if status >= 200 && status < 400 -> Ok(resp.body)
+    status ->
+      Error(
+        "Fetch error: status "
+        <> int.to_string(status)
+        <> " from "
+        <> url,
+      )
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Internal
 // ---------------------------------------------------------------------------

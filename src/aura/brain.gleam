@@ -2299,11 +2299,19 @@ fn preprocess_attachments(
   case msg.attachments {
     [] -> msg.content
     attachments -> {
-      // First: fetch text file attachments and prepend their content
+      // First: download every attachment to /tmp and inline local paths so
+      // the LLM can pass them to shell/skills. Non-blocking on failure.
+      let path_lines = download_attachments_to_tmp(attachments, msg.message_id)
+
+      // Fetch text file attachments and prepend their content
       let text_content = fetch_text_attachments(attachments)
-      let base_content = case text_content {
+      let with_paths = case path_lines {
         "" -> msg.content
-        content -> content <> "\n\n" <> msg.content
+        p -> p <> "\n\n" <> msg.content
+      }
+      let base_content = case text_content {
+        "" -> with_paths
+        content -> content <> "\n\n" <> with_paths
       }
 
       // Then: handle image attachments via vision
@@ -2349,6 +2357,38 @@ fn preprocess_attachments(
       }
     }
   }
+}
+
+/// Download every attachment to /tmp/aura-attachments/<msg_id>/ and return
+/// one line per attachment formatted as `[attachment: /path] filename (N bytes)`.
+/// Best-effort: failures are logged but don't block the message.
+fn download_attachments_to_tmp(
+  attachments: List(discord_types.Attachment),
+  msg_id: String,
+) -> String {
+  let dir = "/tmp/aura-attachments/" <> msg_id
+  let _ = simplifile.create_directory_all(dir)
+  let lines = list.filter_map(attachments, fn(att) {
+    let path = dir <> "/" <> att.filename
+    case web.fetch_bytes(att.url, 30_000) {
+      Error(e) -> {
+        logging.log(logging.Error, "[brain] Attachment download failed for " <> att.filename <> ": " <> e)
+        Error(Nil)
+      }
+      Ok(bytes) ->
+        case simplifile.write_bits(path, bytes) {
+          Error(e) -> {
+            logging.log(logging.Error, "[brain] Attachment write failed for " <> path <> ": " <> string.inspect(e))
+            Error(Nil)
+          }
+          Ok(_) -> {
+            logging.log(logging.Info, "[brain] Attachment saved: " <> path)
+            Ok("[attachment: " <> path <> "] " <> att.filename)
+          }
+        }
+    }
+  })
+  string.join(lines, "\n")
 }
 
 /// Fetch text file attachments and return their content as a formatted string.
