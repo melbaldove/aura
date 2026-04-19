@@ -309,3 +309,28 @@ pub fn execute_wait_with_ref_test() {
   result |> string.contains("\"action\":\"wait\"") |> should.be_true
   result |> string.contains("\"args\":\"@e5\"") |> should.be_true
 }
+
+pub fn execute_wait_with_seconds_test() {
+  let captured = fn(_session, _cdp, action, args, _timeout) {
+    Ok(
+      "{\"action\":\"" <> action <> "\",\"args\":\""
+      <> string.join(args, ",")
+      <> "\"}",
+    )
+  }
+  let result =
+    browser.execute(
+      browser.Wait,
+      [#("seconds", "3")],
+      browser.ExecContext(
+        session: "s",
+        cdp_url: "",
+        timeout_ms: 90_000,
+        run_fn: captured,
+        vision_fn: no_vision,
+      ),
+    )
+  result |> string.contains("\"action\":\"wait\"") |> should.be_true
+  // 3 seconds → 3000 ms, sent to agent-browser's `wait <ms>`.
+  result |> string.contains("\"args\":\"3000\"") |> should.be_true
+}

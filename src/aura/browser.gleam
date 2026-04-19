@@ -288,9 +288,16 @@ fn dispatch_wait(
   args: List(#(String, String)),
   ctx: ExecContext,
 ) -> String {
-  case get_arg(args, "ref") {
-    "" -> error_json("wait requires 'ref' or 'seconds'")
-    ref -> call_ffi("wait", [ref], ctx)
+  case get_arg(args, "ref"), get_arg(args, "seconds") {
+    "", "" -> error_json("wait requires 'ref' or 'seconds'")
+    ref, _ if ref != "" -> call_ffi("wait", [ref], ctx)
+    _, seconds_str -> {
+      case int.parse(seconds_str) {
+        Error(_) -> error_json("seconds must be an integer")
+        Ok(seconds) ->
+          call_ffi("wait", [int.to_string(seconds * 1000)], ctx)
+      }
+    }
   }
 }
 
