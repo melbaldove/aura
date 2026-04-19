@@ -14,6 +14,7 @@ import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/option.{None}
+import simplifile
 import test_harness.{type TestSystem}
 
 // ---------------------------------------------------------------------------
@@ -52,6 +53,10 @@ pub fn register(reg: StepRegistry) -> StepRegistry {
   |> steps.step(
     "the turn deadline fires after {int} {word}",
     then_deadline_fires_after,
+  )
+  |> steps.step(
+    "a tmp file at {string} containing {string}",
+    given_tmp_file,
   )
 }
 
@@ -176,6 +181,17 @@ fn then_deadline_fires_after(
   use unit <- result_try(get_word(ctx.captures, 1))
   let _ms = duration_to_ms(n, unit)
   // Placeholder — deadline assertion body lands in channel_actor refactor.
+  Ok(succeed())
+}
+
+/// Create a tmp file at the given absolute path with the given content.
+/// /tmp files are ephemeral and will be swept on reboot; no explicit cleanup needed.
+fn given_tmp_file(
+  ctx: StepContext,
+) -> Result(dream_types.AssertionResult, String) {
+  use path <- result_try(get_string(ctx.captures, 0))
+  use content <- result_try(get_string(ctx.captures, 1))
+  let _ = simplifile.write(path, content)
   Ok(succeed())
 }
 
