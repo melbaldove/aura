@@ -284,7 +284,7 @@ fn dispatch_console(
 /// Read a local image file and encode it as a base64 data URL suitable
 /// for OpenAI-compatible vision APIs. Unknown extensions default to
 /// image/png since screenshots are always PNG.
-fn read_as_data_url(path: String) -> Result(String, String) {
+pub fn read_as_data_url(path: String) -> Result(String, String) {
   case simplifile.read_bits(path) {
     Error(e) ->
       Error("Failed to read " <> path <> ": " <> simplifile.describe_error(e))

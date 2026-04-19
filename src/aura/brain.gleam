@@ -2,6 +2,7 @@ import aura/acp/flare_manager
 import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
 import aura/brain_tools
+import aura/browser
 import aura/compressor
 import aura/config
 import aura/conversation
@@ -2336,11 +2337,11 @@ fn preprocess_attachments(
       }
 
       // Then: handle image attachments via vision
-      let image_urls = vision.extract_image_urls(attachments)
-      case image_urls {
-        [] -> base_content
-        [first_url, ..] -> {
-          // Resolve vision config for this domain
+      let first_image =
+        list.find(attachments, fn(a) { vision.is_image_attachment(a) })
+      case first_image {
+        Error(_) -> base_content
+        Ok(att) -> {
           let domain_config = case domain_name {
             Some(name) -> {
               case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
@@ -2358,14 +2359,28 @@ fn preprocess_attachments(
               base_content
             }
             True -> {
-              logging.log(logging.Info, "[brain] Processing image attachment: " <> first_url)
-              case describe_image(vision_config, first_url) {
+              // Prefer the local copy as a base64 data URL — Discord CDN
+              // URLs with HMAC query strings get rejected by some vision
+              // endpoints (e.g. GLM returns 400 on them).
+              let local_path =
+                attachment_dir(msg.message_id)
+                <> "/"
+                <> safe_filename(att.filename)
+              let image_ref = case browser.read_as_data_url(local_path) {
+                Ok(data_url) -> data_url
+                Error(e) -> {
+                  logging.log(logging.Info, "[brain] data-url fallback failed (" <> e <> "); using CDN URL")
+                  att.url
+                }
+              }
+              logging.log(logging.Info, "[brain] Processing image attachment: " <> att.filename)
+              case describe_image(vision_config, image_ref) {
                 Ok(description) -> {
-                  logging.log(logging.Info, 
+                  logging.log(logging.Info,
                     "[brain] Vision description: "
                     <> string.slice(description, 0, 100),
                   )
-                  "[Image: " <> description <> "]\n\n" <> base_content
+                  "[Image " <> att.filename <> ": " <> description <> "]\n\n" <> base_content
                 }
                 Error(err) -> {
                   logging.log(logging.Error, "[brain] Vision error: " <> err)

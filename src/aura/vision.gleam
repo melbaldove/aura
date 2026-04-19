@@ -68,7 +68,7 @@ pub fn extract_image_urls(attachments: List(types.Attachment)) -> List(String) {
   })
 }
 
-fn is_image_attachment(att: types.Attachment) -> Bool {
+pub fn is_image_attachment(att: types.Attachment) -> Bool {
   case string.starts_with(att.content_type, "image/") {
     True -> True
     False -> {
