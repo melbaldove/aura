@@ -827,6 +827,26 @@ fn execute_tool_dispatch(
         }
       }
     }
+    "describe_image" -> {
+      case require_arg(args, "path") {
+        Error(e) -> TextResult(e)
+        Ok(path) -> {
+          let resolved = tools.resolve_path(path, ctx.base_dir)
+          let question = case get_arg(args, "question") {
+            "" -> "Describe this image concisely. Focus on text content, numbers, structure, and any actionable information. Be specific."
+            q -> q
+          }
+          case browser.read_as_data_url(resolved) {
+            Error(e) -> TextResult("Error reading image: " <> e)
+            Ok(data_url) ->
+              case ctx.vision_fn(data_url, question) {
+                Ok(analysis) -> TextResult(analysis)
+                Error(e) -> TextResult("Vision error: " <> e)
+              }
+          }
+        }
+      }
+    }
     _ -> {
       // GLM-5.1 sometimes uses the skill name directly as the tool name
       // instead of "run_skill". If the unknown tool name matches a known skill,
@@ -1554,6 +1574,24 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "filename",
           param_type: "string",
           description: "Optional display name in Discord. Defaults to the basename of path.",
+          required: False,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
+      name: "describe_image",
+      description: "Ask the vision model about a local image file. Use this for user-uploaded attachments (auto-downloaded to /tmp/aura-attachments/<msg_id>/), screenshots on disk, or any image you want described. Pass a specific question to focus the analysis. This is the right tool for follow-up vision queries on attached receipts, diagrams, or photos — DO NOT route through browser(navigate file://) + browser(vision), which is slower and browser-scoped.",
+      parameters: [
+        llm.ToolParam(
+          name: "path",
+          param_type: "string",
+          description: "Absolute or relative path to the image file on disk.",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "question",
+          param_type: "string",
+          description: "What to ask the vision model. Defaults to a general description prompt.",
           required: False,
         ),
       ],
