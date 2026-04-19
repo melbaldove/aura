@@ -51,6 +51,7 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [020](020-memory-dreaming.md) | Memory dreaming — offline consolidation system | Accepted |
 | [021](021-unix-socket-ipc.md) | Unix socket IPC for CLI-to-daemon communication | Accepted |
 | [022](022-browser-tool-agent-browser.md) | Browser tool via agent-browser CLI | Accepted |
+| [023](023-client-dependency-injection.md) | Client dependency injection for external boundaries | Accepted |
 
 ## Adding a new ADR
 
