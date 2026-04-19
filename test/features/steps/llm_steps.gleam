@@ -38,6 +38,10 @@ pub fn register(reg: StepRegistry) -> StepRegistry {
     "the LLM system prompt contains {string}",
     then_llm_system_prompt_contains,
   )
+  |> steps.step(
+    "the LLM last call messages contain {string}",
+    then_llm_last_call_messages_contain,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +182,60 @@ fn poll_for_system_prompt(
     False -> {
       let _ = process.sleep(10)
       poll_for_system_prompt(fake, expected, elapsed + 10, timeout_ms)
+    }
+  }
+}
+
+/// Assert that the most-recent `stream_with_tools` call carried at least one
+/// message (of any role) whose content contains the given substring.  Used to
+/// verify that tool errors surfaced as `ToolResultMessage` entries in the next
+/// LLM iteration.  Polls for up to 2000ms to allow async brain processing.
+fn then_llm_last_call_messages_contain(
+  ctx: StepContext,
+) -> Result(dream_types.AssertionResult, String) {
+  use expected <- result_try(get_string(ctx.captures, 0))
+  use system <- result_try(world.get(ctx.world, "system"))
+  let sys: TestSystem = system
+  let combined = poll_for_any_message(sys.fake_llm, expected, 0, 2000)
+  combined
+  |> should
+  |> contain_string(expected)
+  |> or_fail_with(
+    "No message in last LLM call contained: " <> expected,
+  )
+}
+
+/// Poll every 10ms until any message in the latest LLM call contains
+/// `expected`, or until `timeout_ms` elapses.
+fn poll_for_any_message(
+  fake: fake_llm.FakeLLM,
+  expected: String,
+  elapsed: Int,
+  timeout_ms: Int,
+) -> String {
+  let calls = fake_llm.calls(fake)
+  let last_call_messages = case list.last(calls) {
+    Ok(c) -> c.messages
+    Error(_) -> []
+  }
+  let combined =
+    last_call_messages
+    |> list.filter_map(fn(m) {
+      case m {
+        llm.UserMessage(content) -> Ok(content)
+        llm.UserMessageWithImage(content, _) -> Ok(content)
+        llm.AssistantMessage(content) -> Ok(content)
+        llm.AssistantToolCallMessage(content, _) -> Ok(content)
+        llm.SystemMessage(content) -> Ok(content)
+        llm.ToolResultMessage(_, content) -> Ok(content)
+      }
+    })
+    |> string.join("\n")
+  case string.contains(combined, expected) || elapsed >= timeout_ms {
+    True -> combined
+    False -> {
+      let _ = process.sleep(10)
+      poll_for_any_message(fake, expected, elapsed + 10, timeout_ms)
     }
   }
 }
