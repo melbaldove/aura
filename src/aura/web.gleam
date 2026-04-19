@@ -11,6 +11,8 @@ import gleam/result
 import gleam/string
 import gleam/uri
 
+const user_agent = "Aura/0.1 (bot)"
+
 /// A web search result.
 pub type SearchResult {
   SearchResult(title: String, url: String, description: String)
@@ -100,7 +102,7 @@ pub fn fetch(url: String, max_chars: Int) -> Result(String, String) {
   let req =
     req
     |> request.set_method(http.Get)
-    |> request.set_header("user-agent", "Aura/0.1 (bot)")
+    |> request.set_header("user-agent", user_agent)
     |> request.set_header("accept", "text/html,text/plain,application/json")
 
   use resp <- result.try(
@@ -145,7 +147,7 @@ pub fn fetch_bytes(url: String, timeout_ms: Int) -> Result(BitArray, String) {
   let req =
     req
     |> request.set_method(http.Get)
-    |> request.set_header("user-agent", "Aura/0.1 (bot)")
+    |> request.set_header("user-agent", user_agent)
     |> request.set_body(<<>>)
 
   use resp <- result.try(

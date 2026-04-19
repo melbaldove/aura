@@ -2303,8 +2303,9 @@ fn preprocess_attachments(
       // the LLM can pass them to shell/skills. Non-blocking on failure.
       let path_lines = download_attachments_to_tmp(attachments, msg.message_id)
 
-      // Fetch text file attachments and prepend their content
-      let text_content = fetch_text_attachments(attachments)
+      // Fetch text file attachments and prepend their content. Reads from
+      // the local copy when available to avoid a second CDN round-trip.
+      let text_content = fetch_text_attachments(attachments, msg.message_id)
       let with_paths = case path_lines {
         "" -> msg.content
         p -> p <> "\n\n" <> msg.content
@@ -2359,55 +2360,90 @@ fn preprocess_attachments(
   }
 }
 
+const attachment_tmp_base = "/tmp/aura-attachments"
+
+const attachment_download_timeout_ms = 30_000
+
+/// Drop path separators and navigation elements from a user-supplied
+/// filename so it can't escape the per-message tmp dir.
+fn safe_filename(name: String) -> String {
+  let segments =
+    name
+    |> string.replace("\\", "/")
+    |> string.split("/")
+  case list.last(segments) {
+    Ok("") | Ok(".") | Ok("..") | Error(_) -> "attachment"
+    Ok(seg) -> seg
+  }
+}
+
+fn attachment_dir(msg_id: String) -> String {
+  attachment_tmp_base <> "/" <> msg_id
+}
+
 /// Download every attachment to /tmp/aura-attachments/<msg_id>/ and return
-/// one line per attachment formatted as `[attachment: /path] filename (N bytes)`.
+/// one line per attachment formatted as `[attachment: /path] filename`.
 /// Best-effort: failures are logged but don't block the message.
 fn download_attachments_to_tmp(
   attachments: List(discord_types.Attachment),
   msg_id: String,
 ) -> String {
-  let dir = "/tmp/aura-attachments/" <> msg_id
-  let _ = simplifile.create_directory_all(dir)
-  let lines = list.filter_map(attachments, fn(att) {
-    let path = dir <> "/" <> att.filename
-    case web.fetch_bytes(att.url, 30_000) {
-      Error(e) -> {
-        logging.log(logging.Error, "[brain] Attachment download failed for " <> att.filename <> ": " <> e)
-        Error(Nil)
-      }
-      Ok(bytes) ->
-        case simplifile.write_bits(path, bytes) {
+  let dir = attachment_dir(msg_id)
+  case simplifile.create_directory_all(dir) {
+    Error(e) -> {
+      logging.log(logging.Error, "[brain] Attachment dir create failed for " <> dir <> ": " <> simplifile.describe_error(e))
+      ""
+    }
+    Ok(_) -> {
+      let lines = list.filter_map(attachments, fn(att) {
+        let path = dir <> "/" <> safe_filename(att.filename)
+        case web.fetch_bytes(att.url, attachment_download_timeout_ms) {
           Error(e) -> {
-            logging.log(logging.Error, "[brain] Attachment write failed for " <> path <> ": " <> string.inspect(e))
+            logging.log(logging.Error, "[brain] Attachment download failed for " <> att.filename <> ": " <> e)
             Error(Nil)
           }
-          Ok(_) -> {
-            logging.log(logging.Info, "[brain] Attachment saved: " <> path)
-            Ok("[attachment: " <> path <> "] " <> att.filename)
-          }
+          Ok(bytes) ->
+            case simplifile.write_bits(path, bytes) {
+              Error(e) -> {
+                logging.log(logging.Error, "[brain] Attachment write failed for " <> path <> ": " <> simplifile.describe_error(e))
+                Error(Nil)
+              }
+              Ok(_) -> {
+                logging.log(logging.Info, "[brain] Attachment saved: " <> path)
+                Ok("[attachment: " <> path <> "] " <> att.filename)
+              }
+            }
         }
+      })
+      string.join(lines, "\n")
     }
-  })
-  string.join(lines, "\n")
+  }
 }
 
-/// Fetch text file attachments and return their content as a formatted string.
-/// Supports common text file types. Returns empty string if no text files.
+/// Read text file attachments as content for inlining. Prefers the local
+/// copy at /tmp/aura-attachments/<msg_id>/; falls back to CDN fetch when
+/// the download hook left no file on disk.
 fn fetch_text_attachments(
   attachments: List(discord_types.Attachment),
+  msg_id: String,
 ) -> String {
+  let dir = attachment_dir(msg_id)
   let text_parts = list.filter_map(attachments, fn(att) {
     case is_text_attachment(att) {
       False -> Error(Nil)
       True -> {
-        logging.log(logging.Info, "[brain] Fetching text attachment: " <> att.filename)
-        case web.fetch(att.url, 50_000) {
+        let local = dir <> "/" <> safe_filename(att.filename)
+        let content_result = case simplifile.read(local) {
+          Ok(content) -> Ok(content)
+          Error(_) -> web.fetch(att.url, 50_000)
+        }
+        case content_result {
           Ok(content) -> {
-            logging.log(logging.Info, "[brain] Fetched " <> att.filename <> " (" <> int.to_string(string.length(content)) <> " chars)")
+            logging.log(logging.Info, "[brain] Inlining text attachment " <> att.filename <> " (" <> int.to_string(string.length(content)) <> " chars)")
             Ok("[File: " <> att.filename <> "]\n```\n" <> content <> "\n```")
           }
           Error(e) -> {
-            logging.log(logging.Error, "[brain] Failed to fetch " <> att.filename <> ": " <> e)
+            logging.log(logging.Error, "[brain] Failed to read " <> att.filename <> ": " <> e)
             Error(Nil)
           }
         }
