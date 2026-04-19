@@ -753,14 +753,7 @@ fn execute_tool_dispatch(
       case require_arg(args, "command") {
         Error(e) -> TextResult(e)
         Ok(command) -> {
-          let timeout_s = case get_arg(args, "timeout") {
-            "" -> 180
-            t -> case int.parse(t) {
-              Ok(n) -> int.min(n, 600)
-              Error(_) -> 180
-            }
-          }
-          let timeout_ms = timeout_s * 1000
+          let timeout_ms = parse_timeout_ms(args, 180, 600)
           let cwd = case ctx.domain_cwd {
             "" -> ctx.base_dir
             c -> c
@@ -786,13 +779,7 @@ fn execute_tool_dispatch(
               case browser.resolve_session(session_arg, ctx.channel_id) {
                 Error(e) -> TextResult("Error: " <> e)
                 Ok(session) -> {
-                  let timeout_ms = case get_arg(args, "timeout") {
-                    "" -> 90_000
-                    t -> case int.parse(t) {
-                      Ok(n) -> int.min(n * 1000, 600_000)
-                      Error(_) -> 90_000
-                    }
-                  }
+                  let timeout_ms = parse_timeout_ms(args, 90, 600)
                   let exec_ctx =
                     browser.ExecContext(
                       session: session,
@@ -1166,6 +1153,24 @@ pub fn require_arg(
   }
 }
 
+/// Parse the LLM's `timeout` arg (seconds) into milliseconds, with a
+/// default and cap (both in seconds). Non-integer values fall back to the
+/// default. Used by any tool that exposes a per-call timeout override.
+fn parse_timeout_ms(
+  args: List(#(String, String)),
+  default_s: Int,
+  cap_s: Int,
+) -> Int {
+  case get_arg(args, "timeout") {
+    "" -> default_s * 1000
+    t ->
+      case int.parse(t) {
+        Ok(n) -> int.min(n, cap_s) * 1000
+        Error(_) -> default_s * 1000
+      }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -1497,7 +1502,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "browser",
-      description: "Control a headless browser. Use for interactive pages (auth, forms, JS-rendered content). For read-only static HTML, prefer web_fetch. Sessions persist cookies/auth across calls within the same Discord thread. Actions: navigate, snapshot, click, type, press, back, vision, console, wait. First call should be `navigate`. After navigate, a compact snapshot is returned automatically — no separate snapshot call needed unless the page changed.\n\nPages load async. After any state-changing action (navigate, click-that-navigates, press Enter on a form), call `browser(wait, ref=\"@eN\")` for a known target element or `browser(wait, seconds=3)`. Element refs (`@eN`) are only valid for the snapshot that returned them — re-snapshot after navigations. If an action times out, the page is likely still loading; retry with a higher `timeout` arg (e.g. 180). For full patterns, run `shell(command=\"agent-browser skills get core --full\")` — authoritative agent-browser playbook.",
+      description: "Control a headless browser. Use for interactive pages (auth, forms, JS-rendered content). For read-only static HTML, prefer web_fetch. Sessions persist cookies/auth across calls within the same Discord thread. First call should be `navigate`. After navigate, a compact snapshot is returned automatically — no separate snapshot call needed unless the page changed.\n\nPages load async. After any state-changing action (navigate, click-that-navigates, press Enter on a form), call `browser(wait, ref=\"@eN\")` for a known target element or `browser(wait, seconds=3)`. Element refs (`@eN`) are only valid for the snapshot that returned them — re-snapshot after navigations. If an action times out, the page is likely still loading; retry with a higher `timeout` arg (e.g. 180). For full patterns, run `shell(command=\"agent-browser skills get core --full\")` — authoritative agent-browser playbook.",
       parameters: [
         llm.ToolParam(
           name: "action",
@@ -1514,7 +1519,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         llm.ToolParam(
           name: "ref",
           param_type: "string",
-          description: "Element ref like @e5, for click/type.",
+          description: "Element ref like @e5, for click/type/wait.",
           required: False,
         ),
         llm.ToolParam(
@@ -1549,14 +1554,14 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         ),
         llm.ToolParam(
           name: "seconds",
-          param_type: "integer",
-          description: "For wait action: how many seconds to sleep (e.g. 3). Use either this or `ref`.",
+          param_type: "string",
+          description: "For wait action: how many seconds to sleep (e.g. \"3\"). Use either this or `ref`.",
           required: False,
         ),
         llm.ToolParam(
           name: "timeout",
-          param_type: "integer",
-          description: "Per-call override of the default 90s action timeout, in seconds. Cap 600. Bump when you expect a slow op (big form submit, large upload).",
+          param_type: "string",
+          description: "Per-call override of the default 90s action timeout, in seconds (e.g. \"180\"). Cap 600. Bump when you expect a slow op (big form submit, large upload).",
           required: False,
         ),
         llm.ToolParam(
