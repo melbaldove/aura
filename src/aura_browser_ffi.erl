@@ -44,8 +44,12 @@ run(Session, CdpUrl, Action, Args, TimeoutMs) ->
         CdpStr = binary_to_list(CdpUrl),
         ActionStr = binary_to_list(Action),
         ArgsList = [binary_to_list(A) || A <- Args],
+        %% --session isolates the daemon; --session-name persists cookies +
+        %% localStorage across daemon restarts (deploys, reboots). Both use
+        %% the same name. --session-name does not apply to CDP-attached
+        %% browsers — the attached browser manages its own state.
         BackendFlag = case CdpStr of
-            "" -> ["--session", SessionStr];
+            "" -> ["--session", SessionStr, "--session-name", SessionStr];
             Url -> ["--cdp", Url]
         end,
         SocketDir = filename:join(
