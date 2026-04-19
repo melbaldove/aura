@@ -2074,18 +2074,41 @@ fn tool_loop_progressive(
               let new_traces = list.flatten([traces, list.reverse(rev_traces)])
               let tool_results = list.reverse(rev_results)
 
-              // Format current traces for progressive display
-              let progress_text =
-                conversation.format_traces(new_traces) <> "\n\n*Thinking...*"
-
-              // Send or edit message with current trace progress
-              let new_message_id =
-                send_or_edit(
-                  state.discord_token,
-                  channel_id,
-                  message_id,
-                  progress_text,
-                )
+              // If the model narrated text before these tool calls, finalize
+              // the current Discord message with that text + traces so it
+              // stays visible, and start a fresh message for the next
+              // iteration. Otherwise keep editing in place.
+              let #(next_traces, next_message_id) = case
+                string.length(response.content) > 0
+              {
+                True -> {
+                  let finalized =
+                    response.content
+                    <> "\n\n"
+                    <> conversation.format_traces(new_traces)
+                  let _ =
+                    send_or_edit(
+                      state.discord_token,
+                      channel_id,
+                      message_id,
+                      finalized,
+                    )
+                  #([], "")
+                }
+                False -> {
+                  let progress_text =
+                    conversation.format_traces(new_traces)
+                    <> "\n\n*Thinking...*"
+                  let mid =
+                    send_or_edit(
+                      state.discord_token,
+                      channel_id,
+                      message_id,
+                      progress_text,
+                    )
+                  #(new_traces, mid)
+                }
+              }
 
               // Track new messages from this iteration: assistant tool call + tool results
               let iteration_messages = [
@@ -2104,8 +2127,8 @@ fn tool_loop_progressive(
                 tool_ctx,
                 channel_id,
                 updated_messages,
-                new_traces,
-                new_message_id,
+                next_traces,
+                next_message_id,
                 iteration + 1,
                 updated_new_messages,
               )
