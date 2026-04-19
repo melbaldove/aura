@@ -16,5 +16,6 @@ cp "$MAN_SRC/aura-config.5" "$MAN_BASE/man5/"
 cp "$MAN_SRC/aura-flares.7" "$MAN_BASE/man7/"
 cp "$MAN_SRC/aura-diagnostics.7" "$MAN_BASE/man7/"
 cp "$MAN_SRC/aura-browser.7" "$MAN_BASE/man7/"
+cp "$MAN_SRC/aura-testing.7" "$MAN_BASE/man7/"
 
 echo "Man pages installed to $MAN_BASE"
