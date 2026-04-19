@@ -1,9 +1,12 @@
+import gleam/bit_array
+import gleam/dynamic/decode
 import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import gleam/uri
+import simplifile
 
 pub type Action {
   Navigate
@@ -13,6 +16,7 @@ pub type Action {
   Press
   Back
   Vision
+  Console
 }
 
 /// Resolve the agent-browser session name from an optional LLM-provided
@@ -140,13 +144,14 @@ pub fn parse_action(s: String) -> Result(Action, String) {
     "press" -> Ok(Press)
     "back" -> Ok(Back)
     "vision" -> Ok(Vision)
+    "console" -> Ok(Console)
     "" -> Error("action is required")
     other -> Error("unknown action: " <> other)
   }
 }
 
-/// Injection point for the FFI call. Tests pass a fake `run_fn`;
-/// production uses `run_ffi` defined below.
+/// Injection point for external calls. Tests pass fakes; production wires
+/// `run_fn` to `run_ffi` and `vision_fn` to the brain's vision pipeline.
 pub type ExecContext {
   ExecContext(
     session: String,
@@ -154,6 +159,7 @@ pub type ExecContext {
     timeout_ms: Int,
     run_fn: fn(String, String, String, List(String), Int) ->
       Result(String, String),
+    vision_fn: fn(String, String) -> Result(String, String),
   )
 }
 
@@ -172,7 +178,8 @@ pub fn execute(
       call_ffi("type", [get_arg(args, "ref"), get_arg(args, "text")], ctx)
     Press -> call_ffi("press", [get_arg(args, "key")], ctx)
     Back -> call_ffi("back", [], ctx)
-    Vision -> call_ffi("screenshot", [], ctx)
+    Vision -> dispatch_vision(args, ctx)
+    Console -> dispatch_console(args, ctx)
   }
 }
 
@@ -190,8 +197,113 @@ fn dispatch_navigate(
           )
         _, False ->
           error_json("Blocked: URL targets a private or internal address")
-        False, True -> call_ffi("open", [url], ctx)
+        False, True -> {
+          let raw = call_ffi("open", [url], ctx)
+          maybe_intercept_auth_wall(raw)
+        }
       }
+  }
+}
+
+/// If the navigate response lands on a recognizable login/auth page,
+/// replace it with an AUTH_REQUIRED signal so the LLM short-circuits.
+/// Otherwise return the raw response unchanged.
+fn maybe_intercept_auth_wall(raw_json: String) -> String {
+  let decoder = {
+    use url <- decode.optional_field("url", "", decode.string)
+    use title <- decode.optional_field("title", "", decode.string)
+    decode.success(#(url, title))
+  }
+  let full_decoder = decode.at(["data"], decoder)
+  case json.parse(raw_json, full_decoder) {
+    Ok(#(url, title)) ->
+      case detect_auth_required(url, title) {
+        True ->
+          json.to_string(
+            json.object([
+              #("success", json.bool(False)),
+              #("error", json.string("AUTH_REQUIRED: " <> url)),
+              #("needs_auth", json.bool(True)),
+              #("url", json.string(url)),
+            ]),
+          )
+        False -> raw_json
+      }
+    Error(_) -> raw_json
+  }
+}
+
+fn dispatch_vision(
+  args: List(#(String, String)),
+  ctx: ExecContext,
+) -> String {
+  let question = case get_arg(args, "question") {
+    "" -> "Describe this page concisely. Focus on text content, numbers, structure, and any actionable information."
+    q -> q
+  }
+  let raw = call_ffi("screenshot", [], ctx)
+  let path_decoder = decode.at(["data", "path"], decode.string)
+  case json.parse(raw, path_decoder) {
+    Error(_) -> raw
+    Ok(path) ->
+      case read_as_data_url(path) {
+        Error(e) -> error_json("vision screenshot unreadable: " <> e)
+        Ok(data_url) ->
+          case ctx.vision_fn(data_url, question) {
+            Error(e) -> error_json("vision model failed: " <> e)
+            Ok(analysis) ->
+              json.to_string(
+                json.object([
+                  #("success", json.bool(True)),
+                  #(
+                    "data",
+                    json.object([
+                      #("analysis", json.string(analysis)),
+                      #("path", json.string(path)),
+                    ]),
+                  ),
+                ]),
+              )
+          }
+      }
+  }
+}
+
+fn dispatch_console(
+  args: List(#(String, String)),
+  ctx: ExecContext,
+) -> String {
+  case get_arg(args, "expression") {
+    "" -> call_ffi("console", [], ctx)
+    expr -> call_ffi("eval", [expr], ctx)
+  }
+}
+
+/// Read a local image file and encode it as a base64 data URL suitable
+/// for OpenAI-compatible vision APIs.
+fn read_as_data_url(path: String) -> Result(String, String) {
+  case simplifile.read_bits(path) {
+    Error(e) ->
+      Error("Failed to read " <> path <> ": " <> simplifile.describe_error(e))
+    Ok(bytes) -> {
+      let mime = mime_for_path(path)
+      let encoded = bit_array.base64_encode(bytes, True)
+      Ok("data:" <> mime <> ";base64," <> encoded)
+    }
+  }
+}
+
+fn mime_for_path(path: String) -> String {
+  let lower = string.lowercase(path)
+  let suffixes = [
+    #(".png", "image/png"),
+    #(".jpg", "image/jpeg"),
+    #(".jpeg", "image/jpeg"),
+    #(".webp", "image/webp"),
+  ]
+  case list.find(suffixes, fn(pair) { string.ends_with(lower, pair.0) }) {
+    Ok(#(_, mime)) -> mime
+    Error(_) -> "image/png"
   }
 }
 

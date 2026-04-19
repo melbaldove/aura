@@ -96,6 +96,7 @@ pub type ToolContext {
     on_propose: fn(PendingProposal) -> Nil,
     shell_patterns: shell.CompiledPatterns,
     on_shell_approve: fn(PendingShellApproval) -> Nil,
+    vision_fn: fn(String, String) -> Result(String, String),
   )
 }
 
@@ -791,6 +792,7 @@ fn execute_tool_dispatch(
                       cdp_url: cdp_url,
                       timeout_ms: 30_000,
                       run_fn: browser.run_ffi,
+                      vision_fn: ctx.vision_fn,
                     )
                   TextResult(browser.execute(action, args, exec_ctx))
                 }
@@ -1473,7 +1475,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         llm.ToolParam(
           name: "action",
           param_type: "string",
-          description: "navigate | snapshot | click | type | press | back | vision",
+          description: "navigate | snapshot | click | type | press | back | vision | console",
           required: True,
         ),
         llm.ToolParam(
@@ -1504,6 +1506,12 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "question",
           param_type: "string",
           description: "What to ask the vision model, for vision action.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "expression",
+          param_type: "string",
+          description: "JavaScript expression to eval, for console action. Omit to read console logs instead.",
           required: False,
         ),
         llm.ToolParam(

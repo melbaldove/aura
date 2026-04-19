@@ -1340,6 +1340,31 @@ fn build_llm_context(
     None -> state.paths.data
   }
 
+  let domain_cfg_opt = case domain_name {
+    Some(name) ->
+      case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
+        Ok(#(_, cfg)) -> Some(cfg)
+        Error(_) -> None
+      }
+    None -> None
+  }
+  let vision_config = vision.resolve_vision_config(state.global_config, domain_cfg_opt)
+  let tool_vision_fn = fn(image_url: String, question: String) -> Result(String, String) {
+    case vision.is_enabled(vision_config) {
+      False -> Error("vision not configured (set [models] vision in config.toml)")
+      True ->
+        case models.build_llm_config(vision_config.model_spec) {
+          Error(e) -> Error(e)
+          Ok(llm_cfg) ->
+            llm.chat_with_options(
+              llm_cfg,
+              [llm.UserMessageWithImage(content: question, image_url: image_url)],
+              None,
+            )
+        }
+    }
+  }
+
   let tool_ctx =
     brain_tools.ToolContext(
       base_dir: base_dir,
@@ -1364,6 +1389,7 @@ fn build_llm_context(
       on_propose: fn(_) { Nil },
       shell_patterns: state.shell_patterns,
       on_shell_approve: fn(_) { Nil },
+      vision_fn: tool_vision_fn,
     )
 
   // Build roster summary
