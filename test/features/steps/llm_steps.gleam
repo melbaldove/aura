@@ -4,6 +4,7 @@ import dream_test/gherkin/world
 import dream_test/matchers.{contain_string, or_fail_with, should, succeed}
 import dream_test/types as dream_types  // AssertionResult used in handler return types
 import fakes/fake_llm
+import gleam/erlang/process
 import gleam/list
 import gleam/string
 import test_harness.{type TestSystem}
@@ -32,6 +33,10 @@ pub fn register(reg: StepRegistry) -> StepRegistry {
   |> steps.step(
     "the LLM user message contains {string}",
     then_llm_user_message_contains,
+  )
+  |> steps.step(
+    "the LLM system prompt contains {string}",
+    then_llm_system_prompt_contains,
   )
 }
 
@@ -117,6 +122,57 @@ fn then_llm_user_message_contains(
   |> or_fail_with(
     "No user message across LLM calls contained: " <> expected,
   )
+}
+
+/// Assert that the system prompt in the latest LLM `stream_with_tools` call
+/// contains the given substring. Proves domain context assembly injected the
+/// AGENTS.md content into the prompt.
+///
+/// Polls for up to 2000ms since the brain processes messages asynchronously —
+/// the LLM call may not have been recorded by the time this step runs.
+fn then_llm_system_prompt_contains(
+  ctx: StepContext,
+) -> Result(dream_types.AssertionResult, String) {
+  use expected <- result_try(get_string(ctx.captures, 0))
+  use system <- result_try(world.get(ctx.world, "system"))
+  let sys: TestSystem = system
+  let combined = poll_for_system_prompt(sys.fake_llm, expected, 0, 2000)
+  combined
+  |> should
+  |> contain_string(expected)
+  |> or_fail_with(
+    "No system message across LLM calls contained: " <> expected,
+  )
+}
+
+/// Poll every 10ms until a system message containing `expected` appears in the
+/// recorded LLM calls, or until `timeout_ms` elapses. Returns the combined
+/// system message content (possibly not containing `expected` on timeout).
+fn poll_for_system_prompt(
+  fake: fake_llm.FakeLLM,
+  expected: String,
+  elapsed: Int,
+  timeout_ms: Int,
+) -> String {
+  let calls = fake_llm.calls(fake)
+  let combined =
+    calls
+    |> list.flat_map(fn(c) {
+      list.filter_map(c.messages, fn(m) {
+        case m {
+          llm.SystemMessage(content) -> Ok(content)
+          _ -> Error(Nil)
+        }
+      })
+    })
+    |> string.join("\n")
+  case string.contains(combined, expected) || elapsed >= timeout_ms {
+    True -> combined
+    False -> {
+      let _ = process.sleep(10)
+      poll_for_system_prompt(fake, expected, elapsed + 10, timeout_ms)
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

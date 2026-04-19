@@ -156,6 +156,113 @@ pub fn fresh_system() -> TestSystem {
   )
 }
 
+/// Spin up a fresh `TestSystem` with a single domain pre-configured. Creates a
+/// temporary directory under /tmp, writes `agents_md` to AGENTS.md in the
+/// domain's config dir, seeds a `DomainInfo` pointing `channel_id` to
+/// `domain_name`, and includes it in BrainConfig's domains list.
+///
+/// Convention: the channel_id for the domain is always `<domain_name>-channel`
+/// unless overridden. This helper uses that convention internally.
+///
+/// The domain config dir is at:
+///   {paths.config}/domains/{domain_name}/AGENTS.md
+///
+/// which matches what `domain.load_context` reads via `xdg.domain_config_dir`.
+pub fn fresh_system_with_domain(
+  domain_name: String,
+  agents_md: String,
+  channel_id: String,
+) -> TestSystem {
+  // 1. Build the three fakes.
+  let #(fake_discord, discord_client) = fake_discord.new()
+  let #(fake_llm, llm_client) = fake_llm.new()
+  let #(fake_skill_runner, skill_runner_client) = fake_skill_runner.new()
+
+  // 2. Unique scratch DB path; delete any pre-existing file.
+  let db_path =
+    "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
+  let _ = simplifile.delete(db_path)
+
+  // 3. Ensure models.build_llm_config can resolve an API key.
+  set_env("ZAI_API_KEY", "test-harness-dummy-key")
+
+  // 4. DB actor at the scratch path.
+  let assert Ok(db_subject) = db.start(db_path)
+
+  // 5. Live flare_manager.
+  let assert Ok(flare_subject) =
+    flare_manager.start(
+      1,
+      "zai/glm-5-turbo",
+      fn(_event) { Nil },
+      transport.Tmux,
+      db_subject,
+    )
+
+  // 6. Build paths pointing at a unique tmp root.
+  let tmp_root = "/tmp/aura-test-root-" <> int.to_string(unique_integer())
+  let paths =
+    xdg.Paths(
+      config: tmp_root <> "/config",
+      data: tmp_root <> "/data",
+      state: tmp_root <> "/state",
+    )
+
+  // 7. Create the domain config directory and write AGENTS.md.
+  //    domain.load_context reads AGENTS.md from:
+  //      {paths.config}/domains/{domain_name}/AGENTS.md
+  let domain_config_dir =
+    paths.config <> "/domains/" <> domain_name
+  let assert Ok(_) = simplifile.create_directory_all(domain_config_dir)
+  let assert Ok(_) =
+    simplifile.write(domain_config_dir <> "/AGENTS.md", agents_md)
+
+  // 8. Build BrainConfig with the test domain included.
+  let global =
+    config.GlobalConfig(
+      ..config.default_global(),
+      models: config.ModelsConfig(
+        brain: "zai/glm-5-turbo",
+        domain: "",
+        acp: "",
+        heartbeat: "",
+        monitor: "",
+        vision: "zai/glm-5v-turbo",
+        dream: "",
+      ),
+      brain_context: 128_000,
+    )
+
+  let domain_info = brain.DomainInfo(name: domain_name, channel_id: channel_id)
+
+  let brain_config =
+    brain.BrainConfig(
+      global: global,
+      paths: paths,
+      soul: "You are Aura, under test.",
+      domains: [domain_info],
+      domain_configs: [],
+      skill_infos: [],
+      validation_rules: [],
+      db_subject: db_subject,
+      acp_subject: flare_subject,
+      discord: discord_client,
+      llm: llm_client,
+      skill_runner: skill_runner_client,
+      browser_runner: browser_runner.production(),
+    )
+
+  let assert Ok(brain_subject) = brain.start(brain_config)
+
+  TestSystem(
+    brain_subject: brain_subject,
+    fake_discord: fake_discord,
+    fake_llm: fake_llm,
+    fake_skill_runner: fake_skill_runner,
+    db_path: db_path,
+  )
+}
+
 /// Stop the brain actor and remove the scratch DB. The fakes are linked to
 /// their own actors — they die with the test process.
 pub fn teardown(system: TestSystem) -> Nil {

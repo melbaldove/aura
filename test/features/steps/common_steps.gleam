@@ -26,6 +26,10 @@ pub fn register(reg: StepRegistry) -> StepRegistry {
   reg
   |> steps.step("a fresh Aura system", given_fresh_system)
   |> steps.step(
+    "a fresh Aura system with domain {string} containing AGENTS.md {string}",
+    given_fresh_system_with_domain,
+  )
+  |> steps.step(
     "a user message {string} arrives in {string}",
     when_user_message_arrives,
   )
@@ -75,6 +79,22 @@ fn given_fresh_system(
   ctx: StepContext,
 ) -> Result(dream_types.AssertionResult, String) {
   let system = test_harness.fresh_system()
+  world.put(ctx.world, "system", system)
+  Ok(succeed())
+}
+
+/// Set up a fresh system with a single domain pre-configured.
+/// Convention: channel_id is derived as `<domain_name>-channel`.
+/// The AGENTS.md content is written to the domain's config dir before brain
+/// starts, so `domain.load_context` picks it up on the first message.
+fn given_fresh_system_with_domain(
+  ctx: StepContext,
+) -> Result(dream_types.AssertionResult, String) {
+  use domain_name <- result_try(get_string(ctx.captures, 0))
+  use agents_md <- result_try(get_string(ctx.captures, 1))
+  let channel_id = domain_name <> "-channel"
+  let system =
+    test_harness.fresh_system_with_domain(domain_name, agents_md, channel_id)
   world.put(ctx.world, "system", system)
   Ok(succeed())
 }
