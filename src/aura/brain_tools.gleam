@@ -1502,7 +1502,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         llm.ToolParam(
           name: "action",
           param_type: "string",
-          description: "navigate | snapshot | click | type | press | back | vision | console",
+          description: "navigate | snapshot | click | type | press | back | vision | console | wait",
           required: True,
         ),
         llm.ToolParam(
@@ -1545,6 +1545,18 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "full",
           param_type: "boolean",
           description: "For snapshot: return full accessibility tree (default false = compact).",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "seconds",
+          param_type: "integer",
+          description: "For wait action: how many seconds to sleep (e.g. 3). Use either this or `ref`.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "timeout",
+          param_type: "integer",
+          description: "Per-call override of the default 90s action timeout, in seconds. Cap 600. Bump when you expect a slow op (big form submit, large upload).",
           required: False,
         ),
         llm.ToolParam(
