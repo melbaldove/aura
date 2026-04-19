@@ -184,7 +184,7 @@ pub fn execute(
     Back -> call_ffi("back", [], ctx)
     Vision -> dispatch_vision(args, ctx)
     Console -> dispatch_console(args, ctx)
-    Wait -> error_json("wait dispatcher not yet implemented")
+    Wait -> dispatch_wait(args, ctx)
   }
 }
 
@@ -281,6 +281,16 @@ fn dispatch_console(
   case get_arg(args, "expression") {
     "" -> call_ffi("console", [], ctx)
     expr -> call_ffi("eval", [expr], ctx)
+  }
+}
+
+fn dispatch_wait(
+  args: List(#(String, String)),
+  ctx: ExecContext,
+) -> String {
+  case get_arg(args, "ref") {
+    "" -> error_json("wait requires 'ref' or 'seconds'")
+    ref -> call_ffi("wait", [ref], ctx)
   }
 }
 

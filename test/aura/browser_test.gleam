@@ -285,3 +285,27 @@ pub fn parse_action_console_test() {
 pub fn parse_action_wait_test() {
   browser.parse_action("wait") |> should.equal(Ok(browser.Wait))
 }
+
+pub fn execute_wait_with_ref_test() {
+  let captured = fn(_session, _cdp, action, args, _timeout) {
+    Ok(
+      "{\"action\":\"" <> action <> "\",\"args\":\""
+      <> string.join(args, ",")
+      <> "\"}",
+    )
+  }
+  let result =
+    browser.execute(
+      browser.Wait,
+      [#("ref", "@e5")],
+      browser.ExecContext(
+        session: "s",
+        cdp_url: "",
+        timeout_ms: 90_000,
+        run_fn: captured,
+        vision_fn: no_vision,
+      ),
+    )
+  result |> string.contains("\"action\":\"wait\"") |> should.be_true
+  result |> string.contains("\"args\":\"@e5\"") |> should.be_true
+}
