@@ -1497,7 +1497,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "browser",
-      description: "Control a headless browser. Use for interactive pages (auth, forms, JS-rendered content). For read-only static HTML, prefer web_fetch. Sessions persist cookies/auth across calls within the same Discord thread. Actions: navigate, snapshot, click, type, press, back, vision. First call should be `navigate`. After navigate, a compact snapshot is returned automatically — no separate snapshot call needed unless the page changed.",
+      description: "Control a headless browser. Use for interactive pages (auth, forms, JS-rendered content). For read-only static HTML, prefer web_fetch. Sessions persist cookies/auth across calls within the same Discord thread. Actions: navigate, snapshot, click, type, press, back, vision, console, wait. First call should be `navigate`. After navigate, a compact snapshot is returned automatically — no separate snapshot call needed unless the page changed.\n\nPages load async. After any state-changing action (navigate, click-that-navigates, press Enter on a form), call `browser(wait, ref=\"@eN\")` for a known target element or `browser(wait, seconds=3)`. Element refs (`@eN`) are only valid for the snapshot that returned them — re-snapshot after navigations. If an action times out, the page is likely still loading; retry with a higher `timeout` arg (e.g. 180). For full patterns, run `shell(command=\"agent-browser skills get core --full\")` — authoritative agent-browser playbook.",
       parameters: [
         llm.ToolParam(
           name: "action",
