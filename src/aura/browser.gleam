@@ -20,6 +20,7 @@ pub type Action {
   Vision
   Console
   Wait
+  Upload
 }
 
 /// Resolve the agent-browser session name from an optional LLM-provided
@@ -149,6 +150,7 @@ pub fn parse_action(s: String) -> Result(Action, String) {
     "vision" -> Ok(Vision)
     "console" -> Ok(Console)
     "wait" -> Ok(Wait)
+    "upload" -> Ok(Upload)
     "" -> Error("action is required")
     other -> Error("unknown action: " <> other)
   }
@@ -185,6 +187,7 @@ pub fn execute(
     Vision -> dispatch_vision(args, ctx)
     Console -> dispatch_console(args, ctx)
     Wait -> dispatch_wait(args, ctx)
+    Upload -> dispatch_upload(args, ctx)
   }
 }
 
@@ -281,6 +284,17 @@ fn dispatch_console(
   case get_arg(args, "expression") {
     "" -> call_ffi("console", [], ctx)
     expr -> call_ffi("eval", [expr], ctx)
+  }
+}
+
+fn dispatch_upload(
+  args: List(#(String, String)),
+  ctx: ExecContext,
+) -> String {
+  case get_arg(args, "selector"), get_arg(args, "path") {
+    "", _ -> error_json("upload requires 'selector' (e.g. input[type=file])")
+    _, "" -> error_json("upload requires 'path' (absolute file path)")
+    selector, path -> call_ffi("upload", [selector, path], ctx)
   }
 }
 

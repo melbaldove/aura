@@ -176,6 +176,50 @@ pub fn discover_frontmatter_with_quoted_description_test() {
   Nil
 }
 
+pub fn patch_skill_replaces_unique_substring_test() {
+  let dir = "/tmp/aura-skill-patch-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(dir)
+  let _ = skill.create(dir, "p", "# P\n\nversion: 1.0\n")
+  skill.patch(dir, "p", "version: 1.0", "version: 2.0") |> should.be_ok
+  let assert Ok(read) = simplifile.read(dir <> "/p/SKILL.md")
+  read |> string.contains("version: 2.0") |> should.be_true
+  read |> string.contains("version: 1.0") |> should.be_false
+  let _ = simplifile.delete_all([dir])
+}
+
+pub fn patch_skill_rejects_missing_substring_test() {
+  let dir = "/tmp/aura-skill-patch-miss-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(dir)
+  let _ = skill.create(dir, "p", "# P\n")
+  skill.patch(dir, "p", "not there", "x") |> should.be_error
+  let _ = simplifile.delete_all([dir])
+}
+
+pub fn patch_skill_rejects_ambiguous_match_test() {
+  let dir = "/tmp/aura-skill-patch-amb-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(dir)
+  let _ = skill.create(dir, "p", "# P\n\nfoo\nfoo\n")
+  skill.patch(dir, "p", "foo", "bar") |> should.be_error
+  let _ = simplifile.delete_all([dir])
+}
+
+pub fn delete_skill_removes_directory_test() {
+  let dir = "/tmp/aura-skill-delete-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(dir)
+  let _ = skill.create(dir, "gone", "# Gone\n")
+  skill.delete(dir, "gone") |> should.be_ok
+  let exists = simplifile.is_directory(dir <> "/gone")
+  exists |> should.equal(Ok(False))
+  let _ = simplifile.delete_all([dir])
+}
+
+pub fn delete_skill_rejects_missing_test() {
+  let dir = "/tmp/aura-skill-delete-miss-" <> test_helpers.random_suffix()
+  let _ = simplifile.create_directory_all(dir)
+  skill.delete(dir, "ghost") |> should.be_error
+  let _ = simplifile.delete_all([dir])
+}
+
 pub fn list_with_details_test() {
   let dir = "/tmp/aura-skill-list-" <> test_helpers.random_suffix()
   let _ = simplifile.create_directory_all(dir <> "/alpha")

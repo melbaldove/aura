@@ -1,4 +1,5 @@
 import aura/cmd
+import gleam/int
 import gleam/list
 import gleam/result
 import gleam/string
@@ -292,6 +293,71 @@ pub fn upsert(
       )
       Ok("created")
     }
+  }
+}
+
+fn skill_md_path(skills_dir: String, name: String) -> String {
+  skills_dir <> "/" <> name <> "/SKILL.md"
+}
+
+fn wrap_fs(label: String) -> fn(simplifile.FileError) -> String {
+  fn(e) { label <> ": " <> simplifile.describe_error(e) }
+}
+
+/// Read the SKILL.md contents of an installed skill.
+pub fn read_md(skills_dir: String, name: String) -> Result(String, String) {
+  use _ <- result.try(validate_name(name))
+  case simplifile.is_directory(skills_dir <> "/" <> name) {
+    Ok(True) ->
+      simplifile.read(skill_md_path(skills_dir, name))
+      |> result.map_error(wrap_fs("Failed to read SKILL.md"))
+    _ -> Error("Skill not found: " <> name)
+  }
+}
+
+/// Replace a unique substring in an existing skill's SKILL.md. Fails if
+/// `old_str` is not found or occurs more than once — callers must widen
+/// context to disambiguate, matching the behavior of editor tools.
+pub fn patch(
+  skills_dir: String,
+  name: String,
+  old_str: String,
+  new_str: String,
+) -> Result(Nil, String) {
+  case old_str {
+    "" -> Error("old_str cannot be empty")
+    _ -> {
+      use content <- result.try(read_md(skills_dir, name))
+      let occurrences =
+        string.split(content, old_str) |> list.length |> int.subtract(1)
+      case occurrences {
+        0 -> Error("old_str not found in SKILL.md")
+        1 ->
+          simplifile.write(
+            skill_md_path(skills_dir, name),
+            string.replace(content, old_str, new_str),
+          )
+          |> result.map_error(wrap_fs("Failed to write SKILL.md"))
+        _ ->
+          Error(
+            "old_str matches "
+            <> int.to_string(occurrences)
+            <> " locations; widen the context so it uniquely identifies one",
+          )
+      }
+    }
+  }
+}
+
+/// Delete an installed skill, removing its directory and all contents.
+pub fn delete(skills_dir: String, name: String) -> Result(Nil, String) {
+  use _ <- result.try(validate_name(name))
+  let skill_path = skills_dir <> "/" <> name
+  case simplifile.is_directory(skill_path) {
+    Ok(True) ->
+      simplifile.delete(skill_path)
+      |> result.map_error(wrap_fs("Failed to delete skill"))
+    _ -> Error("Skill not found: " <> name)
   }
 }
 

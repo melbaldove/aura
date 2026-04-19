@@ -299,6 +299,43 @@ pub fn parse_action_wait_test() {
   browser.parse_action("wait") |> should.equal(Ok(browser.Wait))
 }
 
+pub fn parse_action_upload_test() {
+  browser.parse_action("upload") |> should.equal(Ok(browser.Upload))
+}
+
+pub fn execute_upload_passes_selector_and_path_test() {
+  let result =
+    browser.execute(
+      browser.Upload,
+      [#("selector", "input[type=file]"), #("path", "/tmp/receipt.jpg")],
+      test_ctx(capture_call),
+    )
+  result |> string.contains("\"action\":\"upload\"") |> should.be_true
+  result
+  |> string.contains("\"args\":\"input[type=file],/tmp/receipt.jpg\"")
+  |> should.be_true
+}
+
+pub fn execute_upload_requires_selector_test() {
+  let result =
+    browser.execute(
+      browser.Upload,
+      [#("path", "/tmp/receipt.jpg")],
+      test_ctx(capture_call),
+    )
+  result |> string.contains("upload requires 'selector'") |> should.be_true
+}
+
+pub fn execute_upload_requires_path_test() {
+  let result =
+    browser.execute(
+      browser.Upload,
+      [#("selector", "input[type=file]")],
+      test_ctx(capture_call),
+    )
+  result |> string.contains("upload requires 'path'") |> should.be_true
+}
+
 fn capture_call(_session, _cdp, action, args, _timeout) {
   Ok(
     "{\"action\":\"" <> action <> "\",\"args\":\""

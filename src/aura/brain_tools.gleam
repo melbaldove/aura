@@ -349,26 +349,7 @@ fn execute_tool_dispatch(
         Error(e) -> TextResult("Error: " <> e)
       }
     }
-    "create_skill" -> {
-      case require_arg(args, "name") {
-        Error(e) -> TextResult(e)
-        Ok(skill_name) ->
-          case require_arg(args, "content") {
-            Error(e) -> TextResult(e)
-            Ok(content) -> {
-              case skill.create(ctx.skills_dir, skill_name, content) {
-                Ok(_) ->
-                  TextResult(
-                    "Skill created: "
-                    <> skill_name
-                    <> ". Available immediately via list_skills and run_skill.",
-                  )
-                Error(e) -> TextResult("Error: " <> e)
-              }
-            }
-          }
-      }
-    }
+    "skill_manage" -> dispatch_skill_manage(args, ctx)
     "list_skills" -> {
       case skill.list_with_details(ctx.skills_dir) {
         Ok(listing) -> TextResult(listing)
@@ -1153,6 +1134,66 @@ pub fn require_arg(
   }
 }
 
+fn dispatch_skill_manage(
+  args: List(#(String, String)),
+  ctx: ToolContext,
+) -> ToolResult {
+  case require_arg(args, "action") {
+    Error(e) -> TextResult(e)
+    Ok(action) ->
+      case require_arg(args, "name") {
+        Error(e) -> TextResult(e)
+        Ok(name) -> skill_manage_action(action, name, args, ctx)
+      }
+  }
+}
+
+fn skill_manage_action(
+  action: String,
+  name: String,
+  args: List(#(String, String)),
+  ctx: ToolContext,
+) -> ToolResult {
+  case action {
+    "create" ->
+      case require_arg(args, "content") {
+        Error(e) -> TextResult(e)
+        Ok(content) ->
+          case skill.create(ctx.skills_dir, name, content) {
+            Ok(_) -> TextResult("Skill created: " <> name)
+            Error(e) -> TextResult("Error: " <> e)
+          }
+      }
+    "edit" ->
+      case require_arg(args, "content") {
+        Error(e) -> TextResult(e)
+        Ok(content) ->
+          case skill.update(ctx.skills_dir, name, content) {
+            Ok(_) -> TextResult("Skill updated: " <> name)
+            Error(e) -> TextResult("Error: " <> e)
+          }
+      }
+    "patch" ->
+      case require_arg(args, "old_str") {
+        Error(e) -> TextResult(e)
+        Ok(old_str) -> {
+          let new_str = get_arg(args, "new_str")
+          case skill.patch(ctx.skills_dir, name, old_str, new_str) {
+            Ok(_) -> TextResult("Skill patched: " <> name)
+            Error(e) -> TextResult("Error: " <> e)
+          }
+        }
+      }
+    "delete" ->
+      case skill.delete(ctx.skills_dir, name) {
+        Ok(_) -> TextResult("Skill deleted: " <> name)
+        Error(e) -> TextResult("Error: " <> e)
+      }
+    _ ->
+      TextResult("Error: unknown action '" <> action <> "'. Use create | edit | patch | delete.")
+  }
+}
+
 /// Parse the LLM's `timeout` arg (seconds) into milliseconds, with a
 /// default and cap (both in seconds). Non-integer values fall back to the
 /// default. Used by any tool that exposes a per-call timeout override.
@@ -1316,9 +1357,15 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
       ],
     ),
     llm.ToolDefinition(
-      name: "create_skill",
-      description: "Manage skills -- your procedural memory. Create reusable approaches for recurring task types. Save as SKILL.md with title, description, and step-by-step instructions. Use after complex tasks (3+ tool calls), tricky error fixes, or discovering non-trivial workflows.",
+      name: "skill_manage",
+      description: "Manage skills -- your procedural memory. Actions: create (new skill), edit (rewrite SKILL.md), patch (find-replace unique substring, preferred for small changes), delete (remove skill). Save after complex tasks (3+ tool calls), tricky error fixes, or non-trivial workflows the LLM had to discover through trial and error.",
       parameters: [
+        llm.ToolParam(
+          name: "action",
+          param_type: "string",
+          description: "One of: create | edit | patch | delete",
+          required: True,
+        ),
         llm.ToolParam(
           name: "name",
           param_type: "string",
@@ -1328,8 +1375,20 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         llm.ToolParam(
           name: "content",
           param_type: "string",
-          description: "Full SKILL.md content with title, description, and step-by-step instructions",
-          required: True,
+          description: "Full SKILL.md content, for create and edit actions",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "old_str",
+          param_type: "string",
+          description: "For patch: substring to replace. Must occur exactly once in SKILL.md — widen context if not unique.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "new_str",
+          param_type: "string",
+          description: "For patch: replacement text. Pass empty string to delete the matched substring.",
+          required: False,
         ),
       ],
     ),
@@ -1494,7 +1553,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         ),
         llm.ToolParam(
           name: "timeout",
-          param_type: "integer",
+          param_type: "string",
           description: "Timeout in seconds (default 180, max 600)",
           required: False,
         ),
@@ -1507,7 +1566,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         llm.ToolParam(
           name: "action",
           param_type: "string",
-          description: "navigate | snapshot | click | type | press | back | vision | console | wait",
+          description: "navigate | snapshot | click | type | press | back | vision | console | wait | upload",
           required: True,
         ),
         llm.ToolParam(
@@ -1548,8 +1607,20 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         ),
         llm.ToolParam(
           name: "full",
-          param_type: "boolean",
-          description: "For snapshot: return full accessibility tree (default false = compact).",
+          param_type: "string",
+          description: "For snapshot: return full accessibility tree (default false = compact). Pass 'true' as a string.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "selector",
+          param_type: "string",
+          description: "CSS selector for upload target (e.g. \"input[type=file]\"). If not found, the file input may not be rendered yet — snapshot/click the attach trigger first.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "path",
+          param_type: "string",
+          description: "Absolute file path to upload, for upload action.",
           required: False,
         ),
         llm.ToolParam(

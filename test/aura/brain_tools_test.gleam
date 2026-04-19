@@ -164,6 +164,26 @@ pub fn expand_tool_calls_infers_name_from_param_keys_test() {
   }
 }
 
+pub fn all_tool_params_are_string_typed_test() {
+  // parse_tool_args decodes to Dict(String, String) — any non-string
+  // param_type in a schema makes the LLM emit JSON numbers/booleans,
+  // which fail the decode and silently reject the entire tool call.
+  let tools = brain_tools.make_built_in_tools()
+  let offenders =
+    list.flat_map(tools, fn(t) {
+      case t {
+        llm.ToolDefinition(name: tool_name, parameters: params, ..) ->
+          list.filter_map(params, fn(p) {
+            case p.param_type {
+              "string" -> Error(Nil)
+              other -> Ok(tool_name <> "." <> p.name <> ":" <> other)
+            }
+          })
+      }
+    })
+  offenders |> should.equal([])
+}
+
 pub fn memory_tool_has_domain_param_test() {
   let tools = brain_tools.make_built_in_tools()
   let memory_tool = list.find(tools, fn(t) {
