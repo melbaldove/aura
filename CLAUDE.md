@@ -255,6 +255,14 @@ When making any non-trivial change, check whether these need updating:
 
 **Always use `bash scripts/deploy.sh`.** Never manual scp+build — it causes stale beams, missing NIF, and FFI mismatch bugs.
 
+**Before deploying, tail `/tmp/aura.log` on Eisenhower for in-flight work.** A deploy SIGTERMs the VM and kills any unlinked background process. Specifically, check for:
+- `[review] Spawned ... review for <domain>` with no matching `... review for <domain>: N entries written` or `... review failed` — a skill/memory/state review is still running, its LLM call will be aborted and no outcome will be logged
+- Active `[brain] Tool:` calls in the current tool loop — the user's in-progress turn will be interrupted
+- `[dreaming]` phases mid-run — dream cycles can take minutes per phase
+- Streaming LLM calls (`[llm] Streaming`) without a corresponding completion
+
+If any of these are in-flight, wait for them to settle (or warn the user) before deploying. Deploying over a conversation is more disruptive than it looks — we already lost a skill-review outcome to a mid-review deploy.
+
 The script does:
 1. `rsync` source + test `.gleam` and `.erl` files to Eisenhower (192.168.50.140)
 2. `gleam clean && gleam build` — ensures no stale beams from previous builds

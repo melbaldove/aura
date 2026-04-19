@@ -14,6 +14,21 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "agent",
+            "if": "Edit(test/**/*_test.gleam) || Write(test/**/*_test.gleam)",
+            "model": "haiku",
+            "prompt": "A test file was just edited or created. Verify the tests actually verify meaningful behavior — no tautologies, no empty assertions, no mocks asserting their own return values.\n\n1. Run `git diff HEAD` (or `git diff` if unstaged) on the changed file(s) to see the new/modified tests. Focus only on `pub fn *_test` functions added or changed in this edit.\n2. For each new or modified test, classify it. A test is TRIVIAL if any of the following hold:\n   - Asserts a literal against itself: `should.be_true(True)`, `should.equal(1, 1)`, `should.equal(\"x\", \"x\")`.\n   - Has no assertion: body runs but never calls `should.*`, never pattern-matches with `should.fail`, never uses `assert`. A test that can never fail is not a test.\n   - Asserts setup data against setup data: `let x = 5 ... should.equal(x, 5)` — the binding is the only source of the expected value.\n   - Mock + tautological assertion: creates a mock/fake that returns value V, then asserts the code under test returns V — the mock's return IS the expected value, so the test proves nothing about the code.\n   - Only checks types or shape without checking values: `should.be_ok(result)` alone when the unwrapped value is what matters (OK if the test is genuinely about 'did this succeed' — context-dependent).\n3. If all new/modified tests are meaningful, return {\"ok\": true}.\n4. If any test is trivial, return {\"ok\": false, \"reason\": \"<test_function_name>: <specific reason it's trivial, with the line of code>\"}. Block the commit; the developer needs to fix these before proceeding.\n\nDo NOT flag tests for style, naming, organization, or coverage gaps. Only flag tests that are structurally incapable of catching a regression.",
+            "timeout": 45,
+            "tools": ["Bash", "Read", "Grep"]
+          }
+        ]
+      }
     ]
   }
 }

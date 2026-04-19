@@ -66,6 +66,16 @@ What Unix and OTP don't cover — Aura-specific constraints and process.
 
 8. **Read the spec, don't guess.** When integrating with a protocol, API, or external system, read the official documentation or source code before writing a single line. Guessing at message formats, field names, or response structures creates bugs that compound. If no spec exists, read the implementation. If you can't read the implementation, write a test harness that logs the actual wire format. "It's probably like this" is not engineering.
 
+9. **Test at the lowest layer that exercises the behavior.** Most tests are fast, deterministic, and run on every change. A minority are slow and reality-checking. Keep them separated: when Discord has an outage, CI should not block; when our code breaks, a provider should not be suspected. Every test fits exactly one of three mutually exclusive categories:
+
+    - **Behavior tests** (the bulk). Does my code do the right thing? Unit tests of pure functions and system-integration tests of actors running in a real BEAM with faked network boundaries. Fast, deterministic. Covers state machines, error paths, concurrency, supervision, data transformations.
+    - **Contract tests** (the minority). Does the external world behave the way I assume? Live calls to z.ai, Discord, Google, Jira. Run on demand, not per commit. A failure means a provider changed something, not that we broke.
+    - **Fault-injection tests** (a subset of behavior tests, important enough to name). Does my code recover when things break? Inject stream stalls, worker crashes, DB errors, malformed responses. Without these, "let it crash" is aspiration, not verified behavior.
+
+    Shape: many behavior tests (sub-second each), few contract tests (dozens, on demand), fault injection woven through behavior tests where recovery matters. Anti-pattern: most coverage from true end-to-end tests — produces slow feedback, flaky runs, and a suite nobody trusts.
+
+10. **Verification is non-negotiable. Every feature ships with a behavior test.** Code is cheap to write; parallelize test authoring via subagents when the surface is wide. A feature without a test is an untested assumption, not a feature. The bar: there is a test that *fails without your change and passes with it*. "It compiled" and "I tried it once in Discord" are not verification. Without this rule, coverage always loses to velocity, and velocity compounds into regression debt that eventually stops the system from being changeable at all. Tautological or empty tests (asserting literals, no assertions, mocks asserting their own return values) are the same as no test — the trivial-test hook exists to catch them.
+
 ## System invariants
 
 Properties that must hold at all times. Violations are bugs.
