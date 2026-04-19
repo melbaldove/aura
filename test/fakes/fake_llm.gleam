@@ -182,11 +182,16 @@ pub fn script(fake: FakeLLM, events: List(ScriptedEvent)) -> Nil {
 }
 
 /// Shortcut: push a scripted response that emits one `Delta(text)` then a
-/// `Complete("", "[]", 0)`. Matches the common "plain text reply" case.
+/// `Complete(text, "[]", 0)`. Matches the common "plain text reply" case.
+///
+/// The `Complete` event carries the full accumulated content (mirroring the
+/// production `stream_complete` FFI which sends the full text, not just the
+/// last delta). Brain's `collect_stream_loop` uses `content` from `Complete`
+/// for the final Discord edit, so the delta and complete must agree.
 pub fn script_text_response(fake: FakeLLM, text: String) -> Nil {
   script(fake, [
     Delta(text: text),
-    Complete(content: "", tool_calls_json: "[]", prompt_tokens: 0),
+    Complete(content: text, tool_calls_json: "[]", prompt_tokens: 0),
   ])
 }
 
