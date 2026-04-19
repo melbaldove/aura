@@ -2656,7 +2656,10 @@ fn describe_image(
       image_url: image_url,
     ),
   ]
-  // TODO(Task 16): route vision through LLMClient when its chat field is extended
+  // Direct call — LLMClient.chat wraps `chat_with_tools` (tool-capable,
+  // returns LlmResponse). Vision preprocessing uses `chat_with_options`
+  // (no tools, returns plain String). Fakeable via LLMClient once the
+  // interface grows a `chat_text` field.
   llm.chat_with_options(llm_config, messages, None)
 }
 
