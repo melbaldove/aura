@@ -800,6 +800,36 @@ fn execute_tool_dispatch(
         }
       }
     }
+    "send_attachment" -> {
+      case require_arg(args, "path") {
+        Error(e) -> TextResult(e)
+        Ok(path) -> {
+          let content = get_arg(args, "content")
+          let filename = case get_arg(args, "filename") {
+            "" -> {
+              case list.last(string.split(path, "/")) {
+                Ok(name) -> name
+                Error(_) -> "attachment"
+              }
+            }
+            n -> n
+          }
+          case
+            rest.send_message_with_attachment(
+              ctx.discord_token,
+              ctx.channel_id,
+              content,
+              path,
+              filename,
+            )
+          {
+            Ok(_) ->
+              TextResult("Attachment sent: " <> filename)
+            Error(e) -> TextResult("Error sending attachment: " <> e)
+          }
+        }
+      }
+    }
     _ -> {
       // GLM-5.1 sometimes uses the skill name directly as the tool name
       // instead of "run_skill". If the unknown tool name matches a known skill,
@@ -1487,6 +1517,30 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "cdp_url",
           param_type: "string",
           description: "Optional CDP endpoint to attach to an already-running browser (BYO auth).",
+          required: False,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
+      name: "send_attachment",
+      description: "Upload a local file to the current Discord channel as an attachment. Use to send screenshots (e.g. after browser(vision) or browser screenshot actions), generated reports, or any file the user needs to see. The file must exist on disk at the given path.",
+      parameters: [
+        llm.ToolParam(
+          name: "path",
+          param_type: "string",
+          description: "Absolute path to the local file to upload.",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "content",
+          param_type: "string",
+          description: "Optional text message to accompany the attachment.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "filename",
+          param_type: "string",
+          description: "Optional display name in Discord. Defaults to the basename of path.",
           required: False,
         ),
       ],

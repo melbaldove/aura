@@ -1,4 +1,6 @@
 import aura/discord/types.{type Embed}
+import aura/time
+import gleam/bit_array
 import gleam/dynamic/decode
 import gleam/http
 import gleam/http/request
@@ -10,6 +12,7 @@ import gleam/list
 import gleam/result
 import gleam/string
 import gleam/uri
+import simplifile
 
 const base_url = "https://discord.com/api/v10"
 
@@ -427,4 +430,142 @@ pub fn send_interaction_response(
 
 fn unexpected_status(status: Int, context: String) -> String {
   "Unexpected status " <> int.to_string(status) <> " from " <> context
+}
+
+// ---------------------------------------------------------------------------
+// Attachments (multipart/form-data upload)
+// ---------------------------------------------------------------------------
+
+/// POST /channels/{channel_id}/messages with a file attachment.
+/// Uploads the file at `file_path` via multipart/form-data, with `content`
+/// as the message body and `filename` as the displayed name in Discord.
+/// Returns the message ID on success.
+pub fn send_message_with_attachment(
+  token: String,
+  channel_id: String,
+  content: String,
+  file_path: String,
+  filename: String,
+) -> Result(String, String) {
+  use file_bytes <- result.try(
+    simplifile.read_bits(file_path)
+    |> result.map_error(fn(e) {
+      "Failed to read attachment " <> file_path <> ": " <> string.inspect(e)
+    }),
+  )
+  let boundary = "aura" <> int.to_string(time.now_ms())
+  let payload_json =
+    json.to_string(
+      json.object([
+        #("content", json.string(content)),
+        #(
+          "attachments",
+          json.array([#(0, filename)], fn(entry) {
+            json.object([
+              #("id", json.int(entry.0)),
+              #("filename", json.string(entry.1)),
+            ])
+          }),
+        ),
+      ]),
+    )
+  let mime = content_type_for_filename(filename)
+  let body = build_multipart_body(boundary, payload_json, filename, mime, file_bytes)
+
+  logging.log(
+    logging.Info,
+    "[discord] Sending attachment "
+      <> filename
+      <> " ("
+      <> int.to_string(bit_array.byte_size(body))
+      <> " bytes) to "
+      <> channel_id,
+  )
+  let url = api_url("/channels/" <> channel_id <> "/messages")
+  use string_req <- result.try(authed_request(url, http.Post, token))
+  let req =
+    string_req
+    |> request.set_header(
+      "content-type",
+      "multipart/form-data; boundary=" <> boundary,
+    )
+    |> request.set_body(body)
+  use resp <- result.try(
+    httpc.send_bits(req)
+    |> result.map_error(fn(_) { "HTTP request failed" }),
+  )
+  let body_str = case bit_array.to_string(resp.body) {
+    Ok(s) -> s
+    Error(_) -> ""
+  }
+  case resp.status {
+    200 | 201 ->
+      json.parse(body_str, decode.at(["id"], decode.string))
+      |> result.map_error(fn(_) { "Failed to parse message ID from attachment response" })
+    status -> {
+      logging.log(
+        logging.Error,
+        "[discord] Attachment upload failed: status "
+          <> int.to_string(status)
+          <> " body " <> body_str,
+      )
+      Error(unexpected_status(status, "send attachment"))
+    }
+  }
+}
+
+/// Build a multipart/form-data body with one `payload_json` part and one
+/// binary file part. Discord expects the file field to be named `files[N]`
+/// where N matches the `id` in the payload's `attachments` array.
+pub fn build_multipart_body(
+  boundary: String,
+  payload_json: String,
+  filename: String,
+  file_content_type: String,
+  file_bytes: BitArray,
+) -> BitArray {
+  let crlf = "\r\n"
+  let delim = "--" <> boundary <> crlf
+  let close = "--" <> boundary <> "--" <> crlf
+  let header_json =
+    delim
+    <> "Content-Disposition: form-data; name=\"payload_json\"" <> crlf
+    <> "Content-Type: application/json" <> crlf
+    <> crlf
+  let header_file =
+    crlf
+    <> delim
+    <> "Content-Disposition: form-data; name=\"files[0]\"; filename=\""
+    <> filename
+    <> "\"" <> crlf
+    <> "Content-Type: " <> file_content_type <> crlf
+    <> crlf
+  let tail = crlf <> close
+  <<
+    header_json:utf8,
+    payload_json:utf8,
+    header_file:utf8,
+    file_bytes:bits,
+    tail:utf8,
+  >>
+}
+
+/// Map a filename to a Content-Type header value based on extension.
+/// Defaults to application/octet-stream when the extension is unknown.
+pub fn content_type_for_filename(filename: String) -> String {
+  let lower = string.lowercase(filename)
+  let suffixes = [
+    #(".png", "image/png"),
+    #(".jpg", "image/jpeg"),
+    #(".jpeg", "image/jpeg"),
+    #(".gif", "image/gif"),
+    #(".webp", "image/webp"),
+    #(".txt", "text/plain"),
+    #(".json", "application/json"),
+    #(".md", "text/markdown"),
+  ]
+  case list.find(suffixes, fn(pair) { string.ends_with(lower, pair.0) }) {
+    Ok(#(_, mime)) -> mime
+    Error(_) -> "application/octet-stream"
+  }
 }
