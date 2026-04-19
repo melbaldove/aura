@@ -1,0 +1,73 @@
+//// Dependency-injected Discord REST client.
+////
+//// Production code constructs via `production(token)`, passing the result
+//// into places that previously called `rest.*` directly. Tests construct
+//// fake clients via `test/fakes/fake_discord.new()` (later tasks) which
+//// returns a compatible `DiscordClient` whose function fields record calls
+//// instead of hitting Discord.
+
+import aura/discord/rest
+import gleam/string
+
+pub type DiscordClient {
+  DiscordClient(
+    send_message: fn(String, String) -> Result(String, String),
+    edit_message: fn(String, String, String) -> Result(Nil, String),
+    trigger_typing: fn(String) -> Result(Nil, String),
+    get_channel_parent: fn(String) -> Result(String, String),
+    send_message_with_attachment: fn(String, String, String) -> Result(
+      String,
+      String,
+    ),
+    create_thread_from_message: fn(String, String, String) -> Result(
+      String,
+      String,
+    ),
+  )
+}
+
+pub fn production(token: String) -> DiscordClient {
+  DiscordClient(
+    send_message: fn(channel_id, content) {
+      rest.send_message(token, channel_id, content, [])
+    },
+    edit_message: fn(channel_id, msg_id, content) {
+      rest.edit_message(token, channel_id, msg_id, content)
+    },
+    trigger_typing: fn(channel_id) {
+      rest.trigger_typing(token, channel_id)
+    },
+    get_channel_parent: fn(channel_id) {
+      rest.get_channel_parent(token, channel_id)
+    },
+    send_message_with_attachment: fn(channel_id, content, file_path) {
+      // Derive filename from path — take the last path component.
+      let filename = case string.split(file_path, "/") {
+        [] -> file_path
+        parts ->
+          case list_last(parts) {
+            "" -> file_path
+            name -> name
+          }
+      }
+      rest.send_message_with_attachment(
+        token,
+        channel_id,
+        content,
+        file_path,
+        filename,
+      )
+    },
+    create_thread_from_message: fn(channel_id, msg_id, name) {
+      rest.create_thread_from_message(token, channel_id, msg_id, name)
+    },
+  )
+}
+
+fn list_last(items: List(String)) -> String {
+  case items {
+    [] -> ""
+    [x] -> x
+    [_, ..rest] -> list_last(rest)
+  }
+}
