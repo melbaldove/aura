@@ -450,7 +450,7 @@ pub fn send_message_with_attachment(
   use file_bytes <- result.try(
     simplifile.read_bits(file_path)
     |> result.map_error(fn(e) {
-      "Failed to read attachment " <> file_path <> ": " <> string.inspect(e)
+      "Failed to read attachment " <> file_path <> ": " <> simplifile.describe_error(e)
     }),
   )
   let boundary = "aura" <> int.to_string(time.now_ms())
@@ -492,7 +492,9 @@ pub fn send_message_with_attachment(
     |> request.set_body(body)
   use resp <- result.try(
     httpc.send_bits(req)
-    |> result.map_error(fn(_) { "HTTP request failed" }),
+    |> result.map_error(fn(e) {
+      "HTTP request failed: " <> string.inspect(e)
+    }),
   )
   let body_str = case bit_array.to_string(resp.body) {
     Ok(s) -> s

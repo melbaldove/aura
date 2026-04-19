@@ -804,14 +804,10 @@ fn execute_tool_dispatch(
       case require_arg(args, "path") {
         Error(e) -> TextResult(e)
         Ok(path) -> {
+          let resolved = tools.resolve_path(path, ctx.base_dir)
           let content = get_arg(args, "content")
           let filename = case get_arg(args, "filename") {
-            "" -> {
-              case list.last(string.split(path, "/")) {
-                Ok(name) -> name
-                Error(_) -> "attachment"
-              }
-            }
+            "" -> basename_or(resolved, "attachment")
             n -> n
           }
           case
@@ -819,12 +815,11 @@ fn execute_tool_dispatch(
               ctx.discord_token,
               ctx.channel_id,
               content,
-              path,
+              resolved,
               filename,
             )
           {
-            Ok(_) ->
-              TextResult("Attachment sent: " <> filename)
+            Ok(_) -> TextResult("Attachment sent: " <> filename)
             Error(e) -> TextResult("Error sending attachment: " <> e)
           }
         }
@@ -1111,6 +1106,16 @@ pub fn format_tool_args(args: List(#(String, String))) -> String {
   args
   |> list.map(fn(pair) { pair.1 })
   |> string.join(", ")
+}
+
+/// Extract the last path segment. Returns `fallback` if the last segment
+/// is empty (trailing slash or empty input).
+fn basename_or(path: String, fallback: String) -> String {
+  case list.last(string.split(path, "/")) {
+    Ok("") -> fallback
+    Ok(name) -> name
+    Error(_) -> fallback
+  }
 }
 
 /// Get an argument value by key, returning empty string if not found.
