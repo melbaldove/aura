@@ -676,114 +676,51 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
         )
       ChannelState(..state, review_counts: #(new_count, state.review_counts.1))
     }
-    ResolveProposal(proposal, action) -> {
-      let now = time.now_ms()
-      let expired = now - proposal.requested_at_ms > approval_expiry_ms
-      case expired {
-        True -> {
-          logging.log(
-            logging.Info,
-            "[channel_actor] Proposal expired: " <> proposal.id,
+    ResolveProposal(proposal, action) ->
+      resolve_approval(
+        state,
+        proposal.requested_at_ms,
+        proposal.channel_id,
+        proposal.message_id,
+        proposal.reply_to,
+        action,
+        "**Expired** -- proposal timed out after 15 minutes.",
+        fn() {
+          case
+            tools.write_file(
+              proposal.path,
+              state.paths.data,
+              proposal.content,
+              state.tool_ctx.validation_rules,
+              True,
+            )
+          {
+            Ok(_) -> #(
+              brain_tools.Approved,
+              "**Approved** -- wrote `" <> proposal.path <> "`",
+            )
+            Error(e) -> #(brain_tools.Rejected, "**Failed** -- " <> e)
+          }
+        },
+        fn() { "**Rejected**" },
+      )
+    ResolveShellApproval(approval, action) ->
+      resolve_approval(
+        state,
+        approval.requested_at_ms,
+        approval.channel_id,
+        approval.message_id,
+        approval.reply_to,
+        action,
+        "**Expired** -- approval timed out after 15 minutes.",
+        fn() {
+          #(
+            brain_tools.Approved,
+            ":white_check_mark: **Approved** -- `" <> approval.command <> "`",
           )
-          process.send(proposal.reply_to, brain_tools.Expired)
-          let _ =
-            state.tool_ctx.discord.edit_message(
-              proposal.channel_id,
-              proposal.message_id,
-              "**Expired** -- proposal timed out after 15 minutes.",
-            )
-          state
-        }
-        False ->
-          case action {
-            "approve" -> {
-              case
-                tools.write_file(
-                  proposal.path,
-                  state.paths.data,
-                  proposal.content,
-                  state.tool_ctx.validation_rules,
-                  True,
-                )
-              {
-                Ok(_) -> {
-                  process.send(proposal.reply_to, brain_tools.Approved)
-                  let _ =
-                    state.tool_ctx.discord.edit_message(
-                      proposal.channel_id,
-                      proposal.message_id,
-                      "**Approved** -- wrote `" <> proposal.path <> "`",
-                    )
-                  state
-                }
-                Error(e) -> {
-                  process.send(proposal.reply_to, brain_tools.Rejected)
-                  let _ =
-                    state.tool_ctx.discord.edit_message(
-                      proposal.channel_id,
-                      proposal.message_id,
-                      "**Failed** -- " <> e,
-                    )
-                  state
-                }
-              }
-            }
-            _ -> {
-              // "reject" or anything else
-              process.send(proposal.reply_to, brain_tools.Rejected)
-              let _ =
-                state.tool_ctx.discord.edit_message(
-                  proposal.channel_id,
-                  proposal.message_id,
-                  "**Rejected**",
-                )
-              state
-            }
-          }
-      }
-    }
-    ResolveShellApproval(approval, action) -> {
-      let now = time.now_ms()
-      let expired = now - approval.requested_at_ms > approval_expiry_ms
-      case expired {
-        True -> {
-          process.send(approval.reply_to, brain_tools.Expired)
-          let _ =
-            state.tool_ctx.discord.edit_message(
-              approval.channel_id,
-              approval.message_id,
-              "**Expired** -- approval timed out after 15 minutes.",
-            )
-          state
-        }
-        False ->
-          case action {
-            "approve" -> {
-              process.send(approval.reply_to, brain_tools.Approved)
-              let _ =
-                state.tool_ctx.discord.edit_message(
-                  approval.channel_id,
-                  approval.message_id,
-                  ":white_check_mark: **Approved** -- `"
-                    <> approval.command
-                    <> "`",
-                )
-              state
-            }
-            _ -> {
-              // "reject" or anything else
-              process.send(approval.reply_to, brain_tools.Rejected)
-              let _ =
-                state.tool_ctx.discord.edit_message(
-                  approval.channel_id,
-                  approval.message_id,
-                  ":x: **Rejected**",
-                )
-              state
-            }
-          }
-      }
-    }
+        },
+        fn() { ":x: **Rejected**" },
+      )
     UpdateCompressorTokens(prompt_tokens) -> {
       case prompt_tokens > 0 {
         True -> {
@@ -867,6 +804,47 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       })
       state
     }
+  }
+}
+
+/// Resolve a pending approval (proposal or shell). Handles the 15-minute
+/// expiry check, dispatches to the caller's approve/reject callbacks, and
+/// emits the appropriate Discord edit. Returns an updated ChannelState.
+fn resolve_approval(
+  state: ChannelState,
+  requested_at_ms: Int,
+  channel_id: String,
+  message_id: String,
+  reply_to: process.Subject(brain_tools.ProposalResult),
+  action: String,
+  expired_msg: String,
+  on_approve: fn() -> #(brain_tools.ProposalResult, String),
+  on_reject: fn() -> String,
+) -> ChannelState {
+  let now = time.now_ms()
+  let expired = now - requested_at_ms > approval_expiry_ms
+  case expired {
+    True -> {
+      process.send(reply_to, brain_tools.Expired)
+      let _ =
+        state.tool_ctx.discord.edit_message(channel_id, message_id, expired_msg)
+      state
+    }
+    False ->
+      case action {
+        "approve" -> {
+          let #(result, body) = on_approve()
+          process.send(reply_to, result)
+          let _ = state.tool_ctx.discord.edit_message(channel_id, message_id, body)
+          state
+        }
+        _ -> {
+          let body = on_reject()
+          process.send(reply_to, brain_tools.Rejected)
+          let _ = state.tool_ctx.discord.edit_message(channel_id, message_id, body)
+          state
+        }
+      }
   }
 }
 
