@@ -32,6 +32,10 @@ pub fn register(reg: StepRegistry) -> StepRegistry {
     given_fresh_system_with_domain,
   )
   |> steps.step(
+    "a fresh Aura system with channel {string} on the channel_actor allowlist",
+    given_fresh_system_allowlisted,
+  )
+  |> steps.step(
     "a user message {string} arrives in {string}",
     when_user_message_arrives,
   )
@@ -105,6 +109,18 @@ fn given_fresh_system_with_domain(
   let channel_id = domain_name <> "-channel"
   let system =
     test_harness.fresh_system_with_domain(domain_name, agents_md, channel_id)
+  world.put(ctx.world, "system", system)
+  Ok(succeed())
+}
+
+/// Set up a fresh system with the given channel on the channel_actor allowlist.
+/// Messages to this channel route through the per-channel actor path instead
+/// of the legacy synchronous brain loop.
+fn given_fresh_system_allowlisted(
+  ctx: StepContext,
+) -> Result(dream_types.AssertionResult, String) {
+  use channel_id <- result_try(get_string(ctx.captures, 0))
+  let system = test_harness.fresh_system_with_allowlist([channel_id])
   world.put(ctx.world, "system", system)
   Ok(succeed())
 }

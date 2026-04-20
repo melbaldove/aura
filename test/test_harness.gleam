@@ -181,6 +181,108 @@ pub fn fresh_system() -> TestSystem {
   )
 }
 
+/// Spin up a fresh `TestSystem` where the given channel_ids are in the
+/// channel_actor allowlist. Messages to these channels route through the new
+/// concurrent channel_actor path instead of the legacy synchronous brain
+/// loop. All other behavior matches `fresh_system/0`.
+pub fn fresh_system_with_allowlist(
+  channel_ids: List(String),
+) -> TestSystem {
+  // 1. Build the three fakes.
+  let #(fake_discord, discord_client) = fake_discord.new()
+  let #(fake_llm, llm_client) = fake_llm.new()
+  let #(fake_skill_runner, skill_runner_client) = fake_skill_runner.new()
+
+  // 2. Unique scratch DB path; delete any pre-existing file.
+  let db_path =
+    "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
+  let _ = simplifile.delete(db_path)
+
+  // 3. Ensure models.build_llm_config can resolve an API key.
+  set_env("ZAI_API_KEY", "test-harness-dummy-key")
+
+  // 4. DB actor at the scratch path.
+  let assert Ok(db_subject) = db.start(db_path)
+
+  // 5. Live flare_manager.
+  let assert Ok(flare_subject) =
+    flare_manager.start(
+      1,
+      "zai/glm-5-turbo",
+      fn(_event) { Nil },
+      transport.Tmux,
+      db_subject,
+    )
+
+  // 5b. Channel supervisor.
+  let assert Ok(channel_sup) = channel_supervisor.start()
+
+  // 6. Build paths pointing at a unique tmp root.
+  let tmp_root = "/tmp/aura-test-root-" <> int.to_string(unique_integer())
+  let paths =
+    xdg.Paths(
+      config: tmp_root <> "/config",
+      data: tmp_root <> "/data",
+      state: tmp_root <> "/state",
+    )
+
+  let assert Ok(_) = simplifile.create_directory_all(paths.config)
+  let assert Ok(_) = simplifile.create_directory_all(paths.data)
+  let assert Ok(_) = simplifile.create_directory_all(paths.state)
+
+  // 7. Build GlobalConfig with the allowlist set.
+  let default = config.default_global()
+  let global =
+    config.GlobalConfig(
+      ..default,
+      models: config.ModelsConfig(
+        brain: "zai/glm-5-turbo",
+        domain: "",
+        acp: "",
+        heartbeat: "",
+        monitor: "",
+        vision: "zai/glm-5v-turbo",
+        dream: "",
+      ),
+      brain_context: 128_000,
+      experimental: config.ExperimentalConfig(
+        channel_actor_channels: channel_ids,
+      ),
+    )
+
+  let default_skill_infos = [
+    skill.SkillInfo(name: "jira", description: "test", path: "/tmp/nonexistent-jira"),
+  ]
+
+  let brain_config =
+    brain.BrainConfig(
+      global: global,
+      paths: paths,
+      soul: "You are Aura, under test.",
+      domains: [],
+      domain_configs: [],
+      skill_infos: default_skill_infos,
+      validation_rules: [],
+      db_subject: db_subject,
+      acp_subject: flare_subject,
+      discord: discord_client,
+      llm: llm_client,
+      skill_runner: skill_runner_client,
+      browser_runner: browser_runner.production(),
+      channel_supervisor: channel_sup,
+    )
+
+  let assert Ok(brain_subject) = brain.start(brain_config)
+
+  TestSystem(
+    brain_subject: brain_subject,
+    fake_discord: fake_discord,
+    fake_llm: fake_llm,
+    fake_skill_runner: fake_skill_runner,
+    db_path: db_path,
+  )
+}
+
 /// Spin up a fresh `TestSystem` with a single domain pre-configured. Creates a
 /// temporary directory under /tmp, writes `agents_md` to AGENTS.md in the
 /// domain's config dir, seeds a `DomainInfo` pointing `channel_id` to
