@@ -279,3 +279,24 @@ pub fn turn_deadline_fails_turn_test() {
     channel_actor.transition(with_stream, channel_actor.TurnDeadline)
   new_state.turn |> should.equal(option.None)
 }
+
+// --- Task 15: worker down translation ----------------------------------------
+
+pub fn worker_down_stream_translates_to_stream_error_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let ref = channel_actor.fake_monitor_ref()
+  let #(new_state, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.WorkerDown(ref, "killed"),
+    )
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+  let _ = new_state
+}

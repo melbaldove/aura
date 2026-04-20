@@ -603,6 +603,26 @@ pub fn transition(
     }
     TurnDeadline, None -> #(state, [])
 
+    // --- Task 15: worker down translation -----------------------------------
+    WorkerDown(_ref, reason), Some(turn) -> {
+      case reason {
+        "normal" -> #(state, [])
+        _ ->
+          case turn.worker_kind {
+            StreamWorker ->
+              transition(state, StreamError("worker crashed: " <> reason))
+            ToolWorker(_, call_id) ->
+              transition(
+                state,
+                ToolResult(call_id, "Error: worker crashed: " <> reason, True),
+              )
+            VisionWorker ->
+              transition(state, VisionError("crashed: " <> reason))
+          }
+      }
+    }
+    WorkerDown(_, _), None -> #(state, [])
+
     _, _ -> #(state, [])
   }
 }
@@ -988,6 +1008,13 @@ pub fn with_fake_stream_turn_at_retry(
   let fake_turn =
     TurnState(..fresh_fake_turn(StreamWorker), stream_retry_count: n)
   ChannelState(..state, turn: Some(fake_turn))
+}
+
+/// Construct a fake monitor ref by monitoring the current process. Used in
+/// `WorkerDown` tests where we need a real `Monitor` value but don't care
+/// which process it refers to.
+pub fn fake_monitor_ref() -> Monitor {
+  process.monitor(process.self())
 }
 
 fn fresh_fake_turn(worker_kind: WorkerKind) -> TurnState {
