@@ -31,6 +31,7 @@ import aura/clients/llm_client
 import aura/clients/skill_runner
 import aura/config
 import aura/db
+import aura/discord
 import aura/shell
 import aura/skill
 import aura/xdg
@@ -370,6 +371,134 @@ pub fn fresh_system_with_domain(
 
   // Seed the same default jira skill as fresh_system/0 so domain-scoped
   // tests can also exercise run_skill without extra setup steps.
+  let default_skill_infos = [
+    skill.SkillInfo(name: "jira", description: "test", path: "/tmp/nonexistent-jira"),
+  ]
+
+  let brain_config =
+    brain.BrainConfig(
+      global: global,
+      paths: paths,
+      soul: "You are Aura, under test.",
+      domains: [domain_info],
+      domain_configs: [],
+      skill_infos: default_skill_infos,
+      validation_rules: [],
+      db_subject: db_subject,
+      acp_subject: flare_subject,
+      discord: discord_client,
+      llm: llm_client,
+      skill_runner: skill_runner_client,
+      browser_runner: browser_runner.production(),
+      channel_supervisor: channel_sup,
+    )
+
+  let assert Ok(brain_subject) = brain.start(brain_config)
+
+  TestSystem(
+    brain_subject: brain_subject,
+    fake_discord: fake_discord,
+    fake_llm: fake_llm,
+    fake_skill_runner: fake_skill_runner,
+    db_path: db_path,
+    db_subject: db_subject,
+  )
+}
+
+/// Build a minimal `IncomingMessage` for use in tests.
+/// Mirrors the private `build_incoming` in `common_steps.gleam`.
+pub fn incoming(channel_id: String, content: String) -> discord.IncomingMessage {
+  discord.IncomingMessage(
+    message_id: "fake-" <> content,
+    channel_id: channel_id,
+    channel_name: None,
+    guild_id: "test-guild",
+    author_id: "test",
+    author_name: "test",
+    content: content,
+    is_bot: False,
+    attachments: [],
+  )
+}
+
+/// Spin up a fresh `TestSystem` with a single domain pre-configured AND
+/// a set of channel IDs on the channel_actor allowlist. Combining both is
+/// necessary for tests that exercise thread creation — the top-level domain
+/// channel must be on the allowlist so brain routes through channel_actor,
+/// and the domain must be registered so brain detects it as a top-level
+/// domain channel and creates a thread.
+pub fn fresh_system_with_domain_and_allowlist(
+  domain_name: String,
+  agents_md: String,
+  channel_id: String,
+  allowlist: List(String),
+) -> TestSystem {
+  // 1. Build the three fakes.
+  let #(fake_discord, discord_client) = fake_discord.new()
+  let #(fake_llm, llm_client) = fake_llm.new()
+  let #(fake_skill_runner, skill_runner_client) = fake_skill_runner.new()
+
+  // 2. Unique scratch DB path; delete any pre-existing file.
+  let db_path =
+    "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
+  let _ = simplifile.delete(db_path)
+
+  // 3. Ensure models.build_llm_config can resolve an API key.
+  set_env("ZAI_API_KEY", "test-harness-dummy-key")
+
+  // 4. DB actor at the scratch path.
+  let assert Ok(db_subject) = db.start(db_path)
+
+  // 5. Live flare_manager.
+  let assert Ok(flare_subject) =
+    flare_manager.start(
+      1,
+      "zai/glm-5-turbo",
+      fn(_event) { Nil },
+      transport.Tmux,
+      db_subject,
+    )
+
+  // 5b. Channel supervisor.
+  let assert Ok(channel_sup) = channel_supervisor.start()
+
+  // 6. Build paths pointing at a unique tmp root.
+  let tmp_root = "/tmp/aura-test-root-" <> int.to_string(unique_integer())
+  let paths =
+    xdg.Paths(
+      config: tmp_root <> "/config",
+      data: tmp_root <> "/data",
+      state: tmp_root <> "/state",
+    )
+
+  // 7. Create the domain config directory and write AGENTS.md.
+  let domain_config_dir =
+    paths.config <> "/domains/" <> domain_name
+  let assert Ok(_) = simplifile.create_directory_all(domain_config_dir)
+  let assert Ok(_) =
+    simplifile.write(domain_config_dir <> "/AGENTS.md", agents_md)
+
+  // 8. Build GlobalConfig with the domain and the allowlist.
+  let global =
+    config.GlobalConfig(
+      ..config.default_global(),
+      models: config.ModelsConfig(
+        brain: "zai/glm-5-turbo",
+        domain: "",
+        acp: "",
+        heartbeat: "",
+        monitor: "",
+        vision: "zai/glm-5v-turbo",
+        dream: "",
+      ),
+      brain_context: 128_000,
+      experimental: config.ExperimentalConfig(
+        channel_actor_channels: allowlist,
+      ),
+    )
+
+  let domain_info = brain.DomainInfo(name: domain_name, channel_id: channel_id)
+
   let default_skill_infos = [
     skill.SkillInfo(name: "jira", description: "test", path: "/tmp/nonexistent-jira"),
   ]

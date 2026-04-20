@@ -32,7 +32,12 @@ pub opaque type FakeDiscord {
 // ---------------------------------------------------------------------------
 
 type State {
-  State(events: List(DiscordEvent), next_id: Int, parents: Dict(String, String))
+  State(
+    events: List(DiscordEvent),
+    next_id: Int,
+    parents: Dict(String, String),
+    thread_scripts: List(String),
+  )
 }
 
 type Msg {
@@ -71,6 +76,7 @@ type Msg {
     channel_id: String,
     reply: process.Subject(Result(String, Nil)),
   )
+  PushThreadScript(thread_id: String)
 }
 
 // ---------------------------------------------------------------------------
@@ -85,9 +91,9 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       process.send(reply, Ok(id))
       actor.continue(
         State(
+          ..state,
           events: [event, ..state.events],
           next_id: state.next_id + 1,
-          parents: state.parents,
         ),
       )
     }
@@ -97,9 +103,8 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       process.send(reply, Ok(Nil))
       actor.continue(
         State(
+          ..state,
           events: [event, ..state.events],
-          next_id: state.next_id,
-          parents: state.parents,
         ),
       )
     }
@@ -109,9 +114,8 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       process.send(reply, Ok(Nil))
       actor.continue(
         State(
+          ..state,
           events: [event, ..state.events],
-          next_id: state.next_id,
-          parents: state.parents,
         ),
       )
     }
@@ -122,15 +126,18 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       process.send(reply, Ok(id))
       actor.continue(
         State(
+          ..state,
           events: [event, ..state.events],
           next_id: state.next_id + 1,
-          parents: state.parents,
         ),
       )
     }
 
     RecordThread(parent_channel_id:, msg_id:, name:, reply:) -> {
-      let thread_id = "fake-thread-" <> int.to_string(state.next_id)
+      let #(thread_id, rest_scripts) = case state.thread_scripts {
+        [scripted, ..rest] -> #(scripted, rest)
+        [] -> #("fake-thread-" <> int.to_string(state.next_id), [])
+      }
       let event =
         ThreadCreated(parent_channel_id:, msg_id:, name:, thread_id:)
       process.send(reply, Ok(thread_id))
@@ -139,9 +146,16 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
           events: [event, ..state.events],
           next_id: state.next_id + 1,
           parents: state.parents,
+          thread_scripts: rest_scripts,
         ),
       )
     }
+
+    PushThreadScript(thread_id:) ->
+      actor.continue(State(
+        ..state,
+        thread_scripts: list.append(state.thread_scripts, [thread_id]),
+      ))
 
     GetSentTo(channel_id:, reply:) -> {
       let contents =
@@ -167,8 +181,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
     Seed(channel:, parent:) -> {
       actor.continue(
         State(
-          events: state.events,
-          next_id: state.next_id,
+          ..state,
           parents: dict.insert(state.parents, channel, parent),
         ),
       )
@@ -217,7 +230,8 @@ fn unwrap_or(r: Result(a, b), default: a) -> a {
 pub fn new() -> #(FakeDiscord, DiscordClient) {
   let builder =
     actor.new_with_initialiser(5000, fn(subject) {
-      let state = State(events: [], next_id: 1, parents: dict.new())
+      let state =
+        State(events: [], next_id: 1, parents: dict.new(), thread_scripts: [])
       Ok(actor.initialised(state) |> actor.returning(subject))
     })
     |> actor.on_message(handle_message)
@@ -378,4 +392,11 @@ fn do_assert_latest_contains(
       }
     }
   }
+}
+
+/// Push a scripted thread_id onto the queue. The next `create_thread_from_message`
+/// call will consume it (FIFO order) and return that id instead of the default
+/// auto-generated `"fake-thread-N"`. Allows tests to assert on a known thread_id.
+pub fn script_create_thread(fake: FakeDiscord, thread_id: String) -> Nil {
+  process.send(fake.subject, PushThreadScript(thread_id:))
 }
