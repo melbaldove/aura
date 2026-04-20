@@ -14,6 +14,7 @@ import aura/llm
 import aura/notification
 import aura/shell
 import aura/skill
+import aura/time
 import aura/validator
 import aura/vision
 import aura/xdg
@@ -25,6 +26,39 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
+import logging
+
+// ---------------------------------------------------------------------------
+// Worker spawn function aliases
+// ---------------------------------------------------------------------------
+//
+// Workers import `ChannelMessage` from this module, which creates a cyclic
+// dependency if we import the worker modules directly. Instead, the spawn
+// functions are threaded in via `Deps` (same pattern as `LLMClient` etc.).
+
+pub type StreamWorkerSpawn =
+  fn(
+    fn(llm.LlmConfig, List(llm.Message), List(llm.ToolDefinition), Pid) -> Nil,
+    llm.LlmConfig,
+    List(llm.Message),
+    List(llm.ToolDefinition),
+    Subject(ChannelMessage),
+  ) ->
+    Pid
+
+pub type ToolWorkerSpawn =
+  fn(brain_tools.ToolContext, llm.ToolCall, Subject(ChannelMessage)) -> Pid
+
+pub type VisionWorkerSpawn =
+  fn(
+    fn(llm.LlmConfig, List(llm.Message), option.Option(Float)) ->
+      Result(String, String),
+    llm.LlmConfig,
+    List(llm.Message),
+    option.Option(Float),
+    Subject(ChannelMessage),
+  ) ->
+    Pid
 
 pub type ChannelMessage {
   HandleIncoming(discord.IncomingMessage)
@@ -127,6 +161,12 @@ pub type ChannelState {
     pending_shell_approvals: List(brain_tools.PendingShellApproval),
     typing_pid: Option(Pid),
     discord_token: String,
+    llm_config: llm.LlmConfig,
+    vision_config: llm.LlmConfig,
+    built_in_tools: List(llm.ToolDefinition),
+    stream_spawn: StreamWorkerSpawn,
+    tool_spawn: ToolWorkerSpawn,
+    vision_spawn: VisionWorkerSpawn,
     self_subject: Subject(ChannelMessage),
   )
 }
@@ -153,6 +193,12 @@ pub type Deps {
     base_dir: String,
     domain_name: String,
     domain_cwd: String,
+    llm_config: llm.LlmConfig,
+    vision_config: llm.LlmConfig,
+    built_in_tools: List(llm.ToolDefinition),
+    stream_spawn: StreamWorkerSpawn,
+    tool_spawn: ToolWorkerSpawn,
+    vision_spawn: VisionWorkerSpawn,
   )
 }
 
@@ -216,6 +262,12 @@ fn build_initial_state(
     pending_shell_approvals: [],
     typing_pid: None,
     discord_token: deps.discord_token,
+    llm_config: deps.llm_config,
+    vision_config: deps.vision_config,
+    built_in_tools: deps.built_in_tools,
+    stream_spawn: deps.stream_spawn,
+    tool_spawn: deps.tool_spawn,
+    vision_spawn: deps.vision_spawn,
     self_subject: self,
   )
 }
@@ -252,7 +304,52 @@ pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
     base_dir: "/tmp",
     domain_name: "",
     domain_cwd: "",
+    llm_config: dummy_llm_config(),
+    vision_config: dummy_llm_config(),
+    built_in_tools: [],
+    stream_spawn: dummy_stream_spawn,
+    tool_spawn: dummy_tool_spawn,
+    vision_spawn: dummy_vision_spawn,
   )
+}
+
+/// Dummy spawn functions for tests that never invoke them. The smoke-test
+/// path only sends messages like `Cancel` / `TurnDeadline` which don't
+/// traverse spawn effects.
+fn dummy_stream_spawn(
+  _fn: fn(llm.LlmConfig, List(llm.Message), List(llm.ToolDefinition), Pid) ->
+    Nil,
+  _config: llm.LlmConfig,
+  _messages: List(llm.Message),
+  _tools: List(llm.ToolDefinition),
+  _parent: Subject(ChannelMessage),
+) -> Pid {
+  process.self()
+}
+
+fn dummy_tool_spawn(
+  _ctx: brain_tools.ToolContext,
+  _call: llm.ToolCall,
+  _parent: Subject(ChannelMessage),
+) -> Pid {
+  process.self()
+}
+
+fn dummy_vision_spawn(
+  _fn: fn(llm.LlmConfig, List(llm.Message), option.Option(Float)) ->
+    Result(String, String),
+  _config: llm.LlmConfig,
+  _messages: List(llm.Message),
+  _temperature: option.Option(Float),
+  _parent: Subject(ChannelMessage),
+) -> Pid {
+  process.self()
+}
+
+/// Dummy LLM config for tests. Never reaches the network because smoke
+/// tests never drive the actor through a real stream/vision spawn path.
+fn dummy_llm_config() -> llm.LlmConfig {
+  llm.LlmConfig(base_url: "", api_key: "", model: "")
 }
 
 /// Start a channel actor with stubbed deps for smoke tests.
@@ -321,22 +418,324 @@ fn build_initial_state_for_test(
     pending_shell_approvals: [],
     typing_pid: None,
     discord_token: deps.discord_token,
+    llm_config: dummy_llm_config(),
+    vision_config: dummy_llm_config(),
+    built_in_tools: [],
+    stream_spawn: dummy_stream_spawn,
+    tool_spawn: dummy_tool_spawn,
+    vision_spawn: dummy_vision_spawn,
     self_subject: self,
   )
 }
 
 // ---------------------------------------------------------------------------
-// Message handler (Phase 1 stub)
+// Message handler
 // ---------------------------------------------------------------------------
 
-/// Phase 1: no-op handler. Every message is acknowledged and state is
-/// returned unchanged. Later tasks replace individual arms with real
-/// state-machine transitions.
-fn handle_message(
+/// Task 16: call the pure `transition` to compute the next state and a list
+/// of effects, then execute each effect. The actor only ever returns the
+/// final state via `actor.continue`.
+pub fn handle_message(
   state: ChannelState,
-  _message: ChannelMessage,
+  message: ChannelMessage,
 ) -> actor.Next(ChannelState, ChannelMessage) {
-  actor.continue(state)
+  let #(new_state, effects) = transition(state, message)
+  let executed_state = list.fold(effects, new_state, execute_effect)
+  actor.continue(executed_state)
+}
+
+// ---------------------------------------------------------------------------
+// Effect interpreter
+// ---------------------------------------------------------------------------
+
+fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
+  case effect {
+    SpawnStreamWorker(messages) -> execute_spawn_stream_worker(state, messages)
+    SpawnToolWorker(call) -> execute_spawn_tool_worker(state, call)
+    SpawnVisionWorker(image_path, question) ->
+      execute_spawn_vision_worker(state, image_path, question)
+    KillWorker(pid) -> {
+      process.kill(pid)
+      state
+    }
+    CancelDeadline(timer) -> {
+      let _ = process.cancel_timer(timer)
+      state
+    }
+    ScheduleDeadline(ms) -> {
+      let timer = process.send_after(state.self_subject, ms, TurnDeadline)
+      update_deadline_timer(state, Some(timer))
+    }
+    DiscordEdit(msg_id, content) -> {
+      case msg_id {
+        "" -> {
+          // No message id yet — fall back to sending a new message so the
+          // user still sees the content. Update the turn's discord_msg_id
+          // when the send succeeds.
+          case state.tool_ctx.discord.send_message(
+            state.channel_id,
+            safe_truncate(content),
+          ) {
+            Ok(id) -> update_turn_msg_id(state, id)
+            Error(_) -> state
+          }
+        }
+        existing -> {
+          let _ = state.tool_ctx.discord.edit_message(
+            state.channel_id,
+            existing,
+            safe_truncate(content),
+          )
+          state
+        }
+      }
+    }
+    DiscordSend(content) -> {
+      let _ = state.tool_ctx.discord.send_message(
+        state.channel_id,
+        safe_truncate(content),
+      )
+      state
+    }
+    DbSaveExchange(messages, author_id, author_name, _prompt_tokens) -> {
+      let now = time.now_ms()
+      case
+        db.resolve_conversation(
+          state.tool_ctx.db_subject,
+          "discord",
+          state.channel_id,
+          now,
+        )
+      {
+        Ok(convo_id) -> {
+          let _ =
+            conversation.save_exchange_to_db(
+              state.tool_ctx.db_subject,
+              convo_id,
+              messages,
+              author_id,
+              author_name,
+              now,
+            )
+          Nil
+        }
+        Error(e) ->
+          logging.log(
+            logging.Info,
+            "[channel "
+              <> state.channel_id
+              <> "] conversation resolve failed: "
+              <> e,
+          )
+      }
+      state
+    }
+    StopTyping(pid) -> {
+      process.kill(pid)
+      ChannelState(..state, typing_pid: None)
+    }
+    StartTyping -> {
+      let pid = start_typing_loop(state)
+      ChannelState(..state, typing_pid: Some(pid))
+    }
+    LogHeartbeat(stats, content_chars) -> {
+      let now = time.now_ms()
+      case now - stats.last_heartbeat_ms >= 30_000 {
+        True -> {
+          logging.log(
+            logging.Info,
+            "[channel "
+              <> state.channel_id
+              <> "] stream progress: "
+              <> int.to_string(stats.reasoning_count)
+              <> " reasoning, "
+              <> int.to_string(stats.delta_count)
+              <> " delta ("
+              <> int.to_string(content_chars)
+              <> " chars), "
+              <> int.to_string({ now - stats.start_ms } / 1000)
+              <> "s elapsed",
+          )
+          update_heartbeat(state, now)
+        }
+        False -> state
+      }
+    }
+    LogStreamSummary(stats, outcome, content_chars) -> {
+      let elapsed = { time.now_ms() - stats.start_ms } / 1000
+      logging.log(
+        logging.Info,
+        "[channel "
+          <> state.channel_id
+          <> "] stream "
+          <> outcome
+          <> ": "
+          <> int.to_string(stats.reasoning_count)
+          <> " reasoning, "
+          <> int.to_string(stats.delta_count)
+          <> " delta ("
+          <> int.to_string(content_chars)
+          <> " chars), "
+          <> int.to_string(elapsed)
+          <> "s total",
+      )
+      state
+    }
+    SpawnSkillReview -> state
+    SpawnMemoryReview -> state
+  }
+}
+
+fn execute_spawn_stream_worker(
+  state: ChannelState,
+  messages: List(llm.Message),
+) -> ChannelState {
+  // If this is a retry, apply exponential backoff before spawning. The
+  // transition has already incremented stream_retry_count, so 1 = first
+  // retry (0ms), 2 = second (500ms), 3+ = 2s.
+  let backoff_ms = case state.turn {
+    Some(turn) ->
+      case turn.stream_retry_count {
+        0 -> 0
+        1 -> 0
+        2 -> 500
+        _ -> 2000
+      }
+    None -> 0
+  }
+  case backoff_ms > 0 {
+    True -> process.sleep(backoff_ms)
+    False -> Nil
+  }
+  let pid =
+    state.stream_spawn(
+      state.tool_ctx.llm_client.stream_with_tools,
+      state.llm_config,
+      messages,
+      state.built_in_tools,
+      state.self_subject,
+    )
+  let monitor = process.monitor(pid)
+  update_turn_with_worker(state, pid, Some(monitor), StreamWorker)
+}
+
+fn execute_spawn_tool_worker(
+  state: ChannelState,
+  call: llm.ToolCall,
+) -> ChannelState {
+  let pid = state.tool_spawn(state.tool_ctx, call, state.self_subject)
+  let monitor = process.monitor(pid)
+  update_turn_with_worker(
+    state,
+    pid,
+    Some(monitor),
+    ToolWorker(call.name, call.id),
+  )
+}
+
+fn execute_spawn_vision_worker(
+  state: ChannelState,
+  image_path: String,
+  question: String,
+) -> ChannelState {
+  let messages = [
+    llm.UserMessageWithImage(content: question, image_url: image_path),
+  ]
+  let pid =
+    state.vision_spawn(
+      state.tool_ctx.llm_client.chat_text,
+      state.vision_config,
+      messages,
+      None,
+      state.self_subject,
+    )
+  let monitor = process.monitor(pid)
+  update_turn_with_worker(state, pid, Some(monitor), VisionWorker)
+}
+
+// ---------------------------------------------------------------------------
+// Effect helpers
+// ---------------------------------------------------------------------------
+
+fn update_turn_with_worker(
+  state: ChannelState,
+  pid: Pid,
+  monitor: Option(Monitor),
+  kind: WorkerKind,
+) -> ChannelState {
+  case state.turn {
+    Some(turn) -> {
+      let new_turn =
+        TurnState(
+          ..turn,
+          worker_pid: pid,
+          worker_monitor: monitor,
+          worker_kind: kind,
+        )
+      ChannelState(..state, turn: Some(new_turn))
+    }
+    None -> state
+  }
+}
+
+fn update_deadline_timer(
+  state: ChannelState,
+  timer: Option(Timer),
+) -> ChannelState {
+  case state.turn {
+    Some(turn) -> {
+      let new_turn = TurnState(..turn, deadline_timer: timer)
+      ChannelState(..state, turn: Some(new_turn))
+    }
+    None -> state
+  }
+}
+
+fn update_heartbeat(state: ChannelState, now_ms: Int) -> ChannelState {
+  case state.turn {
+    Some(turn) -> {
+      let new_stats =
+        StreamStats(..turn.stream_stats, last_heartbeat_ms: now_ms)
+      let new_turn = TurnState(..turn, stream_stats: new_stats)
+      ChannelState(..state, turn: Some(new_turn))
+    }
+    None -> state
+  }
+}
+
+fn update_turn_msg_id(state: ChannelState, msg_id: String) -> ChannelState {
+  case state.turn {
+    Some(turn) -> {
+      let new_turn = TurnState(..turn, discord_msg_id: msg_id)
+      ChannelState(..state, turn: Some(new_turn))
+    }
+    None -> state
+  }
+}
+
+/// Clip content at 1990 chars with an ellipsis, mirroring `brain.send_or_edit`.
+/// Discord's message limit is 2000 characters.
+fn safe_truncate(content: String) -> String {
+  case string.length(content) > 1990 {
+    True -> string.slice(content, 0, 1990) <> " ..."
+    False -> content
+  }
+}
+
+/// Spawn a typing-indicator loop on an unlinked process. Kill it to stop.
+fn start_typing_loop(state: ChannelState) -> Pid {
+  let discord = state.tool_ctx.discord
+  let channel_id = state.channel_id
+  process.spawn_unlinked(fn() { typing_loop(discord, channel_id) })
+}
+
+fn typing_loop(
+  discord: discord_client.DiscordClient,
+  channel_id: String,
+) -> Nil {
+  let _ = discord.trigger_typing(channel_id)
+  process.sleep(8000)
+  typing_loop(discord, channel_id)
 }
 
 // ---------------------------------------------------------------------------
