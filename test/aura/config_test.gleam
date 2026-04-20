@@ -433,3 +433,62 @@ cron = \"not a valid cron\"
   // Invalid cron should fall back to default
   cfg.dreaming_cron |> should.equal("0 4 * * *")
 }
+
+pub fn experimental_channel_actor_channels_parsed_test() {
+  let toml = "
+[discord]
+token = \"test-token\"
+guild = \"aura\"
+default_channel = \"aura\"
+
+[models]
+brain = \"zai/glm-5.1\"
+domain = \"zai/glm-5.1\"
+acp = \"claude/opus\"
+heartbeat = \"zai/glm-5-turbo\"
+monitor = \"zai/glm-5-turbo\"
+
+[notifications]
+digest_windows = [\"07:35\"]
+timezone = \"Asia/Manila\"
+urgent_bypass = true
+
+[acp]
+global_max_concurrent = 4
+
+[experimental]
+channel_actor_channels = [\"abc\", \"xyz\"]
+"
+  let result = config.parse_global(toml)
+  result |> should.be_ok
+  let cfg = result |> result.unwrap(config.default_global())
+  cfg.experimental.channel_actor_channels |> should.equal(["abc", "xyz"])
+}
+
+pub fn experimental_channel_actor_channels_defaults_empty_test() {
+  let toml = "
+[discord]
+token = \"test-token\"
+guild = \"aura\"
+default_channel = \"aura\"
+
+[models]
+brain = \"zai/glm-5.1\"
+domain = \"zai/glm-5.1\"
+acp = \"claude/opus\"
+heartbeat = \"zai/glm-5-turbo\"
+monitor = \"zai/glm-5-turbo\"
+
+[notifications]
+digest_windows = [\"07:35\"]
+timezone = \"Asia/Manila\"
+urgent_bypass = true
+
+[acp]
+global_max_concurrent = 4
+"
+  let result = config.parse_global(toml)
+  result |> should.be_ok
+  let cfg = result |> result.unwrap(config.default_global())
+  cfg.experimental.channel_actor_channels |> should.equal([])
+}

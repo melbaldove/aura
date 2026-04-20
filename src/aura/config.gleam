@@ -49,6 +49,13 @@ pub type MemoryConfig {
   )
 }
 
+/// Experimental feature flags. Allows opting specific channels into
+/// in-progress refactors (e.g. the channel_actor) without impacting the
+/// rest of the system.
+pub type ExperimentalConfig {
+  ExperimentalConfig(channel_actor_channels: List(String))
+}
+
 /// Top-level configuration loaded from the global `config.toml`.
 pub type GlobalConfig {
   GlobalConfig(
@@ -65,6 +72,7 @@ pub type GlobalConfig {
     brain_context: Int,
     dreaming_cron: String,
     dreaming_budget_percent: Int,
+    experimental: ExperimentalConfig,
   )
 }
 
@@ -117,6 +125,7 @@ pub fn default_global() -> GlobalConfig {
     brain_context: 0,
     dreaming_cron: "0 4 * * *",
     dreaming_budget_percent: 10,
+    experimental: ExperimentalConfig(channel_actor_channels: []),
   )
 }
 
@@ -274,6 +283,13 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     Error(_) -> 10
   }
 
+  let channel_actor_channels = case
+    tom.get_array(doc, ["experimental", "channel_actor_channels"])
+  {
+    Ok(arr) -> extract_toml_strings(arr)
+    Error(_) -> []
+  }
+
   Ok(GlobalConfig(
     discord: DiscordConfig(
       token: token,
@@ -308,6 +324,9 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     brain_context: brain_context,
     dreaming_cron: dreaming_cron,
     dreaming_budget_percent: dreaming_budget_percent,
+    experimental: ExperimentalConfig(
+      channel_actor_channels: channel_actor_channels,
+    ),
   ))
 }
 

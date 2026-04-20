@@ -3,7 +3,11 @@ import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
 import aura/brain_tools
 import aura/browser
+import aura/channel_actor
 import aura/channel_supervisor
+import aura/stream_worker
+import aura/tool_worker
+import aura/vision_worker
 import aura/clients/browser_runner.{type BrowserRunner}
 import aura/clients/discord_client.{type DiscordClient}
 import aura/clients/llm_client.{type LLMClient}
@@ -402,22 +406,43 @@ fn handle_message(
           }
         }
       }
-      let subj = state.self_subject
-      process.spawn_unlinked(fn() {
-        case rescue(fn() { handle_with_llm(state, msg, subj, domain_name) }) {
-          Ok(_) -> Nil
-          Error(reason) -> {
-            logging.log(logging.Error, "[brain] CRASH in handle_with_llm: " <> reason)
-            let _ =
-              state.discord.send_message(
-                msg.channel_id,
-                "Sorry, I crashed while processing your message. Check the logs.",
-              )
-            Nil
-          }
+      let allowlist =
+        state.global_config.experimental.channel_actor_channels
+      case list.contains(allowlist, msg.channel_id) {
+        True -> {
+          logging.log(
+            logging.Info,
+            "[brain] Channel " <> msg.channel_id <> " routed to channel_actor (experimental)",
+          )
+          let deps = build_channel_actor_deps(state, msg.channel_id, domain_name)
+          let subject =
+            channel_supervisor.get_or_start(
+              state.channel_supervisor,
+              msg.channel_id,
+              deps,
+            )
+          process.send(subject, channel_actor.HandleIncoming(msg))
+          actor.continue(state)
         }
-      })
-      actor.continue(state)
+        False -> {
+          let subj = state.self_subject
+          process.spawn_unlinked(fn() {
+            case rescue(fn() { handle_with_llm(state, msg, subj, domain_name) }) {
+              Ok(_) -> Nil
+              Error(reason) -> {
+                logging.log(logging.Error, "[brain] CRASH in handle_with_llm: " <> reason)
+                let _ =
+                  state.discord.send_message(
+                    msg.channel_id,
+                    "Sorry, I crashed while processing your message. Check the logs.",
+                  )
+                Nil
+              }
+            }
+          })
+          actor.continue(state)
+        }
+      }
     }
     UpdateDomains(domains) -> {
       logging.log(logging.Info, 
@@ -1256,6 +1281,72 @@ fn persist_flare_result(
         Error(_) -> Nil
       }
   }
+}
+
+/// Build a `channel_actor.Deps` from the brain's state for the given
+/// channel and optional domain. Used when routing a message through the
+/// experimental channel_actor path.
+fn build_channel_actor_deps(
+  state: BrainState,
+  channel_id: String,
+  domain_name: Option(String),
+) -> channel_actor.Deps {
+  // Resolve domain cwd from the domain config (if any).
+  let domain_cwd = case domain_name {
+    Some(name) ->
+      case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
+        Ok(#(_, cfg)) -> cfg.cwd
+        Error(_) -> "."
+      }
+    None -> "."
+  }
+  let base_dir = case domain_name {
+    Some(_) -> domain_cwd
+    None -> state.paths.data
+  }
+
+  // Vision config: tiered domain-over-global resolution, then build the
+  // LlmConfig for the resolved model spec.
+  let domain_cfg_opt = case domain_name {
+    Some(name) ->
+      case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
+        Ok(#(_, cfg)) -> Some(cfg)
+        Error(_) -> None
+      }
+    None -> None
+  }
+  let resolved_vision =
+    vision.resolve_vision_config(state.global_config, domain_cfg_opt)
+  let vision_llm_config = case
+    models.build_llm_config(resolved_vision.model_spec)
+  {
+    Ok(cfg) -> cfg
+    Error(_) -> llm.LlmConfig(base_url: "", api_key: "", model: "")
+  }
+
+  channel_actor.Deps(
+    channel_id: channel_id,
+    discord_token: state.discord_token,
+    db_subject: state.db_subject,
+    acp_subject: state.acp_subject,
+    paths: state.paths,
+    discord: state.discord,
+    llm_client: state.llm_client,
+    skill_runner: state.skill_runner,
+    browser_runner: state.browser_runner,
+    skill_infos: state.skill_infos,
+    skills_dir: state.skills_dir,
+    validation_rules: state.validation_rules,
+    base_dir: base_dir,
+    domain_name: option.unwrap(domain_name, ""),
+    domain_cwd: domain_cwd,
+    llm_config: state.llm_config,
+    vision_config: vision_llm_config,
+    built_in_tools: state.built_in_tools,
+    stream_spawn: stream_worker.spawn,
+    tool_spawn: tool_worker.spawn,
+    vision_spawn: vision_worker.spawn,
+  )
 }
 
 fn resolve_domain_channel(state: BrainState, domain: String) -> String {
