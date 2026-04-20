@@ -15,10 +15,12 @@ import aura/notification
 import aura/shell
 import aura/skill
 import aura/validator
+import aura/vision
 import aura/xdg
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Monitor, type Pid, type Subject, type Timer}
-import gleam/option.{type Option, None}
+import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 
@@ -89,7 +91,7 @@ pub type TurnState {
     started_at: Int,
     iteration: Int,
     worker_pid: Pid,
-    worker_monitor: Monitor,
+    worker_monitor: Option(Monitor),
     worker_kind: WorkerKind,
     accumulated_content: String,
     accumulated_tool_calls: List(llm.ToolCall),
@@ -99,7 +101,7 @@ pub type TurnState {
     messages_at_llm_call: List(llm.Message),
     stream_retry_count: Int,
     stream_stats: StreamStats,
-    deadline_timer: Timer,
+    deadline_timer: Option(Timer),
   )
 }
 
@@ -333,5 +335,213 @@ fn handle_message(
   _message: ChannelMessage,
 ) -> actor.Next(ChannelState, ChannelMessage) {
   actor.continue(state)
+}
+
+// ---------------------------------------------------------------------------
+// Effect type
+// ---------------------------------------------------------------------------
+
+/// Effects emitted by `transition`. The actor's effect interpreter (Task 16)
+/// translates these into real side effects (spawn processes, edit Discord
+/// messages, schedule timers). Declared up-front so Tasks 9-15 can emit
+/// variants without growing the type.
+pub type Effect {
+  SpawnStreamWorker(messages: List(llm.Message))
+  SpawnToolWorker(call: llm.ToolCall)
+  SpawnVisionWorker(image_path: String, question: String)
+  KillWorker(pid: Pid)
+  CancelDeadline(timer: Timer)
+  ScheduleDeadline(ms: Int)
+  DiscordEdit(msg_id: String, content: String)
+  DiscordSend(content: String)
+  DbSaveExchange(
+    messages: List(llm.Message),
+    author_id: String,
+    author_name: String,
+    prompt_tokens: Int,
+  )
+  StopTyping(pid: Pid)
+  StartTyping
+  LogHeartbeat(stats: StreamStats, content_chars: Int)
+  LogStreamSummary(stats: StreamStats, outcome: String, content_chars: Int)
+  SpawnSkillReview
+  SpawnMemoryReview
+}
+
+// ---------------------------------------------------------------------------
+// Pure transition
+// ---------------------------------------------------------------------------
+
+/// Pure state-machine transition. Given current state and an incoming
+/// message, return the next state and a list of effects for the interpreter
+/// to execute. Task 8 handles only `HandleIncoming` — queueing when busy,
+/// starting a turn when idle. Tasks 9-15 will extend other arms.
+pub fn transition(
+  state: ChannelState,
+  message: ChannelMessage,
+) -> #(ChannelState, List(Effect)) {
+  case message, state.turn {
+    HandleIncoming(msg), None -> start_turn(state, PendingUserMessage(msg))
+    HandleIncoming(msg), Some(_) -> {
+      let new_queue = list.append(state.queue, [PendingUserMessage(msg)])
+      #(ChannelState(..state, queue: new_queue), [])
+    }
+    _, _ -> #(state, [])
+  }
+}
+
+fn start_turn(
+  state: ChannelState,
+  work: PendingWork,
+) -> #(ChannelState, List(Effect)) {
+  case work {
+    PendingUserMessage(msg) -> {
+      let messages = build_llm_messages(state, msg)
+      case has_image_attachment(msg) {
+        True -> {
+          let #(path, question) = first_image_and_question(msg)
+          #(state_with_pending_vision(state, messages, msg), [
+            SpawnVisionWorker(path, question),
+            StartTyping,
+            ScheduleDeadline(600_000),
+          ])
+        }
+        False ->
+          #(state_with_pending_stream(state, messages, msg), [
+            SpawnStreamWorker(messages),
+            StartTyping,
+            ScheduleDeadline(600_000),
+          ])
+      }
+    }
+    _ -> #(state, [])
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Transition helpers
+// ---------------------------------------------------------------------------
+
+/// Build the message list to send to the LLM for this turn. For Task 8 the
+/// system prompt/domain context is not assembled here — the effect
+/// interpreter (Task 16) is responsible for prepending domain-aware context
+/// before handing off to the LLM call.
+fn build_llm_messages(
+  state: ChannelState,
+  msg: discord.IncomingMessage,
+) -> List(llm.Message) {
+  list.append(state.conversation, [llm.UserMessage(content: msg.content)])
+}
+
+fn has_image_attachment(msg: discord.IncomingMessage) -> Bool {
+  list.any(msg.attachments, vision.is_image_attachment)
+}
+
+fn first_image_and_question(
+  msg: discord.IncomingMessage,
+) -> #(String, String) {
+  let first_url =
+    list.find_map(msg.attachments, fn(att) {
+      case vision.is_image_attachment(att) {
+        True -> Ok(att.url)
+        False -> Error(Nil)
+      }
+    })
+  let url = case first_url {
+    Ok(u) -> u
+    Error(_) -> ""
+  }
+  #(url, "Describe this image in detail for downstream tool use.")
+}
+
+fn new_turn_state(
+  kind: TurnKind,
+  worker_kind: WorkerKind,
+  messages: List(llm.Message),
+) -> TurnState {
+  TurnState(
+    kind: kind,
+    discord_msg_id: "",
+    started_at: 0,
+    iteration: 0,
+    worker_pid: process.self(),
+    worker_monitor: None,
+    worker_kind: worker_kind,
+    accumulated_content: "",
+    accumulated_tool_calls: [],
+    pending_tool_results: dict.new(),
+    new_messages: [],
+    traces: [],
+    messages_at_llm_call: messages,
+    stream_retry_count: 0,
+    stream_stats: StreamStats(
+      start_ms: 0,
+      reasoning_count: 0,
+      delta_count: 0,
+      last_heartbeat_ms: 0,
+    ),
+    deadline_timer: None,
+  )
+}
+
+fn state_with_pending_vision(
+  state: ChannelState,
+  messages: List(llm.Message),
+  msg: discord.IncomingMessage,
+) -> ChannelState {
+  let kind = UserTurn(message_id: msg.message_id, author_id: msg.author_id)
+  let turn = new_turn_state(kind, VisionWorker, messages)
+  ChannelState(..state, turn: Some(turn))
+}
+
+fn state_with_pending_stream(
+  state: ChannelState,
+  messages: List(llm.Message),
+  msg: discord.IncomingMessage,
+) -> ChannelState {
+  let kind = UserTurn(message_id: msg.message_id, author_id: msg.author_id)
+  let turn = new_turn_state(kind, StreamWorker, messages)
+  ChannelState(..state, turn: Some(turn))
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+/// Construct a fresh `ChannelState` for tests without spinning up an actor.
+/// Uses the same wiring as `start_for_test` but returns the state directly.
+pub fn initial_state_for_test(channel_id: String) -> ChannelState {
+  let deps = TestDeps(channel_id: channel_id, discord_token: "")
+  build_initial_state_for_test(deps, process.new_subject())
+}
+
+/// Build a state with a fake in-flight turn. Used to exercise the "busy"
+/// path of `transition` without standing up real workers/monitors.
+pub fn with_fake_in_flight_turn(state: ChannelState) -> ChannelState {
+  let fake_turn =
+    TurnState(
+      kind: UserTurn(message_id: "fake", author_id: "fake"),
+      discord_msg_id: "",
+      started_at: 0,
+      iteration: 0,
+      worker_pid: process.self(),
+      worker_monitor: None,
+      worker_kind: StreamWorker,
+      accumulated_content: "",
+      accumulated_tool_calls: [],
+      pending_tool_results: dict.new(),
+      new_messages: [],
+      traces: [],
+      messages_at_llm_call: [],
+      stream_retry_count: 0,
+      stream_stats: StreamStats(
+        start_ms: 0,
+        reasoning_count: 0,
+        delta_count: 0,
+        last_heartbeat_ms: 0,
+      ),
+      deadline_timer: None,
+    )
+  ChannelState(..state, turn: Some(fake_turn))
 }
 
