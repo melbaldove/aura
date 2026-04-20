@@ -1086,21 +1086,8 @@ fn handle_acp_event(
             session_name,
             text,
           )
-          let domain_name = case
-            list.find(state.domains, fn(d) { d.name == domain })
-          {
-            Ok(d) -> Some(d.name)
-            Error(_) -> None
-          }
-          process.spawn_unlinked(fn() {
-            handle_handback(
-              state,
-              channel,
-              domain_name,
-              session_name,
-              text,
-            )
-          })
+          // Route handback via channel_actor keyed on the flare's thread_id.
+          route_handback_to_channel_actor(state, session_name, domain, text)
           let new_msgs =
             dict.delete(state.acp_progress_msgs, session_name)
           actor.continue(BrainState(..state, acp_progress_msgs: new_msgs))
@@ -1110,7 +1097,6 @@ fn handle_acp_event(
     acp_monitor.AcpTurnCompleted(session_name, domain, result_text) -> {
       // Turn completed but session still alive — handback the results
       // so brain can respond naturally and optionally send follow-up prompts
-      let channel = resolve_acp_channel(state, session_name, domain)
       case result_text {
         "" -> actor.continue(state)
         text -> {
@@ -1121,21 +1107,8 @@ fn handle_acp_event(
             session_name,
             text,
           )
-          let domain_name = case
-            list.find(state.domains, fn(d) { d.name == domain })
-          {
-            Ok(d) -> Some(d.name)
-            Error(_) -> None
-          }
-          process.spawn_unlinked(fn() {
-            handle_handback(
-              state,
-              channel,
-              domain_name,
-              session_name,
-              text,
-            )
-          })
+          // Route handback via channel_actor keyed on the flare's thread_id.
+          route_handback_to_channel_actor(state, session_name, domain, text)
           actor.continue(state)
         }
       }
@@ -1417,6 +1390,40 @@ fn resolve_acp_channel(
         id -> id
       }
     Error(_) -> resolve_domain_channel(state, domain)
+  }
+}
+
+/// Route a handback event to the channel_actor for the flare's thread_id.
+/// Looks up the flare by session_name to get its thread_id, then sends
+/// HandleHandback to the channel_actor managing that thread. Logs a warning
+/// when the flare is unknown.
+fn route_handback_to_channel_actor(
+  state: BrainState,
+  session_name: String,
+  domain: String,
+  text: String,
+) -> Nil {
+  case flare_manager.get_session(state.acp_subject, session_name) {
+    Ok(flare) -> {
+      let domain_name = case list.find(state.domains, fn(d) { d.name == flare.domain }) {
+        Ok(_) -> Some(flare.domain)
+        Error(_) -> None
+      }
+      let deps =
+        build_channel_actor_deps(state, flare.thread_id, domain_name)
+      let subject =
+        channel_supervisor.get_or_start(
+          state.channel_supervisor,
+          flare.thread_id,
+          deps,
+        )
+      process.send(subject, channel_actor.HandleHandback(flare.id, text))
+    }
+    Error(_) ->
+      logging.log(
+        logging.Info,
+        "[brain] Handback for unknown flare: " <> session_name,
+      )
   }
 }
 

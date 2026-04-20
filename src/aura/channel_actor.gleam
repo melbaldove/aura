@@ -103,7 +103,7 @@ pub type ChannelMessage {
 
 pub type TurnKind {
   UserTurn(message_id: String, author_id: String)
-  HandbackTurn(flare_id: String)
+  HandbackTurn(flare_id: String, result: String)
   FindingTurn(finding: notification.Finding)
 }
 
@@ -694,7 +694,34 @@ fn execute_spawn_stream_worker(
       state.channel_id,
       state.tool_ctx.acp_subject,
     )
-  let messages_with_system = [llm.SystemMessage(system_prompt), ..messages]
+  // For handback turns, append the handback system message after history.
+  // Resolve session_name by looking up the flare by id; fall back to flare_id.
+  let messages_with_system =
+    case state.turn {
+      Some(TurnState(kind: HandbackTurn(flare_id, result), ..)) -> {
+        let session_name =
+          case
+            list.find(
+              flare_manager.list_sessions(state.tool_ctx.acp_subject),
+              fn(s) { s.id == flare_id },
+            )
+          {
+            Ok(s) -> s.session_name
+            Error(_) -> flare_id
+          }
+        let handback_msg =
+          "[Flare reported back: \""
+          <> session_name
+          <> "\"]\n\n"
+          <> result
+        list.flatten([
+          [llm.SystemMessage(system_prompt)],
+          messages,
+          [llm.SystemMessage(handback_msg)],
+        ])
+      }
+      _ -> [llm.SystemMessage(system_prompt), ..messages]
+    }
   let pid =
     state.stream_spawn(
       state.tool_ctx.llm_client.stream_with_tools,
@@ -1097,6 +1124,15 @@ pub fn transition(
     }
     WorkerDown(_, _), None -> #(state, [])
 
+    // --- handback ---------------------------------------------------
+    HandleHandback(flare_id, result), None ->
+      start_turn(state, PendingHandback(flare_id, result))
+    HandleHandback(flare_id, result), Some(_) -> {
+      let new_queue =
+        list.append(state.queue, [PendingHandback(flare_id, result)])
+      #(ChannelState(..state, queue: new_queue), [])
+    }
+
     _, _ -> #(state, [])
   }
 }
@@ -1226,6 +1262,20 @@ fn start_turn(
           ])
       }
     }
+    PendingHandback(flare_id, result) -> {
+      // Build messages from current conversation history. The handback system
+      // message is injected in execute_spawn_stream_worker (effect interpreter)
+      // so that the flare_manager.list_sessions call stays out of pure transition.
+      let messages = state.conversation
+      let kind = HandbackTurn(flare_id, result)
+      let turn = new_turn_state(kind, StreamWorker, messages)
+      #(ChannelState(..state, turn: Some(turn)), [
+        SpawnStreamWorker(messages),
+        StartTyping,
+        ScheduleDeadline(600_000),
+      ])
+    }
+
     _ -> #(state, [])
   }
 }
@@ -1453,9 +1503,10 @@ fn finalize_turn(
 ) -> #(ChannelState, List(Effect)) {
   let final_messages =
     list.append(turn.new_messages, [llm.AssistantMessage(content)])
-  let author_id = case turn.kind {
-    UserTurn(_, author_id) -> author_id
-    _ -> ""
+  let #(author_id, author_name) = case turn.kind {
+    UserTurn(_, aid) -> #(aid, "")
+    HandbackTurn(_, _) -> #("aura", "Aura")
+    FindingTurn(_) -> #("aura", "Aura")
   }
   let full_history = list.append(state.conversation, final_messages)
   // Compute skill-review counter logic: reset to 0 when the current turn
@@ -1471,7 +1522,7 @@ fn finalize_turn(
   }
   let base_effects = [
     DiscordEdit(turn.discord_msg_id, format_progress(content, turn.traces)),
-    DbSaveExchange(final_messages, author_id, "", prompt_tokens),
+    DbSaveExchange(final_messages, author_id, author_name, prompt_tokens),
     SpawnMemoryReview(full_history),
     SpawnSkillReview(full_history, new_skill_iterations, skill_review_count),
     LogStreamSummary(turn.stream_stats, "complete", string.length(content)),
@@ -1571,6 +1622,18 @@ pub fn with_fake_stream_turn_at_retry(
 /// which process it refers to.
 pub fn fake_monitor_ref() -> Monitor {
   process.monitor(process.self())
+}
+
+/// Build a state with a fake handback-in-flight turn. Used to exercise
+/// the `HandbackTurn` path of `finalize_turn` and `DbSaveExchange` author
+/// attribution.
+pub fn with_fake_handback_turn(
+  state: ChannelState,
+  flare_id: String,
+) -> ChannelState {
+  let fake_turn =
+    TurnState(..fresh_fake_turn(StreamWorker), kind: HandbackTurn(flare_id, "result"))
+  ChannelState(..state, turn: Some(fake_turn))
 }
 
 fn fresh_fake_turn(worker_kind: WorkerKind) -> TurnState {
