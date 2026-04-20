@@ -1975,7 +1975,13 @@ fn finalize_turn(
     Some(timer) -> list.append(with_typing, [CancelDeadline(timer)])
     None -> with_typing
   }
-  let cleared = ChannelState(..state, turn: None, typing_pid: None)
+  let cleared =
+    ChannelState(
+      ..state,
+      turn: None,
+      typing_pid: None,
+      conversation: full_history,
+    )
   case state.queue {
     [] -> #(cleared, with_deadline)
     [next, ..rest] -> {

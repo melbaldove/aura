@@ -186,6 +186,31 @@ pub fn stream_complete_no_tools_finalizes_test() {
   has_db_save |> should.be_true
 }
 
+/// Regression: finalize_turn must persist the full turn (user message +
+/// tool/new messages + final assistant message) back into state.conversation.
+/// Previously `cleared` only reset turn/typing_pid and left state.conversation
+/// pointing at the pre-turn history, so every turn after the first saw stale
+/// context through build_llm_messages.
+pub fn finalize_turn_appends_to_state_conversation_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let before = list.length(state.conversation)
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(after_state, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("final answer", "[]", 100),
+    )
+  let has_assistant =
+    list.any(after_state.conversation, fn(m) {
+      case m {
+        llm.AssistantMessage("final answer") -> True
+        _ -> False
+      }
+    })
+  has_assistant |> should.be_true
+  { list.length(after_state.conversation) > before } |> should.be_true
+}
+
 pub fn stream_complete_with_tools_spawns_tool_worker_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
