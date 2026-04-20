@@ -5,12 +5,12 @@ import aura/time
 import gleam/dict
 import gleam/erlang/process
 import gleam/int
-import logging
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import logging
 
 const protect_tail_count = 20
 
@@ -112,30 +112,38 @@ pub fn load_from_db(
   platform_id: String,
   timestamp: Int,
 ) -> Result(#(String, List(llm.Message)), String) {
-  use convo_id <- result.try(db.resolve_conversation(db_subject, platform, platform_id, timestamp))
+  use convo_id <- result.try(db.resolve_conversation(
+    db_subject,
+    platform,
+    platform_id,
+    timestamp,
+  ))
   use stored <- result.try(db.load_messages(db_subject, convo_id, 80))
-  let messages = list.map(stored, fn(m) {
-    case m.role {
-      "system" -> llm.SystemMessage(m.content)
-      "user" -> llm.UserMessage(m.content)
-      "assistant" -> {
-        case m.tool_calls {
-          "" -> llm.AssistantMessage(m.content)
-          tc_json -> {
-            let calls = llm.parse_tool_calls_json(tc_json)
-            case calls {
-              [] -> llm.AssistantMessage(m.content)
-              _ -> llm.AssistantToolCallMessage(m.content, calls)
+  let messages =
+    list.map(stored, fn(m) {
+      case m.role {
+        "system" -> llm.SystemMessage(m.content)
+        "user" -> llm.UserMessage(m.content)
+        "assistant" -> {
+          case m.tool_calls {
+            "" -> llm.AssistantMessage(m.content)
+            tc_json -> {
+              let calls = llm.parse_tool_calls_json(tc_json)
+              case calls {
+                [] -> llm.AssistantMessage(m.content)
+                _ -> llm.AssistantToolCallMessage(m.content, calls)
+              }
             }
           }
         }
+        "tool" -> llm.ToolResultMessage(m.tool_call_id, m.content)
+        _ -> llm.UserMessage(m.content)
       }
-      "tool" -> llm.ToolResultMessage(m.tool_call_id, m.content)
-      _ -> llm.UserMessage(m.content)
-    }
-  })
+    })
   // Restore compaction summary if present
-  let messages_with_summary = case db.get_compaction_summary(db_subject, convo_id) {
+  let messages_with_summary = case
+    db.get_compaction_summary(db_subject, convo_id)
+  {
     Ok("") -> messages
     Ok(summary) -> [llm.SystemMessage(summary), ..messages]
     Error(_) -> messages
@@ -154,17 +162,35 @@ pub fn save_exchange_to_db(
   author_name: String,
   timestamp: Int,
 ) -> Result(Nil, String) {
-  let _ = list.index_fold(messages, Ok(Nil), fn(acc, msg, idx) {
-    case acc {
-      Error(e) -> Error(e)
-      Ok(_) -> {
-        let #(role, content, tool_call_id, tool_calls_json) = message_to_db_fields(msg)
-        let msg_author_id = case role { "user" -> author_id _ -> "" }
-        let msg_author_name = case role { "user" -> author_name _ -> "aura" }
-        db.append_message_full(db_subject, conversation_id, role, content, msg_author_id, msg_author_name, tool_call_id, tool_calls_json, timestamp + idx)
+  let _ =
+    list.index_fold(messages, Ok(Nil), fn(acc, msg, idx) {
+      case acc {
+        Error(e) -> Error(e)
+        Ok(_) -> {
+          let #(role, content, tool_call_id, tool_calls_json) =
+            message_to_db_fields(msg)
+          let msg_author_id = case role {
+            "user" -> author_id
+            _ -> ""
+          }
+          let msg_author_name = case role {
+            "user" -> author_name
+            _ -> "aura"
+          }
+          db.append_message_full(
+            db_subject,
+            conversation_id,
+            role,
+            content,
+            msg_author_id,
+            msg_author_name,
+            tool_call_id,
+            tool_calls_json,
+            timestamp + idx,
+          )
+        }
       }
-    }
-  })
+    })
 }
 
 /// Convert an LLM message to database field tuple: (role, content, tool_call_id, tool_calls_json).
@@ -174,7 +200,8 @@ fn message_to_db_fields(msg: llm.Message) -> #(String, String, String, String) {
     llm.UserMessageWithImage(c, _) -> #("user", c, "", "")
     llm.AssistantMessage(c) -> #("assistant", c, "", "")
     llm.AssistantToolCallMessage(c, calls) -> {
-      let calls_json = json.array(calls, llm.tool_call_to_json) |> json.to_string
+      let calls_json =
+        json.array(calls, llm.tool_call_to_json) |> json.to_string
       #("assistant", c, "", calls_json)
     }
     llm.ToolResultMessage(id, c) -> #("tool", c, id, "")
@@ -212,7 +239,13 @@ pub fn get_or_load_db(
           #(new_buffers, convo_id, messages)
         }
         Error(e) -> {
-          logging.log(logging.Error, "[conversation] Failed to load from DB for " <> cache_key <> ": " <> e)
+          logging.log(
+            logging.Error,
+            "[conversation] Failed to load from DB for "
+              <> cache_key
+              <> ": "
+              <> e,
+          )
           #(buffers, cache_key, [])
         }
       }
@@ -253,7 +286,10 @@ pub fn needs_compression(
 }
 
 /// Estimate token count: use real API value if available, otherwise rough estimate.
-pub fn estimate_tokens(messages: List(llm.Message), last_prompt_tokens: Int) -> Int {
+pub fn estimate_tokens(
+  messages: List(llm.Message),
+  last_prompt_tokens: Int,
+) -> Int {
   case last_prompt_tokens > 0 {
     True -> last_prompt_tokens
     False -> compressor.estimate_messages_tokens(messages)
@@ -307,9 +343,18 @@ pub fn compress_buffer(
   context_length: Int,
 ) -> #(Buffers, CompressorState) {
   let history = get_history(buffers, channel_id)
-  let #(new_history, new_state) = compress_history(
-    history, llm_config, compressor_state, domain_name, agents_md, state_md, db_subject, convo_id, context_length,
-  )
+  let #(new_history, new_state) =
+    compress_history(
+      history,
+      llm_config,
+      compressor_state,
+      domain_name,
+      agents_md,
+      state_md,
+      db_subject,
+      convo_id,
+      context_length,
+    )
   #(dict.insert(buffers, channel_id, new_history), new_state)
 }
 
@@ -334,7 +379,13 @@ pub fn compress_history(
       let #(pruned_history, prune_count) =
         compressor.prune_tool_outputs(history, protect_tail_count)
       case prune_count > 0 {
-        True -> logging.log(logging.Info, "[conversation] Pruned " <> int.to_string(prune_count) <> " tool output(s)")
+        True ->
+          logging.log(
+            logging.Info,
+            "[conversation] Pruned "
+              <> int.to_string(prune_count)
+              <> " tool output(s)",
+          )
         False -> Nil
       }
 
@@ -344,14 +395,24 @@ pub fn compress_history(
         None -> 3
       }
       // Token-budget tail protection: walk backward by ~20% of context window
-      let tail_start = compressor.find_tail_boundary(pruned_history, head_count, context_length)
+      let tail_start =
+        compressor.find_tail_boundary(
+          pruned_history,
+          head_count,
+          context_length,
+        )
       let tail = list.drop(pruned_history, tail_start)
-      let middle = list.drop(pruned_history, head_count) |> list.take(tail_start - head_count)
+      let middle =
+        list.drop(pruned_history, head_count)
+        |> list.take(tail_start - head_count)
 
       let now = time.now_ms()
       case now < compressor_state.cooldown_until {
         True -> {
-          logging.log(logging.Info, "[conversation] Compression in cooldown, pruning only")
+          logging.log(
+            logging.Info,
+            "[conversation] Compression in cooldown, pruning only",
+          )
           #(pruned_history, compressor_state)
         }
         False -> {
@@ -359,26 +420,61 @@ pub fn compress_history(
             Some(s) -> Some(s)
             None -> compressor_state.previous_summary
           }
-          case compressor.compress(llm_config, middle, summary_input, domain_name, agents_md, state_md) {
+          case
+            compressor.compress(
+              llm_config,
+              middle,
+              summary_input,
+              domain_name,
+              agents_md,
+              state_md,
+            )
+          {
             Ok(summary_text) -> {
-              logging.log(logging.Info, "[conversation] Compressed " <> int.to_string(list.length(middle)) <> " messages into summary")
-              let summary_msg = llm.SystemMessage(summary_text)
-              let new_history = compressor.sanitize_tool_pairs([summary_msg, ..tail])
-              case db.update_compaction_summary(db_subject, convo_id, summary_text) {
-                Ok(_) -> Nil
-                Error(e) -> logging.log(logging.Error, "[conversation] Failed to persist compaction summary: " <> e)
-              }
-              let new_state = CompressorState(
-                previous_summary: Some(compressor.strip_summary_prefix(summary_text)),
-                last_prompt_tokens: compressor_state.last_prompt_tokens,
-                compression_count: compressor_state.compression_count + 1,
-                cooldown_until: 0,
+              logging.log(
+                logging.Info,
+                "[conversation] Compressed "
+                  <> int.to_string(list.length(middle))
+                  <> " messages into summary",
               )
+              let summary_msg = llm.SystemMessage(summary_text)
+              let new_history =
+                compressor.sanitize_tool_pairs([summary_msg, ..tail])
+              case
+                db.update_compaction_summary(db_subject, convo_id, summary_text)
+              {
+                Ok(_) -> Nil
+                Error(e) ->
+                  logging.log(
+                    logging.Error,
+                    "[conversation] Failed to persist compaction summary: " <> e,
+                  )
+              }
+              let new_state =
+                CompressorState(
+                  previous_summary: Some(compressor.strip_summary_prefix(
+                    summary_text,
+                  )),
+                  last_prompt_tokens: compressor_state.last_prompt_tokens,
+                  compression_count: compressor_state.compression_count + 1,
+                  cooldown_until: 0,
+                )
               #(new_history, new_state)
             }
             Error(e) -> {
-              logging.log(logging.Error, "[conversation] Compression failed: " <> e <> ", cooldown 10 minutes")
-              #(pruned_history, CompressorState(..compressor_state, cooldown_until: now + compression_cooldown_ms))
+              logging.log(
+                logging.Error,
+                "[conversation] Compression failed: "
+                  <> e
+                  <> ", cooldown 10 minutes",
+              )
+              #(
+                pruned_history,
+                CompressorState(
+                  ..compressor_state,
+                  cooldown_until: now + compression_cooldown_ms,
+                ),
+              )
             }
           }
         }

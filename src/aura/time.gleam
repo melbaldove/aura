@@ -8,11 +8,7 @@ pub fn now_ms() -> Int {
 /// Today's date as "YYYY-MM-DD".
 pub fn today_date_string() -> String {
   let #(#(year, month, day), _time) = erlang_localtime()
-  int.to_string(year)
-  <> "-"
-  <> pad_zero(month)
-  <> "-"
-  <> pad_zero(day)
+  int.to_string(year) <> "-" <> pad_zero(month) <> "-" <> pad_zero(day)
 }
 
 /// Current date and time as "YYYY-MM-DD HH:MM" (local time).

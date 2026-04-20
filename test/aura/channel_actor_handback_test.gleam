@@ -4,7 +4,6 @@
 /// channel_actor HandleHandback → start_turn → LLM call) to verify:
 ///   1. The handback system message is injected into the LLM call.
 ///   2. finalize_turn saves with author_id="aura", author_name="Aura".
-
 import aura/acp/flare_manager
 import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
@@ -56,29 +55,23 @@ pub fn handback_injects_system_message_into_turn_test() {
   // and send HandleHandback to the channel_actor for that thread.
   process.send(
     sys.brain_subject,
-    brain.AcpEvent(
-      acp_monitor.AcpCompleted(
-        session_name: "fix-build",
-        domain: "cm2",
-        report: acp_types.AcpReport(
-          outcome: acp_types.Clean,
-          files_changed: [],
-          decisions: "",
-          tests: "",
-          blockers: "",
-          anchor: "",
-        ),
-        result_text: "build passed",
+    brain.AcpEvent(acp_monitor.AcpCompleted(
+      session_name: "fix-build",
+      domain: "cm2",
+      report: acp_types.AcpReport(
+        outcome: acp_types.Clean,
+        files_changed: [],
+        decisions: "",
+        tests: "",
+        blockers: "",
+        anchor: "",
       ),
-    ),
+      result_text: "build passed",
+    )),
   )
 
   // Wait for the LLM call to appear (up to 3s).
-  let _ =
-    poll.poll_until(
-      fn() { fake_llm.calls(sys.fake_llm) != [] },
-      3000,
-    )
+  let _ = poll.poll_until(fn() { fake_llm.calls(sys.fake_llm) != [] }, 3000)
 
   let all_calls = fake_llm.calls(sys.fake_llm)
   { all_calls != [] } |> should.be_true

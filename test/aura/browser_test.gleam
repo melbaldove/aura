@@ -82,10 +82,7 @@ pub fn truncate_snapshot_no_footer_when_not_cut_test() {
 }
 
 pub fn detect_auth_required_catches_signin_url_test() {
-  browser.detect_auth_required(
-    "https://example.com/signin",
-    "Sign In",
-  )
+  browser.detect_auth_required("https://example.com/signin", "Sign In")
   |> should.be_true
 }
 
@@ -267,7 +264,9 @@ pub fn execute_navigate_calls_run_fn_for_safe_url_test() {
         cdp_url: "",
         timeout_ms: 30_000,
         run_fn: fn(_session, _cdp, _action, _args, _timeout) {
-          Ok("{\"success\": true, \"data\": {\"url\": \"https://example.com/\", \"title\": \"Example\"}}")
+          Ok(
+            "{\"success\": true, \"data\": {\"url\": \"https://example.com/\", \"title\": \"Example\"}}",
+          )
         },
         vision_fn: no_vision,
         url_has_secret_fn: browser.url_has_secret,
@@ -347,7 +346,9 @@ pub fn execute_upload_requires_path_test() {
 
 fn capture_call(_session, _cdp, action, args, _timeout) {
   Ok(
-    "{\"action\":\"" <> action <> "\",\"args\":\""
+    "{\"action\":\""
+    <> action
+    <> "\",\"args\":\""
     <> string.join(args, ",")
     <> "\"}",
   )

@@ -1,9 +1,9 @@
 import gleam/bool
 import gleam/int
-import logging
 import gleam/list
 import gleam/result
 import gleam/string
+import logging
 
 /// Prompt user for text input
 pub fn ask(prompt: String) -> Result(String, String) {

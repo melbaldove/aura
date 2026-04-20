@@ -37,8 +37,7 @@ type SupervisorState {
 /// Start the channel supervisor actor.
 pub fn start() -> Result(Subject(SupervisorMessage), actor.StartError) {
   actor.new_with_initialiser(5000, fn(self_subject) {
-    let state =
-      SupervisorState(children: dict.new(), self: self_subject)
+    let state = SupervisorState(children: dict.new(), self: self_subject)
     Ok(actor.initialised(state) |> actor.returning(self_subject))
   })
   |> actor.on_message(handle_message)

@@ -6,13 +6,17 @@ import gleeunit/should
 
 pub fn empty_buffer_test() {
   let buffers = conversation.new()
-  conversation.get_history(buffers, "chan-123") |> list.length |> should.equal(0)
+  conversation.get_history(buffers, "chan-123")
+  |> list.length
+  |> should.equal(0)
 }
 
 pub fn append_and_retrieve_test() {
   let buffers = conversation.new()
   let buffers = conversation.append(buffers, "chan-123", "Hello", "Hi there!")
-  conversation.get_history(buffers, "chan-123") |> list.length |> should.equal(2)
+  conversation.get_history(buffers, "chan-123")
+  |> list.length
+  |> should.equal(2)
 }
 
 pub fn separate_channels_test() {
@@ -43,12 +47,13 @@ pub fn needs_compression_test() {
   // Build a buffer with enough tokens to trigger compression
   // 200K context window, trigger at 50% = 100K tokens = 400K chars
   // Use small window for testing: 100 tokens = 400 chars
-  let buffers = conversation.append(
-    conversation.new(),
-    "chan-1",
-    string.repeat("x", 300),
-    string.repeat("y", 300),
-  )
+  let buffers =
+    conversation.append(
+      conversation.new(),
+      "chan-1",
+      string.repeat("x", 300),
+      string.repeat("y", 300),
+    )
   // 600 chars = 150 tokens. At context_window=200, threshold=100 tokens -> should trigger
   should.be_true(conversation.needs_compression(buffers, "chan-1", 200))
   // At context_window=2000, threshold=1000 tokens -> should NOT trigger

@@ -47,18 +47,12 @@ pub fn register(reg: StepRegistry) -> StepRegistry {
     "the Discord message sent to {string} contains {string}",
     then_discord_contains,
   )
-  |> steps.step(
-    "no Discord message is sent to {string}",
-    then_no_discord_send,
-  )
+  |> steps.step("no Discord message is sent to {string}", then_no_discord_send)
   |> steps.step(
     "the turn deadline fires after {int} {word}",
     then_deadline_fires_after,
   )
-  |> steps.step(
-    "a tmp file at {string} containing {string}",
-    given_tmp_file,
-  )
+  |> steps.step("a tmp file at {string} containing {string}", given_tmp_file)
   |> steps.step(
     "Discord received at least {int} edits to the same message",
     then_discord_at_least_n_edits,
@@ -245,7 +239,10 @@ fn edit_count(fake: fake_discord.FakeDiscord) -> Int {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-fn build_incoming(channel_id: String, content: String) -> discord.IncomingMessage {
+fn build_incoming(
+  channel_id: String,
+  content: String,
+) -> discord.IncomingMessage {
   discord.IncomingMessage(
     message_id: "fake-" <> content,
     channel_id: channel_id,

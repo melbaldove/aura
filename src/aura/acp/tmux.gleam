@@ -17,14 +17,27 @@ pub fn build_create_command(
   session_name: String,
   shell_command: String,
 ) -> Command {
-  Command(
-    program: "tmux",
-    args: ["new-session", "-d", "-s", session_name, "--", "sh", "-c", shell_command],
-  )
+  Command(program: "tmux", args: [
+    "new-session",
+    "-d",
+    "-s",
+    session_name,
+    "--",
+    "sh",
+    "-c",
+    shell_command,
+  ])
 }
 
 pub fn build_capture_command(session_name: String) -> Command {
-  Command(program: "tmux", args: ["capture-pane", "-p", "-S", "-500", "-t", session_name])
+  Command(program: "tmux", args: [
+    "capture-pane",
+    "-p",
+    "-S",
+    "-500",
+    "-t",
+    session_name,
+  ])
 }
 
 pub fn build_kill_command(session_name: String) -> Command {
@@ -69,7 +82,8 @@ pub fn create_session(
 pub fn send_input(session_name: String, text: String) -> Result(Nil, String) {
   case cmd.run("tmux", ["send-keys", "-t", session_name, text, "Enter"], 5000) {
     Ok(#(0, _, _)) -> Ok(Nil)
-    Ok(#(code, _, stderr)) -> Error("tmux send-keys exit " <> int.to_string(code) <> ": " <> stderr)
+    Ok(#(code, _, stderr)) ->
+      Error("tmux send-keys exit " <> int.to_string(code) <> ": " <> stderr)
     Error(e) -> Error(e)
   }
 }
@@ -83,7 +97,8 @@ pub fn capture_pane(session_name: String) -> Result(String, String) {
 /// Launches claude, sends Enter to accept the trust prompt, waits, kills session.
 pub fn ensure_trusted(cwd: String) -> Result(Nil, String) {
   let session_name = "aura-trust-" <> int.to_string(time.now_ms())
-  let shell_command = "cd " <> cwd <> " && claude --dangerously-skip-permissions 'echo trusted'"
+  let shell_command =
+    "cd " <> cwd <> " && claude --dangerously-skip-permissions 'echo trusted'"
   case create_session(session_name, shell_command) {
     Error(e) -> Error("Failed to create trust session: " <> e)
     Ok(Nil) -> {

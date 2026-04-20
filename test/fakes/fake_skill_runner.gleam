@@ -48,7 +48,8 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       let existing =
         dict.get(state.scripts, skill_name)
         |> unwrap_or([])
-      let updated = dict.insert(state.scripts, skill_name, list.append(existing, [result]))
+      let updated =
+        dict.insert(state.scripts, skill_name, list.append(existing, [result]))
       actor.continue(State(scripts: updated, invocations: state.invocations))
     }
 
@@ -59,15 +60,14 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
         Ok([next, ..rest]) -> {
           let updated = dict.insert(state.scripts, name, rest)
           process.send(reply, Ok(next))
-          actor.continue(
-            State(scripts: updated, invocations: new_invocations),
-          )
+          actor.continue(State(scripts: updated, invocations: new_invocations))
         }
         _ -> {
           process.send(reply, Error("no script for skill " <> name))
-          actor.continue(
-            State(scripts: state.scripts, invocations: new_invocations),
-          )
+          actor.continue(State(
+            scripts: state.scripts,
+            invocations: new_invocations,
+          ))
         }
       }
     }
@@ -106,11 +106,17 @@ pub fn new() -> #(FakeSkillRunner, SkillRunner) {
   let fake = FakeSkillRunner(subject: subj)
 
   let runner =
-    SkillRunner(invoke: fn(skill_info: skill.SkillInfo, args: List(String), _timeout_ms: Int) {
-      process.call(subj, 1000, fn(reply) {
-        Pop(name: skill_info.name, args: args, reply: reply)
-      })
-    })
+    SkillRunner(
+      invoke: fn(
+        skill_info: skill.SkillInfo,
+        args: List(String),
+        _timeout_ms: Int,
+      ) {
+        process.call(subj, 1000, fn(reply) {
+          Pop(name: skill_info.name, args: args, reply: reply)
+        })
+      },
+    )
 
   #(fake, runner)
 }

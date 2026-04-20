@@ -5,11 +5,11 @@ import aura/tier
 import aura/validator
 import gleam/dynamic/decode
 import gleam/int
-import logging
 import gleam/json
 import gleam/list
 import gleam/result
 import gleam/string
+import logging
 import simplifile
 
 /// Resolve a file path to an absolute path.
@@ -110,7 +110,10 @@ pub fn run_skill(
         Ok(parsed) -> parsed
         Error(_) -> split_shell_args(args_str)
       }
-      logging.log(logging.Info, "[tools] run_skill: " <> name <> " " <> string.inspect(args))
+      logging.log(
+        logging.Info,
+        "[tools] run_skill: " <> name <> " " <> string.inspect(args),
+      )
       case runner.invoke(skill_info, args, 30_000) {
         Ok(r) ->
           case r.exit_code {
@@ -169,7 +172,8 @@ fn split_shell_args_loop(
         True -> {
           case c == quote_char {
             True -> split_shell_args_loop(rest, current, acc, False, "")
-            False -> split_shell_args_loop(rest, current <> c, acc, True, quote_char)
+            False ->
+              split_shell_args_loop(rest, current <> c, acc, True, quote_char)
           }
         }
         False -> {
@@ -178,7 +182,8 @@ fn split_shell_args_loop(
             " " -> {
               case current {
                 "" -> split_shell_args_loop(rest, "", acc, False, "")
-                _ -> split_shell_args_loop(rest, "", [current, ..acc], False, "")
+                _ ->
+                  split_shell_args_loop(rest, "", [current, ..acc], False, "")
               }
             }
             _ -> split_shell_args_loop(rest, current <> c, acc, False, "")
@@ -193,8 +198,7 @@ fn ensure_parent_dir(path: String) -> Nil {
   let parts = string.split(path, "/")
   case list.length(parts) > 1 {
     True -> {
-      let parent =
-        list.take(parts, list.length(parts) - 1) |> string.join("/")
+      let parent = list.take(parts, list.length(parts) - 1) |> string.join("/")
       let _ = simplifile.create_directory_all(parent)
       Nil
     }

@@ -23,7 +23,8 @@ fn cleanup(base: String) -> Nil {
 // ---------------------------------------------------------------------------
 
 pub fn build_consolidation_prompt_test() {
-  let memory = "§ db-pattern\nAll DB access through actor\n\n§ fts-search\nFTS5 with porter tokenizer"
+  let memory =
+    "§ db-pattern\nAll DB access through actor\n\n§ fts-search\nFTS5 with porter tokenizer"
   let prompt = dreaming.build_consolidation_prompt(memory)
 
   // Contains key instructions
@@ -115,11 +116,15 @@ pub fn gather_file_sources_test() {
 
   // State content is formatted via structured_memory.format_for_display
   sources.state_content |> string.contains("focus") |> should.be_true
-  sources.state_content |> string.contains("Building dreaming system") |> should.be_true
+  sources.state_content
+  |> string.contains("Building dreaming system")
+  |> should.be_true
 
   // Memory content is formatted
   sources.memory_content |> string.contains("db-pattern") |> should.be_true
-  sources.memory_content |> string.contains("Actor serializes all writes") |> should.be_true
+  sources.memory_content
+  |> string.contains("Actor serializes all writes")
+  |> should.be_true
 
   // DB-sourced fields are empty (caller fills them)
   sources.flare_outcomes |> should.equal("")
@@ -131,10 +136,11 @@ pub fn gather_file_sources_test() {
 pub fn gather_file_sources_missing_files_test() {
   let base = temp_dir("missing-" <> test_helpers.random_suffix())
 
-  let sources = dreaming.gather_file_sources(
-    base <> "/nonexistent/STATE.md",
-    base <> "/nonexistent/MEMORY.md",
-  )
+  let sources =
+    dreaming.gather_file_sources(
+      base <> "/nonexistent/STATE.md",
+      base <> "/nonexistent/MEMORY.md",
+    )
 
   sources.state_content |> should.equal("(empty)")
   sources.memory_content |> should.equal("(empty)")
@@ -150,10 +156,8 @@ pub fn gather_file_sources_empty_files_test() {
   simplifile.write(base <> "/STATE.md", "") |> should.be_ok
   simplifile.write(base <> "/MEMORY.md", "") |> should.be_ok
 
-  let sources = dreaming.gather_file_sources(
-    base <> "/STATE.md",
-    base <> "/MEMORY.md",
-  )
+  let sources =
+    dreaming.gather_file_sources(base <> "/STATE.md", base <> "/MEMORY.md")
 
   // Empty files with no entries return "(empty)" from format_for_display
   sources.state_content |> should.equal("(empty)")
@@ -167,12 +171,13 @@ pub fn gather_file_sources_empty_files_test() {
 // ---------------------------------------------------------------------------
 
 pub fn build_dream_system_prompt_test() {
-  let sources = dreaming.DreamSources(
-    memory_content: "**db-pattern:** Actor serializes all writes",
-    state_content: "**focus:** Building dreaming system",
-    flare_outcomes: "### fix-bug\nFixed pagination",
-    compaction_summaries: "Discussed SQLite migration",
-  )
+  let sources =
+    dreaming.DreamSources(
+      memory_content: "**db-pattern:** Actor serializes all writes",
+      state_content: "**focus:** Building dreaming system",
+      flare_outcomes: "### fix-bug\nFixed pagination",
+      compaction_summaries: "Discussed SQLite migration",
+    )
   let prompt = dreaming.build_dream_system_prompt("backend", sources)
 
   // Contains domain name
@@ -192,18 +197,23 @@ pub fn build_dream_system_prompt_test() {
 }
 
 pub fn build_dream_system_prompt_empty_sources_test() {
-  let sources = dreaming.DreamSources(
-    memory_content: "(empty)",
-    state_content: "(empty)",
-    flare_outcomes: "(no flare outcomes since last dream)",
-    compaction_summaries: "(no compaction summaries available)",
-  )
+  let sources =
+    dreaming.DreamSources(
+      memory_content: "(empty)",
+      state_content: "(empty)",
+      flare_outcomes: "(no flare outcomes since last dream)",
+      compaction_summaries: "(no compaction summaries available)",
+    )
   let prompt = dreaming.build_dream_system_prompt("aura", sources)
 
   prompt |> string.contains("aura") |> should.be_true
   prompt |> string.contains("(empty)") |> should.be_true
-  prompt |> string.contains("(no flare outcomes since last dream)") |> should.be_true
-  prompt |> string.contains("(no compaction summaries available)") |> should.be_true
+  prompt
+  |> string.contains("(no flare outcomes since last dream)")
+  |> should.be_true
+  prompt
+  |> string.contains("(no compaction summaries available)")
+  |> should.be_true
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +395,9 @@ pub fn extract_index_entries_from_successes_test() {
     _ -> ""
   }
   first |> string.contains("backend") |> should.be_true
-  first |> string.contains("Backend covers DB and API patterns.") |> should.be_true
+  first
+  |> string.contains("Backend covers DB and API patterns.")
+  |> should.be_true
 
   let second = case entries {
     [_, b, ..] -> b
@@ -435,11 +447,12 @@ pub fn extract_index_entries_empty_results_test() {
 }
 
 pub fn build_global_dream_system_prompt_test() {
-  let prompt = dreaming.build_global_dream_system_prompt(
-    "**db-pattern:** All DB through actor",
-    "**name:** Melbourne",
-    "backend: Covers DB and API patterns.\n\nfrontend: Covers React.",
-  )
+  let prompt =
+    dreaming.build_global_dream_system_prompt(
+      "**db-pattern:** All DB through actor",
+      "**name:** Melbourne",
+      "backend: Covers DB and API patterns.\n\nfrontend: Covers React.",
+    )
 
   // Contains global dreaming context
   prompt |> string.contains("global dreaming process") |> should.be_true
@@ -453,16 +466,19 @@ pub fn build_global_dream_system_prompt_test() {
   prompt |> string.contains("Melbourne") |> should.be_true
 
   // Contains domain index entries
-  prompt |> string.contains("backend: Covers DB and API patterns.") |> should.be_true
+  prompt
+  |> string.contains("backend: Covers DB and API patterns.")
+  |> should.be_true
   prompt |> string.contains("frontend: Covers React.") |> should.be_true
 }
 
 pub fn build_global_dream_system_prompt_empty_sources_test() {
-  let prompt = dreaming.build_global_dream_system_prompt(
-    "(empty)",
-    "(empty)",
-    "(no domain index entries)",
-  )
+  let prompt =
+    dreaming.build_global_dream_system_prompt(
+      "(empty)",
+      "(empty)",
+      "(no domain index entries)",
+    )
 
   prompt |> string.contains("(empty)") |> should.be_true
   prompt |> string.contains("(no domain index entries)") |> should.be_true

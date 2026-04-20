@@ -1,9 +1,9 @@
 import aura/cron
 import gleam/int
-import logging
 import gleam/list
 import gleam/result
 import gleam/string
+import logging
 import tom
 
 /// Discord connection settings (token, guild ID, and fallback channel ID).
@@ -108,7 +108,11 @@ pub fn default_global() -> GlobalConfig {
       urgent_bypass: False,
     ),
     vision: VisionConfig(prompt: ""),
-    memory: MemoryConfig(review_interval: 10, notify_on_review: True, skill_review_interval: 10),
+    memory: MemoryConfig(
+      review_interval: 10,
+      notify_on_review: True,
+      skill_review_interval: 10,
+    ),
     acp_global_max_concurrent: 0,
     acp_server_url: "",
     acp_agent_name: "claude-code",
@@ -178,7 +182,9 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
   )
   use models_domain <- result.try(
     tom.get_string(doc, ["models", "domain"])
-    |> result.try_recover(fn(_) { tom.get_string(doc, ["models", "workstream"]) })
+    |> result.try_recover(fn(_) {
+      tom.get_string(doc, ["models", "workstream"])
+    })
     |> result.map_error(fn(_) { "Missing models.domain" }),
   )
   use models_acp <- result.try(
@@ -261,7 +267,10 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
       case cron.parse(c) {
         Ok(_) -> c
         Error(_) -> {
-          logging.log(logging.Warning, "[config] Invalid dreaming.cron '" <> c <> "', using default")
+          logging.log(
+            logging.Warning,
+            "[config] Invalid dreaming.cron '" <> c <> "', using default",
+          )
           "0 4 * * *"
         }
       }
@@ -269,7 +278,9 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     Error(_) -> "0 4 * * *"
   }
 
-  let dreaming_budget_percent = case tom.get_int(doc, ["dreaming", "budget_percent"]) {
+  let dreaming_budget_percent = case
+    tom.get_int(doc, ["dreaming", "budget_percent"])
+  {
     Ok(p) -> int.clamp(p, min: 1, max: 50)
     Error(_) -> 10
   }

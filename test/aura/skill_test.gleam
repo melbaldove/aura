@@ -13,7 +13,8 @@ pub fn discover_skills_test() {
       base <> "/skills/jira/SKILL.md",
       "# Jira\nManage Jira tickets.",
     )
-  let _ = simplifile.write(base <> "/skills/jira/jira.sh", "#!/bin/bash\necho done")
+  let _ =
+    simplifile.write(base <> "/skills/jira/jira.sh", "#!/bin/bash\necho done")
   let _ = simplifile.create_directory_all(base <> "/skills/google")
   let _ =
     simplifile.write(
@@ -21,7 +22,10 @@ pub fn discover_skills_test() {
       "# Google\nGoogle workspace.",
     )
   let _ =
-    simplifile.write(base <> "/skills/google/google.sh", "#!/bin/bash\necho done")
+    simplifile.write(
+      base <> "/skills/google/google.sh",
+      "#!/bin/bash\necho done",
+    )
 
   let skills = skill.discover(base <> "/skills") |> should.be_ok
   list.length(skills) |> should.equal(2)
@@ -45,13 +49,19 @@ pub fn filter_skills_by_allowed_test() {
     skill.SkillInfo(name: "google", description: "Google", path: "/p/google"),
     skill.SkillInfo(name: "slack", description: "Slack", path: "/p/slack"),
   ]
-  skill.filter_allowed(all, ["jira", "google"]) |> list.length |> should.equal(2)
+  skill.filter_allowed(all, ["jira", "google"])
+  |> list.length
+  |> should.equal(2)
 }
 
 pub fn skill_description_for_prompt_test() {
   let skills = [
     skill.SkillInfo(name: "jira", description: "Manage tickets.", path: "/p"),
-    skill.SkillInfo(name: "google", description: "Google workspace.", path: "/p"),
+    skill.SkillInfo(
+      name: "google",
+      description: "Google workspace.",
+      path: "/p",
+    ),
   ]
   let prompt = skill.descriptions_for_prompt(skills)
   prompt |> string.contains("jira") |> should.be_true
@@ -130,11 +140,14 @@ pub fn discover_uses_frontmatter_description_test() {
 }
 
 pub fn discover_frontmatter_without_description_falls_back_to_body_test() {
-  let base = "/tmp/aura-skill-frontmatter-fallback-" <> test_helpers.random_suffix()
+  let base =
+    "/tmp/aura-skill-frontmatter-fallback-" <> test_helpers.random_suffix()
   let _ = simplifile.create_directory_all(base <> "/skills/alpha")
-  let content = "---\ntier: 2\nentrypoint: scripts/run.py\n---\n\n# Alpha\n\nAlpha body description.\n"
+  let content =
+    "---\ntier: 2\nentrypoint: scripts/run.py\n---\n\n# Alpha\n\nAlpha body description.\n"
   let _ = simplifile.write(base <> "/skills/alpha/SKILL.md", content)
-  let _ = simplifile.write(base <> "/skills/alpha/run.sh", "#!/bin/bash\necho ok")
+  let _ =
+    simplifile.write(base <> "/skills/alpha/run.sh", "#!/bin/bash\necho ok")
 
   let skills = skill.discover(base <> "/skills") |> should.be_ok
   let assert Ok(alpha) = list.find(skills, fn(s) { s.name == "alpha" })
@@ -149,7 +162,8 @@ pub fn discover_no_frontmatter_uses_first_paragraph_test() {
   let _ = simplifile.create_directory_all(base <> "/skills/plain")
   let content = "# Plain\n\nPlain description text.\n"
   let _ = simplifile.write(base <> "/skills/plain/SKILL.md", content)
-  let _ = simplifile.write(base <> "/skills/plain/run.sh", "#!/bin/bash\necho ok")
+  let _ =
+    simplifile.write(base <> "/skills/plain/run.sh", "#!/bin/bash\necho ok")
 
   let skills = skill.discover(base <> "/skills") |> should.be_ok
   let assert Ok(plain) = list.find(skills, fn(s) { s.name == "plain" })
@@ -165,7 +179,8 @@ pub fn discover_frontmatter_with_quoted_description_test() {
   let content =
     "---\nname: slack\ndescription: \"Read Slack, draft replies. Multi-workspace.\"\n---\n\n# Slack\n"
   let _ = simplifile.write(base <> "/skills/slack/SKILL.md", content)
-  let _ = simplifile.write(base <> "/skills/slack/run.sh", "#!/bin/bash\necho ok")
+  let _ =
+    simplifile.write(base <> "/skills/slack/run.sh", "#!/bin/bash\necho ok")
 
   let skills = skill.discover(base <> "/skills") |> should.be_ok
   let assert Ok(slack) = list.find(skills, fn(s) { s.name == "slack" })
@@ -224,10 +239,16 @@ pub fn list_with_details_test() {
   let dir = "/tmp/aura-skill-list-" <> test_helpers.random_suffix()
   let _ = simplifile.create_directory_all(dir <> "/alpha")
   let _ =
-    simplifile.write(dir <> "/alpha/SKILL.md", "# Alpha\n\nAlpha skill for testing.\n")
+    simplifile.write(
+      dir <> "/alpha/SKILL.md",
+      "# Alpha\n\nAlpha skill for testing.\n",
+    )
   let _ = simplifile.create_directory_all(dir <> "/beta")
   let _ =
-    simplifile.write(dir <> "/beta/SKILL.md", "# Beta\n\nBeta skill for testing.\n")
+    simplifile.write(
+      dir <> "/beta/SKILL.md",
+      "# Beta\n\nBeta skill for testing.\n",
+    )
 
   let result = skill.list_with_details(dir)
   should.be_ok(result)

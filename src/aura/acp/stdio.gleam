@@ -129,4 +129,3 @@ pub fn ffi_is_error_response(line: String) -> ErrorCheck {
 
 @external(erlang, "aura_acp_stdio_ffi", "is_error_response")
 fn ffi_is_error_response_raw(line: String) -> #(Bool, String)
-

@@ -6,12 +6,12 @@ import gleam/http
 import gleam/http/request
 import gleam/httpc
 import gleam/int
-import logging
 import gleam/json
 import gleam/list
 import gleam/result
 import gleam/string
 import gleam/uri
+import logging
 import simplifile
 
 const base_url = "https://discord.com/api/v10"
@@ -50,7 +50,13 @@ pub fn send_message(
   content: String,
   embeds: List(Embed),
 ) -> Result(String, String) {
-  logging.log(logging.Info, "[discord] Sending " <> int.to_string(string.length(content)) <> " chars to " <> channel_id)
+  logging.log(
+    logging.Info,
+    "[discord] Sending "
+      <> int.to_string(string.length(content))
+      <> " chars to "
+      <> channel_id,
+  )
   let url = api_url("/channels/" <> channel_id <> "/messages")
   let body = types.create_message_payload(content, embeds) |> json.to_string()
   use req <- result.try(authed_request(url, http.Post, token))
@@ -68,13 +74,22 @@ pub fn send_message(
       case json.parse(resp.body, decode.at(["id"], decode.string)) {
         Ok(id) -> Ok(id)
         Error(_) -> {
-          logging.log(logging.Error, "[discord] Failed to parse message ID from send response")
+          logging.log(
+            logging.Error,
+            "[discord] Failed to parse message ID from send response",
+          )
           Ok("")
         }
       }
     }
     status -> {
-      logging.log(logging.Error, "[discord] Error sending to " <> channel_id <> ": status " <> int.to_string(status))
+      logging.log(
+        logging.Error,
+        "[discord] Error sending to "
+          <> channel_id
+          <> ": status "
+          <> int.to_string(status),
+      )
       Error(unexpected_status(status, "send message"))
     }
   }
@@ -87,16 +102,17 @@ pub fn edit_message(
   message_id: String,
   content: String,
 ) -> Result(Nil, String) {
-  logging.log(logging.Info, 
+  logging.log(
+    logging.Info,
     "[discord] Editing message " <> message_id <> " in " <> channel_id,
   )
-  let url =
-    api_url("/channels/" <> channel_id <> "/messages/" <> message_id)
+  let url = api_url("/channels/" <> channel_id <> "/messages/" <> message_id)
   let body =
     json.object([
       #("content", json.string(content)),
       #("components", json.array([], fn(x) { x })),
-    ]) |> json.to_string()
+    ])
+    |> json.to_string()
   use req <- result.try(authed_request(url, http.Patch, token))
   let req =
     req
@@ -106,16 +122,14 @@ pub fn edit_message(
     httpc.configure()
     |> httpc.timeout(10_000)
     |> httpc.dispatch(req)
-    |> result.map_error(fn(e) {
-      "HTTP request failed: " <> string.inspect(e)
-    }),
+    |> result.map_error(fn(e) { "HTTP request failed: " <> string.inspect(e) }),
   )
   case resp.status {
     200 -> Ok(Nil)
     status -> {
-      logging.log(logging.Info, 
-        "[discord] Error editing message: status "
-        <> int.to_string(status),
+      logging.log(
+        logging.Info,
+        "[discord] Error editing message: status " <> int.to_string(status),
       )
       Error(unexpected_status(status, "edit message"))
     }
@@ -187,13 +201,15 @@ pub fn list_channels(
       case json.parse(resp.body, channel_decoder) {
         Ok(channels) -> {
           // Filter to text channels (type 0) and return (name, id)
-          Ok(list.filter_map(channels, fn(c) {
-            let #(name, id, t) = c
-            case t {
-              0 -> Ok(#(name, id))
-              _ -> Error(Nil)
-            }
-          }))
+          Ok(
+            list.filter_map(channels, fn(c) {
+              let #(name, id, t) = c
+              case t {
+                0 -> Ok(#(name, id))
+                _ -> Error(Nil)
+              }
+            }),
+          )
         }
         Error(_) -> Error("Failed to parse channels from response")
       }
@@ -244,12 +260,19 @@ pub fn get_active_threads(
   case resp.status {
     200 -> {
       let thread_decoder =
-        decode.at(["threads"], decode.list({
-          use id <- decode.field("id", decode.string)
-          use name <- decode.field("name", decode.string)
-          use parent_id <- decode.optional_field("parent_id", "", decode.string)
-          decode.success(#(id, name, parent_id))
-        }))
+        decode.at(
+          ["threads"],
+          decode.list({
+            use id <- decode.field("id", decode.string)
+            use name <- decode.field("name", decode.string)
+            use parent_id <- decode.optional_field(
+              "parent_id",
+              "",
+              decode.string,
+            )
+            decode.success(#(id, name, parent_id))
+          }),
+        )
       json.parse(resp.body, thread_decoder)
       |> result.map_error(fn(_) { "Failed to parse threads from response" })
     }
@@ -264,7 +287,10 @@ pub fn get_channel_messages(
   channel_id: String,
   limit: Int,
 ) -> Result(List(#(String, String)), String) {
-  let url = api_url("/channels/" <> channel_id <> "/messages?limit=" <> int.to_string(limit))
+  let url =
+    api_url(
+      "/channels/" <> channel_id <> "/messages?limit=" <> int.to_string(limit),
+    )
   use req <- result.try(authed_request(url, http.Get, token))
   use resp <- result.try(
     httpc.send(req)
@@ -274,7 +300,10 @@ pub fn get_channel_messages(
     200 -> {
       let msg_decoder =
         decode.list({
-          use author_name <- decode.subfield(["author", "username"], decode.string)
+          use author_name <- decode.subfield(
+            ["author", "username"],
+            decode.string,
+          )
           use content <- decode.optional_field("content", "", decode.string)
           decode.success(#(author_name, content))
         })
@@ -335,7 +364,10 @@ pub fn create_thread_from_message(
 
 /// GET /channels/{channel_id} — get the parent_id of a thread channel.
 /// Returns the parent channel ID, or empty string if not a thread.
-pub fn get_channel_parent(token: String, channel_id: String) -> Result(String, String) {
+pub fn get_channel_parent(
+  token: String,
+  channel_id: String,
+) -> Result(String, String) {
   let url = api_url("/channels/" <> channel_id)
   use req <- result.try(authed_request(url, http.Get, token))
   use resp <- result.try(
@@ -360,7 +392,10 @@ pub fn send_message_with_components(
   content: String,
   components: json.Json,
 ) -> Result(String, String) {
-  logging.log(logging.Info, "[discord] Sending message with components to " <> channel_id)
+  logging.log(
+    logging.Info,
+    "[discord] Sending message with components to " <> channel_id,
+  )
   let url = api_url("/channels/" <> channel_id <> "/messages")
   let body =
     json.object([
@@ -450,7 +485,10 @@ pub fn send_message_with_attachment(
   use file_bytes <- result.try(
     simplifile.read_bits(file_path)
     |> result.map_error(fn(e) {
-      "Failed to read attachment " <> file_path <> ": " <> simplifile.describe_error(e)
+      "Failed to read attachment "
+      <> file_path
+      <> ": "
+      <> simplifile.describe_error(e)
     }),
   )
   let boundary = "aura" <> int.to_string(time.now_ms())
@@ -470,7 +508,8 @@ pub fn send_message_with_attachment(
       ]),
     )
   let mime = content_type_for_filename(filename)
-  let body = build_multipart_body(boundary, payload_json, filename, mime, file_bytes)
+  let body =
+    build_multipart_body(boundary, payload_json, filename, mime, file_bytes)
 
   logging.log(
     logging.Info,
@@ -492,9 +531,7 @@ pub fn send_message_with_attachment(
     |> request.set_body(body)
   use resp <- result.try(
     httpc.send_bits(req)
-    |> result.map_error(fn(e) {
-      "HTTP request failed: " <> string.inspect(e)
-    }),
+    |> result.map_error(fn(e) { "HTTP request failed: " <> string.inspect(e) }),
   )
   let body_str = case bit_array.to_string(resp.body) {
     Ok(s) -> s
@@ -503,13 +540,16 @@ pub fn send_message_with_attachment(
   case resp.status {
     200 | 201 ->
       json.parse(body_str, decode.at(["id"], decode.string))
-      |> result.map_error(fn(_) { "Failed to parse message ID from attachment response" })
+      |> result.map_error(fn(_) {
+        "Failed to parse message ID from attachment response"
+      })
     status -> {
       logging.log(
         logging.Error,
         "[discord] Attachment upload failed: status "
           <> int.to_string(status)
-          <> " body " <> body_str,
+          <> " body "
+          <> body_str,
       )
       Error(unexpected_status(status, "send attachment"))
     }
@@ -531,16 +571,21 @@ pub fn build_multipart_body(
   let close = "--" <> boundary <> "--" <> crlf
   let header_json =
     delim
-    <> "Content-Disposition: form-data; name=\"payload_json\"" <> crlf
-    <> "Content-Type: application/json" <> crlf
+    <> "Content-Disposition: form-data; name=\"payload_json\""
+    <> crlf
+    <> "Content-Type: application/json"
+    <> crlf
     <> crlf
   let header_file =
     crlf
     <> delim
     <> "Content-Disposition: form-data; name=\"files[0]\"; filename=\""
     <> filename
-    <> "\"" <> crlf
-    <> "Content-Type: " <> file_content_type <> crlf
+    <> "\""
+    <> crlf
+    <> "Content-Type: "
+    <> file_content_type
+    <> crlf
     <> crlf
   let tail = crlf <> close
   <<

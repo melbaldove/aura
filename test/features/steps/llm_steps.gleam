@@ -1,8 +1,12 @@
 import aura/llm
-import dream_test/gherkin/steps.{type StepContext, type StepRegistry, get_int, get_string}
+import dream_test/gherkin/steps.{
+  type StepContext, type StepRegistry, get_int, get_string,
+}
 import dream_test/gherkin/world
 import dream_test/matchers.{contain_string, or_fail_with, should, succeed}
-import dream_test/types as dream_types  // AssertionResult used in handler return types
+import dream_test/types as dream_types
+
+// AssertionResult used in handler return types
 import fakes/fake_llm
 import gleam/list
 import gleam/string
@@ -16,14 +20,8 @@ import test_harness.{type TestSystem}
 /// Register all LLM step definitions onto the provided registry.
 pub fn register(reg: StepRegistry) -> StepRegistry {
   reg
-  |> steps.step(
-    "the LLM will respond with {string}",
-    given_llm_text_response,
-  )
-  |> steps.step(
-    "the LLM will call {string} with {string}",
-    given_llm_tool_call,
-  )
+  |> steps.step("the LLM will respond with {string}", given_llm_text_response)
+  |> steps.step("the LLM will call {string} with {string}", given_llm_tool_call)
   // Workaround: dream_test's .feature parser mangles {string} captures
   // that contain many backslash-escaped quotes. Specialized steps that
   // take plain scalar values and build JSON server-side sidestep the
@@ -95,12 +93,7 @@ fn given_llm_run_skill_tool_call(
   use args <- result_try(get_string(ctx.captures, 1))
   use system <- result_try(world.get(ctx.world, "system"))
   let sys: TestSystem = system
-  let args_json =
-    "{\"name\":\""
-    <> name
-    <> "\",\"args\":\""
-    <> args
-    <> "\"}"
+  let args_json = "{\"name\":\"" <> name <> "\",\"args\":\"" <> args <> "\"}"
   fake_llm.script_tool_call(sys.fake_llm, "run_skill", args_json)
   Ok(succeed())
 }
@@ -160,7 +153,6 @@ fn given_llm_stream_deltas(
   Ok(succeed())
 }
 
-
 /// Assert that any recorded `stream_with_tools` call carried a user
 /// message whose content contains the given substring. Proves vision
 /// enrichment reached the tool-loop prompt.
@@ -186,9 +178,7 @@ fn then_llm_user_message_contains(
   combined
   |> should
   |> contain_string(expected)
-  |> or_fail_with(
-    "No user message across LLM calls contained: " <> expected,
-  )
+  |> or_fail_with("No user message across LLM calls contained: " <> expected)
 }
 
 /// Assert that the system prompt in the latest LLM `stream_with_tools` call
@@ -210,9 +200,7 @@ fn then_llm_system_prompt_contains(
   combined_system_prompts(sys.fake_llm)
   |> should
   |> contain_string(expected)
-  |> or_fail_with(
-    "No system message across LLM calls contained: " <> expected,
-  )
+  |> or_fail_with("No system message across LLM calls contained: " <> expected)
 }
 
 fn combined_system_prompts(fake: fake_llm.FakeLLM) -> String {
@@ -245,9 +233,7 @@ fn then_llm_last_call_messages_contain(
   last_call_combined(sys.fake_llm)
   |> should
   |> contain_string(expected)
-  |> or_fail_with(
-    "No message in last LLM call contained: " <> expected,
-  )
+  |> or_fail_with("No message in last LLM call contained: " <> expected)
 }
 
 fn last_call_combined(fake: fake_llm.FakeLLM) -> String {

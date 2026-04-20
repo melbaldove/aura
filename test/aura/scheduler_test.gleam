@@ -257,11 +257,7 @@ pub fn dream_due_when_cron_matches_and_not_recently_run_test() {
   let #(minute, hour, _day, _month, _weekday) =
     scheduler.ms_to_time_parts(now_ms)
   // If this timestamp doesn't land on 4:00, adjust the cron to match
-  let cron_str =
-    int.to_string(minute)
-    <> " "
-    <> int.to_string(hour)
-    <> " * * *"
+  let cron_str = int.to_string(minute) <> " " <> int.to_string(hour) <> " * * *"
   // last_dream was over a minute ago
   let last_dream_ms = now_ms - 120_000
   scheduler.is_dream_due(cron_str, now_ms, last_dream_ms)
@@ -277,10 +273,7 @@ pub fn dream_not_due_when_cron_does_not_match_test() {
   // Pick a different hour to guarantee no match
   let wrong_hour = { hour + 6 } % 24
   let cron_str =
-    int.to_string(minute)
-    <> " "
-    <> int.to_string(wrong_hour)
-    <> " * * *"
+    int.to_string(minute) <> " " <> int.to_string(wrong_hour) <> " * * *"
   scheduler.is_dream_due(cron_str, now_ms, 0)
   |> should.be_false
 }
@@ -289,11 +282,7 @@ pub fn dream_not_due_when_already_ran_this_minute_test() {
   let now_ms = 1_713_232_800_000
   let #(minute, hour, _day, _month, _weekday) =
     scheduler.ms_to_time_parts(now_ms)
-  let cron_str =
-    int.to_string(minute)
-    <> " "
-    <> int.to_string(hour)
-    <> " * * *"
+  let cron_str = int.to_string(minute) <> " " <> int.to_string(hour) <> " * * *"
   // last_dream_ms is in the current minute (start_of_minute = now_ms - now_ms % 60000)
   let start_of_minute = now_ms - { now_ms % 60_000 }
   let last_dream_ms = start_of_minute + 5000

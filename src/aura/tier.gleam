@@ -10,8 +10,7 @@ pub type Tier {
 pub fn for_path(path: String) -> Tier {
   // Tier 3: identity files requiring full preview
   case
-    string.ends_with(path, "/SOUL.md")
-    && string.contains(path, ".config/aura")
+    string.ends_with(path, "/SOUL.md") && string.contains(path, ".config/aura")
   {
     True -> NeedsApprovalWithPreview
     False -> {

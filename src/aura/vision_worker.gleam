@@ -26,8 +26,7 @@ pub fn spawn(
     case chat_text_fn(config, messages, temperature) {
       Ok(description) ->
         process.send(parent, channel_actor.VisionComplete(description))
-      Error(reason) ->
-        process.send(parent, channel_actor.VisionError(reason))
+      Error(reason) -> process.send(parent, channel_actor.VisionError(reason))
     }
   })
 }

@@ -181,8 +181,7 @@ pub fn execute(
     Navigate -> dispatch_navigate(args, ctx)
     Snapshot -> call_ffi("snapshot", snapshot_args(args), ctx)
     Click -> call_ffi("click", [get_arg(args, "ref")], ctx)
-    Type ->
-      call_ffi("type", [get_arg(args, "ref"), get_arg(args, "text")], ctx)
+    Type -> call_ffi("type", [get_arg(args, "ref"), get_arg(args, "text")], ctx)
     Press -> call_ffi("press", [get_arg(args, "key")], ctx)
     Back -> call_ffi("back", [], ctx)
     Vision -> dispatch_vision(args, ctx)
@@ -192,10 +191,7 @@ pub fn execute(
   }
 }
 
-fn dispatch_navigate(
-  args: List(#(String, String)),
-  ctx: ExecContext,
-) -> String {
+fn dispatch_navigate(args: List(#(String, String)), ctx: ExecContext) -> String {
   case get_arg(args, "url") {
     "" -> error_json("url is required for navigate")
     url ->
@@ -242,10 +238,7 @@ fn intercept_auth_wall(raw_json: String) -> String {
   }
 }
 
-fn dispatch_vision(
-  args: List(#(String, String)),
-  ctx: ExecContext,
-) -> String {
+fn dispatch_vision(args: List(#(String, String)), ctx: ExecContext) -> String {
   let question = case get_arg(args, "question") {
     "" -> vision.default_vision_prompt
     q -> q
@@ -278,20 +271,14 @@ fn dispatch_vision(
   }
 }
 
-fn dispatch_console(
-  args: List(#(String, String)),
-  ctx: ExecContext,
-) -> String {
+fn dispatch_console(args: List(#(String, String)), ctx: ExecContext) -> String {
   case get_arg(args, "expression") {
     "" -> call_ffi("console", [], ctx)
     expr -> call_ffi("eval", [expr], ctx)
   }
 }
 
-fn dispatch_upload(
-  args: List(#(String, String)),
-  ctx: ExecContext,
-) -> String {
+fn dispatch_upload(args: List(#(String, String)), ctx: ExecContext) -> String {
   case get_arg(args, "selector"), get_arg(args, "path") {
     "", _ -> error_json("upload requires 'selector' (e.g. input[type=file])")
     _, "" -> error_json("upload requires 'path' (absolute file path)")
@@ -299,18 +286,14 @@ fn dispatch_upload(
   }
 }
 
-fn dispatch_wait(
-  args: List(#(String, String)),
-  ctx: ExecContext,
-) -> String {
+fn dispatch_wait(args: List(#(String, String)), ctx: ExecContext) -> String {
   case get_arg(args, "ref"), get_arg(args, "seconds") {
     "", "" -> error_json("wait requires 'ref' or 'seconds'")
     ref, _ if ref != "" -> call_ffi("wait", [ref], ctx)
     _, seconds_str -> {
       case int.parse(seconds_str) {
         Error(_) -> error_json("seconds must be an integer")
-        Ok(seconds) ->
-          call_ffi("wait", [int.to_string(seconds * 1000)], ctx)
+        Ok(seconds) -> call_ffi("wait", [int.to_string(seconds * 1000)], ctx)
       }
     }
   }
@@ -334,11 +317,7 @@ pub fn read_as_data_url(path: String) -> Result(String, String) {
   }
 }
 
-fn call_ffi(
-  action_name: String,
-  args: List(String),
-  ctx: ExecContext,
-) -> String {
+fn call_ffi(action_name: String, args: List(String), ctx: ExecContext) -> String {
   case ctx.run_fn(ctx.session, ctx.cdp_url, action_name, args, ctx.timeout_ms) {
     Ok(output) -> output
     Error(reason) -> error_json("agent-browser failed: " <> reason)

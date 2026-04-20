@@ -35,7 +35,8 @@ pub fn fake_discord_records_other_event_types_test() {
   let #(fake, client) = fake_discord.new()
   let _ = client.edit_message("ch", "msg-1", "edited")
   let _ = client.trigger_typing("ch")
-  let _ = client.send_message_with_attachment("ch", "see attached", "/tmp/x.jpg")
+  let _ =
+    client.send_message_with_attachment("ch", "see attached", "/tmp/x.jpg")
   let _ = client.create_thread_from_message("ch", "msg-1", "new-thread")
 
   let events = fake_discord.all_events(fake)

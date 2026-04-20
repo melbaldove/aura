@@ -77,8 +77,7 @@ pub fn read_summary(
   domain: String,
   week: String,
 ) -> Result(String, String) {
-  let path =
-    data_dir <> "/domains/" <> domain <> "/summaries/" <> week <> ".md"
+  let path = data_dir <> "/domains/" <> domain <> "/summaries/" <> week <> ".md"
   case simplifile.read(path) {
     Ok(content) -> Ok(content)
     Error(_) -> Ok("")
@@ -97,7 +96,10 @@ pub fn write_summary(
   use _ <- result.try(
     simplifile.create_directory_all(dir)
     |> result.map_error(fn(e) {
-      "Failed to create summaries directory " <> dir <> ": " <> string.inspect(e)
+      "Failed to create summaries directory "
+      <> dir
+      <> ": "
+      <> string.inspect(e)
     }),
   )
   simplifile.write(path, content)

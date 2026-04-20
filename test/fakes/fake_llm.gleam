@@ -57,11 +57,7 @@ type State {
 
 type Msg {
   PushScript(events: List(ScriptedEvent))
-  Consume(
-    call: LlmCall,
-    callback_pid: Pid,
-    reply: process.Subject(Nil),
-  )
+  Consume(call: LlmCall, callback_pid: Pid, reply: process.Subject(Nil))
   GetCalls(reply: process.Subject(List(LlmCall)))
   PushChatTextScript(text: String)
   PopChatText(reply: process.Subject(Result(String, String)))
@@ -70,10 +66,9 @@ type Msg {
 fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     PushScript(events:) ->
-      actor.continue(State(
-        ..state,
-        scripts: list.append(state.scripts, [events]),
-      ))
+      actor.continue(
+        State(..state, scripts: list.append(state.scripts, [events])),
+      )
 
     Consume(call:, callback_pid:, reply:) -> {
       let #(events, rest) = case state.scripts {
@@ -84,11 +79,9 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       // immediately (mirrors production where the FFI runs async).
       let _ = process.spawn_unlinked(fn() { replay(events, callback_pid) })
       process.send(reply, Nil)
-      actor.continue(State(
-        ..state,
-        scripts: rest,
-        calls: list.append(state.calls, [call]),
-      ))
+      actor.continue(
+        State(..state, scripts: rest, calls: list.append(state.calls, [call])),
+      )
     }
 
     GetCalls(reply:) -> {
@@ -97,10 +90,12 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
     }
 
     PushChatTextScript(text:) ->
-      actor.continue(State(
-        ..state,
-        chat_text_scripts: list.append(state.chat_text_scripts, [text]),
-      ))
+      actor.continue(
+        State(
+          ..state,
+          chat_text_scripts: list.append(state.chat_text_scripts, [text]),
+        ),
+      )
 
     PopChatText(reply:) -> {
       case state.chat_text_scripts {

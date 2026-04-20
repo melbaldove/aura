@@ -4,13 +4,13 @@ import gleam/http
 import gleam/http/request
 import gleam/httpc
 import gleam/int
-import logging
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gleam/uri
+import logging
 
 pub type Message {
   SystemMessage(content: String)
@@ -27,7 +27,12 @@ pub type ToolDefinition {
 }
 
 pub type ToolParam {
-  ToolParam(name: String, param_type: String, description: String, required: Bool)
+  ToolParam(
+    name: String,
+    param_type: String,
+    description: String,
+    required: Bool,
+  )
 }
 
 /// Tool call from LLM response
@@ -133,7 +138,10 @@ pub fn build_request_body(
 pub fn parse_response(body: String) -> Result(String, String) {
   // First try to get all choices as a list of content strings, then take first
   let list_decoder =
-    decode.at(["choices"], decode.list(decode.at(["message", "content"], decode.string)))
+    decode.at(
+      ["choices"],
+      decode.list(decode.at(["message", "content"], decode.string)),
+    )
   case json.parse(body, list_decoder) {
     Error(_) -> Error("Failed to parse response JSON")
     Ok(contents) ->
@@ -183,7 +191,10 @@ fn post_chat(
   label: String,
 ) -> Result(String, String) {
   let url = config.base_url <> "/chat/completions"
-  logging.log(logging.Info, "[llm] Calling " <> config.model <> " at " <> url <> label)
+  logging.log(
+    logging.Info,
+    "[llm] Calling " <> config.model <> " at " <> url <> label,
+  )
   use parsed_uri <- result.try(
     uri.parse(url)
     |> result.map_error(fn(_) { "Failed to parse URL: " <> url }),
@@ -207,9 +218,17 @@ fn post_chat(
   case resp.status {
     200 -> Ok(resp.body)
     status -> {
-      logging.log(logging.Error, "[llm] Error from " <> config.model <> ": status " <> int.to_string(status))
+      logging.log(
+        logging.Error,
+        "[llm] Error from "
+          <> config.model
+          <> ": status "
+          <> int.to_string(status),
+      )
       Error(
-        "LLM API error (status " <> int.to_string(status) <> "): "
+        "LLM API error (status "
+        <> int.to_string(status)
+        <> "): "
         <> string.slice(resp.body, 0, 200),
       )
     }
@@ -337,7 +356,10 @@ pub fn chat_streaming_with_tools(
   callback_pid: process.Pid,
 ) -> Nil {
   let url = config.base_url <> "/chat/completions"
-  logging.log(logging.Info, "[llm] Streaming " <> config.model <> " at " <> url <> " (with tools)")
+  logging.log(
+    logging.Info,
+    "[llm] Streaming " <> config.model <> " at " <> url <> " (with tools)",
+  )
   let base_fields = [
     #("model", json.string(config.model)),
     #("messages", json.array(messages, message_to_json)),
@@ -346,9 +368,10 @@ pub fn chat_streaming_with_tools(
   ]
   let fields = case tools {
     [] -> base_fields
-    _ -> list.append(base_fields, [
-      #("tools", json.array(tools, tool_definition_to_json)),
-    ])
+    _ ->
+      list.append(base_fields, [
+        #("tools", json.array(tools, tool_definition_to_json)),
+      ])
   }
   let body_str = json.object(fields) |> json.to_string
   stream_ffi(url, config.api_key, config.model, body_str, callback_pid)
@@ -376,13 +399,16 @@ pub fn parse_tool_calls_json(json_str: String) -> List(ToolCall) {
 /// Parse a JSON array of flat tool calls as produced by the streaming FFI:
 /// `[{"id":"...","name":"...","arguments":"..."}]`.
 /// Returns Ok(list) or Error(message).
-pub fn parse_flat_tool_calls_json(json_str: String) -> Result(List(ToolCall), String) {
-  let decoder = decode.list({
-    use id <- decode.field("id", decode.string)
-    use name <- decode.field("name", decode.string)
-    use arguments <- decode.field("arguments", decode.string)
-    decode.success(ToolCall(id: id, name: name, arguments: arguments))
-  })
+pub fn parse_flat_tool_calls_json(
+  json_str: String,
+) -> Result(List(ToolCall), String) {
+  let decoder =
+    decode.list({
+      use id <- decode.field("id", decode.string)
+      use name <- decode.field("name", decode.string)
+      use arguments <- decode.field("arguments", decode.string)
+      decode.success(ToolCall(id: id, name: name, arguments: arguments))
+    })
   json.parse(json_str, decoder)
   |> result.map_error(fn(_) { "Failed to parse tool calls JSON" })
 }

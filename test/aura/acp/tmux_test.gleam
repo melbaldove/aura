@@ -30,4 +30,3 @@ pub fn build_has_session_command_test() {
   cmd.program |> should.equal("tmux")
   list.first(cmd.args) |> should.equal(Ok("has-session"))
 }
-

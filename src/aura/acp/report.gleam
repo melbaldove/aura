@@ -49,10 +49,7 @@ pub fn parse(output: String) -> Result(types.AcpReport, String) {
   }
 }
 
-fn parse_lines(
-  lines: List(String),
-  acc: types.AcpReport,
-) -> types.AcpReport {
+fn parse_lines(lines: List(String), acc: types.AcpReport) -> types.AcpReport {
   case lines {
     [] -> acc
     [line, ..rest] -> {
@@ -69,15 +66,9 @@ fn parse_line(line: String, acc: types.AcpReport) -> types.AcpReport {
       let v = string.trim(value)
       case string.trim(key) {
         "OUTCOME" ->
-          types.AcpReport(
-            ..acc,
-            outcome: parse_outcome(string.lowercase(v)),
-          )
+          types.AcpReport(..acc, outcome: parse_outcome(string.lowercase(v)))
         "FILES_CHANGED" ->
-          types.AcpReport(
-            ..acc,
-            files_changed: parse_files_changed(v),
-          )
+          types.AcpReport(..acc, files_changed: parse_files_changed(v))
         "DECISIONS" -> types.AcpReport(..acc, decisions: v)
         "TESTS" -> types.AcpReport(..acc, tests: v)
         "BLOCKERS" -> types.AcpReport(..acc, blockers: v)

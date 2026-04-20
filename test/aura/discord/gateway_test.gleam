@@ -4,7 +4,8 @@ import gleam/option.{None}
 import gleeunit/should
 
 pub fn parse_message_create_with_attachments_test() {
-  let json = "{
+  let json =
+    "{
     \"op\": 0,
     \"t\": \"MESSAGE_CREATE\",
     \"d\": {
@@ -22,7 +23,8 @@ pub fn parse_message_create_with_attachments_test() {
   let assert Ok(msg) = result
   msg.id |> should.equal("msg123")
   msg.content |> should.equal("check this image")
-  msg.attachments |> should.equal([
+  msg.attachments
+  |> should.equal([
     types.Attachment(
       url: "https://cdn.discordapp.com/attachments/1/2/photo.png",
       content_type: "image/png",
@@ -32,7 +34,8 @@ pub fn parse_message_create_with_attachments_test() {
 }
 
 pub fn parse_message_create_without_attachments_test() {
-  let json = "{
+  let json =
+    "{
     \"op\": 0,
     \"t\": \"MESSAGE_CREATE\",
     \"d\": {
@@ -51,7 +54,8 @@ pub fn parse_message_create_without_attachments_test() {
 }
 
 pub fn parse_message_create_attachment_missing_optional_fields_test() {
-  let json = "{
+  let json =
+    "{
     \"op\": 0,
     \"t\": \"MESSAGE_CREATE\",
     \"d\": {
@@ -67,7 +71,8 @@ pub fn parse_message_create_attachment_missing_optional_fields_test() {
   let result = gateway.parse_message_create_public(json)
   let assert Ok(msg) = result
   msg.guild_id |> should.equal(None)
-  msg.attachments |> should.equal([
+  msg.attachments
+  |> should.equal([
     types.Attachment(
       url: "https://cdn.discordapp.com/attachments/1/2/file.dat",
       content_type: "",

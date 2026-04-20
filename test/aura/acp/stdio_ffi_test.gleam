@@ -32,9 +32,7 @@ pub fn jsx_encode_nested_map_test() {
 pub fn jsx_encode_prompt_params_test() {
   // Simulates session/prompt params — the exact structure that was broken
   let json =
-    stdio.ffi_jsx_encode(
-      make_prompt_params("sess_123", "Analyze the code"),
-    )
+    stdio.ffi_jsx_encode(make_prompt_params("sess_123", "Analyze the code"))
   json |> string_contains("\"sessionId\":\"sess_123\"") |> should.be_true
   json |> string_contains("\"prompt\":[") |> should.be_true
   json |> string_contains("\"type\":\"text\"") |> should.be_true

@@ -119,19 +119,13 @@ pub fn embed_to_json(embed: Embed) -> json.Json {
     ]
     |> list.filter_map(fn(x) { x })
 
-  let fields_entry = #(
-    "fields",
-    json.array(embed.fields, embed_field_to_json),
-  )
+  let fields_entry = #("fields", json.array(embed.fields, embed_field_to_json))
 
   json.object([fields_entry, ..optional_fields])
 }
 
 /// Encode a message creation payload (POST /channels/{id}/messages)
-pub fn create_message_payload(
-  content: String,
-  embeds: List(Embed),
-) -> json.Json {
+pub fn create_message_payload(content: String, embeds: List(Embed)) -> json.Json {
   json.object([
     #("content", json.string(content)),
     #("embeds", json.array(embeds, embed_to_json)),

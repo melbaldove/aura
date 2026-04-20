@@ -84,4 +84,3 @@ pub fn send_embed(
     )
   rest.send_message(token, channel_id, "", [embed])
 }
-

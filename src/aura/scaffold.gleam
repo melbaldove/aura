@@ -66,7 +66,11 @@ urgent_bypass = true
 global_max_concurrent = 4
 "
 
-fn domain_config_toml(name: String, description: String, channel: String) -> String {
+fn domain_config_toml(
+  name: String,
+  description: String,
+  channel: String,
+) -> String {
   "name = \""
   <> name
   <> "\"\ndescription = \""
@@ -118,7 +122,10 @@ pub fn scaffold(paths: xdg.Paths) -> Result(Nil, String) {
   use _ <- result.try(write_if_missing(paths.config <> "/SOUL.md", soul_md))
   use _ <- result.try(write_if_missing(paths.config <> "/META.md", meta_md))
   use _ <- result.try(write_if_missing(paths.config <> "/USER.md", user_md))
-  use _ <- result.try(write_if_missing(paths.config <> "/config.toml", config_toml))
+  use _ <- result.try(write_if_missing(
+    paths.config <> "/config.toml",
+    config_toml,
+  ))
 
   // State files
   use _ <- result.try(write_if_missing(paths.state <> "/MEMORY.md", memory_md))
@@ -138,12 +145,10 @@ pub fn scaffold_domain(
   // Config dir for domain
   let domain_config_dir = paths.config <> "/domains/" <> name
   use _ <- result.try(create_dir(domain_config_dir))
-  use _ <- result.try(
-    write_if_missing(
-      domain_config_dir <> "/config.toml",
-      domain_config_toml(name, description, channel),
-    ),
-  )
+  use _ <- result.try(write_if_missing(
+    domain_config_dir <> "/config.toml",
+    domain_config_toml(name, description, channel),
+  ))
 
   // Data dir for domain
   let domain_data_dir = paths.data <> "/domains/" <> name

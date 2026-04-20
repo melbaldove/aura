@@ -20,4 +20,3 @@ pub fn event_to_json(event: Event) -> json.Json {
     #("summary", json.string(event.summary)),
   ])
 }
-

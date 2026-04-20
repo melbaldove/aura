@@ -25,10 +25,11 @@ pub fn migrate_jsonl_files_test() {
   let _ = simplifile.create_directory_all(conv_dir)
 
   // Write a sample JSONL file
-  let _ = simplifile.write(
-    conv_dir <> "/test-channel-123.jsonl",
-    "{\"role\":\"user\",\"content\":\"hello\"}\n{\"role\":\"assistant\",\"content\":\"hi there\"}\n",
-  )
+  let _ =
+    simplifile.write(
+      conv_dir <> "/test-channel-123.jsonl",
+      "{\"role\":\"user\",\"content\":\"hello\"}\n{\"role\":\"assistant\",\"content\":\"hi there\"}\n",
+    )
 
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(count) = db_migration.migrate_jsonl(subject, dir)
@@ -50,10 +51,11 @@ pub fn migrate_handles_malformed_lines_test() {
   let _ = simplifile.create_directory_all(conv_dir)
 
   // Mix of valid and invalid lines
-  let _ = simplifile.write(
-    conv_dir <> "/chan2.jsonl",
-    "{\"role\":\"user\",\"content\":\"valid\"}\nnot json at all\n{\"role\":\"assistant\",\"content\":\"also valid\"}\n",
-  )
+  let _ =
+    simplifile.write(
+      conv_dir <> "/chan2.jsonl",
+      "{\"role\":\"user\",\"content\":\"valid\"}\nnot json at all\n{\"role\":\"assistant\",\"content\":\"also valid\"}\n",
+    )
 
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(count) = db_migration.migrate_jsonl(subject, dir)
@@ -68,10 +70,11 @@ pub fn migrate_skips_if_data_exists_test() {
   let dir = "/tmp/aura-mig-test2"
   let conv_dir = dir <> "/conversations"
   let _ = simplifile.create_directory_all(conv_dir)
-  let _ = simplifile.write(
-    conv_dir <> "/chan1.jsonl",
-    "{\"role\":\"user\",\"content\":\"msg1\"}\n",
-  )
+  let _ =
+    simplifile.write(
+      conv_dir <> "/chan1.jsonl",
+      "{\"role\":\"user\",\"content\":\"msg1\"}\n",
+    )
 
   let assert Ok(subject) = db.start(":memory:")
 

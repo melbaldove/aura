@@ -2,11 +2,11 @@ import aura/db
 import aura/time
 import gleam/dict.{type Dict}
 import gleam/erlang/process
-import logging
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import logging
 import simplifile
 
 /// A keyed entry in a memory file.
@@ -77,12 +77,13 @@ fn upsert_entries(
 ) -> #(Bool, List(Entry)) {
   let exists = list.any(entries, fn(e) { e.key == key })
   let updated = case exists {
-    True -> list.map(entries, fn(e) {
-      case e.key == key {
-        True -> Entry(key: key, content: content)
-        False -> e
-      }
-    })
+    True ->
+      list.map(entries, fn(e) {
+        case e.key == key {
+          True -> Entry(key: key, content: content)
+          False -> e
+        }
+      })
     False -> list.append(entries, [Entry(key: key, content: content)])
   }
   #(exists, updated)
@@ -126,7 +127,10 @@ pub fn set_with_archive(
               case db.supersede_memory_entry(db_subject, old_id, new_id, now) {
                 Ok(Nil) -> Nil
                 Error(err) ->
-                  logging.log(logging.Error, "[memory] Archive supersede failed: " <> err)
+                  logging.log(
+                    logging.Error,
+                    "[memory] Archive supersede failed: " <> err,
+                  )
               }
             }
             Error(_) -> Nil
@@ -158,7 +162,12 @@ pub fn remove_with_archive(
   case list.length(filtered) == list.length(entries) {
     True -> {
       let keys = list.map(entries, fn(e) { e.key })
-      Error("No entry with key '" <> key <> "'. Existing keys: " <> string.join(keys, ", "))
+      Error(
+        "No entry with key '"
+        <> key
+        <> "'. Existing keys: "
+        <> string.join(keys, ", "),
+      )
     }
     False -> {
       use _ <- result.try(write_entries(path, filtered))
@@ -171,7 +180,10 @@ pub fn remove_with_archive(
           case db.supersede_memory_entry(db_subject, old_id, 0, now) {
             Ok(Nil) -> Nil
             Error(err) ->
-              logging.log(logging.Error, "[memory] Archive supersede on remove failed: " <> err)
+              logging.log(
+                logging.Error,
+                "[memory] Archive supersede on remove failed: " <> err,
+              )
           }
         }
         Error(_) -> Nil
@@ -188,7 +200,12 @@ pub fn remove(path: String, key: String) -> Result(Nil, String) {
   case list.length(filtered) == list.length(entries) {
     True -> {
       let keys = list.map(entries, fn(e) { e.key })
-      Error("No entry with key '" <> key <> "'. Existing keys: " <> string.join(keys, ", "))
+      Error(
+        "No entry with key '"
+        <> key
+        <> "'. Existing keys: "
+        <> string.join(keys, ", "),
+      )
     }
     False -> write_entries(path, filtered)
   }
@@ -199,9 +216,11 @@ pub fn format_for_display(path: String) -> Result(String, String) {
   use entries <- result.try(read_entries(path))
   case entries {
     [] -> Ok("(empty)")
-    _ -> Ok(string.join(list.map(entries, fn(e) {
-      "**" <> e.key <> ":** " <> e.content
-    }), "\n"))
+    _ ->
+      Ok(string.join(
+        list.map(entries, fn(e) { "**" <> e.key <> ":** " <> e.content }),
+        "\n",
+      ))
   }
 }
 
@@ -212,9 +231,12 @@ pub fn read_as_dict(path: String) -> Result(Dict(String, String), String) {
 }
 
 fn write_entries(path: String, entries: List(Entry)) -> Result(Nil, String) {
-  let content = string.join(list.map(entries, fn(e) {
-    "§ " <> e.key <> "\n" <> e.content
-  }), "\n\n") <> "\n"
+  let content =
+    string.join(
+      list.map(entries, fn(e) { "§ " <> e.key <> "\n" <> e.content }),
+      "\n\n",
+    )
+    <> "\n"
   simplifile.write(path, content)
   |> result.map_error(fn(e) {
     "Failed to write memory file: " <> string.inspect(e)

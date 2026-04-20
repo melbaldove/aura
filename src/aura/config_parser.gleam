@@ -10,9 +10,7 @@ pub fn resolve_env_string(value: String) -> Result(String, String) {
         |> string.drop_start(2)
         |> string.drop_end(1)
       env.get_env(var_name)
-      |> result.map_error(fn(_) {
-        "Environment variable not set: " <> var_name
-      })
+      |> result.map_error(fn(_) { "Environment variable not set: " <> var_name })
     }
     False -> Ok(value)
   }

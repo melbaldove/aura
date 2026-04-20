@@ -86,11 +86,7 @@ pub type ChannelMessage {
 
   StreamDelta(text: String)
   StreamReasoning
-  StreamComplete(
-    content: String,
-    tool_calls_json: String,
-    prompt_tokens: Int,
-  )
+  StreamComplete(content: String, tool_calls_json: String, prompt_tokens: Int)
   StreamError(reason: String)
 
   ToolResult(call_id: String, result: String, is_error: Bool)
@@ -235,9 +231,7 @@ pub type Deps {
 }
 
 /// Start a channel actor with production deps.
-pub fn start(
-  deps: Deps,
-) -> Result(Subject(ChannelMessage), actor.StartError) {
+pub fn start(deps: Deps) -> Result(Subject(ChannelMessage), actor.StartError) {
   actor.new_with_initialiser(5000, fn(self_subject) {
     let state = build_initial_state(deps, self_subject)
     Ok(actor.initialised(state) |> actor.returning(self_subject))
@@ -547,29 +541,33 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
           // No message id yet — fall back to sending a new message so the
           // user still sees the content. Update the turn's discord_msg_id
           // when the send succeeds.
-          case state.tool_ctx.discord.send_message(
-            state.channel_id,
-            discord_message.clip_to_discord_limit(content),
-          ) {
+          case
+            state.tool_ctx.discord.send_message(
+              state.channel_id,
+              discord_message.clip_to_discord_limit(content),
+            )
+          {
             Ok(id) -> update_turn_msg_id(state, id)
             Error(_) -> state
           }
         }
         existing -> {
-          let _ = state.tool_ctx.discord.edit_message(
-            state.channel_id,
-            existing,
-            discord_message.clip_to_discord_limit(content),
-          )
+          let _ =
+            state.tool_ctx.discord.edit_message(
+              state.channel_id,
+              existing,
+              discord_message.clip_to_discord_limit(content),
+            )
           state
         }
       }
     }
     DiscordSend(content) -> {
-      let _ = state.tool_ctx.discord.send_message(
-        state.channel_id,
-        discord_message.clip_to_discord_limit(content),
-      )
+      let _ =
+        state.tool_ctx.discord.send_message(
+          state.channel_id,
+          discord_message.clip_to_discord_limit(content),
+        )
       state
     }
     DbSaveExchange(messages, author_id, author_name, _prompt_tokens) -> {
@@ -777,7 +775,9 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
                 state.tool_ctx.discord.edit_message(
                   approval.channel_id,
                   approval.message_id,
-                  ":white_check_mark: **Approved** -- `" <> approval.command <> "`",
+                  ":white_check_mark: **Approved** -- `"
+                    <> approval.command
+                    <> "`",
                 )
               state
             }
@@ -920,32 +920,27 @@ fn execute_spawn_stream_worker(
     )
   // For handback turns, append the handback system message after history.
   // Resolve session_name by looking up the flare by id; fall back to flare_id.
-  let messages_with_system =
-    case state.turn {
-      Some(TurnState(kind: HandbackTurn(flare_id, result), ..)) -> {
-        let session_name =
-          case
-            list.find(
-              flare_manager.list_sessions(state.tool_ctx.acp_subject),
-              fn(s) { s.id == flare_id },
-            )
-          {
-            Ok(s) -> s.session_name
-            Error(_) -> flare_id
-          }
-        let handback_msg =
-          "[Flare reported back: \""
-          <> session_name
-          <> "\"]\n\n"
-          <> result
-        list.flatten([
-          [llm.SystemMessage(system_prompt)],
-          messages,
-          [llm.SystemMessage(handback_msg)],
-        ])
+  let messages_with_system = case state.turn {
+    Some(TurnState(kind: HandbackTurn(flare_id, result), ..)) -> {
+      let session_name = case
+        list.find(
+          flare_manager.list_sessions(state.tool_ctx.acp_subject),
+          fn(s) { s.id == flare_id },
+        )
+      {
+        Ok(s) -> s.session_name
+        Error(_) -> flare_id
       }
-      _ -> [llm.SystemMessage(system_prompt), ..messages]
+      let handback_msg =
+        "[Flare reported back: \"" <> session_name <> "\"]\n\n" <> result
+      list.flatten([
+        [llm.SystemMessage(system_prompt)],
+        messages,
+        [llm.SystemMessage(handback_msg)],
+      ])
     }
+    _ -> [llm.SystemMessage(system_prompt), ..messages]
+  }
   let pid =
     state.stream_spawn(
       state.tool_ctx.llm_client.stream_with_tools,
@@ -1051,10 +1046,7 @@ fn start_typing_loop(state: ChannelState) -> Pid {
   process.spawn_unlinked(fn() { typing_loop(discord, channel_id) })
 }
 
-fn typing_loop(
-  discord: discord_client.DiscordClient,
-  channel_id: String,
-) -> Nil {
+fn typing_loop(discord: discord_client.DiscordClient, channel_id: String) -> Nil {
   let _ = discord.trigger_typing(channel_id)
   process.sleep(8000)
   typing_loop(discord, channel_id)
@@ -1125,10 +1117,7 @@ pub fn transition(
     // --- vision results ---------------------------------------------
     VisionComplete(description), Some(turn) -> {
       let enriched =
-        enrich_messages_with_description(
-          turn.messages_at_llm_call,
-          description,
-        )
+        enrich_messages_with_description(turn.messages_at_llm_call, description)
       let new_turn =
         TurnState(
           ..turn,
@@ -1156,19 +1145,20 @@ pub fn transition(
           ..turn.stream_stats,
           delta_count: turn.stream_stats.delta_count + 1,
         )
-      let #(edit_effects, new_last_edit_len) =
-        case should_progressive_edit(turn, new_acc) {
-          True -> #(
-            [
-              DiscordEdit(
-                turn.discord_msg_id,
-                format_progress(new_acc, turn.traces),
-              ),
-            ],
-            string.length(new_acc),
-          )
-          False -> #([], turn.last_edit_len)
-        }
+      let #(edit_effects, new_last_edit_len) = case
+        should_progressive_edit(turn, new_acc)
+      {
+        True -> #(
+          [
+            DiscordEdit(
+              turn.discord_msg_id,
+              format_progress(new_acc, turn.traces),
+            ),
+          ],
+          string.length(new_acc),
+        )
+        False -> #([], turn.last_edit_len)
+      }
       let new_turn =
         TurnState(
           ..turn,
@@ -1316,7 +1306,11 @@ pub fn transition(
           ])
         }
         False ->
-          fail_turn_internal(state, turn, "stream exhausted retries: " <> reason)
+          fail_turn_internal(
+            state,
+            turn,
+            "stream exhausted retries: " <> reason,
+          )
       }
     }
     StreamError(_), None -> #(state, [])
@@ -1471,10 +1465,9 @@ pub fn transition(
         Ok(proposal) -> {
           let new_proposals =
             list.filter(state.pending_proposals, fn(p) { p.id != approval_id })
-          #(
-            ChannelState(..state, pending_proposals: new_proposals),
-            [ResolveProposal(proposal, action)],
-          )
+          #(ChannelState(..state, pending_proposals: new_proposals), [
+            ResolveProposal(proposal, action),
+          ])
         }
         Error(_) ->
           case
@@ -1487,10 +1480,9 @@ pub fn transition(
                 list.filter(state.pending_shell_approvals, fn(a) {
                   a.id != approval_id
                 })
-              #(
-                ChannelState(..state, pending_shell_approvals: new_approvals),
-                [ResolveShellApproval(approval, action)],
-              )
+              #(ChannelState(..state, pending_shell_approvals: new_approvals), [
+                ResolveShellApproval(approval, action),
+              ])
             }
             Error(_) -> {
               logging.log(
@@ -1597,14 +1589,11 @@ fn fail_turn_effects(
 /// Clear the in-flight turn (and typing pid) and, if the queue is non-empty,
 /// start the next turn. Returns the post-clear state plus any start effects
 /// from the dequeued turn.
-fn clear_and_dequeue(
-  state: ChannelState,
-) -> #(ChannelState, List(Effect)) {
+fn clear_and_dequeue(state: ChannelState) -> #(ChannelState, List(Effect)) {
   let cleared = ChannelState(..state, turn: None, typing_pid: None)
   case state.queue {
     [] -> #(cleared, [])
-    [next, ..rest] ->
-      start_turn(ChannelState(..cleared, queue: rest), next)
+    [next, ..rest] -> start_turn(ChannelState(..cleared, queue: rest), next)
   }
 }
 
@@ -1624,12 +1613,11 @@ fn start_turn(
             ScheduleDeadline(600_000),
           ])
         }
-        False ->
-          #(state_with_pending_stream(state, messages, msg), [
-            SpawnStreamWorker(messages),
-            StartTyping,
-            ScheduleDeadline(600_000),
-          ])
+        False -> #(state_with_pending_stream(state, messages, msg), [
+          SpawnStreamWorker(messages),
+          StartTyping,
+          ScheduleDeadline(600_000),
+        ])
       }
     }
     PendingHandback(flare_id, result) -> {
@@ -1660,16 +1648,18 @@ fn start_turn(
 /// construction (lines 1253-1388). Called fresh on every turn so memory is
 /// always current.
 fn build_base_system_prompt(state: ChannelState) -> String {
-  let memory_content =
-    case structured_memory.format_for_display(xdg.memory_path(state.paths)) {
-      Ok(c) -> c
-      Error(_) -> ""
-    }
-  let user_content =
-    case structured_memory.format_for_display(xdg.user_path(state.paths)) {
-      Ok(c) -> c
-      Error(_) -> ""
-    }
+  let memory_content = case
+    structured_memory.format_for_display(xdg.memory_path(state.paths))
+  {
+    Ok(c) -> c
+    Error(_) -> ""
+  }
+  let user_content = case
+    structured_memory.format_for_display(xdg.user_path(state.paths))
+  {
+    Ok(c) -> c
+    Error(_) -> ""
+  }
   let system_prompt_text =
     system_prompt.build_system_prompt(
       state.soul,
@@ -1703,35 +1693,36 @@ fn build_base_system_prompt(state: ChannelState) -> String {
     list.filter(flares, fn(f) { f.status == flare_manager.Active })
   let parked_flares =
     list.filter(flares, fn(f) { f.status == flare_manager.Parked })
-  let roster_section =
-    case list.length(active_flares) + list.length(parked_flares) {
-      0 -> ""
-      _ -> {
-        let active_lines =
-          list.map(active_flares, fn(f) {
-            "- \""
-            <> f.label
-            <> "\" ("
-            <> f.domain
-            <> ") — active, session: "
-            <> f.session_name
-          })
-        let parked_lines =
-          list.map(parked_flares, fn(f) {
-            "- \"" <> f.label <> "\" (" <> f.domain <> ") — parked"
-          })
-        "\n\n## Flare Roster"
-        <> case active_lines {
-          [] -> ""
-          lines -> "\nActive:\n" <> string.join(lines, "\n")
-        }
-        <> case parked_lines {
-          [] -> ""
-          lines -> "\nParked:\n" <> string.join(lines, "\n")
-        }
-        <> "\n\nUse flare(action='rekindle', ...) to resume a parked flare. Use flare(action='ignite', ...) to start new work."
+  let roster_section = case
+    list.length(active_flares) + list.length(parked_flares)
+  {
+    0 -> ""
+    _ -> {
+      let active_lines =
+        list.map(active_flares, fn(f) {
+          "- \""
+          <> f.label
+          <> "\" ("
+          <> f.domain
+          <> ") — active, session: "
+          <> f.session_name
+        })
+      let parked_lines =
+        list.map(parked_flares, fn(f) {
+          "- \"" <> f.label <> "\" (" <> f.domain <> ") — parked"
+        })
+      "\n\n## Flare Roster"
+      <> case active_lines {
+        [] -> ""
+        lines -> "\nActive:\n" <> string.join(lines, "\n")
       }
+      <> case parked_lines {
+        [] -> ""
+        lines -> "\nParked:\n" <> string.join(lines, "\n")
+      }
+      <> "\n\nUse flare(action='rekindle', ...) to resume a parked flare. Use flare(action='ignite', ...) to start new work."
     }
+  }
   base_with_domain <> roster_section
 }
 
@@ -1777,26 +1768,25 @@ pub fn assemble_system_prompt(
     <> "\n\nWrites to logs, memory, state, and skills are autonomous."
     <> "\nAll other writes require approval -- use propose(path, content, description)."
 
-  let flare_context =
-    case
-      list.find(flare_manager.list_sessions(acp_subject), fn(s) {
-        s.thread_id == channel_id
-      })
-    {
-      Ok(flare) ->
-        "\n\n## Active Flare"
-        <> "\nYou are in a flare thread."
-        <> "\nSession: "
-        <> flare.session_name
-        <> "\nState: "
-        <> flare_manager.status_to_string(flare.status)
-        <> "\nDomain: "
-        <> flare.domain
-        <> "\nTask: "
-        <> string.slice(flare.original_prompt, 0, 300)
-        <> "\n\nUse flare(action='status', session_name='...') to check progress, flare(action='prompt', ...) to send instructions, flare(action='list') to see all flares."
-      Error(_) -> ""
-    }
+  let flare_context = case
+    list.find(flare_manager.list_sessions(acp_subject), fn(s) {
+      s.thread_id == channel_id
+    })
+  {
+    Ok(flare) ->
+      "\n\n## Active Flare"
+      <> "\nYou are in a flare thread."
+      <> "\nSession: "
+      <> flare.session_name
+      <> "\nState: "
+      <> flare_manager.status_to_string(flare.status)
+      <> "\nDomain: "
+      <> flare.domain
+      <> "\nTask: "
+      <> string.slice(flare.original_prompt, 0, 300)
+      <> "\n\nUse flare(action='status', session_name='...') to check progress, flare(action='prompt', ...) to send instructions, flare(action='list') to see all flares."
+    Error(_) -> ""
+  }
 
   base <> fs_section <> flare_context
 }
@@ -1816,9 +1806,7 @@ fn has_image_attachment(msg: discord.IncomingMessage) -> Bool {
   list.any(msg.attachments, vision.is_image_attachment)
 }
 
-fn first_image_and_question(
-  msg: discord.IncomingMessage,
-) -> #(String, String) {
+fn first_image_and_question(msg: discord.IncomingMessage) -> #(String, String) {
   let first_url =
     list.find_map(msg.attachments, fn(att) {
       case vision.is_image_attachment(att) {
@@ -1916,10 +1904,7 @@ fn replace_last_user_message(
     [llm.UserMessage(content: original), ..rest] -> {
       let enriched =
         llm.UserMessage(
-          content: original
-            <> "\n\n[Image description: "
-            <> description
-            <> "]",
+          content: original <> "\n\n[Image description: " <> description <> "]",
         )
       Ok(list.append(list.reverse(rest), [enriched, ..acc_forward_suffix]))
     }
@@ -1937,7 +1922,10 @@ fn should_progressive_edit(turn: TurnState, new_acc: String) -> Bool {
 
 /// Format the in-progress message for Discord, mirroring how
 /// `brain.collect_stream_loop` renders partial content.
-fn format_progress(content: String, traces: List(conversation.ToolTrace)) -> String {
+fn format_progress(
+  content: String,
+  traces: List(conversation.ToolTrace),
+) -> String {
   conversation.format_full_message(traces, content <> " ...")
 }
 
@@ -2117,7 +2105,10 @@ pub fn with_fake_handback_turn(
   flare_id: String,
 ) -> ChannelState {
   let fake_turn =
-    TurnState(..fresh_fake_turn(StreamWorker), kind: HandbackTurn(flare_id, "result"))
+    TurnState(
+      ..fresh_fake_turn(StreamWorker),
+      kind: HandbackTurn(flare_id, "result"),
+    )
   ChannelState(..state, turn: Some(fake_turn))
 }
 
@@ -2147,4 +2138,3 @@ fn fresh_fake_turn(worker_kind: WorkerKind) -> TurnState {
     last_edit_len: 0,
   )
 }
-

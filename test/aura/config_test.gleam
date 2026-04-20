@@ -3,7 +3,8 @@ import gleam/result
 import gleeunit/should
 
 pub fn parse_global_config_test() {
-  let toml = "
+  let toml =
+    "
 [discord]
 token = \"test-token\"
 guild = \"aura\"
@@ -38,7 +39,8 @@ global_max_concurrent = 4
 }
 
 pub fn parse_domain_config_test() {
-  let toml = "
+  let toml =
+    "
 name = \"CM2\"
 description = \"CMSquared PCHC CICS. Backend. Rust.\"
 cwd = \"~/repos/cm2\"
@@ -65,7 +67,8 @@ max_concurrent = 2
 }
 
 pub fn parse_global_config_with_vision_test() {
-  let toml = "
+  let toml =
+    "
 [discord]
 token = \"test-token\"
 guild = \"aura\"
@@ -99,7 +102,8 @@ global_max_concurrent = 4
 
 // This test uses the legacy "workstream" key to verify backwards compatibility
 pub fn parse_global_config_without_vision_test() {
-  let toml = "
+  let toml =
+    "
 [discord]
 token = \"test-token\"
 guild = \"aura\"
@@ -128,7 +132,8 @@ global_max_concurrent = 4
 }
 
 pub fn parse_domain_config_with_vision_test() {
-  let toml = "
+  let toml =
+    "
 name = \"local-accounts\"
 description = \"Local accounting\"
 cwd = \".\"
@@ -147,11 +152,13 @@ prompt = \"Describe this receipt. Focus on amounts and dates.\"
   result |> should.be_ok
   let cfg = result |> result.unwrap(config.default_domain())
   cfg.vision_model |> should.equal("zai/glm-5v-turbo")
-  cfg.vision_prompt |> should.equal("Describe this receipt. Focus on amounts and dates.")
+  cfg.vision_prompt
+  |> should.equal("Describe this receipt. Focus on amounts and dates.")
 }
 
 pub fn parse_domain_config_without_vision_test() {
-  let toml = "
+  let toml =
+    "
 name = \"CM2\"
 description = \"CMSquared\"
 cwd = \".\"
@@ -168,7 +175,8 @@ channel = \"cm2\"
 }
 
 pub fn parse_domain_config_with_acp_test() {
-  let toml = "
+  let toml =
+    "
 name = \"test\"
 description = \"Test\"
 cwd = \".\"
@@ -191,7 +199,8 @@ worktree = false
 }
 
 pub fn parse_domain_config_acp_defaults_test() {
-  let toml = "
+  let toml =
+    "
 name = \"test\"
 description = \"Test\"
 cwd = \".\"
@@ -208,7 +217,8 @@ channel = \"test\"
 }
 
 pub fn parse_global_skill_review_interval_test() {
-  let toml = "
+  let toml =
+    "
 [discord]
 token = \"test-token\"
 guild = \"aura\"
@@ -241,7 +251,8 @@ skill_review_interval = 50
 }
 
 pub fn parse_global_skill_review_interval_default_test() {
-  let toml = "
+  let toml =
+    "
 [discord]
 token = \"test-token\"
 guild = \"aura\"
@@ -271,7 +282,8 @@ global_max_concurrent = 4
 }
 
 pub fn parse_dreaming_config_explicit_test() {
-  let toml = "
+  let toml =
+    "
 [discord]
 token = \"test-token\"
 guild = \"aura\"
@@ -306,7 +318,8 @@ budget_percent = 15
 }
 
 pub fn parse_dreaming_config_defaults_test() {
-  let toml = "
+  let toml =
+    "
 [discord]
 token = \"test-token\"
 guild = \"aura\"
@@ -339,7 +352,8 @@ global_max_concurrent = 4
 }
 
 pub fn dreaming_budget_percent_clamped_high_test() {
-  let toml = "
+  let toml =
+    "
 [discord]
 token = \"test-token\"
 guild = \"aura\"
@@ -371,7 +385,8 @@ budget_percent = 99
 }
 
 pub fn dreaming_budget_percent_clamped_low_test() {
-  let toml = "
+  let toml =
+    "
 [discord]
 token = \"test-token\"
 guild = \"aura\"
@@ -403,7 +418,8 @@ budget_percent = 0
 }
 
 pub fn dreaming_invalid_cron_falls_back_to_default_test() {
-  let toml = "
+  let toml =
+    "
 [discord]
 token = \"test-token\"
 guild = \"aura\"
@@ -433,4 +449,3 @@ cron = \"not a valid cron\"
   // Invalid cron should fall back to default
   cfg.dreaming_cron |> should.equal("0 4 * * *")
 }
-

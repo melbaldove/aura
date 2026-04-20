@@ -4,12 +4,18 @@ import gleam/list
 import gleeunit/should
 
 pub fn parse_tool_args_valid_json_test() {
-  let args = brain_tools.parse_tool_args("{\"name\":\"google\",\"args\":\"calendar today\"}")
+  let args =
+    brain_tools.parse_tool_args(
+      "{\"name\":\"google\",\"args\":\"calendar today\"}",
+    )
   list.length(args) |> should.equal(2)
 }
 
 pub fn parse_tool_args_concatenated_json_test() {
-  let args = brain_tools.parse_tool_args("{\"name\":\"google\",\"args\":\"a\"}{\"name\":\"jira\",\"args\":\"b\"}")
+  let args =
+    brain_tools.parse_tool_args(
+      "{\"name\":\"google\",\"args\":\"a\"}{\"name\":\"jira\",\"args\":\"b\"}",
+    )
   let name = case list.find(args, fn(p) { p.0 == "name" }) {
     Ok(#(_, v)) -> v
     Error(_) -> ""
@@ -120,23 +126,25 @@ pub fn expand_tool_calls_mixed_names_test() {
 
 pub fn built_in_tools_include_flare_test() {
   let tools = brain_tools.make_built_in_tools()
-  let has_flare = list.any(tools, fn(t) {
-    case t {
-      llm.ToolDefinition(name: "flare", ..) -> True
-      _ -> False
-    }
-  })
+  let has_flare =
+    list.any(tools, fn(t) {
+      case t {
+        llm.ToolDefinition(name: "flare", ..) -> True
+        _ -> False
+      }
+    })
   has_flare |> should.be_true
 }
 
 pub fn built_in_tools_no_acp_dispatch_test() {
   let tools = brain_tools.make_built_in_tools()
-  let has_acp = list.any(tools, fn(t) {
-    case t {
-      llm.ToolDefinition(name: "acp_dispatch", ..) -> True
-      _ -> False
-    }
-  })
+  let has_acp =
+    list.any(tools, fn(t) {
+      case t {
+        llm.ToolDefinition(name: "acp_dispatch", ..) -> True
+        _ -> False
+      }
+    })
   has_acp |> should.be_false
 }
 
@@ -186,9 +194,13 @@ pub fn all_tool_params_are_string_typed_test() {
 
 pub fn memory_tool_has_domain_param_test() {
   let tools = brain_tools.make_built_in_tools()
-  let memory_tool = list.find(tools, fn(t) {
-    case t { llm.ToolDefinition(name: "memory", ..) -> True _ -> False }
-  })
+  let memory_tool =
+    list.find(tools, fn(t) {
+      case t {
+        llm.ToolDefinition(name: "memory", ..) -> True
+        _ -> False
+      }
+    })
   case memory_tool {
     Ok(llm.ToolDefinition(parameters: params, ..)) -> {
       let has_domain = list.any(params, fn(p) { p.name == "domain" })
@@ -200,7 +212,11 @@ pub fn memory_tool_has_domain_param_test() {
 
 pub fn expand_tool_calls_preserves_non_concat_test() {
   let calls = [
-    llm.ToolCall(id: "1", name: "read_file", arguments: "{\"path\":\"foo.txt\"}"),
+    llm.ToolCall(
+      id: "1",
+      name: "read_file",
+      arguments: "{\"path\":\"foo.txt\"}",
+    ),
     llm.ToolCall(
       id: "2",
       name: "jira",

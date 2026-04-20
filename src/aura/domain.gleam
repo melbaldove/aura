@@ -2,9 +2,9 @@ import aura/memory
 import aura/skill
 import aura/time
 import aura/xdg
-import logging
 import gleam/list
 import gleam/string
+import logging
 import simplifile
 
 /// Domain context loaded from disk for injection into the LLM system prompt.
@@ -25,9 +25,14 @@ fn read_optional_file(path: String, label: String, domain: String) -> String {
     Ok(content) -> content
     Error(simplifile.Enoent) -> ""
     Error(e) -> {
-      logging.log(logging.Info, 
-        "[domain] Failed to read " <> label <> " for "
-        <> domain <> ": " <> string.inspect(e),
+      logging.log(
+        logging.Info,
+        "[domain] Failed to read "
+          <> label
+          <> " for "
+          <> domain
+          <> ": "
+          <> string.inspect(e),
       )
       ""
     }
@@ -43,24 +48,36 @@ pub fn load_context(
 ) -> DomainContext {
   let domain_name = extract_domain_name(config_dir)
 
-  let agents_md = read_optional_file(config_dir <> "/AGENTS.md", "AGENTS.md", domain_name)
+  let agents_md =
+    read_optional_file(config_dir <> "/AGENTS.md", "AGENTS.md", domain_name)
 
   let description = case load_description(config_dir) {
     Ok(desc) -> desc
     Error(e) -> {
-      logging.log(logging.Error, "[domain] Failed to load description for " <> config_dir <> ": " <> string.inspect(e))
+      logging.log(
+        logging.Error,
+        "[domain] Failed to load description for "
+          <> config_dir
+          <> ": "
+          <> string.inspect(e),
+      )
       ""
     }
   }
 
-  let state_md = read_optional_file(state_dir <> "/STATE.md", "STATE.md", domain_name)
-  let memory_md = read_optional_file(data_dir <> "/MEMORY.md", "MEMORY.md", domain_name)
+  let state_md =
+    read_optional_file(state_dir <> "/STATE.md", "STATE.md", domain_name)
+  let memory_md =
+    read_optional_file(data_dir <> "/MEMORY.md", "MEMORY.md", domain_name)
 
   let date = time.today_date_string()
   let todays_log = case memory.read_daily_log(data_dir, date) {
     Ok(log) -> log
     Error(e) -> {
-      logging.log(logging.Error, "[domain] Failed to read daily log for " <> domain_name <> ": " <> e)
+      logging.log(
+        logging.Error,
+        "[domain] Failed to read daily log for " <> domain_name <> ": " <> e,
+      )
       ""
     }
   }
@@ -81,14 +98,16 @@ pub fn load_context(
 pub fn build_domain_prompt(context: DomainContext) -> String {
   let sections = [
     build_agents_section(context.agents_md),
-    "## Domain\n" <> case context.description {
+    "## Domain\n"
+      <> case context.description {
       "" -> "No description."
       desc -> desc
     },
     build_state_section(context.state_md),
     build_memory_section(context.memory_md),
     build_log_section(context.todays_log),
-    "## Skills\n" <> case context.skill_descriptions {
+    "## Skills\n"
+      <> case context.skill_descriptions {
       "" -> "No skills available."
       desc -> desc
     },
@@ -196,4 +215,3 @@ pub fn load_context_files(
     }
   }
 }
-

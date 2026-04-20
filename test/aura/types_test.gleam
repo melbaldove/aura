@@ -19,4 +19,3 @@ pub fn event_to_json_test() {
     "{\"ts\":\"2026-03-25T14:30:00+08:00\",\"domain\":\"backend\",\"type\":\"pr_merged\",\"ref\":\"TASK-456\",\"summary\":\"Fixed ACK receipt format\"}",
   )
 }
-

@@ -80,7 +80,10 @@ pub fn serialize_includes_tool_results_test() {
     llm.ToolResultMessage("call_1", "file contents here"),
   ]
   let result = compressor.serialize_messages(messages)
-  should.be_true(string.contains(result, "[TOOL RESULT call_1]: file contents here"))
+  should.be_true(string.contains(
+    result,
+    "[TOOL RESULT call_1]: file contents here",
+  ))
 }
 
 pub fn serialize_truncates_long_content_test() {
@@ -94,7 +97,11 @@ pub fn serialize_truncates_long_content_test() {
 pub fn serialize_tool_call_message_test() {
   let messages = [
     llm.AssistantToolCallMessage("", [
-      llm.ToolCall(id: "call_1", name: "read_file", arguments: "{\"path\":\".\"}"),
+      llm.ToolCall(
+        id: "call_1",
+        name: "read_file",
+        arguments: "{\"path\":\".\"}",
+      ),
     ]),
   ]
   let result = compressor.serialize_messages(messages)
@@ -108,7 +115,14 @@ pub fn serialize_tool_call_message_test() {
 
 pub fn build_first_compression_prompt_test() {
   let serialized = "[USER]: Hello\n[ASSISTANT]: Hi"
-  let result = compressor.build_compression_prompt(serialized, option.None, "test-domain", "", "")
+  let result =
+    compressor.build_compression_prompt(
+      serialized,
+      option.None,
+      "test-domain",
+      "",
+      "",
+    )
   should.be_true(string.contains(result, "structured handoff summary"))
   should.be_true(string.contains(result, "Goal"))
   should.be_true(string.contains(result, "Key Decisions"))
@@ -118,8 +132,18 @@ pub fn build_first_compression_prompt_test() {
 pub fn build_iterative_update_prompt_test() {
   let serialized = "[USER]: new stuff"
   let existing = "## Goal\nHelp with accounting"
-  let result = compressor.build_compression_prompt(serialized, option.Some(existing), "test-domain", "", "")
-  should.be_true(string.contains(result, "updating a context compaction summary"))
+  let result =
+    compressor.build_compression_prompt(
+      serialized,
+      option.Some(existing),
+      "test-domain",
+      "",
+      "",
+    )
+  should.be_true(string.contains(
+    result,
+    "updating a context compaction summary",
+  ))
   should.be_true(string.contains(result, "PRESERVE all existing"))
   should.be_true(string.contains(result, existing))
 }

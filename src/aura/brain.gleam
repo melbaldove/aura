@@ -4,9 +4,6 @@ import aura/acp/types as acp_types
 import aura/brain_tools
 import aura/channel_actor
 import aura/channel_supervisor
-import aura/stream_worker
-import aura/tool_worker
-import aura/vision_worker
 import aura/clients/browser_runner.{type BrowserRunner}
 import aura/clients/discord_client.{type DiscordClient}
 import aura/clients/llm_client.{type LLMClient}
@@ -24,21 +21,24 @@ import aura/review_runner
 import aura/scheduler
 import aura/shell
 import aura/skill
+import aura/stream_worker
 import aura/structured_memory
 import aura/system_prompt
 import aura/time
+import aura/tool_worker
 import aura/validator
 import aura/vision
+import aura/vision_worker
 import aura/xdg
 import gleam/dict
 import gleam/erlang/process
 import gleam/int
-import logging
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
+import logging
 
 // ---------------------------------------------------------------------------
 // FFI
@@ -185,7 +185,10 @@ pub fn start(
   {
     Ok(len) -> len
     Error(e) -> {
-      logging.log(logging.Warning, "[brain] Warning: " <> e <> ", defaulting to 128000")
+      logging.log(
+        logging.Warning,
+        "[brain] Warning: " <> e <> ", defaulting to 128000",
+      )
       128_000
     }
   }
@@ -249,14 +252,15 @@ fn handle_message(
           // Check cache first, then Discord API for parent channel
           case dict.get(state.thread_domains, msg.channel_id) {
             Ok(name) -> {
-              logging.log(logging.Info, "[brain] Route: " <> name <> " (via thread cache)")
+              logging.log(
+                logging.Info,
+                "[brain] Route: " <> name <> " (via thread cache)",
+              )
               Some(name)
             }
             Error(_) -> {
               // Look up parent channel from Discord — is this a thread?
-              case
-                state.discord.get_channel_parent(msg.channel_id)
-              {
+              case state.discord.get_channel_parent(msg.channel_id) {
                 Ok("") -> {
                   logging.log(logging.Info, "[brain] Route: #aura")
                   None
@@ -265,7 +269,8 @@ fn handle_message(
                   // Check if parent is a domain channel
                   case route_message(parent_id, state.domains) {
                     DirectRoute(name) -> {
-                      logging.log(logging.Info, 
+                      logging.log(
+                        logging.Info,
                         "[brain] Route: " <> name <> " (via thread parent)",
                       )
                       // Cache it for next time
@@ -300,48 +305,49 @@ fn handle_message(
       // Thread creation for top-level domain channels
       let is_top_level_domain =
         list.any(state.domains, fn(d) { d.channel_id == msg.channel_id })
-      let #(routed_channel_id, new_state) =
-        case is_top_level_domain, domain_name {
-          True, Some(name) -> {
-            let thread_name = string.slice(msg.content, 0, 50)
-            case
-              state.discord.create_thread_from_message(
-                msg.channel_id,
-                msg.message_id,
-                thread_name,
+      let #(routed_channel_id, new_state) = case
+        is_top_level_domain,
+        domain_name
+      {
+        True, Some(name) -> {
+          let thread_name = string.slice(msg.content, 0, 50)
+          case
+            state.discord.create_thread_from_message(
+              msg.channel_id,
+              msg.message_id,
+              thread_name,
+            )
+          {
+            Ok(thread_id) -> {
+              logging.log(
+                logging.Info,
+                "[brain] Created thread " <> thread_id <> " for domain " <> name,
               )
-            {
-              Ok(thread_id) -> {
-                logging.log(
-                  logging.Info,
-                  "[brain] Created thread " <> thread_id <> " for domain " <> name,
+              let updated =
+                BrainState(
+                  ..state,
+                  thread_domains: dict.insert(
+                    state.thread_domains,
+                    thread_id,
+                    name,
+                  ),
                 )
-                let updated =
-                  BrainState(
-                    ..state,
-                    thread_domains: dict.insert(
-                      state.thread_domains,
-                      thread_id,
-                      name,
-                    ),
-                  )
-                #(thread_id, updated)
-              }
-              Error(e) -> {
-                logging.log(
-                  logging.Error,
-                  "[brain] Thread creation failed: " <> e <> ", routing to original channel",
-                )
-                #(msg.channel_id, state)
-              }
+              #(thread_id, updated)
+            }
+            Error(e) -> {
+              logging.log(
+                logging.Error,
+                "[brain] Thread creation failed: "
+                  <> e
+                  <> ", routing to original channel",
+              )
+              #(msg.channel_id, state)
             }
           }
-          _, _ -> #(msg.channel_id, state)
         }
-      logging.log(
-        logging.Info,
-        "[brain] Routing msg to " <> routed_channel_id,
-      )
+        _, _ -> #(msg.channel_id, state)
+      }
+      logging.log(logging.Info, "[brain] Routing msg to " <> routed_channel_id)
       let routed_msg =
         discord.IncomingMessage(..msg, channel_id: routed_channel_id)
       let deps =
@@ -356,10 +362,11 @@ fn handle_message(
       actor.continue(new_state)
     }
     UpdateDomains(domains) -> {
-      logging.log(logging.Info, 
+      logging.log(
+        logging.Info,
         "[brain] Updated domains: "
-        <> string.inspect(list.length(domains))
-        <> " entries",
+          <> string.inspect(list.length(domains))
+          <> " entries",
       )
       actor.continue(BrainState(..state, domains: domains))
     }
@@ -394,7 +401,8 @@ fn handle_message(
           let channel = state.aura_channel_id
           case channel {
             "" -> {
-              logging.log(logging.Info, 
+              logging.log(
+                logging.Info,
                 "[brain] No #aura channel configured for digest delivery",
               )
               Nil
@@ -461,11 +469,7 @@ fn handle_message(
           }
           let deps = build_channel_actor_deps(state, ch, domain_name)
           let subject =
-            channel_supervisor.get_or_start(
-              state.channel_supervisor,
-              ch,
-              deps,
-            )
+            channel_supervisor.get_or_start(state.channel_supervisor, ch, deps)
           process.send(
             subject,
             channel_actor.HandleInteractionResolve(action, approval_id),
@@ -490,12 +494,7 @@ fn handle_acp_event(
 ) -> actor.Next(BrainState, BrainMessage) {
   case event {
     acp_monitor.AcpStarted(session_name, domain, task_id) -> {
-      let msg =
-        "**ACP Started** -- "
-        <> task_id
-        <> "\n`"
-        <> session_name
-        <> "`"
+      let msg = "**ACP Started** -- " <> task_id <> "\n`" <> session_name <> "`"
       let channel = resolve_acp_channel(state, session_name, domain)
       process.spawn_unlinked(fn() {
         send_discord_response(state.discord, channel, msg)
@@ -570,13 +569,11 @@ fn handle_acp_event(
       case result_text {
         "" -> {
           let outcome = acp_types.outcome_to_string(report.outcome)
-          let msg =
-            "**ACP Complete** [" <> outcome <> "] -- " <> report.anchor
+          let msg = "**ACP Complete** [" <> outcome <> "] -- " <> report.anchor
           process.spawn_unlinked(fn() {
             send_discord_response(state.discord, channel, msg)
           })
-          let new_msgs =
-            dict.delete(state.acp_progress_msgs, session_name)
+          let new_msgs = dict.delete(state.acp_progress_msgs, session_name)
           actor.continue(BrainState(..state, acp_progress_msgs: new_msgs))
         }
         text -> {
@@ -589,8 +586,7 @@ fn handle_acp_event(
           )
           // Route handback via channel_actor keyed on the flare's thread_id.
           route_handback_to_channel_actor(state, session_name, domain, text)
-          let new_msgs =
-            dict.delete(state.acp_progress_msgs, session_name)
+          let new_msgs = dict.delete(state.acp_progress_msgs, session_name)
           actor.continue(BrainState(..state, acp_progress_msgs: new_msgs))
         }
       }
@@ -634,7 +630,11 @@ fn handle_acp_event(
       let domain_dir = xdg.domain_data_dir(state.paths, domain)
       case memory.append_domain_log(domain_dir, summary) {
         Ok(_) -> Nil
-        Error(e) -> logging.log(logging.Error, "[brain] Failed to write domain log: " <> e)
+        Error(e) ->
+          logging.log(
+            logging.Error,
+            "[brain] Failed to write domain log: " <> e,
+          )
       }
 
       // Build elapsed time from session
@@ -675,54 +675,54 @@ fn handle_acp_event(
 
       // Build body from structured fields (same format for tmux and stdio — both LLM-summarized)
       let body = case is_idle {
-            True -> {
-              let done = acp_monitor.extract_field(summary, "Done:")
-              let needs = acp_monitor.extract_field(summary, "Needs input:")
-              let parts = [
-                case done {
-                  "" -> ""
-                  _ -> "**Done:** " <> done
-                },
-                case needs {
-                  "" | "none" | "None" -> ""
-                  _ -> "**Needs input:** " <> needs
-                },
-              ]
-              let body_text =
-                list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
-              body_text <> "\n\nWant me to check on this? Reply in this thread."
-            }
-            False -> {
-              let status_line = case status {
-                "" -> ""
-                _ -> "**Status:** " <> status
-              }
-              let done = acp_monitor.extract_field(summary, "Done:")
-              let current = acp_monitor.extract_field(summary, "Current:")
-              let needs = acp_monitor.extract_field(summary, "Needs input:")
-              let next = acp_monitor.extract_field(summary, "Next:")
-              let parts = [
-                status_line,
-                case done {
-                  "" -> ""
-                  _ -> "**Done:** " <> done
-                },
-                case current {
-                  "" -> ""
-                  _ -> "**Current:** " <> current
-                },
-                case needs {
-                  "" | "none" | "None" -> ""
-                  _ -> "**Needs input:** " <> needs
-                },
-                case next {
-                  "" -> ""
-                  _ -> "**Next:** " <> next
-                },
-              ]
-              list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
-            }
+        True -> {
+          let done = acp_monitor.extract_field(summary, "Done:")
+          let needs = acp_monitor.extract_field(summary, "Needs input:")
+          let parts = [
+            case done {
+              "" -> ""
+              _ -> "**Done:** " <> done
+            },
+            case needs {
+              "" | "none" | "None" -> ""
+              _ -> "**Needs input:** " <> needs
+            },
+          ]
+          let body_text =
+            list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
+          body_text <> "\n\nWant me to check on this? Reply in this thread."
+        }
+        False -> {
+          let status_line = case status {
+            "" -> ""
+            _ -> "**Status:** " <> status
           }
+          let done = acp_monitor.extract_field(summary, "Done:")
+          let current = acp_monitor.extract_field(summary, "Current:")
+          let needs = acp_monitor.extract_field(summary, "Needs input:")
+          let next = acp_monitor.extract_field(summary, "Next:")
+          let parts = [
+            status_line,
+            case done {
+              "" -> ""
+              _ -> "**Done:** " <> done
+            },
+            case current {
+              "" -> ""
+              _ -> "**Current:** " <> current
+            },
+            case needs {
+              "" | "none" | "None" -> ""
+              _ -> "**Needs input:** " <> needs
+            },
+            case next {
+              "" -> ""
+              _ -> "**Next:** " <> next
+            },
+          ]
+          list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
+        }
+      }
 
       let msg = header <> "\n\n" <> body
       let channel = resolve_acp_channel(state, session_name, domain)
@@ -747,11 +747,18 @@ fn handle_acp_event(
           let safe = discord_message.clip_to_discord_limit(msg)
           case discord.send_message(channel, safe) {
             Ok(message_id) ->
-              BrainState(..state,
-                acp_progress_msgs: dict.insert(progress_msgs, sn, #(channel, message_id)),
+              BrainState(
+                ..state,
+                acp_progress_msgs: dict.insert(progress_msgs, sn, #(
+                  channel,
+                  message_id,
+                )),
               )
             Error(err) -> {
-              logging.log(logging.Error, "[brain] Failed to send progress: " <> err)
+              logging.log(
+                logging.Error,
+                "[brain] Failed to send progress: " <> err,
+              )
               state
             }
           }
@@ -773,18 +780,17 @@ fn persist_flare_result(
 ) -> Nil {
   case structured_memory.security_scan(result_text) {
     Error(reason) -> {
-      logging.log(logging.Info, 
+      logging.log(
+        logging.Info,
         "[brain] Blocked flare result_text for "
-        <> session_name
-        <> ": "
-        <> reason,
+          <> session_name
+          <> ": "
+          <> reason,
       )
       Nil
     }
     Ok(_) ->
-      case
-        flare_manager.get_flare_by_session_name(acp_subject, session_name)
-      {
+      case flare_manager.get_flare_by_session_name(acp_subject, session_name) {
         Ok(flare) -> {
           let _ =
             db.update_flare_result(
@@ -911,12 +917,13 @@ fn route_handback_to_channel_actor(
 ) -> Nil {
   case flare_manager.get_session(state.acp_subject, session_name) {
     Ok(flare) -> {
-      let domain_name = case list.find(state.domains, fn(d) { d.name == flare.domain }) {
+      let domain_name = case
+        list.find(state.domains, fn(d) { d.name == flare.domain })
+      {
         Ok(_) -> Some(flare.domain)
         Error(_) -> None
       }
-      let deps =
-        build_channel_actor_deps(state, flare.thread_id, domain_name)
+      let deps = build_channel_actor_deps(state, flare.thread_id, domain_name)
       let subject =
         channel_supervisor.get_or_start(
           state.channel_supervisor,
@@ -945,11 +952,12 @@ fn send_discord_response(
   channel_id: String,
   content: String,
 ) -> Nil {
-  logging.log(logging.Info, 
+  logging.log(
+    logging.Info,
     "[brain] Sending to channel "
-    <> channel_id
-    <> ": "
-    <> string.slice(content, 0, 100),
+      <> channel_id
+      <> ": "
+      <> string.slice(content, 0, 100),
   )
   let safe_content = discord_message.clip_to_discord_limit(content)
   case discord.send_message(channel_id, safe_content) {

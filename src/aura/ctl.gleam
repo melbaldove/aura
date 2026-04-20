@@ -4,9 +4,9 @@ import aura/time
 import aura/xdg
 import gleam/erlang/process
 import gleam/int
-import logging
 import gleam/list
 import gleam/string
+import logging
 
 // ---------------------------------------------------------------------------
 // FFI
@@ -52,9 +52,7 @@ pub type CtlContext {
 pub fn start(ctx: CtlContext) -> Result(Nil, String) {
   let socket_path = xdg.state_path(ctx.paths, "aura.sock")
   case
-    start_listener_ffi(socket_path, fn(command) {
-      handle_command(command, ctx)
-    })
+    start_listener_ffi(socket_path, fn(command) { handle_command(command, ctx) })
   {
     Ok(_pid) -> Ok(Nil)
     Error(e) -> Error("Failed to start ctl listener: " <> e)
@@ -107,7 +105,10 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
       <> last_dream
     }
 
-    unknown -> "ERROR: unknown command '" <> unknown <> "'. Commands: ping, dream, status"
+    unknown ->
+      "ERROR: unknown command '"
+      <> unknown
+      <> "'. Commands: ping, dream, status"
   }
 }
 

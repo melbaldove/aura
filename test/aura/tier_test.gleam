@@ -2,7 +2,9 @@ import aura/tier
 import gleeunit/should
 
 pub fn tier1_domain_logs_test() {
-  tier.for_path("/home/user/.local/share/aura/domains/cm2/logs/2026-03-30.jsonl")
+  tier.for_path(
+    "/home/user/.local/share/aura/domains/cm2/logs/2026-03-30.jsonl",
+  )
   |> should.equal(tier.Autonomous)
 }
 

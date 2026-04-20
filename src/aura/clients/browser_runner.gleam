@@ -11,8 +11,5 @@ pub type BrowserRunner {
 }
 
 pub fn production() -> BrowserRunner {
-  BrowserRunner(
-    run: browser.run_ffi,
-    url_has_secret: browser.url_has_secret,
-  )
+  BrowserRunner(run: browser.run_ffi, url_has_secret: browser.url_has_secret)
 }

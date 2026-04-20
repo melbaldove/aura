@@ -63,7 +63,8 @@ pub fn serialize_skips_system_test() {
 
 pub fn build_first_compression_prompt_test() {
   let serialized = "[USER]: Hello\n[ASSISTANT]: Hi there"
-  let result = compressor.build_compression_prompt(serialized, None, "test-domain", "", "")
+  let result =
+    compressor.build_compression_prompt(serialized, None, "test-domain", "", "")
   should.be_true(string.contains(result, "structured handoff summary"))
   should.be_true(string.contains(result, serialized))
   should.be_true(string.contains(result, "test-domain"))
@@ -72,8 +73,18 @@ pub fn build_first_compression_prompt_test() {
 pub fn build_update_prompt_test() {
   let serialized = "[USER]: New stuff\n[ASSISTANT]: Response"
   let existing = "## Goal\nHelp with accounting"
-  let result = compressor.build_compression_prompt(serialized, Some(existing), "test-domain", "", "")
-  should.be_true(string.contains(result, "updating a context compaction summary"))
+  let result =
+    compressor.build_compression_prompt(
+      serialized,
+      Some(existing),
+      "test-domain",
+      "",
+      "",
+    )
+  should.be_true(string.contains(
+    result,
+    "updating a context compaction summary",
+  ))
   should.be_true(string.contains(result, existing))
   should.be_true(string.contains(result, "PRESERVE all existing"))
 }
@@ -214,7 +225,14 @@ pub fn needs_full_compression_test() {
 
 pub fn build_prompt_with_domain_context_test() {
   let serialized = "[USER]: Hello"
-  let result = compressor.build_compression_prompt(serialized, None, "my-project", "You are a coding assistant", "Working on PR #42")
+  let result =
+    compressor.build_compression_prompt(
+      serialized,
+      None,
+      "my-project",
+      "You are a coding assistant",
+      "Working on PR #42",
+    )
   should.be_true(string.contains(result, "my-project"))
   should.be_true(string.contains(result, "Domain instructions:"))
   should.be_true(string.contains(result, "You are a coding assistant"))
@@ -224,7 +242,8 @@ pub fn build_prompt_with_domain_context_test() {
 
 pub fn build_prompt_without_domain_context_test() {
   let serialized = "[USER]: Hello"
-  let result = compressor.build_compression_prompt(serialized, None, "aura", "", "")
+  let result =
+    compressor.build_compression_prompt(serialized, None, "aura", "", "")
   should.be_true(string.contains(result, "aura"))
   should.be_false(string.contains(result, "Domain instructions:"))
   should.be_false(string.contains(result, "Current state:"))
@@ -245,7 +264,11 @@ pub fn serialize_messages_truncates_long_content_test() {
 pub fn serialize_messages_includes_tool_call_args_test() {
   let messages = [
     llm.AssistantToolCallMessage("thinking", [
-      llm.ToolCall(id: "c1", name: "read_file", arguments: "{\"path\": \"test.gleam\"}"),
+      llm.ToolCall(
+        id: "c1",
+        name: "read_file",
+        arguments: "{\"path\": \"test.gleam\"}",
+      ),
     ]),
   ]
   let result = compressor.serialize_messages(messages)

@@ -40,7 +40,9 @@ pub fn build_system_prompt(
 
   "You are responding in a Discord server. Stay in character.\n\n"
   <> soul_content
-  <> "\n\nCurrent time: " <> time.now_datetime_string() <> " (Asia/Manila)"
+  <> "\n\nCurrent time: "
+  <> time.now_datetime_string()
+  <> " (Asia/Manila)"
   <> "\n\nKeep responses concise and direct. Use Discord markdown where appropriate."
   <> domain_section
   <> skills_section

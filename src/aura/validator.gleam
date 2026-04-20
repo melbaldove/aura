@@ -55,8 +55,7 @@ fn match_segment(segment: String, pattern: String) -> Bool {
         False ->
           case string.ends_with(pattern, "*") {
             True -> {
-              let prefix =
-                string.drop_end(pattern, 1)
+              let prefix = string.drop_end(pattern, 1)
               string.starts_with(segment, prefix)
             }
             False -> segment == pattern
@@ -178,9 +177,7 @@ pub fn validate(
 }
 
 /// Parse `[[rules]]` array-of-tables from TOML content.
-pub fn parse_rules(
-  toml_content: String,
-) -> Result(List(Rule), String) {
+pub fn parse_rules(toml_content: String) -> Result(List(Rule), String) {
   case tom.parse(toml_content) {
     Error(_) -> Error("Failed to parse TOML")
     Ok(doc) -> {
@@ -226,9 +223,7 @@ fn parse_rule_type(
     "must_contain" -> {
       use value <- result.try(
         tom.get_string(table, ["value"])
-        |> result.map_error(fn(_) {
-          "must_contain rule requires 'value' field"
-        }),
+        |> result.map_error(fn(_) { "must_contain rule requires 'value' field" }),
       )
       Ok(MustContain(value))
     }

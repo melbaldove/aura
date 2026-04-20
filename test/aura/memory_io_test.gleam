@@ -1,6 +1,6 @@
 import aura/memory
-import aura/test_helpers
 import aura/scaffold
+import aura/test_helpers
 import aura/xdg
 import gleam/json
 import gleam/string
@@ -38,8 +38,7 @@ pub fn append_domain_log_test() {
   memory.append_domain_log(domain_dir, "Added FTS5 search")
   |> should.be_ok
 
-  let content =
-    simplifile.read(domain_dir <> "/log.jsonl") |> should.be_ok
+  let content = simplifile.read(domain_dir <> "/log.jsonl") |> should.be_ok
   content |> string.contains("Chose SQLite") |> should.be_true
   content |> string.contains("FTS5") |> should.be_true
   content |> string.contains("timestamp") |> should.be_true
@@ -109,11 +108,14 @@ pub fn append_multiple_log_entries_test() {
 
   let e1 = json.object([#("msg", json.string("first entry"))])
   let e2 = json.object([#("msg", json.string("second entry"))])
-  memory.append_log(paths.data <> "/domains/ws1", "2026-03-30", e1) |> should.be_ok
-  memory.append_log(paths.data <> "/domains/ws1", "2026-03-30", e2) |> should.be_ok
+  memory.append_log(paths.data <> "/domains/ws1", "2026-03-30", e1)
+  |> should.be_ok
+  memory.append_log(paths.data <> "/domains/ws1", "2026-03-30", e2)
+  |> should.be_ok
 
   let log =
-    memory.read_daily_log(paths.data <> "/domains/ws1", "2026-03-30") |> should.be_ok
+    memory.read_daily_log(paths.data <> "/domains/ws1", "2026-03-30")
+    |> should.be_ok
   log |> string.contains("first entry") |> should.be_true
   log |> string.contains("second entry") |> should.be_true
 

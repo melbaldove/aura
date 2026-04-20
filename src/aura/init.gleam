@@ -123,7 +123,8 @@ fn prompt_discord_token_loop() -> Result(String, String) {
 fn resolve_guild(token: String) -> Result(String, String) {
   use guilds <- result.try(rest.list_guilds(token))
   case guilds {
-    [] -> Error("Bot is not in any guilds. Please add the bot to a server first.")
+    [] ->
+      Error("Bot is not in any guilds. Please add the bot to a server first.")
     [#(id, name)] -> {
       io.println("  Guild: " <> name)
       io.println("")
@@ -150,10 +151,12 @@ fn resolve_guild(token: String) -> Result(String, String) {
 fn prompt_llm_key() -> Result(#(String, String), String) {
   io.println("LLM Provider Configuration")
   io.println("--------------------------")
-  use choice <- result.try(prompt.choose("Select LLM provider:", [
-    "zai (ZhipuAI)",
-    "claude (Anthropic)",
-  ]))
+  use choice <- result.try(
+    prompt.choose("Select LLM provider:", [
+      "zai (ZhipuAI)",
+      "claude (Anthropic)",
+    ]),
+  )
   let provider = case choice {
     1 -> "zai"
     _ -> "claude"

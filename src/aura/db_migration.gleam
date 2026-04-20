@@ -3,11 +3,11 @@ import aura/time
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
-import logging
 import gleam/json
 import gleam/list
 import gleam/result
 import gleam/string
+import logging
 import simplifile
 
 /// Migrate existing JSONL conversation files to SQLite.
@@ -30,7 +30,8 @@ pub fn migrate_jsonl(
           // Check if we already have data (don't double-migrate)
           case db.has_messages(db_subject) {
             Ok(True) -> {
-              logging.log(logging.Info, 
+              logging.log(
+                logging.Info,
                 "[migration] Database already has data, skipping JSONL migration",
               )
               Ok(0)
@@ -48,16 +49,18 @@ pub fn migrate_jsonl(
                     )
                   {
                     Ok(n) -> {
-                      logging.log(logging.Info, 
+                      logging.log(
+                        logging.Info,
                         "[migration] Migrated "
-                        <> int.to_string(n)
-                        <> " messages from "
-                        <> file,
+                          <> int.to_string(n)
+                          <> " messages from "
+                          <> file,
                       )
                       acc + n
                     }
                     Error(e) -> {
-                      logging.log(logging.Info, 
+                      logging.log(
+                        logging.Info,
                         "[migration] Failed to migrate " <> file <> ": " <> e,
                       )
                       acc
@@ -84,9 +87,12 @@ fn migrate_one_file(
   )
 
   let now = time.now_ms()
-  use convo_id <- result.try(
-    db.resolve_conversation(db_subject, "discord", channel_id, now),
-  )
+  use convo_id <- result.try(db.resolve_conversation(
+    db_subject,
+    "discord",
+    channel_id,
+    now,
+  ))
 
   // Parse JSONL lines
   let lines =
@@ -125,4 +131,3 @@ fn migrate_one_file(
 
   Ok(migrated)
 }
-

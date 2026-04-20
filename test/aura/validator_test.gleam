@@ -8,10 +8,7 @@ pub fn match_exact_path_test() {
 }
 
 pub fn match_glob_path_test() {
-  validator.path_matches(
-    "domains/cm2/log.jsonl",
-    "domains/*/log.jsonl",
-  )
+  validator.path_matches("domains/cm2/log.jsonl", "domains/*/log.jsonl")
   |> should.be_true
   validator.path_matches(
     "domains/cm2/logs/2026-03-30.jsonl",

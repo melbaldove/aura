@@ -17,9 +17,7 @@ fn fake_config() -> llm.LlmConfig {
 /// Subject owned by the caller. Using a dedicated process means the
 /// callback mailbox is empty — no stray messages leaked from other tests
 /// in the shared BEAM VM.
-fn spawn_collector(
-  collector: process.Subject(String),
-) -> process.Pid {
+fn spawn_collector(collector: process.Subject(String)) -> process.Pid {
   process.spawn(fn() { collector_loop(collector) })
 }
 

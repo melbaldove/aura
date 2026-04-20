@@ -5,12 +5,12 @@ import gleam/http
 import gleam/http/request
 import gleam/httpc
 import gleam/int
-import logging
 import gleam/json
 import gleam/option.{type Option, None}
 import gleam/result
 import gleam/string
 import gleam/uri
+import logging
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,11 +50,7 @@ pub fn list_agents(server_url: String) -> Result(List(Agent), String) {
   let decoder =
     decode.list({
       use name <- decode.field("name", decode.string)
-      use description <- decode.optional_field(
-        "description",
-        "",
-        decode.string,
-      )
+      use description <- decode.optional_field("description", "", decode.string)
       decode.success(Agent(name: name, description: description))
     })
   case json.parse(resp, decoder) {
@@ -179,7 +175,10 @@ pub fn parse_status(s: String) -> RunStatus {
     "cancelling" -> Cancelling
     "cancelled" -> Cancelled
     unknown -> {
-      logging.log(logging.Warning, "[acp-client] Unknown run status: " <> unknown)
+      logging.log(
+        logging.Warning,
+        "[acp-client] Unknown run status: " <> unknown,
+      )
       InProgress
     }
   }
@@ -233,9 +232,7 @@ fn parse_run(body: String) -> Result(Run, String) {
   case json.parse(body, decoder) {
     Ok(run) -> Ok(run)
     Error(_) ->
-      Error(
-        "Failed to parse run response: " <> string.slice(body, 0, 200),
-      )
+      Error("Failed to parse run response: " <> string.slice(body, 0, 200))
   }
 }
 

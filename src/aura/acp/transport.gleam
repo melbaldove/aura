@@ -6,27 +6,28 @@ import aura/acp/stdio
 import aura/acp/tmux
 import aura/acp/types
 import gleam/erlang/process
-import logging
 import gleam/list
 import gleam/result
 import gleam/string
+import logging
 
 // ---------------------------------------------------------------------------
 // Completion buffer — accumulates data for handback payload
 // ---------------------------------------------------------------------------
 
 pub type CompletionBuffer {
-  CompletionBuffer(
-    tool_names: List(String),
-    agent_chunks: List(String),
-  )
+  CompletionBuffer(tool_names: List(String), agent_chunks: List(String))
 }
 
 pub fn new_completion_buffer() -> CompletionBuffer {
   CompletionBuffer(tool_names: [], agent_chunks: [])
 }
 
-pub fn buffer_event(buf: CompletionBuffer, event_type: String, data: String) -> CompletionBuffer {
+pub fn buffer_event(
+  buf: CompletionBuffer,
+  event_type: String,
+  data: String,
+) -> CompletionBuffer {
   case event_type {
     "tool_call" -> {
       let name = extract_tool_name(data)
@@ -40,7 +41,10 @@ pub fn buffer_event(buf: CompletionBuffer, event_type: String, data: String) -> 
     }
     "agent_message_chunk" -> {
       let text = extract_agent_text(data)
-      CompletionBuffer(..buf, agent_chunks: list.append(buf.agent_chunks, [text]))
+      CompletionBuffer(
+        ..buf,
+        agent_chunks: list.append(buf.agent_chunks, [text]),
+      )
     }
     _ -> buf
   }
@@ -77,7 +81,10 @@ pub fn extract_agent_text(data: String) -> String {
   }
 }
 
-pub fn format_result_text(buf: CompletionBuffer, monitor_summary: String) -> String {
+pub fn format_result_text(
+  buf: CompletionBuffer,
+  monitor_summary: String,
+) -> String {
   let summary_section = case monitor_summary {
     "" -> ""
     s -> "Summary: " <> s
@@ -93,7 +100,10 @@ pub fn format_result_text(buf: CompletionBuffer, monitor_summary: String) -> Str
     text -> "Agent's response:\n" <> text
   }
 
-  let sections = list.filter([summary_section, tools_section, agent_section], fn(s) { s != "" })
+  let sections =
+    list.filter([summary_section, tools_section, agent_section], fn(s) {
+      s != ""
+    })
   string.join(sections, "\n\n")
 }
 
@@ -138,17 +148,10 @@ pub fn dispatch(
 ) -> Result(DispatchResult, String) {
   case transport {
     Http(server_url, agent_name) ->
-      dispatch_http(
-        server_url,
-        agent_name,
-        session_name,
-        task_spec,
-        on_event,
-      )
+      dispatch_http(server_url, agent_name, session_name, task_spec, on_event)
     Stdio(command) ->
       dispatch_stdio(command, session_name, task_spec, monitor_model, on_event)
-    Tmux ->
-      dispatch_tmux(session_name, task_spec, monitor_model, on_event)
+    Tmux -> dispatch_tmux(session_name, task_spec, monitor_model, on_event)
   }
 }
 
@@ -188,7 +191,8 @@ pub fn kill(
       case tmux.kill_session(session_name) {
         Ok(_) -> Ok(Nil)
         Error(e) -> {
-          logging.log(logging.Info, 
+          logging.log(
+            logging.Info,
             "[acp] tmux kill failed for " <> session_name <> ": " <> e,
           )
           Ok(Nil)
@@ -258,17 +262,28 @@ fn dispatch_stdio_inner(
     case start_fn() {
       Error(e) -> process.send(reply_subject, Error(e))
       Ok(#(owner, session_id)) -> {
-        let monitor = acp_monitor.start_push_monitor(
-          acp_monitor.default_monitor_config(),
+        let monitor =
+          acp_monitor.start_push_monitor(
+            acp_monitor.default_monitor_config(),
+            session_name,
+            task_spec.domain,
+            prompt_text,
+            monitor_model,
+            on_event,
+          )
+        process.send(reply_subject, Ok(#(owner, session_id, monitor)))
+        on_event(acp_monitor.AcpStarted(
           session_name,
           task_spec.domain,
-          prompt_text,
-          monitor_model,
+          task_spec.id,
+        ))
+        stdio_event_loop(
+          session_name,
+          task_spec.domain,
           on_event,
+          monitor,
+          new_completion_buffer(),
         )
-        process.send(reply_subject, Ok(#(owner, session_id, monitor)))
-        on_event(acp_monitor.AcpStarted(session_name, task_spec.domain, task_spec.id))
-        stdio_event_loop(session_name, task_spec.domain, on_event, monitor, new_completion_buffer())
       }
     }
   })
@@ -277,7 +292,11 @@ fn dispatch_stdio_inner(
     Ok(Ok(#(owner, session_id, monitor))) ->
       Ok(DispatchResult(
         run_id: session_id,
-        handle: StdioHandle(owner: owner, session_id: session_id, monitor: monitor),
+        handle: StdioHandle(
+          owner: owner,
+          session_id: session_id,
+          monitor: monitor,
+        ),
       ))
     Ok(Error(err)) -> Error("Stdio dispatch failed: " <> err)
     Error(_) -> Error("Stdio session timed out")
@@ -303,41 +322,79 @@ fn stdio_event_loop(
           // end_turn means "finished this response" not "finished all work".
           // Emit turn-completed for handback, reset buffer, continue the loop
           // so subsequent prompts (send_input) are processed.
-          let monitor_summary = process.call(monitor, 5000, fn(reply_to) {
-            acp_monitor.GetLastSummary(reply_to)
-          })
+          let monitor_summary =
+            process.call(monitor, 5000, fn(reply_to) {
+              acp_monitor.GetLastSummary(reply_to)
+            })
           let result_text = format_result_text(buf, monitor_summary)
-          on_event(acp_monitor.AcpTurnCompleted(session_name, domain, result_text))
-          stdio_event_loop(session_name, domain, on_event, monitor, new_completion_buffer())
+          on_event(acp_monitor.AcpTurnCompleted(
+            session_name,
+            domain,
+            result_text,
+          ))
+          stdio_event_loop(
+            session_name,
+            domain,
+            on_event,
+            monitor,
+            new_completion_buffer(),
+          )
         }
         "cancelled" ->
           on_event(acp_monitor.AcpFailed(session_name, domain, "cancelled"))
         "refusal" ->
           on_event(acp_monitor.AcpFailed(session_name, domain, "refused"))
         other ->
-          on_event(acp_monitor.AcpFailed(session_name, domain, "stopped: " <> other))
+          on_event(acp_monitor.AcpFailed(
+            session_name,
+            domain,
+            "stopped: " <> other,
+          ))
       }
     }
     stdio.Exit(code) -> {
-      logging.log(logging.Info, "[acp-stdio] Process exited with code " <> code <> " for " <> session_name)
+      logging.log(
+        logging.Info,
+        "[acp-stdio] Process exited with code "
+          <> code
+          <> " for "
+          <> session_name,
+      )
       case code {
         "0" -> {
           // Clean exit — the agent process terminated normally
-          let monitor_summary = process.call(monitor, 5000, fn(reply_to) {
-            acp_monitor.GetLastSummary(reply_to)
-          })
+          let monitor_summary =
+            process.call(monitor, 5000, fn(reply_to) {
+              acp_monitor.GetLastSummary(reply_to)
+            })
           let result_text = format_result_text(buf, monitor_summary)
-          on_event(acp_monitor.AcpCompleted(session_name, domain, types.AcpReport(
-            outcome: types.Clean, files_changed: [], decisions: "",
-            tests: "", blockers: "", anchor: "Session completed",
-          ), result_text))
+          on_event(acp_monitor.AcpCompleted(
+            session_name,
+            domain,
+            types.AcpReport(
+              outcome: types.Clean,
+              files_changed: [],
+              decisions: "",
+              tests: "",
+              blockers: "",
+              anchor: "Session completed",
+            ),
+            result_text,
+          ))
         }
         _ ->
-          on_event(acp_monitor.AcpFailed(session_name, domain, "process exited (code " <> code <> ")"))
+          on_event(acp_monitor.AcpFailed(
+            session_name,
+            domain,
+            "process exited (code " <> code <> ")",
+          ))
       }
     }
     stdio.Error(reason) -> {
-      logging.log(logging.Error, "[acp-stdio] Error for " <> session_name <> ": " <> reason)
+      logging.log(
+        logging.Error,
+        "[acp-stdio] Error for " <> session_name <> ": " <> reason,
+      )
       on_event(acp_monitor.AcpFailed(session_name, domain, reason))
     }
     stdio.Timeout -> {
@@ -358,7 +415,9 @@ pub fn dispatch_stdio_resume(
 ) -> Result(DispatchResult, String) {
   let cmd = command
   dispatch_stdio_inner(
-    fn() { stdio.start_session_resume(cmd, task_spec.cwd, resume_session_id, prompt) },
+    fn() {
+      stdio.start_session_resume(cmd, task_spec.cwd, resume_session_id, prompt)
+    },
     session_name,
     task_spec,
     prompt,
@@ -381,9 +440,11 @@ fn dispatch_http(
   task_spec: types.TaskSpec,
   on_event: fn(acp_monitor.AcpEvent) -> Nil,
 ) -> Result(DispatchResult, String) {
-  use run <- result.try(
-    client.create_run(server_url, agent_name, task_spec.prompt),
-  )
+  use run <- result.try(client.create_run(
+    server_url,
+    agent_name,
+    task_spec.prompt,
+  ))
 
   // Start SSE listener — translates SSE events to AcpEvents via on_event
   let run_id = run.run_id
@@ -415,49 +476,52 @@ pub fn http_event_loop(
         "run.in-progress" ->
           on_event(acp_monitor.AcpStarted(session_name, domain, run_id))
         "run.awaiting" ->
-          on_event(
-            acp_monitor.AcpAlert(
-              session_name,
-              domain,
-              types.Blocked,
-              "Agent awaiting input",
-            ),
-          )
+          on_event(acp_monitor.AcpAlert(
+            session_name,
+            domain,
+            types.Blocked,
+            "Agent awaiting input",
+          ))
         "run.completed" ->
-          on_event(
-            acp_monitor.AcpCompleted(
-              session_name,
-              domain,
-              types.AcpReport(
-                outcome: types.Clean,
-                files_changed: [],
-                decisions: "",
-                tests: "",
-                blockers: "",
-                anchor: data,
-              ),
-              data,
+          on_event(acp_monitor.AcpCompleted(
+            session_name,
+            domain,
+            types.AcpReport(
+              outcome: types.Clean,
+              files_changed: [],
+              decisions: "",
+              tests: "",
+              blockers: "",
+              anchor: data,
             ),
-          )
+            data,
+          ))
         "run.failed" ->
           on_event(acp_monitor.AcpFailed(session_name, domain, data))
         "run.cancelled" ->
           on_event(acp_monitor.AcpFailed(session_name, domain, "cancelled"))
         "message.part" ->
-          on_event(
-            acp_monitor.AcpProgress(session_name, domain, "", "", data, False),
-          )
+          on_event(acp_monitor.AcpProgress(
+            session_name,
+            domain,
+            "",
+            "",
+            data,
+            False,
+          ))
         _ -> Nil
       }
       // Stop on terminal events, continue otherwise
       case event_type {
         "run.completed" | "run.failed" | "run.cancelled" -> Nil
-        _ ->
-          http_event_loop(on_event, session_name, domain, run_id, server_url)
+        _ -> http_event_loop(on_event, session_name, domain, run_id, server_url)
       }
     }
     sse.Error(reason) -> {
-      logging.log(logging.Error, "[acp-sse] Error for " <> session_name <> ": " <> reason)
+      logging.log(
+        logging.Error,
+        "[acp-sse] Error for " <> session_name <> ": " <> reason,
+      )
       // Reconnect after delay
       process.sleep(5000)
       let self_pid = process.self()
@@ -471,7 +535,10 @@ pub fn http_event_loop(
       Nil
     }
     sse.Timeout -> {
-      logging.log(logging.Warning, "[acp-sse] Timeout for " <> session_name <> ", reconnecting")
+      logging.log(
+        logging.Warning,
+        "[acp-sse] Timeout for " <> session_name <> ", reconnecting",
+      )
       let self_pid = process.self()
       process.spawn_unlinked(fn() {
         client.subscribe_events(server_url, run_id, self_pid)

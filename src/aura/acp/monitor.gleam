@@ -5,11 +5,11 @@ import aura/models
 import aura/time
 import gleam/erlang/process
 import gleam/int
-import logging
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/string
+import logging
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,11 +32,7 @@ pub type AcpEvent {
   /// A turn completed (end_turn) but the session is still alive.
   /// Used by stdio transport where end_turn means "finished responding"
   /// not "finished all work". The event loop continues after this.
-  AcpTurnCompleted(
-    session_name: String,
-    domain: String,
-    result_text: String,
-  )
+  AcpTurnCompleted(session_name: String, domain: String, result_text: String)
   // AcpTimedOut removed — flares run until done or explicitly stopped
   AcpFailed(session_name: String, domain: String, error: String)
   AcpProgress(
@@ -93,13 +89,17 @@ pub fn start_push_monitor(
 ) -> process.Subject(StdioMonitorMsg) {
   let llm_config = case monitor_model {
     "" -> None
-    model -> case models.build_llm_config(model) {
-      Ok(c) -> Some(c)
-      Error(e) -> {
-        logging.log(logging.Info, "[acp-monitor] No LLM config for " <> model <> ": " <> e)
-        None
+    model ->
+      case models.build_llm_config(model) {
+        Ok(c) -> Some(c)
+        Error(e) -> {
+          logging.log(
+            logging.Info,
+            "[acp-monitor] No LLM config for " <> model <> ": " <> e,
+          )
+          None
+        }
       }
-    }
   }
 
   let builder =
@@ -130,9 +130,9 @@ pub fn start_push_monitor(
   case actor.start(builder) {
     Ok(started) -> started.data
     Error(err) -> {
-      logging.log(logging.Info, 
-        "[acp-monitor] Failed to start push monitor: "
-        <> string.inspect(err),
+      logging.log(
+        logging.Info,
+        "[acp-monitor] Failed to start push monitor: " <> string.inspect(err),
       )
       process.new_subject()
     }
@@ -163,10 +163,12 @@ fn handle_push_msg(
 ) -> actor.Next(PushMonitorState, StdioMonitorMsg) {
   case msg {
     RawLine(line) -> {
-      actor.continue(PushMonitorState(
-        ..state,
-        raw_lines: list.append(state.raw_lines, [line]),
-      ))
+      actor.continue(
+        PushMonitorState(
+          ..state,
+          raw_lines: list.append(state.raw_lines, [line]),
+        ),
+      )
     }
     Tick -> handle_push_tick(state)
     UpdateStdioSummary(summary) -> {
@@ -195,63 +197,69 @@ fn handle_push_tick(
 
   // If backing off from LLM rate limit, decrement and skip LLM call
   case state.skip_ticks > 0 {
+    True -> {
+      process.send_after(
+        state.self_subject,
+        state.config.emit_interval_ms,
+        Tick,
+      )
+      actor.continue(
+        PushMonitorState(
+          ..state,
+          idle_checks: new_idle_checks,
+          skip_ticks: state.skip_ticks - 1,
+        ),
+      )
+    }
+    False -> {
+      let is_idle = !is_active
+      let should_emit =
+        is_active
+        || {
+          new_idle_checks >= state.config.idle_surface_threshold
+          && !state.idle_surfaced
+        }
+
+      let new_state = case should_emit {
         True -> {
-          process.send_after(state.self_subject, state.config.emit_interval_ms, Tick)
-          actor.continue(PushMonitorState(
+          // Spawn LLM summarization (non-blocking)
+          let s = state
+          let lines = state.raw_lines
+          process.spawn_unlinked(fn() {
+            generate_stdio_progress(s, lines, is_idle)
+          })
+
+          PushMonitorState(
+            ..state,
+            raw_lines: [],
+            idle_checks: new_idle_checks,
+            idle_surfaced: case is_idle {
+              True -> True
+              False -> False
+            },
+          )
+        }
+        False ->
+          PushMonitorState(
             ..state,
             idle_checks: new_idle_checks,
-            skip_ticks: state.skip_ticks - 1,
-          ))
-        }
-        False -> {
-          let is_idle = !is_active
-          let should_emit =
-            is_active
-            || {
-              new_idle_checks >= state.config.idle_surface_threshold
-              && !state.idle_surfaced
-            }
-
-          let new_state = case should_emit {
-            True -> {
-              // Spawn LLM summarization (non-blocking)
-              let s = state
-              let lines = state.raw_lines
-              process.spawn_unlinked(fn() {
-                generate_stdio_progress(s, lines, is_idle)
-              })
-
-              PushMonitorState(
-                ..state,
-                raw_lines: [],
-                idle_checks: new_idle_checks,
-                idle_surfaced: case is_idle {
-                  True -> True
-                  False -> False
-                },
-              )
-            }
-            False ->
-              PushMonitorState(
-                ..state,
-                idle_checks: new_idle_checks,
-                idle_surfaced: case is_active {
-                  True -> False
-                  False -> state.idle_surfaced
-                },
-              )
-          }
-
-          let next_interval = case
-            new_idle_checks >= state.config.idle_surface_threshold
-          {
-            True -> state.config.idle_interval_ms
-            False -> state.config.emit_interval_ms
-          }
-          process.send_after(state.self_subject, next_interval, Tick)
-          actor.continue(new_state)
-        }
+            idle_surfaced: case is_active {
+              True -> False
+              False -> state.idle_surfaced
+            },
+          )
       }
+
+      let next_interval = case
+        new_idle_checks >= state.config.idle_surface_threshold
+      {
+        True -> state.config.idle_interval_ms
+        False -> state.config.emit_interval_ms
+      }
+      process.send_after(state.self_subject, next_interval, Tick)
+      actor.continue(new_state)
+    }
+  }
 }
 
 /// Generate a structured progress update for stdio sessions using LLM.
@@ -275,7 +283,10 @@ fn generate_stdio_progress(
         session_name: state.session_name,
         domain: state.domain,
         title: "",
-        status: case is_idle { True -> "Idle" False -> "Working" },
+        status: case is_idle {
+          True -> "Idle"
+          False -> "Working"
+        },
         summary: summary,
         is_idle: is_idle,
       ))
@@ -319,11 +330,15 @@ fn generate_stdio_progress(
         <> "- `backticks` for key file paths only. No bullet points — commas instead."
 
       let user_prompt =
-        "Task: " <> state.task_prompt
-        <> "\nElapsed: " <> int.to_string(elapsed_min) <> " minutes"
+        "Task: "
+        <> state.task_prompt
+        <> "\nElapsed: "
+        <> int.to_string(elapsed_min)
+        <> " minutes"
         <> idle_hint
         <> previous_section
-        <> "\n\nLatest ACP events:\n" <> tail
+        <> "\n\nLatest ACP events:\n"
+        <> tail
 
       let messages = [
         llm.SystemMessage(system_prompt),
@@ -369,9 +384,12 @@ fn generate_stdio_progress(
           ))
         }
         Error(e) -> {
-          logging.log(logging.Info, 
+          logging.log(
+            logging.Info,
             "[acp-monitor] Stdio progress LLM failed for "
-            <> state.session_name <> ": " <> e,
+              <> state.session_name
+              <> ": "
+              <> e,
           )
           // Back off on rate limit errors
           case string.contains(e, "429") || string.contains(e, "overloaded") {
@@ -437,7 +455,14 @@ pub fn start_monitor_only(
   emit_started: Bool,
   idle_surfaced: Bool,
 ) -> Result(process.Subject(MonitorMessage), String) {
-  start_monitor_actor(task_spec, session_name, monitor_model, on_event, emit_started, idle_surfaced)
+  start_monitor_actor(
+    task_spec,
+    session_name,
+    monitor_model,
+    on_event,
+    emit_started,
+    idle_surfaced,
+  )
 }
 
 /// Shared actor creation for both start and start_recovery.
@@ -453,7 +478,14 @@ fn start_monitor_actor(
   let llm_config = case models.build_llm_config(monitor_model) {
     Ok(config) -> Some(config)
     Error(e) -> {
-      logging.log(logging.Info, "[acp-monitor] No LLM config for " <> monitor_model <> ": " <> e <> " — progress updates disabled")
+      logging.log(
+        logging.Info,
+        "[acp-monitor] No LLM config for "
+          <> monitor_model
+          <> ": "
+          <> e
+          <> " — progress updates disabled",
+      )
       None
     }
   }
@@ -465,10 +497,11 @@ fn start_monitor_actor(
       // For recovery: pre-load current tmux output so first check doesn't see a false change
       let initial_output = case emit_started {
         True -> ""
-        False -> case tmux.capture_pane(session_name) {
-          Ok(o) -> cap_output(o)
-          Error(_) -> ""
-        }
+        False ->
+          case tmux.capture_pane(session_name) {
+            Ok(o) -> cap_output(o)
+            Error(_) -> ""
+          }
       }
 
       let state =
@@ -490,7 +523,10 @@ fn start_monitor_actor(
         True -> "Monitor"
         False -> "Recovery monitor"
       }
-      logging.log(logging.Info, "[acp-monitor] " <> label <> " initialized for " <> session_name)
+      logging.log(
+        logging.Info,
+        "[acp-monitor] " <> label <> " initialized for " <> session_name,
+      )
 
       // Schedule the first check
       schedule_next(subject)
@@ -513,9 +549,7 @@ fn start_monitor_actor(
   case actor.start(builder) {
     Ok(started) -> Ok(started.data)
     Error(err) ->
-      Error(
-        "Failed to start monitor actor: " <> string.inspect(err),
-      )
+      Error("Failed to start monitor actor: " <> string.inspect(err))
   }
 }
 
@@ -535,9 +569,7 @@ fn handle_message(
   }
 }
 
-fn handle_check(
-  state: MonitorState,
-) -> actor.Next(MonitorState, MonitorMessage) {
+fn handle_check(state: MonitorState) -> actor.Next(MonitorState, MonitorMessage) {
   logging.log(logging.Info, "[acp-monitor] Checking " <> state.session_name)
   // 1. Check if session still exists
   case tmux.session_exists(state.session_name) {
@@ -549,7 +581,12 @@ fn handle_check(
 fn handle_session_ended(
   state: MonitorState,
 ) -> actor.Next(MonitorState, MonitorMessage) {
-  logging.log(logging.Info, "[acp-monitor] Session " <> state.session_name <> " tmux session disappeared")
+  logging.log(
+    logging.Info,
+    "[acp-monitor] Session "
+      <> state.session_name
+      <> " tmux session disappeared",
+  )
   state.on_event(AcpFailed(
     session_name: state.session_name,
     domain: state.task_spec.domain,
@@ -563,7 +600,13 @@ fn handle_session_alive(
 ) -> actor.Next(MonitorState, MonitorMessage) {
   case tmux.capture_pane(state.session_name) {
     Error(err) -> {
-      logging.log(logging.Error, "[acp-monitor] Failed to capture pane for " <> state.session_name <> ": " <> err)
+      logging.log(
+        logging.Error,
+        "[acp-monitor] Failed to capture pane for "
+          <> state.session_name
+          <> ": "
+          <> err,
+      )
       schedule_next(state.self_subject)
       actor.continue(state)
     }
@@ -584,30 +627,66 @@ fn handle_session_alive(
       // Idle detection — surface status ONCE, then shut up until output changes
       case new_idle_checks >= idle_surface_threshold && !new_idle_surfaced {
         True -> {
-          logging.log(logging.Info, "[acp-monitor] Session " <> state.session_name <> " idle — surfacing status")
+          logging.log(
+            logging.Info,
+            "[acp-monitor] Session "
+              <> state.session_name
+              <> " idle — surfacing status",
+          )
           let s = state
           let o = output
           process.spawn_unlinked(fn() { generate_progress_update(s, o, True) })
-          process.send_after(state.self_subject, idle_check_interval_ms, CheckSession)
-          actor.continue(MonitorState(..state, last_output: output, idle_checks: new_idle_checks, idle_surfaced: True))
+          process.send_after(
+            state.self_subject,
+            idle_check_interval_ms,
+            CheckSession,
+          )
+          actor.continue(
+            MonitorState(
+              ..state,
+              last_output: output,
+              idle_checks: new_idle_checks,
+              idle_surfaced: True,
+            ),
+          )
         }
         _ -> {
           case new_idle_checks >= idle_threshold {
             True -> {
               // Already idle — back off to slow interval, no spam
-              process.send_after(state.self_subject, idle_check_interval_ms, CheckSession)
-              actor.continue(MonitorState(..state, last_output: output, idle_checks: new_idle_checks, idle_surfaced: new_idle_surfaced))
+              process.send_after(
+                state.self_subject,
+                idle_check_interval_ms,
+                CheckSession,
+              )
+              actor.continue(
+                MonitorState(
+                  ..state,
+                  last_output: output,
+                  idle_checks: new_idle_checks,
+                  idle_surfaced: new_idle_surfaced,
+                ),
+              )
             }
             False -> {
               // Active — generate progress update if enough time passed or substantial output change
               let now = time.now_ms()
-              let diff_len = string.length(output) - string.length(state.last_output)
-              let abs_diff = case diff_len < 0 { True -> 0 - diff_len False -> diff_len }
-              let new_progress_ms = case now - state.last_progress_ms >= progress_interval_ms || abs_diff > 500 {
+              let diff_len =
+                string.length(output) - string.length(state.last_output)
+              let abs_diff = case diff_len < 0 {
+                True -> 0 - diff_len
+                False -> diff_len
+              }
+              let new_progress_ms = case
+                now - state.last_progress_ms >= progress_interval_ms
+                || abs_diff > 500
+              {
                 True -> {
                   let s = state
                   let o = output
-                  process.spawn_unlinked(fn() { generate_progress_update(s, o, False) })
+                  process.spawn_unlinked(fn() {
+                    generate_progress_update(s, o, False)
+                  })
                   now
                 }
                 False -> state.last_progress_ms
@@ -615,7 +694,12 @@ fn handle_session_alive(
 
               schedule_next(state.self_subject)
               actor.continue(
-                MonitorState(..state, last_output: output, last_progress_ms: new_progress_ms, idle_checks: new_idle_checks),
+                MonitorState(
+                  ..state,
+                  last_output: output,
+                  last_progress_ms: new_progress_ms,
+                  idle_checks: new_idle_checks,
+                ),
               )
             }
           }
@@ -625,14 +709,17 @@ fn handle_session_alive(
   }
 }
 
-
 // ---------------------------------------------------------------------------
 // LLM classification
 // ---------------------------------------------------------------------------
 
 /// Generate a structured progress update using one LLM call.
 /// Replaces the old separate classify_and_alert + summarize_and_report.
-fn generate_progress_update(state: MonitorState, output: String, is_idle: Bool) -> Nil {
+fn generate_progress_update(
+  state: MonitorState,
+  output: String,
+  is_idle: Bool,
+) -> Nil {
   case state.llm_config {
     None -> Nil
     Some(config) -> {
@@ -641,11 +728,15 @@ fn generate_progress_update(state: MonitorState, output: String, is_idle: Bool) 
 
       let previous_section = case state.last_summary {
         "" -> ""
-        prev -> "\n\nPrevious update:\n" <> prev <> "\n\nUpdate the summary. Accumulate Done items — don't drop previous accomplishments."
+        prev ->
+          "\n\nPrevious update:\n"
+          <> prev
+          <> "\n\nUpdate the summary. Accumulate Done items — don't drop previous accomplishments."
       }
 
       let idle_hint = case is_idle {
-        True -> "\nThe session output has not changed — it appears idle or waiting for input. Set Status to 'Idle' or 'Needs input' as appropriate."
+        True ->
+          "\nThe session output has not changed — it appears idle or waiting for input. Set Status to 'Idle' or 'Needs input' as appropriate."
         False -> ""
       }
 
@@ -661,11 +752,15 @@ fn generate_progress_update(state: MonitorState, output: String, is_idle: Bool) 
         <> "Use markdown: `file paths`, `commands`, `ticket numbers` in backticks. URLs as links. Bullet points for multiple items. Be specific and concise."
 
       let user_prompt =
-        "Task: " <> state.task_spec.prompt
-        <> "\nElapsed: " <> int.to_string(elapsed_min) <> " minutes"
+        "Task: "
+        <> state.task_spec.prompt
+        <> "\nElapsed: "
+        <> int.to_string(elapsed_min)
+        <> " minutes"
         <> idle_hint
         <> previous_section
-        <> "\n\nLatest output:\n" <> tail
+        <> "\n\nLatest output:\n"
+        <> tail
 
       let messages = [
         llm.SystemMessage(system_prompt),
@@ -713,7 +808,13 @@ fn generate_progress_update(state: MonitorState, output: String, is_idle: Bool) 
           ))
         }
         Error(e) -> {
-          logging.log(logging.Error, "[acp-monitor] Progress LLM call failed for " <> state.session_name <> ": " <> e)
+          logging.log(
+            logging.Error,
+            "[acp-monitor] Progress LLM call failed for "
+              <> state.session_name
+              <> ": "
+              <> e,
+          )
         }
       }
     }
@@ -726,8 +827,13 @@ pub fn extract_field(text: String, field: String) -> String {
   case string.split(text, "\n") {
     [] -> ""
     lines -> {
-      case list.find(lines, fn(line) { string.starts_with(string.trim(line), field) }) {
-        Ok(line) -> string.trim(string.drop_start(string.trim(line), string.length(field)))
+      case
+        list.find(lines, fn(line) {
+          string.starts_with(string.trim(line), field)
+        })
+      {
+        Ok(line) ->
+          string.trim(string.drop_start(string.trim(line), string.length(field)))
         Error(_) -> ""
       }
     }
@@ -741,7 +847,11 @@ pub fn extract_field(text: String, field: String) -> String {
 fn cap_output(output: String) -> String {
   case string.length(output) > max_output_size {
     True ->
-      string.slice(output, string.length(output) - max_output_size, max_output_size)
+      string.slice(
+        output,
+        string.length(output) - max_output_size,
+        max_output_size,
+      )
     False -> output
   }
 }

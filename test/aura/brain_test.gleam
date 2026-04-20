@@ -40,7 +40,14 @@ pub fn build_system_prompt_test() {
     skill.SkillInfo(name: "jira", description: "Jira integration", path: ""),
     skill.SkillInfo(name: "google", description: "Google search", path: ""),
   ]
-  let prompt = brain.build_system_prompt("You are Aura. Direct. Concise.", ["cm2", "hy"], skills, "", "")
+  let prompt =
+    brain.build_system_prompt(
+      "You are Aura. Direct. Concise.",
+      ["cm2", "hy"],
+      skills,
+      "",
+      "",
+    )
   prompt |> string.contains("Aura") |> should.be_true
   prompt |> string.contains("Discord") |> should.be_true
   prompt |> string.contains("cm2") |> should.be_true
@@ -48,7 +55,8 @@ pub fn build_system_prompt_test() {
 }
 
 pub fn build_system_prompt_includes_soul_content_test() {
-  let prompt = brain.build_system_prompt("Custom personality goes here.", [], [], "", "")
+  let prompt =
+    brain.build_system_prompt("Custom personality goes here.", [], [], "", "")
   prompt |> string.contains("Custom personality goes here.") |> should.be_true
   prompt |> string.contains("No domains") |> should.be_true
 }

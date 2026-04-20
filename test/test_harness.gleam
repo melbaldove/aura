@@ -87,8 +87,7 @@ pub fn fresh_system() -> TestSystem {
   let fake_review_inst = fake_review.new()
 
   // 2. Unique scratch DB path; delete any pre-existing file.
-  let db_path =
-    "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
+  let db_path = "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
   let _ = simplifile.delete(db_path)
 
   // 3. Ensure models.build_llm_config can resolve an API key. The fake LLM
@@ -156,7 +155,11 @@ pub fn fresh_system() -> TestSystem {
   // can find it in skill_infos. The path is never accessed because the
   // fake_skill_runner intercepts the invocation — this is registry metadata only.
   let default_skill_infos = [
-    skill.SkillInfo(name: "jira", description: "test", path: "/tmp/nonexistent-jira"),
+    skill.SkillInfo(
+      name: "jira",
+      description: "test",
+      path: "/tmp/nonexistent-jira",
+    ),
   ]
 
   let brain_config =
@@ -217,8 +220,7 @@ pub fn fresh_system_with_domain(
   let fake_review_inst = fake_review.new()
 
   // 2. Unique scratch DB path; delete any pre-existing file.
-  let db_path =
-    "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
+  let db_path = "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
   let _ = simplifile.delete(db_path)
 
   // 3. Ensure models.build_llm_config can resolve an API key.
@@ -252,8 +254,7 @@ pub fn fresh_system_with_domain(
   // 7. Create the domain config directory and write AGENTS.md.
   //    domain.load_context reads AGENTS.md from:
   //      {paths.config}/domains/{domain_name}/AGENTS.md
-  let domain_config_dir =
-    paths.config <> "/domains/" <> domain_name
+  let domain_config_dir = paths.config <> "/domains/" <> domain_name
   let assert Ok(_) = simplifile.create_directory_all(domain_config_dir)
   let assert Ok(_) =
     simplifile.write(domain_config_dir <> "/AGENTS.md", agents_md)
@@ -279,7 +280,11 @@ pub fn fresh_system_with_domain(
   // Seed the same default jira skill as fresh_system/0 so domain-scoped
   // tests can also exercise run_skill without extra setup steps.
   let default_skill_infos = [
-    skill.SkillInfo(name: "jira", description: "test", path: "/tmp/nonexistent-jira"),
+    skill.SkillInfo(
+      name: "jira",
+      description: "test",
+      path: "/tmp/nonexistent-jira",
+    ),
   ]
 
   let brain_config =
@@ -345,8 +350,7 @@ pub fn fresh_system_with_review_interval(review_interval: Int) -> TestSystem {
   let fake_review_inst = fake_review.new()
 
   // 2. Unique scratch DB path.
-  let db_path =
-    "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
+  let db_path = "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
   let _ = simplifile.delete(db_path)
 
   set_env("ZAI_API_KEY", "test-harness-dummy-key")
@@ -398,7 +402,11 @@ pub fn fresh_system_with_review_interval(review_interval: Int) -> TestSystem {
     )
 
   let default_skill_infos = [
-    skill.SkillInfo(name: "jira", description: "test", path: "/tmp/nonexistent-jira"),
+    skill.SkillInfo(
+      name: "jira",
+      description: "test",
+      path: "/tmp/nonexistent-jira",
+    ),
   ]
 
   let brain_config =
@@ -449,8 +457,7 @@ pub fn fresh_system_with_skill_review_interval(
   let fake_review_inst = fake_review.new()
 
   // 2. Unique scratch DB path.
-  let db_path =
-    "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
+  let db_path = "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
   let _ = simplifile.delete(db_path)
 
   set_env("ZAI_API_KEY", "test-harness-dummy-key")
@@ -502,7 +509,11 @@ pub fn fresh_system_with_skill_review_interval(
     )
 
   let default_skill_infos = [
-    skill.SkillInfo(name: "jira", description: "test", path: "/tmp/nonexistent-jira"),
+    skill.SkillInfo(
+      name: "jira",
+      description: "test",
+      path: "/tmp/nonexistent-jira",
+    ),
   ]
 
   let brain_config =

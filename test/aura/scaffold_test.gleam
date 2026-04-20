@@ -1,5 +1,5 @@
-import aura/test_helpers
 import aura/scaffold
+import aura/test_helpers
 import aura/xdg
 import gleeunit/should
 import simplifile
@@ -58,12 +58,20 @@ pub fn scaffold_domain_test() {
   let _ = simplifile.create_directory_all(paths.config <> "/domains")
   let _ = simplifile.create_directory_all(paths.data <> "/domains")
 
-  scaffold.scaffold_domain(paths, "test-project", "A test domain", "test-project")
+  scaffold.scaffold_domain(
+    paths,
+    "test-project",
+    "A test domain",
+    "test-project",
+  )
   |> should.be_ok
 
-  simplifile.is_file(paths.config <> "/domains/test-project/config.toml") |> should.be_ok
-  simplifile.is_directory(paths.data <> "/domains/test-project/logs") |> should.be_ok
-  simplifile.is_directory(paths.data <> "/domains/test-project/summaries") |> should.be_ok
+  simplifile.is_file(paths.config <> "/domains/test-project/config.toml")
+  |> should.be_ok
+  simplifile.is_directory(paths.data <> "/domains/test-project/logs")
+  |> should.be_ok
+  simplifile.is_directory(paths.data <> "/domains/test-project/summaries")
+  |> should.be_ok
 
   // Cleanup
   cleanup_paths(paths)

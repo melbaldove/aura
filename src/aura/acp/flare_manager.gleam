@@ -7,14 +7,14 @@ import aura/acp/types
 import aura/db
 import aura/time
 import gleam/dict.{type Dict}
+import gleam/erlang/process
 import gleam/int
-import logging
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
-import gleam/erlang/process
 import gleam/result
 import gleam/string
+import logging
 
 // ---------------------------------------------------------------------------
 // Types
@@ -96,10 +96,7 @@ pub type FlareMsg {
     tools_json: String,
     workspace: String,
   )
-  Archive(
-    reply_to: process.Subject(Result(Nil, String)),
-    flare_id: String,
-  )
+  Archive(reply_to: process.Subject(Result(Nil, String)), flare_id: String)
   GetFlare(
     reply_to: process.Subject(Result(FlareRecord, Nil)),
     flare_id: String,
@@ -112,9 +109,7 @@ pub type FlareMsg {
     reply_to: process.Subject(Result(FlareRecord, Nil)),
     session_name: String,
   )
-  ListFlares(
-    reply_to: process.Subject(List(FlareRecord)),
-  )
+  ListFlares(reply_to: process.Subject(List(FlareRecord)))
 
   // Session operations (same interface as acp_manager)
   Dispatch(
@@ -123,10 +118,7 @@ pub type FlareMsg {
     thread_id: String,
     flare_id: String,
   )
-  Kill(
-    reply_to: process.Subject(Result(Nil, String)),
-    session_name: String,
-  )
+  Kill(reply_to: process.Subject(Result(Nil, String)), session_name: String)
   SendInput(
     reply_to: process.Subject(Result(Nil, String)),
     session_name: String,
@@ -136,9 +128,7 @@ pub type FlareMsg {
     reply_to: process.Subject(Result(FlareRecord, Nil)),
     session_name: String,
   )
-  ListSessions(
-    reply_to: process.Subject(List(FlareRecord)),
-  )
+  ListSessions(reply_to: process.Subject(List(FlareRecord)))
 
   // Lifecycle operations
   Park(
@@ -157,15 +147,10 @@ pub type FlareMsg {
   SetBrainCallback(on_brain_event: fn(acp_monitor.AcpEvent) -> Nil)
 
   // Query
-  ListParkedWithTriggers(
-    reply_to: process.Subject(List(FlareRecord)),
-  )
+  ListParkedWithTriggers(reply_to: process.Subject(List(FlareRecord)))
 
   // Test-only
-  RegisterForTest(
-    flare: FlareRecord,
-    reply_to: process.Subject(Nil),
-  )
+  RegisterForTest(flare: FlareRecord, reply_to: process.Subject(Nil))
 }
 
 type FlareManagerState {
@@ -290,12 +275,8 @@ pub fn get_session(
   })
 }
 
-pub fn list_sessions(
-  subject: process.Subject(FlareMsg),
-) -> List(FlareRecord) {
-  process.call(subject, 5000, fn(reply_to) {
-    ListSessions(reply_to: reply_to)
-  })
+pub fn list_sessions(subject: process.Subject(FlareMsg)) -> List(FlareRecord) {
+  process.call(subject, 5000, fn(reply_to) { ListSessions(reply_to: reply_to) })
 }
 
 pub fn get_flare(
@@ -325,12 +306,8 @@ pub fn get_flare_by_session_name(
   })
 }
 
-pub fn list_flares(
-  subject: process.Subject(FlareMsg),
-) -> List(FlareRecord) {
-  process.call(subject, 5000, fn(reply_to) {
-    ListFlares(reply_to: reply_to)
-  })
+pub fn list_flares(subject: process.Subject(FlareMsg)) -> List(FlareRecord) {
+  process.call(subject, 5000, fn(reply_to) { ListFlares(reply_to: reply_to) })
 }
 
 pub fn park(
@@ -386,7 +363,13 @@ pub fn start(
   let builder =
     actor.new_with_initialiser(10_000, fn(self_subject) {
       let #(flares, session_to_flare) =
-        recover_flares(self_subject, monitor_model, on_brain_event, acp_transport, db_subject)
+        recover_flares(
+          self_subject,
+          monitor_model,
+          on_brain_event,
+          acp_transport,
+          db_subject,
+        )
 
       let state =
         FlareManagerState(
@@ -419,9 +402,29 @@ fn handle_message(
   message: FlareMsg,
 ) -> actor.Next(FlareManagerState, FlareMsg) {
   case message {
-    Ignite(reply_to:, label:, domain:, thread_id:, prompt:, execution_json:, triggers_json:, tools_json:, workspace:) -> {
+    Ignite(
+      reply_to:,
+      label:,
+      domain:,
+      thread_id:,
+      prompt:,
+      execution_json:,
+      triggers_json:,
+      tools_json:,
+      workspace:,
+    ) -> {
       let #(new_state, result) =
-        handle_ignite(state, label, domain, thread_id, prompt, execution_json, triggers_json, tools_json, workspace)
+        handle_ignite(
+          state,
+          label,
+          domain,
+          thread_id,
+          prompt,
+          execution_json,
+          triggers_json,
+          tools_json,
+          workspace,
+        )
       process.send(reply_to, result)
       actor.continue(new_state)
     }
@@ -501,9 +504,7 @@ fn handle_message(
       let parked_with_triggers =
         dict.values(state.flares)
         |> list.filter(fn(f) {
-          f.status == Parked
-          && f.triggers_json != ""
-          && f.triggers_json != "[]"
+          f.status == Parked && f.triggers_json != "" && f.triggers_json != "[]"
         })
       process.send(reply_to, parked_with_triggers)
       actor.continue(state)
@@ -565,26 +566,30 @@ fn handle_ignite(
       awaiting_response: False,
     )
 
-  let stored = db.StoredFlare(
-    id: flare_id,
-    label: label,
-    status: status_to_string(flare.status),
-    domain: domain,
-    thread_id: thread_id,
-    original_prompt: prompt,
-    execution: execution_json,
-    triggers: triggers_json,
-    tools: tools_json,
-    workspace: workspace,
-    session_id: "",
-    created_at_ms: now,
-    updated_at_ms: now,
-  )
+  let stored =
+    db.StoredFlare(
+      id: flare_id,
+      label: label,
+      status: status_to_string(flare.status),
+      domain: domain,
+      thread_id: thread_id,
+      original_prompt: prompt,
+      execution: execution_json,
+      triggers: triggers_json,
+      tools: tools_json,
+      workspace: workspace,
+      session_id: "",
+      created_at_ms: now,
+      updated_at_ms: now,
+    )
   case db.upsert_flare(state.db_subject, stored) {
     Ok(_) -> {
       let new_flares = dict.insert(state.flares, flare_id, flare)
       let new_state = FlareManagerState(..state, flares: new_flares)
-      logging.log(logging.Info, "[flare] Ignited: " <> flare_id <> " (" <> label <> ")")
+      logging.log(
+        logging.Info,
+        "[flare] Ignited: " <> flare_id <> " (" <> label <> ")",
+      )
       #(new_state, Ok(flare_id))
     }
     Error(err) -> {
@@ -615,16 +620,25 @@ fn handle_archive(
           case transport.kill(state.transport, handle, session_name) {
             Ok(_) -> Nil
             Error(e) ->
-              logging.log(logging.Info, 
+              logging.log(
+                logging.Info,
                 "[flare] Kill failed for " <> session_name <> ": " <> e,
               )
           }
         }
       }
 
-      case db.update_flare_status(state.db_subject, flare_id, status_to_string(Archived), now) {
+      case
+        db.update_flare_status(
+          state.db_subject,
+          flare_id,
+          status_to_string(Archived),
+          now,
+        )
+      {
         Ok(_) -> Nil
-        Error(e) -> logging.log(logging.Error, "[flare] Failed to persist archive: " <> e)
+        Error(e) ->
+          logging.log(logging.Error, "[flare] Failed to persist archive: " <> e)
       }
 
       let new_flares = dict.insert(state.flares, flare_id, updated)
@@ -711,10 +725,20 @@ fn handle_dispatch(
                   awaiting_response: True,
                 )
 
-              case db.update_flare_session_id(state.db_subject, flare_id, result.run_id, now) {
+              case
+                db.update_flare_session_id(
+                  state.db_subject,
+                  flare_id,
+                  result.run_id,
+                  now,
+                )
+              {
                 Ok(_) -> Nil
                 Error(e) ->
-                  logging.log(logging.Error, "[flare] Failed to persist session link: " <> e)
+                  logging.log(
+                    logging.Error,
+                    "[flare] Failed to persist session link: " <> e,
+                  )
               }
 
               let new_flares =
@@ -727,16 +751,15 @@ fn handle_dispatch(
                   flares: new_flares,
                   session_to_flare: new_session_to_flare,
                 )
-              logging.log(logging.Info, 
-                "[flare] Dispatched: "
-                <> flare_id
-                <> " -> "
-                <> session_name,
+              logging.log(
+                logging.Info,
+                "[flare] Dispatched: " <> flare_id <> " -> " <> session_name,
               )
               #(new_state, Ok(session_name))
             }
             Error(err) -> {
-              logging.log(logging.Info, 
+              logging.log(
+                logging.Info,
                 "[flare] Dispatch failed for " <> flare_id <> ": " <> err,
               )
               #(state, Error(err))
@@ -762,10 +785,12 @@ fn handle_kill(
       case transport.kill(state.transport, handle, session_name) {
         Ok(_) -> Nil
         Error(e) ->
-          logging.log(logging.Error, "[flare] Kill failed for " <> session_name <> ": " <> e)
+          logging.log(
+            logging.Error,
+            "[flare] Kill failed for " <> session_name <> ": " <> e,
+          )
       }
-      let new_state =
-        update_flare_status(state, flare.id, Failed("killed"))
+      let new_state = update_flare_status(state, flare.id, Failed("killed"))
       #(new_state, Ok(Nil))
     }
     Error(_) -> {
@@ -777,11 +802,9 @@ fn handle_kill(
               case tmux.kill_session(session_name) {
                 Ok(_) -> Nil
                 Error(e) ->
-                  logging.log(logging.Info, 
-                    "[flare] tmux kill failed for "
-                    <> session_name
-                    <> ": "
-                    <> e,
+                  logging.log(
+                    logging.Info,
+                    "[flare] tmux kill failed for " <> session_name <> ": " <> e,
                   )
               }
             }
@@ -851,11 +874,12 @@ fn handle_park(
           case transport.kill(state.transport, handle, session_name) {
             Ok(_) -> Nil
             Error(e) ->
-              logging.log(logging.Info, 
+              logging.log(
+                logging.Info,
                 "[flare] Kill failed during park for "
-                <> session_name
-                <> ": "
-                <> e,
+                  <> session_name
+                  <> ": "
+                  <> e,
               )
           }
         }
@@ -876,7 +900,8 @@ fn handle_park(
       let stored = flare_to_stored(updated)
       case db.upsert_flare(state.db_subject, stored) {
         Ok(_) -> Nil
-        Error(e) -> logging.log(logging.Error, "[flare] Failed to persist park: " <> e)
+        Error(e) ->
+          logging.log(logging.Error, "[flare] Failed to persist park: " <> e)
       }
 
       let new_flares = dict.insert(state.flares, flare_id, updated)
@@ -930,8 +955,7 @@ fn handle_rekindle(
                   provider: provider.ClaudeCode,
                   worktree: True,
                 )
-              let session_name =
-                tmux.build_session_name(flare.domain, flare.id)
+              let session_name = tmux.build_session_name(flare.domain, flare.id)
 
               let on_event = fn(event) {
                 process.send(state.self_subject, MonitorEvent(event))
@@ -973,10 +997,21 @@ fn handle_rekindle(
                       awaiting_response: True,
                     )
 
-                  case db.update_flare_rekindle(state.db_subject, flare_id, result.run_id, status_to_string(Active), now) {
+                  case
+                    db.update_flare_rekindle(
+                      state.db_subject,
+                      flare_id,
+                      result.run_id,
+                      status_to_string(Active),
+                      now,
+                    )
+                  {
                     Ok(_) -> Nil
                     Error(e) ->
-                      logging.log(logging.Error, "[flare] Failed to persist rekindle: " <> e)
+                      logging.log(
+                        logging.Error,
+                        "[flare] Failed to persist rekindle: " <> e,
+                      )
                   }
 
                   let new_flares =
@@ -989,20 +1024,19 @@ fn handle_rekindle(
                       flares: new_flares,
                       session_to_flare: new_session_to_flare,
                     )
-                  logging.log(logging.Info, 
-                    "[flare] Rekindled: "
-                    <> flare_id
-                    <> " -> "
-                    <> session_name,
+                  logging.log(
+                    logging.Info,
+                    "[flare] Rekindled: " <> flare_id <> " -> " <> session_name,
                   )
                   #(new_state, Ok(session_name))
                 }
                 Error(err) -> {
-                  logging.log(logging.Info, 
+                  logging.log(
+                    logging.Info,
                     "[flare] Rekindle dispatch failed for "
-                    <> flare_id
-                    <> ": "
-                    <> err,
+                      <> flare_id
+                      <> ": "
+                      <> err,
                   )
                   #(state, Error(err))
                 }
@@ -1114,28 +1148,39 @@ fn update_flare_status(
 ) -> FlareManagerState {
   case dict.get(state.flares, flare_id) {
     Error(_) -> {
-      logging.log(logging.Info, 
+      logging.log(
+        logging.Info,
         "[flare] Warning: status update for unknown flare " <> flare_id,
       )
       state
     }
     Ok(flare) -> {
       let now = time.now_ms()
-      logging.log(logging.Info, 
+      logging.log(
+        logging.Info,
         "[flare] "
-        <> flare_id
-        <> " status: "
-        <> status_to_string(flare.status)
-        <> " -> "
-        <> status_to_string(new_status),
+          <> flare_id
+          <> " status: "
+          <> status_to_string(flare.status)
+          <> " -> "
+          <> status_to_string(new_status),
       )
-      let updated =
-        FlareRecord(..flare, status: new_status, updated_at_ms: now)
+      let updated = FlareRecord(..flare, status: new_status, updated_at_ms: now)
 
-      case db.update_flare_status(state.db_subject, flare_id, status_to_string(new_status), now) {
+      case
+        db.update_flare_status(
+          state.db_subject,
+          flare_id,
+          status_to_string(new_status),
+          now,
+        )
+      {
         Ok(_) -> Nil
         Error(e) ->
-          logging.log(logging.Error, "[flare] Failed to persist status update: " <> e)
+          logging.log(
+            logging.Error,
+            "[flare] Failed to persist status update: " <> e,
+          )
       }
 
       // Clear session mapping for terminal states
@@ -1167,7 +1212,8 @@ fn update_flare_for_session(
   case dict.get(state.session_to_flare, session_name) {
     Ok(flare_id) -> update_flare_status(state, flare_id, new_status)
     Error(_) -> {
-      logging.log(logging.Info, 
+      logging.log(
+        logging.Info,
         "[flare] Warning: event for unknown session " <> session_name,
       )
       state
@@ -1188,17 +1234,21 @@ fn recover_flares(
 ) -> #(Dict(String, FlareRecord), Dict(String, String)) {
   case db.load_flares(db_subject, True) {
     Error(err) -> {
-      logging.log(logging.Error, "[flare] Failed to load flares from DB: " <> err)
+      logging.log(
+        logging.Error,
+        "[flare] Failed to load flares from DB: " <> err,
+      )
       #(dict.new(), dict.new())
     }
     Ok(stored_flares) -> {
       case stored_flares {
         [] -> #(dict.new(), dict.new())
         _ -> {
-          logging.log(logging.Info, 
+          logging.log(
+            logging.Info,
             "[flare] Recovering "
-            <> int.to_string(list.length(stored_flares))
-            <> " flare(s)...",
+              <> int.to_string(list.length(stored_flares))
+              <> " flare(s)...",
           )
           let pairs =
             list.map(stored_flares, fn(sf) {
@@ -1212,26 +1262,29 @@ fn recover_flares(
               )
             })
           let flare_dict =
-            list.map(pairs, fn(p) { #(p.0.id, p.0) })
+            list.map(pairs, fn(p) { #({ p.0 }.id, p.0) })
             |> dict.from_list
           let session_dict =
             list.filter_map(pairs, fn(p) {
               case p.1 {
                 "" -> Error(Nil)
-                sn -> Ok(#(sn, p.0.id))
+                sn -> Ok(#(sn, { p.0 }.id))
               }
             })
             |> dict.from_list
           // Schedule staggered rekindles for flares that need it (3s, 5s, 7s, ...)
-          let needs_rekindle =
-            list.filter(pairs, fn(p) { p.2 })
+          let needs_rekindle = list.filter(pairs, fn(p) { p.2 })
           list.index_map(needs_rekindle, fn(p, idx) {
             let delay = 3000 + idx * 2000
-            process.send_after(self_subject, delay, Rekindle(
-              reply_to: process.new_subject(),
-              flare_id: p.0.id,
-              input: "Check your current state. If you have unfinished work, continue. If you are done, report what you accomplished.",
-            ))
+            process.send_after(
+              self_subject,
+              delay,
+              Rekindle(
+                reply_to: process.new_subject(),
+                flare_id: { p.0 }.id,
+                input: "Check your current state. If you have unfinished work, continue. If you are done, report what you accomplished.",
+              ),
+            )
           })
           #(flare_dict, session_dict)
         }
@@ -1259,7 +1312,14 @@ fn recover_single_flare(
       // Check if the transport session is still alive
       case transport.is_alive(acp_transport, sf.session_id, session_name) {
         True -> {
-          logging.log(logging.Info, "[flare] Recovering alive flare: " <> sf.id <> " (" <> sf.label <> ")")
+          logging.log(
+            logging.Info,
+            "[flare] Recovering alive flare: "
+              <> sf.id
+              <> " ("
+              <> sf.label
+              <> ")",
+          )
 
           // Re-attach monitor
           let on_event = fn(event) {
@@ -1278,12 +1338,13 @@ fn recover_single_flare(
         }
         False -> {
           // Process died (deploy/restart) — caller schedules staggered rekindle
-          logging.log(logging.Info, 
+          logging.log(
+            logging.Info,
             "[flare] Session dead, auto-rekindling: "
-            <> sf.id
-            <> " ("
-            <> sf.label
-            <> ")",
+              <> sf.id
+              <> " ("
+              <> sf.label
+              <> ")",
           )
           // Load as Parked so rekindle guard passes (rejects Active)
           let flare = stored_flare_to_record(sf, Parked, "", None)
@@ -1293,13 +1354,19 @@ fn recover_single_flare(
     }
     Parked -> {
       // Just load into memory, no session to check
-      logging.log(logging.Info, "[flare] Loading parked flare: " <> sf.id <> " (" <> sf.label <> ")")
+      logging.log(
+        logging.Info,
+        "[flare] Loading parked flare: " <> sf.id <> " (" <> sf.label <> ")",
+      )
       let flare = stored_flare_to_record(sf, Parked, "", None)
       #(flare, "", False)
     }
     Failed(reason) -> {
       // Load failed flares into memory for visibility
-      logging.log(logging.Info, "[flare] Loading failed flare: " <> sf.id <> " (" <> sf.label <> ")")
+      logging.log(
+        logging.Info,
+        "[flare] Loading failed flare: " <> sf.id <> " (" <> sf.label <> ")",
+      )
       let flare = stored_flare_to_record(sf, Failed(reason), "", None)
       #(flare, "", False)
     }
@@ -1370,13 +1437,17 @@ fn reattach_monitor(
         )
       {
         Ok(_) ->
-          logging.log(logging.Info, "[flare] Monitor re-attached: " <> session_name)
+          logging.log(
+            logging.Info,
+            "[flare] Monitor re-attached: " <> session_name,
+          )
         Error(e) ->
-          logging.log(logging.Info, 
+          logging.log(
+            logging.Info,
             "[flare] Failed to re-attach monitor for "
-            <> session_name
-            <> ": "
-            <> e,
+              <> session_name
+              <> ": "
+              <> e,
           )
       }
     }
@@ -1389,7 +1460,13 @@ fn reattach_monitor(
         process.spawn_unlinked(fn() {
           client.subscribe_events(server_url, run_id, self_pid)
         })
-        transport.http_event_loop(on_event, session_name, domain, run_id, server_url)
+        transport.http_event_loop(
+          on_event,
+          session_name,
+          domain,
+          run_id,
+          server_url,
+        )
       })
       Nil
     }
@@ -1404,4 +1481,3 @@ fn reattach_monitor(
 fn provider_from_domain() -> provider.AcpProvider {
   provider.ClaudeCode
 }
-

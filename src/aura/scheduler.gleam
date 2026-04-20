@@ -14,12 +14,12 @@ import aura/xdg
 import gleam/dict
 import gleam/erlang/process
 import gleam/int
-import logging
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
+import logging
 import simplifile
 import tom
 
@@ -107,7 +107,9 @@ pub fn parse_schedules(
     trimmed -> {
       use doc <- result.try(
         tom.parse(trimmed)
-        |> result.map_error(fn(e) { "TOML parse error: " <> config.format_parse_error(e) }),
+        |> result.map_error(fn(e) {
+          "TOML parse error: " <> config.format_parse_error(e)
+        }),
       )
 
       let schedules_result =
@@ -178,7 +180,6 @@ fn parse_schedule_table(
   ))
 }
 
-
 // ---------------------------------------------------------------------------
 // Serialization
 // ---------------------------------------------------------------------------
@@ -192,21 +193,22 @@ pub fn serialize_schedules(schedules: List(ScheduleConfig)) -> String {
 
 fn serialize_one(config: ScheduleConfig) -> String {
   let lines = ["[[schedule]]"]
-  let lines = list.append(lines, [
-    "name = " <> quote(config.name),
-  ])
-  let lines = list.append(lines, [
-    "type = " <> quote(config.schedule_type),
-  ])
+  let lines =
+    list.append(lines, [
+      "name = " <> quote(config.name),
+    ])
+  let lines =
+    list.append(lines, [
+      "type = " <> quote(config.schedule_type),
+    ])
   let lines = case config.schedule_type {
-    "cron" ->
-      list.append(lines, ["cron = " <> quote(config.cron)])
-    _ ->
-      list.append(lines, ["every = " <> quote(config.every)])
+    "cron" -> list.append(lines, ["cron = " <> quote(config.cron)])
+    _ -> list.append(lines, ["every = " <> quote(config.every)])
   }
-  let lines = list.append(lines, [
-    "skill = " <> quote(config.skill),
-  ])
+  let lines =
+    list.append(lines, [
+      "skill = " <> quote(config.skill),
+    ])
   let lines = case config.args {
     "" -> lines
     a -> list.append(lines, ["args = " <> quote(a)])
@@ -215,15 +217,18 @@ fn serialize_one(config: ScheduleConfig) -> String {
     config.domains
     |> list.map(quote)
     |> string.join(", ")
-  let lines = list.append(lines, [
-    "domains = [" <> domains_str <> "]",
-  ])
-  let lines = list.append(lines, [
-    "model = " <> quote(config.model),
-  ])
-  let lines = list.append(lines, [
-    "enabled = " <> bool_string(config.enabled),
-  ])
+  let lines =
+    list.append(lines, [
+      "domains = [" <> domains_str <> "]",
+    ])
+  let lines =
+    list.append(lines, [
+      "model = " <> quote(config.model),
+    ])
+  let lines =
+    list.append(lines, [
+      "enabled = " <> bool_string(config.enabled),
+    ])
   string.join(lines, "\n") <> "\n"
 }
 
@@ -373,13 +378,14 @@ fn validate_schedules(entries: List(ScheduleEntry)) -> Nil {
         case notification.parse_interval(entry.config.every) {
           Ok(_) -> Nil
           Error(e) ->
-            logging.log(logging.Info, 
+            logging.log(
+              logging.Info,
               "[scheduler] WARNING: schedule '"
-              <> entry.config.name
-              <> "' has invalid interval '"
-              <> entry.config.every
-              <> "': "
-              <> e,
+                <> entry.config.name
+                <> "' has invalid interval '"
+                <> entry.config.every
+                <> "': "
+                <> e,
             )
         }
       }
@@ -387,23 +393,25 @@ fn validate_schedules(entries: List(ScheduleEntry)) -> Nil {
         case cron.parse(entry.config.cron) {
           Ok(_) -> Nil
           Error(e) ->
-            logging.log(logging.Info, 
+            logging.log(
+              logging.Info,
               "[scheduler] WARNING: schedule '"
-              <> entry.config.name
-              <> "' has invalid cron '"
-              <> entry.config.cron
-              <> "': "
-              <> e,
+                <> entry.config.name
+                <> "' has invalid cron '"
+                <> entry.config.cron
+                <> "': "
+                <> e,
             )
         }
       }
       other ->
-        logging.log(logging.Info, 
+        logging.log(
+          logging.Info,
           "[scheduler] WARNING: schedule '"
-          <> entry.config.name
-          <> "' has unknown type '"
-          <> other
-          <> "'",
+            <> entry.config.name
+            <> "' has unknown type '"
+            <> other
+            <> "'",
         )
     }
   })
@@ -460,10 +468,11 @@ pub fn start(
 
   case actor.start(builder) {
     Ok(started) -> {
-      logging.log(logging.Info, 
+      logging.log(
+        logging.Info,
         "[scheduler] Started with "
-        <> int.to_string(list.length(entries))
-        <> " schedule(s)",
+          <> int.to_string(list.length(entries))
+          <> " schedule(s)",
       )
       Ok(started.data)
     }
@@ -515,7 +524,10 @@ fn handle_message(
         Some(dream_cfg) -> {
           case is_dream_due(dream_cfg.cron, now_ms, state.last_dream_ms) {
             True -> {
-              logging.log(logging.Info, "[scheduler] Dreaming is due, spawning dream cycle")
+              logging.log(
+                logging.Info,
+                "[scheduler] Dreaming is due, spawning dream cycle",
+              )
               process.spawn_unlinked(fn() {
                 dreaming.dream_all(dreaming.DreamConfig(
                   model_spec: dream_cfg.model_spec,
@@ -537,11 +549,13 @@ fn handle_message(
       // Schedule next tick in 60 seconds
       process.send_after(state.self_subject, 60_000, Tick)
 
-      actor.continue(SchedulerState(
-        ..state,
-        entries: new_entries,
-        last_dream_ms: new_last_dream_ms,
-      ))
+      actor.continue(
+        SchedulerState(
+          ..state,
+          entries: new_entries,
+          last_dream_ms: new_last_dream_ms,
+        ),
+      )
     }
 
     ReloadSchedules -> {
@@ -565,15 +579,19 @@ fn handle_message(
           })
         }
         Error(e) -> {
-          logging.log(logging.Error, "[scheduler] Failed to reload schedules: " <> e)
+          logging.log(
+            logging.Error,
+            "[scheduler] Failed to reload schedules: " <> e,
+          )
           state.entries
         }
       }
       validate_schedules(new_entries)
-      logging.log(logging.Info, 
+      logging.log(
+        logging.Info,
         "[scheduler] Reloaded "
-        <> int.to_string(list.length(new_entries))
-        <> " schedule(s)",
+          <> int.to_string(list.length(new_entries))
+          <> " schedule(s)",
       )
       actor.continue(SchedulerState(..state, entries: new_entries))
     }
@@ -589,11 +607,12 @@ fn handle_message(
     }
 
     SetDreamConfig(config:) -> {
-      logging.log(logging.Info, 
+      logging.log(
+        logging.Info,
         "[scheduler] Dream config set — cron: "
-        <> config.cron
-        <> ", domains: "
-        <> string.join(config.domains, ", "),
+          <> config.cron
+          <> ", domains: "
+          <> string.join(config.domains, ", "),
       )
       actor.continue(SchedulerState(..state, dream_config: Some(config)))
     }
@@ -610,13 +629,23 @@ fn execute_schedule(
   on_finding: fn(notification.Finding) -> Nil,
 ) -> Nil {
   logging.log(logging.Info, "[scheduler] Executing schedule: " <> config.name)
-  case tools.run_skill(skill_runner.production(), skills, config.skill, config.args) {
+  case
+    tools.run_skill(
+      skill_runner.production(),
+      skills,
+      config.skill,
+      config.args,
+    )
+  {
     Ok(output) -> {
       let urgency = classify_urgency(config, output)
       emit_findings(config, output, urgency, on_finding)
     }
     Error(e) -> {
-      logging.log(logging.Error, "[scheduler] " <> config.name <> " failed: " <> e)
+      logging.log(
+        logging.Error,
+        "[scheduler] " <> config.name <> " failed: " <> e,
+      )
       Nil
     }
   }
@@ -626,7 +655,10 @@ fn execute_schedule(
 // Urgency classification
 // ---------------------------------------------------------------------------
 
-fn classify_urgency(config: ScheduleConfig, output: String) -> notification.Urgency {
+fn classify_urgency(
+  config: ScheduleConfig,
+  output: String,
+) -> notification.Urgency {
   case models.build_llm_config(config.model) {
     Error(_) -> notification.Normal
     Ok(llm_config) -> {
@@ -671,7 +703,10 @@ fn emit_findings(
 ) -> Nil {
   list.each(config.domains, fn(domain) {
     let summary = string.slice(output, 0, 50)
-    logging.log(logging.Info, "[scheduler:" <> config.name <> "] Finding: " <> summary)
+    logging.log(
+      logging.Info,
+      "[scheduler:" <> config.name <> "] Finding: " <> summary,
+    )
     let finding =
       notification.Finding(
         domain: domain,
@@ -698,13 +733,12 @@ fn handle_manage(
     "resume" -> handle_resume(state, params)
     "create" -> handle_create(state, params)
     "delete" -> handle_delete(state, params)
-    _ ->
-      #(
-        "Unknown schedule action: '"
-          <> action
-          <> "'. Valid actions: list, pause, resume, create, delete",
-        state,
-      )
+    _ -> #(
+      "Unknown schedule action: '"
+        <> action
+        <> "'. Valid actions: list, pause, resume, create, delete",
+      state,
+    )
   }
 }
 
@@ -771,7 +805,10 @@ fn handle_toggle(
   verb: String,
 ) -> #(String, SchedulerState) {
   case get_param(params, "name") {
-    Error(_) -> #("Missing 'name' parameter for " <> string.lowercase(verb) <> " action.", state)
+    Error(_) -> #(
+      "Missing 'name' parameter for " <> string.lowercase(verb) <> " action.",
+      state,
+    )
     Ok(name) -> {
       case list.any(state.entries, fn(e) { e.config.name == name }) {
         False -> #("Schedule not found: " <> name, state)
@@ -811,11 +848,9 @@ fn handle_create(
             get_param(params, "type") |> result.unwrap("interval")
           let every = get_param(params, "every") |> result.unwrap("")
           let cron_str = get_param(params, "cron") |> result.unwrap("")
-          let skill_name =
-            get_param(params, "skill") |> result.unwrap("")
+          let skill_name = get_param(params, "skill") |> result.unwrap("")
           let args = get_param(params, "args") |> result.unwrap("")
-          let domains_str =
-            get_param(params, "domains") |> result.unwrap("")
+          let domains_str = get_param(params, "domains") |> result.unwrap("")
           let domains = case domains_str {
             "" -> []
             s ->
@@ -844,8 +879,7 @@ fn handle_create(
                 )
               let entry = ScheduleEntry(config: config, last_run_ms: 0)
               let new_entries = list.append(state.entries, [entry])
-              let new_state =
-                SchedulerState(..state, entries: new_entries)
+              let new_state = SchedulerState(..state, entries: new_entries)
               write_schedules(new_state)
               #("Created schedule: " <> name, new_state)
             }
@@ -898,9 +932,13 @@ fn write_schedules(state: SchedulerState) -> Nil {
   let toml_content = serialize_schedules(configs)
   case simplifile.write(state.config_path, toml_content) {
     Ok(_) ->
-      logging.log(logging.Info, "[scheduler] Wrote schedules to " <> state.config_path)
+      logging.log(
+        logging.Info,
+        "[scheduler] Wrote schedules to " <> state.config_path,
+      )
     Error(e) ->
-      logging.log(logging.Info, 
+      logging.log(
+        logging.Info,
         "[scheduler] Failed to write schedules: " <> string.inspect(e),
       )
   }

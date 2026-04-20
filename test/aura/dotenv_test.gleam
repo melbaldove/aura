@@ -11,7 +11,8 @@ pub fn parse_env_file_test() {
 }
 
 pub fn parse_with_comments_test() {
-  let content = "# This is a comment\nKEY=value\n\n# Another comment\nKEY2=value2\n"
+  let content =
+    "# This is a comment\nKEY=value\n\n# Another comment\nKEY2=value2\n"
   let pairs = dotenv.parse(content)
   list.length(pairs) |> should.equal(2)
 }

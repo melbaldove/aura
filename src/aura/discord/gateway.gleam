@@ -1,11 +1,11 @@
 import aura/discord/types
 import gleam/dynamic/decode
 import gleam/erlang/process
-import logging
 import gleam/json
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/string
+import logging
 
 // ---------------------------------------------------------------------------
 // State
@@ -46,10 +46,11 @@ pub fn connect(
 ) -> Result(actor.Started(process.Subject(GatewayMessage)), String) {
   // Parse host from URL (e.g., "wss://gateway.discord.gg" -> "gateway.discord.gg")
   let host = case string.split(gateway_url, "//") {
-    [_, rest] -> case string.split(rest, "/") {
-      [h, ..] -> h
-      _ -> rest
-    }
+    [_, rest] ->
+      case string.split(rest, "/") {
+        [h, ..] -> h
+        _ -> rest
+      }
     _ -> "gateway.discord.gg"
   }
 
@@ -73,7 +74,12 @@ pub fn connect(
     actor.new_with_initialiser(10_000, fn(self_subject) {
       // Connect WebSocket, relay frames to this actor
       let ws_pid = ws_connect(host, path, self_subject)
-      let state = GatewayState(..initial_state, ws_pid: Some(ws_pid), self_subject: Some(self_subject))
+      let state =
+        GatewayState(
+          ..initial_state,
+          ws_pid: Some(ws_pid),
+          self_subject: Some(self_subject),
+        )
 
       // Set up selector for WebSocket messages and heartbeat
       let selector =
@@ -141,11 +147,17 @@ fn handle_message(
 ) -> actor.Next(GatewayState, GatewayMessage) {
   case message {
     WsText(text) -> {
-      logging.log(logging.Info, "[gateway] Frame received: " <> string.slice(text, 0, 80))
+      logging.log(
+        logging.Info,
+        "[gateway] Frame received: " <> string.slice(text, 0, 80),
+      )
       handle_text(state, text)
     }
     WsClosed -> {
-      logging.log(logging.Info, "[gateway] WsClosed received — connection will be restarted by supervisor")
+      logging.log(
+        logging.Info,
+        "[gateway] WsClosed received — connection will be restarted by supervisor",
+      )
       state.on_event(types.Reconnect)
       actor.stop_abnormal("WebSocket closed")
     }
@@ -167,7 +179,12 @@ fn handle_message(
 fn handle_heartbeat(
   state: GatewayState,
 ) -> actor.Next(GatewayState, GatewayMessage) {
-  logging.log(logging.Info, "[gateway] Sending heartbeat (seq: " <> string.inspect(state.sequence) <> ")")
+  logging.log(
+    logging.Info,
+    "[gateway] Sending heartbeat (seq: "
+      <> string.inspect(state.sequence)
+      <> ")",
+  )
   let payload =
     types.heartbeat_payload(state.sequence)
     |> json.to_string
@@ -179,18 +196,29 @@ fn handle_heartbeat(
 fn schedule_heartbeat(state: GatewayState) -> Nil {
   case state.heartbeat_interval, state.self_subject {
     Some(interval), Some(subject) -> {
-      logging.log(logging.Info, "[gateway] Scheduling next heartbeat in " <> string.inspect(interval) <> "ms")
+      logging.log(
+        logging.Info,
+        "[gateway] Scheduling next heartbeat in "
+          <> string.inspect(interval)
+          <> "ms",
+      )
       schedule_heartbeat_ffi(interval, subject)
     }
     _, _ -> {
-      logging.log(logging.Warning, "[gateway] WARNING: Cannot schedule heartbeat (interval or subject missing)")
+      logging.log(
+        logging.Warning,
+        "[gateway] WARNING: Cannot schedule heartbeat (interval or subject missing)",
+      )
       Nil
     }
   }
 }
 
 @external(erlang, "aura_gateway_bridge", "schedule_heartbeat")
-fn schedule_heartbeat_ffi(interval_ms: Int, subject: process.Subject(GatewayMessage)) -> Nil
+fn schedule_heartbeat_ffi(
+  interval_ms: Int,
+  subject: process.Subject(GatewayMessage),
+) -> Nil
 
 // ---------------------------------------------------------------------------
 // Gateway frame parsing & dispatch
@@ -267,12 +295,11 @@ fn handle_hello(
 ) -> actor.Next(GatewayState, GatewayMessage) {
   case parse_hello_interval(raw_text) {
     Ok(interval) -> {
-      let new_state =
-        GatewayState(..state, heartbeat_interval: Some(interval))
+      let new_state = GatewayState(..state, heartbeat_interval: Some(interval))
 
-      new_state.on_event(types.Hello(types.HelloPayload(
-        heartbeat_interval: interval,
-      )))
+      new_state.on_event(
+        types.Hello(types.HelloPayload(heartbeat_interval: interval)),
+      )
 
       schedule_heartbeat(new_state)
 
@@ -339,12 +366,13 @@ fn handle_ready(
   }
 }
 
-fn parse_ready(
-  text: String,
-) -> Result(#(String, String), json.DecodeError) {
+fn parse_ready(text: String) -> Result(#(String, String), json.DecodeError) {
   let decoder = {
     use session_id <- decode.subfield(["d", "session_id"], decode.string)
-    use resume_url <- decode.subfield(["d", "resume_gateway_url"], decode.string)
+    use resume_url <- decode.subfield(
+      ["d", "resume_gateway_url"],
+      decode.string,
+    )
     decode.success(#(session_id, resume_url))
   }
   json.parse(text, decoder)
@@ -377,7 +405,11 @@ fn parse_message_create(
     use url <- decode.field("url", decode.string)
     use content_type <- decode.optional_field("content_type", "", decode.string)
     use filename <- decode.optional_field("filename", "", decode.string)
-    decode.success(types.Attachment(url: url, content_type: content_type, filename: filename))
+    decode.success(types.Attachment(
+      url: url,
+      content_type: content_type,
+      filename: filename,
+    ))
   }
 
   let decoder =
@@ -391,7 +423,11 @@ fn parse_message_create(
       )
       use author <- decode.field("author", user_decoder)
       use content <- decode.optional_field("content", "", decode.string)
-      use attachments <- decode.optional_field("attachments", [], decode.list(attachment_decoder))
+      use attachments <- decode.optional_field(
+        "attachments",
+        [],
+        decode.list(attachment_decoder),
+      )
       decode.success(types.ReceivedMessage(
         id: id,
         channel_id: channel_id,
@@ -406,7 +442,9 @@ fn parse_message_create(
 }
 
 /// Public wrapper for testing parse_message_create
-pub fn parse_message_create_public(text: String) -> Result(types.ReceivedMessage, json.DecodeError) {
+pub fn parse_message_create_public(
+  text: String,
+) -> Result(types.ReceivedMessage, json.DecodeError) {
   parse_message_create(text)
 }
 
@@ -423,25 +461,14 @@ fn handle_interaction_create(
   }
 }
 
-fn parse_interaction(
-  raw_text: String,
-) -> Result(types.GatewayEvent, Nil) {
+fn parse_interaction(raw_text: String) -> Result(types.GatewayEvent, Nil) {
   let decoder = {
     use interaction_id <- decode.subfield(["d", "id"], decode.string)
     use interaction_token <- decode.subfield(["d", "token"], decode.string)
-    use custom_id <- decode.subfield(
-      ["d", "data", "custom_id"],
-      decode.string,
-    )
+    use custom_id <- decode.subfield(["d", "data", "custom_id"], decode.string)
     use channel_id <- decode.subfield(["d", "channel_id"], decode.string)
-    use user_id <- decode.subfield(
-      ["d", "member", "user", "id"],
-      decode.string,
-    )
-    use message_id <- decode.subfield(
-      ["d", "message", "id"],
-      decode.string,
-    )
+    use user_id <- decode.subfield(["d", "member", "user", "id"], decode.string)
+    use message_id <- decode.subfield(["d", "message", "id"], decode.string)
     decode.success(types.InteractionCreate(
       interaction_id: interaction_id,
       interaction_token: interaction_token,

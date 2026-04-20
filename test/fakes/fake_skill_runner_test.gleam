@@ -15,7 +15,8 @@ pub fn fake_skill_runner_returns_scripted_result_test() {
     skill.SkillResult(exit_code: 0, stdout: "ok", stderr: ""),
   )
 
-  let result = runner.invoke(fake_skill_info("jira"), ["tickets", "assigned"], 5000)
+  let result =
+    runner.invoke(fake_skill_info("jira"), ["tickets", "assigned"], 5000)
   case result {
     Ok(sr) -> {
       sr.stdout |> should.equal("ok")

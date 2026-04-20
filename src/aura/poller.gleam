@@ -6,11 +6,11 @@ import aura/discord/rest
 import aura/discord/types as discord_types
 import gleam/erlang/process
 import gleam/int
-import logging
 import gleam/list
 import gleam/option.{None}
 import gleam/otp/actor
 import gleam/otp/supervision
+import logging
 
 /// GUILDS (1) + GUILD_MESSAGES (512) + DIRECT_MESSAGES (4096) + MESSAGE_CONTENT (32768)
 const default_intents = 37_377
@@ -29,7 +29,10 @@ pub fn supervised(
 fn start(
   discord_config: config.DiscordConfig,
   brain_subject: process.Subject(brain.BrainMessage),
-) -> Result(actor.Started(process.Subject(gateway.GatewayMessage)), actor.StartError) {
+) -> Result(
+  actor.Started(process.Subject(gateway.GatewayMessage)),
+  actor.StartError,
+) {
   let token = discord_config.token
   logging.log(logging.Info, "[poller] Fetching gateway URL...")
 
@@ -48,7 +51,16 @@ fn start(
               True -> Nil
               False -> {
                 let incoming = discord.from_received(msg, None)
-                logging.log(logging.Info, "[poller] Message from " <> msg.author.username <> " in " <> msg.channel_id <> " (attachments: " <> int.to_string(list.length(msg.attachments)) <> ")")
+                logging.log(
+                  logging.Info,
+                  "[poller] Message from "
+                    <> msg.author.username
+                    <> " in "
+                    <> msg.channel_id
+                    <> " (attachments: "
+                    <> int.to_string(list.length(msg.attachments))
+                    <> ")",
+                )
                 process.send(brain_subject, brain.HandleMessage(incoming))
               }
             }
@@ -61,13 +73,14 @@ fn start(
             user_id,
             _message_id,
           ) -> {
-            logging.log(logging.Info, 
+            logging.log(
+              logging.Info,
               "[poller] Interaction from "
-              <> user_id
-              <> " in "
-              <> channel_id
-              <> ": "
-              <> custom_id,
+                <> user_id
+                <> " in "
+                <> channel_id
+                <> ": "
+                <> custom_id,
             )
             process.send(
               brain_subject,

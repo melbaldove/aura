@@ -4,12 +4,12 @@ import gleam/http
 import gleam/http/request
 import gleam/httpc
 import gleam/int
-import logging
 import gleam/json
 import gleam/list
 import gleam/result
 import gleam/string
 import gleam/uri
+import logging
 
 const user_agent = "Aura/0.1 (bot)"
 
@@ -23,7 +23,9 @@ pub type SearchResult {
 pub fn search(query: String, limit: Int) -> Result(List(SearchResult), String) {
   use api_key <- result.try(
     env.get_env("BRAVE_API_KEY")
-    |> result.map_error(fn(_) { "BRAVE_API_KEY not configured. Set it in ~/.config/aura/.env" }),
+    |> result.map_error(fn(_) {
+      "BRAVE_API_KEY not configured. Set it in ~/.config/aura/.env"
+    }),
   )
 
   let encoded_query = uri.percent_encode(query)
@@ -116,18 +118,17 @@ pub fn fetch(url: String, max_chars: Int) -> Result(String, String) {
     status if status >= 200 && status < 400 -> {
       let text = strip_html(resp.body)
       let truncated = case string.length(text) > max_chars {
-        True -> string.slice(text, 0, max_chars) <> "\n\n[Truncated at " <> int.to_string(max_chars) <> " chars]"
+        True ->
+          string.slice(text, 0, max_chars)
+          <> "\n\n[Truncated at "
+          <> int.to_string(max_chars)
+          <> " chars]"
         False -> text
       }
       Ok(truncated)
     }
     status ->
-      Error(
-        "Fetch error: status "
-        <> int.to_string(status)
-        <> " from "
-        <> url,
-      )
+      Error("Fetch error: status " <> int.to_string(status) <> " from " <> url)
   }
 }
 
@@ -160,12 +161,7 @@ pub fn fetch_bytes(url: String, timeout_ms: Int) -> Result(BitArray, String) {
   case resp.status {
     status if status >= 200 && status < 400 -> Ok(resp.body)
     status ->
-      Error(
-        "Fetch error: status "
-        <> int.to_string(status)
-        <> " from "
-        <> url,
-      )
+      Error("Fetch error: status " <> int.to_string(status) <> " from " <> url)
   }
 }
 
@@ -178,13 +174,13 @@ fn parse_brave_results(body: String) -> Result(List(SearchResult), String) {
     use title <- decode.field("title", decode.string)
     use url <- decode.field("url", decode.string)
     use description <- decode.optional_field("description", "", decode.string)
-    decode.success(SearchResult(title: title, url: url, description: description))
+    decode.success(SearchResult(
+      title: title,
+      url: url,
+      description: description,
+    ))
   }
-  let decoder =
-    decode.at(
-      ["web", "results"],
-      decode.list(result_decoder),
-    )
+  let decoder = decode.at(["web", "results"], decode.list(result_decoder))
   json.parse(body, decoder)
   |> result.map_error(fn(_) { "Failed to parse search results" })
 }

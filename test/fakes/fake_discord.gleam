@@ -52,10 +52,7 @@ type Msg {
     new_content: String,
     reply: process.Subject(Result(Nil, String)),
   )
-  RecordTyping(
-    channel_id: String,
-    reply: process.Subject(Result(Nil, String)),
-  )
+  RecordTyping(channel_id: String, reply: process.Subject(Result(Nil, String)))
   RecordAttachment(
     channel_id: String,
     content: String,
@@ -101,23 +98,13 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
     RecordEdited(channel_id:, msg_id:, new_content:, reply:) -> {
       let event = Edited(channel_id:, msg_id:, new_content:)
       process.send(reply, Ok(Nil))
-      actor.continue(
-        State(
-          ..state,
-          events: [event, ..state.events],
-        ),
-      )
+      actor.continue(State(..state, events: [event, ..state.events]))
     }
 
     RecordTyping(channel_id:, reply:) -> {
       let event = TypingTriggered(channel_id:)
       process.send(reply, Ok(Nil))
-      actor.continue(
-        State(
-          ..state,
-          events: [event, ..state.events],
-        ),
-      )
+      actor.continue(State(..state, events: [event, ..state.events]))
     }
 
     RecordAttachment(channel_id:, content:, path:, reply:) -> {
@@ -138,24 +125,23 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
         [scripted, ..rest] -> #(scripted, rest)
         [] -> #("fake-thread-" <> int.to_string(state.next_id), [])
       }
-      let event =
-        ThreadCreated(parent_channel_id:, msg_id:, name:, thread_id:)
+      let event = ThreadCreated(parent_channel_id:, msg_id:, name:, thread_id:)
       process.send(reply, Ok(thread_id))
-      actor.continue(
-        State(
-          events: [event, ..state.events],
-          next_id: state.next_id + 1,
-          parents: state.parents,
-          thread_scripts: rest_scripts,
-        ),
-      )
+      actor.continue(State(
+        events: [event, ..state.events],
+        next_id: state.next_id + 1,
+        parents: state.parents,
+        thread_scripts: rest_scripts,
+      ))
     }
 
     PushThreadScript(thread_id:) ->
-      actor.continue(State(
-        ..state,
-        thread_scripts: list.append(state.thread_scripts, [thread_id]),
-      ))
+      actor.continue(
+        State(
+          ..state,
+          thread_scripts: list.append(state.thread_scripts, [thread_id]),
+        ),
+      )
 
     GetSentTo(channel_id:, reply:) -> {
       let contents =
@@ -163,8 +149,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
         |> list.reverse
         |> list.filter_map(fn(event) {
           case event {
-            Sent(channel_id: cid, content: c, ..) if cid == channel_id ->
-              Ok(c)
+            Sent(channel_id: cid, content: c, ..) if cid == channel_id -> Ok(c)
             _ -> Error(Nil)
           }
         })
@@ -180,16 +165,12 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
 
     Seed(channel:, parent:) -> {
       actor.continue(
-        State(
-          ..state,
-          parents: dict.insert(state.parents, channel, parent),
-        ),
+        State(..state, parents: dict.insert(state.parents, channel, parent)),
       )
     }
 
     GetParent(channel_id:, reply:) -> {
-      let result =
-        Ok(dict.get(state.parents, channel_id) |> unwrap_or(""))
+      let result = Ok(dict.get(state.parents, channel_id) |> unwrap_or(""))
       process.send(reply, result)
       actor.continue(state)
     }
@@ -202,8 +183,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
           case event {
             Edited(channel_id: cid, new_content: c, ..) if cid == channel_id ->
               Ok(c)
-            Sent(channel_id: cid, content: c, ..) if cid == channel_id ->
-              Ok(c)
+            Sent(channel_id: cid, content: c, ..) if cid == channel_id -> Ok(c)
             _ -> Error(Nil)
           }
         })
@@ -265,12 +245,7 @@ pub fn new() -> #(FakeDiscord, DiscordClient) {
       },
       create_thread_from_message: fn(channel_id, msg_id, name) {
         process.call(subj, 1000, fn(reply) {
-          RecordThread(
-            parent_channel_id: channel_id,
-            msg_id:,
-            name:,
-            reply:,
-          )
+          RecordThread(parent_channel_id: channel_id, msg_id:, name:, reply:)
         })
       },
     )

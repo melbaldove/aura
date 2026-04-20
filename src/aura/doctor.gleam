@@ -36,10 +36,11 @@ pub fn run() -> Nil {
       }
     }),
   ]
-  let dep_results = list.map(dep_checks, fn(c) {
-    let #(label, checker) = c
-    check(label, checker)
-  })
+  let dep_results =
+    list.map(dep_checks, fn(c) {
+      let #(label, checker) = c
+      check(label, checker)
+    })
 
   io.println("")
   io.println("Directories:")
@@ -63,10 +64,11 @@ pub fn run() -> Nil {
       }
     }),
   ]
-  let directory_results = list.map(directory_checks, fn(c) {
-    let #(label, checker) = c
-    check(label, checker)
-  })
+  let directory_results =
+    list.map(directory_checks, fn(c) {
+      let #(label, checker) = c
+      check(label, checker)
+    })
 
   io.println("")
   io.println("Credentials:")
@@ -89,10 +91,11 @@ pub fn run() -> Nil {
       }
     }),
   ]
-  let cred_results = list.map(cred_checks, fn(c) {
-    let #(label, checker) = c
-    check(label, checker)
-  })
+  let cred_results =
+    list.map(cred_checks, fn(c) {
+      let #(label, checker) = c
+      check(label, checker)
+    })
 
   io.println("")
   io.println("Config:")
@@ -109,10 +112,11 @@ pub fn run() -> Nil {
       }
     }),
   ]
-  let config_results = list.map(config_checks, fn(c) {
-    let #(label, checker) = c
-    check(label, checker)
-  })
+  let config_results =
+    list.map(config_checks, fn(c) {
+      let #(label, checker) = c
+      check(label, checker)
+    })
 
   io.println("")
   io.println("Identity:")
@@ -124,20 +128,22 @@ pub fn run() -> Nil {
       }
     }),
   ]
-  let identity_results = list.map(identity_checks, fn(c) {
-    let #(label, checker) = c
-    check(label, checker)
-  })
+  let identity_results =
+    list.map(identity_checks, fn(c) {
+      let #(label, checker) = c
+      check(label, checker)
+    })
 
   io.println("")
   io.println("Skills:")
-  let _ = check("  Skills directory", fn() {
-    let dir = xdg.skills_dir(paths)
-    case skill.discover(dir) {
-      Ok(skills) -> Ok(int.to_string(list.length(skills)) <> " found")
-      Error(_) -> Ok("0 found")
-    }
-  })
+  let _ =
+    check("  Skills directory", fn() {
+      let dir = xdg.skills_dir(paths)
+      case skill.discover(dir) {
+        Ok(skills) -> Ok(int.to_string(list.length(skills)) <> " found")
+        Error(_) -> Ok("0 found")
+      }
+    })
 
   io.println("")
   let results =

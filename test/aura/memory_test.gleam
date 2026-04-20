@@ -1,7 +1,7 @@
 import aura/memory
+import aura/scaffold
 import aura/test_helpers
 import aura/types
-import aura/scaffold
 import aura/xdg
 import gleam/string
 import gleeunit/should

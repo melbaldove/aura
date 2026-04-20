@@ -12,17 +12,12 @@ pub type LLMClient {
       List(llm.Message),
       List(llm.ToolDefinition),
       Pid,
-    ) -> Nil,
-    chat: fn(
-      llm.LlmConfig,
-      List(llm.Message),
-      List(llm.ToolDefinition),
-    ) -> Result(llm.LlmResponse, String),
-    chat_text: fn(
-      llm.LlmConfig,
-      List(llm.Message),
-      Option(Float),
-    ) -> Result(String, String),
+    ) ->
+      Nil,
+    chat: fn(llm.LlmConfig, List(llm.Message), List(llm.ToolDefinition)) ->
+      Result(llm.LlmResponse, String),
+    chat_text: fn(llm.LlmConfig, List(llm.Message), Option(Float)) ->
+      Result(String, String),
   )
 }
 

@@ -31,6 +31,7 @@ fn dream_log(message: String, domain: String, paths: xdg.Paths) -> Nil {
 fn dream_log_global(message: String) -> Nil {
   logging.log(logging.Info, message)
 }
+
 import gleam/string
 
 // ---------------------------------------------------------------------------
@@ -105,7 +106,8 @@ pub fn build_consolidation_prompt(current_memory: String) -> String {
 
 ## Current Memory
 
-" <> current_memory
+"
+  <> current_memory
 }
 
 /// Build the prompt for the promotion phase.
@@ -129,15 +131,20 @@ pub fn build_promotion_prompt(
 
 ## Current State
 
-" <> state_content <> "
+"
+  <> state_content
+  <> "
 
 ## Flare Outcomes (since last dream)
 
-" <> flare_outcomes <> "
+"
+  <> flare_outcomes
+  <> "
 
 ## Compaction Summaries
 
-" <> compaction_summaries
+"
+  <> compaction_summaries
 }
 
 /// Build the prompt for the reflection phase.
@@ -168,11 +175,15 @@ pub fn build_render_prompt(
 
 ## Previous Working Set
 
-" <> previous_working_set <> "
+"
+  <> previous_working_set
+  <> "
 
 ## Instructions
 
-- Your token budget is " <> budget_str <> " tokens. The final memory must fit within this budget.
+- Your token budget is "
+  <> budget_str
+  <> " tokens. The final memory must fit within this budget.
 - Use the memory tool with action \"set\" to write entries and \"remove\" to delete entries.
 - **Stability rule: if an entry from the previous working set is already well-formed and the underlying knowledge has NOT changed during this dream cycle, keep it VERBATIM. Do not rephrase for style. Only touch entries where new information was consolidated, promoted, or reflected.**
 - When you do modify an entry, the change should reflect new information — not cosmetic rewording.
@@ -230,13 +241,17 @@ pub fn gather_all_sources(
   }
 
   // Query flare outcomes since last dream
-  let flare_outcomes = case db.get_flare_outcomes(db_subject, domain, since_ms) {
+  let flare_outcomes = case
+    db.get_flare_outcomes(db_subject, domain, since_ms)
+  {
     Ok(outcomes) -> format_flare_outcomes(outcomes)
     Error(_) -> "(no flare outcomes available)"
   }
 
   // Query compaction summaries for this domain
-  let compaction_summaries = case db.get_compaction_summaries(db_subject, domain) {
+  let compaction_summaries = case
+    db.get_compaction_summaries(db_subject, domain)
+  {
     Ok(summaries) -> format_compaction_summaries(summaries)
     Error(_) -> "(no compaction summaries available)"
   }
@@ -254,25 +269,34 @@ pub fn build_dream_system_prompt(
   domain: String,
   sources: DreamSources,
 ) -> String {
-  "You are the dreaming process for domain \"" <> domain <> "\". Your job is to consolidate and synthesize memory.
+  "You are the dreaming process for domain \""
+  <> domain
+  <> "\". Your job is to consolidate and synthesize memory.
 
 During a dream cycle, you review all accumulated knowledge — working memory, ephemeral state, agent outcomes, and conversation summaries — then consolidate, promote durable insights, and produce a compact working set.
 
 ## Domain Memory
 
-" <> sources.memory_content <> "
+"
+  <> sources.memory_content
+  <> "
 
 ## Domain State
 
-" <> sources.state_content <> "
+"
+  <> sources.state_content
+  <> "
 
 ## Flare Outcomes
 
-" <> sources.flare_outcomes <> "
+"
+  <> sources.flare_outcomes
+  <> "
 
 ## Compaction Summaries
 
-" <> sources.compaction_summaries
+"
+  <> sources.compaction_summaries
 }
 
 // ---------------------------------------------------------------------------
@@ -383,18 +407,16 @@ pub fn dream_domain(
 
   // Phase 4: Render
   dream_log("[dream] " <> domain <> " — phase 4: render", domain, paths)
-  use #(final_messages, _render_count) <- result.try(
-    run_phase_with_retry(
-      llm_config,
-      messages_after_reflect,
-      tools,
-      "render",
-      build_render_prompt(budget_tokens, sources.memory_content),
-      domain,
-      paths,
-      db_subject,
-    ),
-  )
+  use #(final_messages, _render_count) <- result.try(run_phase_with_retry(
+    llm_config,
+    messages_after_reflect,
+    tools,
+    "render",
+    build_render_prompt(budget_tokens, sources.memory_content),
+    domain,
+    paths,
+    db_subject,
+  ))
 
   let duration_ms = time.now_ms() - start_ms
   let index_entry = extract_index_entry(final_messages)
@@ -461,7 +483,13 @@ fn run_phase_with_retry(
     execute_dream_memory_tool(call, domain, paths, db_subject)
   }
   run_phase_with_retry_using(
-    llm_config, messages, tools, phase, prompt, domain, executor,
+    llm_config,
+    messages,
+    tools,
+    phase,
+    prompt,
+    domain,
+    executor,
   )
 }
 
@@ -476,8 +504,7 @@ fn run_phase_with_retry_using(
   domain_label: String,
   executor: fn(llm.ToolCall) -> #(String, Option(#(String, String))),
 ) -> Result(#(List(llm.Message), Int), String) {
-  let phase_messages =
-    list.append(messages, [llm.UserMessage(prompt)])
+  let phase_messages = list.append(messages, [llm.UserMessage(prompt)])
 
   run_phase_attempt(
     llm_config,
@@ -500,33 +527,36 @@ fn run_phase_attempt(
   executor: fn(llm.ToolCall) -> #(String, Option(#(String, String))),
   remaining_delays: List(Int),
 ) -> Result(#(List(llm.Message), Int), String) {
-  case dream_tool_loop(
-    llm_config,
-    messages,
-    tools,
-    executor,
-    0,
-    0,
-  ) {
+  case dream_tool_loop(llm_config, messages, tools, executor, 0, 0) {
     Ok(#(updated_messages, tool_count)) -> {
       Ok(#(updated_messages, tool_count))
     }
     Error(err) -> {
       case remaining_delays {
         [] -> {
-          logging.log(logging.Info,
-            "[dream] " <> domain_label <> " — phase " <> phase
-            <> " failed after all retries: " <> err,
+          logging.log(
+            logging.Info,
+            "[dream] "
+              <> domain_label
+              <> " — phase "
+              <> phase
+              <> " failed after all retries: "
+              <> err,
           )
-          Error(
-            "Phase " <> phase <> " failed after all retries: " <> err,
-          )
+          Error("Phase " <> phase <> " failed after all retries: " <> err)
         }
         [delay, ..rest] -> {
-          logging.log(logging.Info,
-            "[dream] " <> domain_label <> " — phase " <> phase
-            <> " failed (" <> err <> "), retrying in "
-            <> int.to_string(delay) <> "ms",
+          logging.log(
+            logging.Info,
+            "[dream] "
+              <> domain_label
+              <> " — phase "
+              <> phase
+              <> " failed ("
+              <> err
+              <> "), retrying in "
+              <> int.to_string(delay)
+              <> "ms",
           )
           process.sleep(delay)
           run_phase_attempt(
@@ -568,8 +598,7 @@ pub fn dream_tool_loop(
           // No tool calls — append assistant text response and return
           let updated_messages = case response.content {
             "" -> messages
-            content ->
-              list.append(messages, [llm.AssistantMessage(content)])
+            content -> list.append(messages, [llm.AssistantMessage(content)])
           }
           Ok(#(updated_messages, tool_count))
         }
@@ -684,9 +713,7 @@ fn execute_global_memory_tool(
           )
         unknown ->
           Error(
-            "Error: unknown target '"
-            <> unknown
-            <> "'. Use 'memory' or 'user'.",
+            "Error: unknown target '" <> unknown <> "'. Use 'memory' or 'user'.",
           )
       }
 
@@ -800,9 +827,7 @@ pub fn get_retry_delays() -> List(Int) {
 // Internal helpers for argument parsing
 // ---------------------------------------------------------------------------
 
-fn parse_dream_args(
-  json_str: String,
-) -> Result(dict.Dict(String, String), Nil) {
+fn parse_dream_args(json_str: String) -> Result(dict.Dict(String, String), Nil) {
   case json.parse(json_str, decode.dict(decode.string, decode.string)) {
     Ok(d) -> Ok(d)
     Error(_) -> Error(Nil)
@@ -825,10 +850,11 @@ fn get_dream_arg(args: dict.Dict(String, String), key: String) -> String {
 /// then runs the global consolidation pass (reduce phase).
 pub fn dream_all(config: DreamConfig) -> Nil {
   let start_ms = time.now_ms()
-  logging.log(logging.Info,
+  logging.log(
+    logging.Info,
     "[dream] Starting dream cycle for "
-    <> int.to_string(list.length(config.domains))
-    <> " domains",
+      <> int.to_string(list.length(config.domains))
+      <> " domains",
   )
 
   case models.build_llm_config(config.model_spec) {
@@ -870,7 +896,8 @@ pub fn dream_all(config: DreamConfig) -> Nil {
       )
 
       let duration_ms = time.now_ms() - start_ms
-      logging.log(logging.Info,
+      logging.log(
+        logging.Info,
         "[dream] Cycle complete in " <> int.to_string(duration_ms / 1000) <> "s",
       )
     }
@@ -920,10 +947,11 @@ pub fn collect_results(
       let remaining_ms = deadline_ms - now
       case remaining_ms <= 0 {
         True -> {
-          logging.log(logging.Info,
+          logging.log(
+            logging.Info,
             "[dream] Timeout: "
-            <> int.to_string(remaining)
-            <> " domains still pending",
+              <> int.to_string(remaining)
+              <> " domains still pending",
           )
           list.reverse(acc)
         }
@@ -933,12 +961,19 @@ pub fn collect_results(
               case result {
                 Ok(dr) ->
                   dream_log_global(
-                    "[dream] " <> domain <> " completed — phase: "
+                    "[dream] "
+                    <> domain
+                    <> " completed — phase: "
                     <> dr.phase_reached
-                    <> ", consolidated: " <> int.to_string(dr.entries_consolidated)
-                    <> ", promoted: " <> int.to_string(dr.entries_promoted)
-                    <> ", reflections: " <> int.to_string(dr.reflections_generated)
-                    <> " (" <> int.to_string(dr.duration_ms / 1000) <> "s)",
+                    <> ", consolidated: "
+                    <> int.to_string(dr.entries_consolidated)
+                    <> ", promoted: "
+                    <> int.to_string(dr.entries_promoted)
+                    <> ", reflections: "
+                    <> int.to_string(dr.reflections_generated)
+                    <> " ("
+                    <> int.to_string(dr.duration_ms / 1000)
+                    <> "s)",
                   )
                 Error(e) ->
                   dream_log_global("[dream] " <> domain <> " failed: " <> e)
@@ -951,10 +986,11 @@ pub fn collect_results(
               )
             }
             Error(Nil) -> {
-              logging.log(logging.Info,
+              logging.log(
+                logging.Info,
                 "[dream] Timeout: "
-                <> int.to_string(remaining)
-                <> " domains still pending",
+                  <> int.to_string(remaining)
+                  <> " domains still pending",
               )
               list.reverse(acc)
             }
@@ -1004,11 +1040,9 @@ fn log_domain_results(
         {
           Ok(_) -> Nil
           Error(e) ->
-            logging.log(logging.Info,
-              "[dream] Failed to log dream run for "
-              <> dr.domain
-              <> ": "
-              <> e,
+            logging.log(
+              logging.Info,
+              "[dream] Failed to log dream run for " <> dr.domain <> ": " <> e,
             )
         }
       }
@@ -1032,7 +1066,9 @@ fn dream_global(
   let user_path = xdg.user_path(paths)
 
   // Read global memory and user profile
-  let memory_content = case structured_memory.format_for_display(global_memory_path) {
+  let memory_content = case
+    structured_memory.format_for_display(global_memory_path)
+  {
     Ok(content) -> content
     Error(_) -> "(empty)"
   }
@@ -1046,11 +1082,12 @@ fn dream_global(
     entries -> string.join(entries, "\n\n")
   }
 
-  let system_prompt = build_global_dream_system_prompt(
-    memory_content,
-    user_content,
-    index_section,
-  )
+  let system_prompt =
+    build_global_dream_system_prompt(
+      memory_content,
+      user_content,
+      index_section,
+    )
 
   let initial_messages = [llm.SystemMessage(system_prompt)]
   let tool = dream_memory_tool_definition()
@@ -1134,10 +1171,11 @@ fn dream_global(
             }
             Ok(#(_final_messages, _render_count)) -> {
               let duration_ms = time.now_ms() - start_ms
-              logging.log(logging.Info,
+              logging.log(
+                logging.Info,
                 "[dream] _global — complete ("
-                <> int.to_string(duration_ms / 1000)
-                <> "s)",
+                  <> int.to_string(duration_ms / 1000)
+                  <> "s)",
               )
               log_global_dream_run(
                 db_subject,
@@ -1168,15 +1206,20 @@ During the global pass, you review global memory and user profile alongside doma
 
 ## Global Memory
 
-" <> memory_content <> "
+"
+  <> memory_content
+  <> "
 
 ## User Profile
 
-" <> user_content <> "
+"
+  <> user_content
+  <> "
 
 ## Domain Index Summaries
 
-" <> index_section
+"
+  <> index_section
 }
 
 /// Log a global dream run to the database.
@@ -1202,6 +1245,7 @@ fn log_global_dream_run(
     )
   {
     Ok(_) -> Nil
-    Error(e) -> dream_log_global("[dream] Failed to log global dream run: " <> e)
+    Error(e) ->
+      dream_log_global("[dream] Failed to log global dream run: " <> e)
   }
 }

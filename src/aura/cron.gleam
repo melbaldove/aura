@@ -39,10 +39,7 @@ pub fn parse(expression: String) -> Result(CronExpr, String) {
         day_of_week: dow_f,
       ))
     }
-    _ ->
-      Error(
-        "Expected 5 fields, got " <> int.to_string(list.length(fields)),
-      )
+    _ -> Error("Expected 5 fields, got " <> int.to_string(list.length(fields)))
   }
 }
 
@@ -59,15 +56,13 @@ fn parse_field(field: String, name: String) -> Result(CronField, String) {
                 True -> Ok(Step(n))
                 False -> Error("Step must be > 0 in " <> name)
               }
-            Error(_) ->
-              Error("Invalid step in " <> name <> ": " <> field)
+            Error(_) -> Error("Invalid step in " <> name <> ": " <> field)
           }
         }
         False -> {
           case int.parse(field) {
             Ok(n) -> Ok(Exact(n))
-            Error(_) ->
-              Error("Invalid value in " <> name <> ": " <> field)
+            Error(_) -> Error("Invalid value in " <> name <> ": " <> field)
           }
         }
       }

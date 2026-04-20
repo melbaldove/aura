@@ -104,13 +104,15 @@ fn load_config(paths: xdg.Paths) -> Result(config.GlobalConfig, String) {
   )
   use cfg <- result.try(config.parse_global(content))
   // Resolve env var references in the discord token
-  use resolved_token <- result.try(
-    config_parser.resolve_env_string(cfg.discord.token),
-  )
-  Ok(config.GlobalConfig(
-    ..cfg,
-    discord: config.DiscordConfig(..cfg.discord, token: resolved_token),
+  use resolved_token <- result.try(config_parser.resolve_env_string(
+    cfg.discord.token,
   ))
+  Ok(
+    config.GlobalConfig(
+      ..cfg,
+      discord: config.DiscordConfig(..cfg.discord, token: resolved_token),
+    ),
+  )
 }
 
 @external(erlang, "aura_runtime_ffi", "halt")

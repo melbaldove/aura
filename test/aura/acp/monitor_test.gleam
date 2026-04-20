@@ -6,22 +6,29 @@ pub fn monitor_emits_on_tick_test() {
   let event_subject = process.new_subject()
   let on_event = fn(event) { process.send(event_subject, event) }
 
-  let monitor = acp_monitor.start_push_monitor(
-    acp_monitor.MonitorConfig(
-      emit_interval_ms: 200,
-      idle_interval_ms: 500,
-      idle_surface_threshold: 3,
-    ),
-    "test-session",
-    "test-domain",
-    "Analyze the code",
-    "",
-    on_event,
-  )
+  let monitor =
+    acp_monitor.start_push_monitor(
+      acp_monitor.MonitorConfig(
+        emit_interval_ms: 200,
+        idle_interval_ms: 500,
+        idle_surface_threshold: 3,
+      ),
+      "test-session",
+      "test-domain",
+      "Analyze the code",
+      "",
+      on_event,
+    )
 
   // Send raw lines
-  process.send(monitor, acp_monitor.RawLine("{\"update\":{\"toolName\":\"Read\"}}"))
-  process.send(monitor, acp_monitor.RawLine("{\"update\":{\"toolName\":\"Grep\"}}"))
+  process.send(
+    monitor,
+    acp_monitor.RawLine("{\"update\":{\"toolName\":\"Read\"}}"),
+  )
+  process.send(
+    monitor,
+    acp_monitor.RawLine("{\"update\":{\"toolName\":\"Grep\"}}"),
+  )
 
   // Wait for tick (200ms + buffer)
   case process.receive(event_subject, 1000) {
@@ -37,18 +44,19 @@ pub fn monitor_idle_detection_test() {
   let event_subject = process.new_subject()
   let on_event = fn(event) { process.send(event_subject, event) }
 
-  let _monitor = acp_monitor.start_push_monitor(
-    acp_monitor.MonitorConfig(
-      emit_interval_ms: 50,
-      idle_interval_ms: 50,
-      idle_surface_threshold: 2,
-    ),
-    "test-idle",
-    "test-domain",
-    "Analyze the code",
-    "",
-    on_event,
-  )
+  let _monitor =
+    acp_monitor.start_push_monitor(
+      acp_monitor.MonitorConfig(
+        emit_interval_ms: 50,
+        idle_interval_ms: 50,
+        idle_surface_threshold: 2,
+      ),
+      "test-idle",
+      "test-domain",
+      "Analyze the code",
+      "",
+      on_event,
+    )
 
   // Send no events, wait for idle detection
   process.sleep(250)
@@ -60,18 +68,19 @@ pub fn monitor_resets_after_emit_test() {
   let event_subject = process.new_subject()
   let on_event = fn(event) { process.send(event_subject, event) }
 
-  let monitor = acp_monitor.start_push_monitor(
-    acp_monitor.MonitorConfig(
-      emit_interval_ms: 200,
-      idle_interval_ms: 500,
-      idle_surface_threshold: 3,
-    ),
-    "test-reset",
-    "test-domain",
-    "Analyze the code",
-    "",
-    on_event,
-  )
+  let monitor =
+    acp_monitor.start_push_monitor(
+      acp_monitor.MonitorConfig(
+        emit_interval_ms: 200,
+        idle_interval_ms: 500,
+        idle_surface_threshold: 3,
+      ),
+      "test-reset",
+      "test-domain",
+      "Analyze the code",
+      "",
+      on_event,
+    )
 
   // Send line, wait for first emit
   process.send(monitor, acp_monitor.RawLine("{\"first\":true}"))
@@ -95,18 +104,19 @@ pub fn monitor_get_last_summary_test() {
   let event_subject = process.new_subject()
   let on_event = fn(event) { process.send(event_subject, event) }
 
-  let monitor = acp_monitor.start_push_monitor(
-    acp_monitor.MonitorConfig(
-      emit_interval_ms: 100,
-      idle_interval_ms: 500,
-      idle_surface_threshold: 3,
-    ),
-    "test-summary",
-    "test-domain",
-    "Analyze the code",
-    "",
-    on_event,
-  )
+  let monitor =
+    acp_monitor.start_push_monitor(
+      acp_monitor.MonitorConfig(
+        emit_interval_ms: 100,
+        idle_interval_ms: 500,
+        idle_surface_threshold: 3,
+      ),
+      "test-summary",
+      "test-domain",
+      "Analyze the code",
+      "",
+      on_event,
+    )
 
   // Send some data and wait for a tick to generate a summary
   process.send(monitor, acp_monitor.RawLine("{\"update\":true}"))
@@ -115,9 +125,10 @@ pub fn monitor_get_last_summary_test() {
   let _ = process.receive(event_subject, 500)
 
   // Now ask for the summary
-  let summary = process.call(monitor, 1000, fn(reply_to) {
-    acp_monitor.GetLastSummary(reply_to)
-  })
+  let summary =
+    process.call(monitor, 1000, fn(reply_to) {
+      acp_monitor.GetLastSummary(reply_to)
+    })
   { summary != "" } |> should.be_true
 }
 
@@ -125,50 +136,54 @@ pub fn monitor_get_last_summary_empty_test() {
   let event_subject = process.new_subject()
   let on_event = fn(_event) { process.send(event_subject, Nil) }
 
-  let monitor = acp_monitor.start_push_monitor(
-    acp_monitor.MonitorConfig(
-      emit_interval_ms: 5000,
-      idle_interval_ms: 5000,
-      idle_surface_threshold: 3,
-    ),
-    "test-summary-empty",
-    "test-domain",
-    "Analyze the code",
-    "",
-    fn(_) { Nil },
-  )
+  let monitor =
+    acp_monitor.start_push_monitor(
+      acp_monitor.MonitorConfig(
+        emit_interval_ms: 5000,
+        idle_interval_ms: 5000,
+        idle_surface_threshold: 3,
+      ),
+      "test-summary-empty",
+      "test-domain",
+      "Analyze the code",
+      "",
+      fn(_) { Nil },
+    )
 
   // No data sent, no tick fired — summary should be empty
-  let summary = process.call(monitor, 1000, fn(reply_to) {
-    acp_monitor.GetLastSummary(reply_to)
-  })
+  let summary =
+    process.call(monitor, 1000, fn(reply_to) {
+      acp_monitor.GetLastSummary(reply_to)
+    })
   summary |> should.equal("")
 }
 
 pub fn monitor_never_stops_itself_test() {
   let on_event = fn(_) { Nil }
 
-  let monitor = acp_monitor.start_push_monitor(
-    acp_monitor.MonitorConfig(
-      emit_interval_ms: 100,
-      idle_interval_ms: 100,
-      idle_surface_threshold: 3,
-    ),
-    "test-no-timeout",
-    "test-domain",
-    "Analyze the code",
-    "",
-    on_event,
-  )
+  let monitor =
+    acp_monitor.start_push_monitor(
+      acp_monitor.MonitorConfig(
+        emit_interval_ms: 100,
+        idle_interval_ms: 100,
+        idle_surface_threshold: 3,
+      ),
+      "test-no-timeout",
+      "test-domain",
+      "Analyze the code",
+      "",
+      on_event,
+    )
 
   // Send data, wait well past where a timeout would have fired
   process.send(monitor, acp_monitor.RawLine("{\"event\":\"tool\"}"))
   process.sleep(300)
 
   // Monitor must still be alive — no timeout kills it
-  let summary = process.call(monitor, 1000, fn(reply_to) {
-    acp_monitor.GetLastSummary(reply_to)
-  })
+  let summary =
+    process.call(monitor, 1000, fn(reply_to) {
+      acp_monitor.GetLastSummary(reply_to)
+    })
   { summary != "" } |> should.be_true
 
   // Explicitly stop it via Shutdown

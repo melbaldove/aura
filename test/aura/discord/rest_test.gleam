@@ -22,13 +22,15 @@ pub fn content_type_webp_test() {
 
 pub fn content_type_text_test() {
   rest.content_type_for_filename("log.txt") |> should.equal("text/plain")
-  rest.content_type_for_filename("data.json") |> should.equal("application/json")
+  rest.content_type_for_filename("data.json")
+  |> should.equal("application/json")
 }
 
 pub fn content_type_unknown_test() {
   rest.content_type_for_filename("x.bin")
   |> should.equal("application/octet-stream")
-  rest.content_type_for_filename("noext") |> should.equal("application/octet-stream")
+  rest.content_type_for_filename("noext")
+  |> should.equal("application/octet-stream")
 }
 
 pub fn build_multipart_has_both_parts_test() {
@@ -56,14 +58,7 @@ pub fn build_multipart_has_both_parts_test() {
 
 pub fn build_multipart_embeds_file_bytes_test() {
   let magic = <<0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A>>
-  let body =
-    rest.build_multipart_body(
-      "b",
-      "{}",
-      "x.png",
-      "image/png",
-      magic,
-    )
+  let body = rest.build_multipart_body("b", "{}", "x.png", "image/png", magic)
   // PNG magic bytes must survive intact in the body.
   bit_array.slice(body, bit_array.byte_size(body) - 20, 8)
   |> should.be_ok

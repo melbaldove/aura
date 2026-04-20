@@ -123,9 +123,7 @@ pub type DbMessage {
     reply_to: process.Subject(Result(String, String)),
     conversation_id: String,
   )
-  HasMessages(
-    reply_to: process.Subject(Result(Bool, String)),
-  )
+  HasMessages(reply_to: process.Subject(Result(Bool, String)))
   AppendMessageFull(
     reply_to: process.Subject(Result(Nil, String)),
     conversation_id: String,
@@ -200,10 +198,7 @@ pub type DbMessage {
     reflections_generated: Int,
     duration_ms: Int,
   )
-  GetLastDreamMs(
-    reply_to: process.Subject(Result(Int, String)),
-    domain: String,
-  )
+  GetLastDreamMs(reply_to: process.Subject(Result(Int, String)), domain: String)
   UpdateFlareResult(
     reply_to: process.Subject(Result(Nil, String)),
     id: String,
@@ -231,9 +226,7 @@ type DbState {
 
 /// Open (or create) the SQLite database at `path`, initialize the schema,
 /// and return a subject for sending `DbMessage` requests to the actor.
-pub fn start(
-  path: String,
-) -> Result(process.Subject(DbMessage), String) {
+pub fn start(path: String) -> Result(process.Subject(DbMessage), String) {
   let builder =
     actor.new_with_initialiser(5000, fn(subject) {
       case sqlight.open(path) {
@@ -246,16 +239,14 @@ pub fn start(
             Error(err) -> Error("Failed to initialize schema: " <> err)
           }
         }
-        Error(err) ->
-          Error("Failed to open database: " <> string.inspect(err))
+        Error(err) -> Error("Failed to open database: " <> string.inspect(err))
       }
     })
     |> actor.on_message(handle_message)
 
   case actor.start(builder) {
     Ok(started) -> Ok(started.data)
-    Error(err) ->
-      Error("Failed to start db actor: " <> string.inspect(err))
+    Error(err) -> Error("Failed to start db actor: " <> string.inspect(err))
   }
 }
 
@@ -348,10 +339,7 @@ pub fn get_compaction_summary(
   conversation_id: String,
 ) -> Result(String, String) {
   process.call(subject, 5000, fn(reply_to) {
-    GetCompactionSummary(
-      reply_to: reply_to,
-      conversation_id: conversation_id,
-    )
+    GetCompactionSummary(reply_to: reply_to, conversation_id: conversation_id)
   })
 }
 
@@ -415,12 +403,8 @@ pub fn append_message_full(
 
 /// Check if the database has any messages at all.
 /// Used by migration to avoid double-importing JSONL files.
-pub fn has_messages(
-  subject: process.Subject(DbMessage),
-) -> Result(Bool, String) {
-  process.call(subject, 5000, fn(reply_to) {
-    HasMessages(reply_to: reply_to)
-  })
+pub fn has_messages(subject: process.Subject(DbMessage)) -> Result(Bool, String) {
+  process.call(subject, 5000, fn(reply_to) { HasMessages(reply_to: reply_to) })
 }
 
 /// Insert or replace a flare record.
@@ -428,9 +412,7 @@ pub fn upsert_flare(
   subject: process.Subject(DbMessage),
   stored: StoredFlare,
 ) -> Result(Nil, String) {
-  process.call(subject, 10_000, fn(reply_to) {
-    UpsertFlare(reply_to:, stored:)
-  })
+  process.call(subject, 10_000, fn(reply_to) { UpsertFlare(reply_to:, stored:) })
 }
 
 /// Load all flares, optionally excluding archived ones.
@@ -490,7 +472,14 @@ pub fn insert_memory_entry(
   created_at_ms: Int,
 ) -> Result(Int, String) {
   process.call(subject, 5000, fn(reply_to) {
-    InsertMemoryEntry(reply_to:, domain:, target:, key:, content:, created_at_ms:)
+    InsertMemoryEntry(
+      reply_to:,
+      domain:,
+      target:,
+      key:,
+      content:,
+      created_at_ms:,
+    )
   })
 }
 
@@ -503,7 +492,12 @@ pub fn supersede_memory_entry(
   superseded_at_ms: Int,
 ) -> Result(Nil, String) {
   process.call(subject, 5000, fn(reply_to) {
-    SupersedeMemoryEntry(reply_to:, entry_id:, superseded_by:, superseded_at_ms:)
+    SupersedeMemoryEntry(
+      reply_to:,
+      entry_id:,
+      superseded_by:,
+      superseded_at_ms:,
+    )
   })
 }
 
@@ -618,13 +612,31 @@ fn handle_message(
     }
 
     ResolveConversation(reply_to:, platform:, platform_id:, timestamp:) -> {
-      let result = do_resolve_conversation(state.conn, platform, platform_id, timestamp)
+      let result =
+        do_resolve_conversation(state.conn, platform, platform_id, timestamp)
       process.send(reply_to, result)
       actor.continue(state)
     }
 
-    AppendMessage(reply_to:, conversation_id:, role:, content:, author_id:, author_name:, timestamp:) -> {
-      let result = do_append_message(state.conn, conversation_id, role, content, author_id, author_name, timestamp)
+    AppendMessage(
+      reply_to:,
+      conversation_id:,
+      role:,
+      content:,
+      author_id:,
+      author_name:,
+      timestamp:,
+    ) -> {
+      let result =
+        do_append_message(
+          state.conn,
+          conversation_id,
+          role,
+          content,
+          author_id,
+          author_name,
+          timestamp,
+        )
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -642,7 +654,8 @@ fn handle_message(
     }
 
     UpdateCompactionSummary(reply_to:, conversation_id:, summary:) -> {
-      let result = do_update_compaction_summary(state.conn, conversation_id, summary)
+      let result =
+        do_update_compaction_summary(state.conn, conversation_id, summary)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -671,8 +684,29 @@ fn handle_message(
       actor.continue(state)
     }
 
-    AppendMessageFull(reply_to:, conversation_id:, role:, content:, author_id:, author_name:, tool_call_id:, tool_calls:, timestamp:) -> {
-      let result = do_append_message_full(state.conn, conversation_id, role, content, author_id, author_name, tool_call_id, tool_calls, timestamp)
+    AppendMessageFull(
+      reply_to:,
+      conversation_id:,
+      role:,
+      content:,
+      author_id:,
+      author_name:,
+      tool_call_id:,
+      tool_calls:,
+      timestamp:,
+    ) -> {
+      let result =
+        do_append_message_full(
+          state.conn,
+          conversation_id,
+          role,
+          content,
+          author_id,
+          author_name,
+          tool_call_id,
+          tool_calls,
+          timestamp,
+        )
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -696,25 +730,59 @@ fn handle_message(
     }
 
     UpdateFlareSessionId(reply_to:, id:, session_id:, updated_at_ms:) -> {
-      let result = do_update_flare_session_id(state.conn, id, session_id, updated_at_ms)
+      let result =
+        do_update_flare_session_id(state.conn, id, session_id, updated_at_ms)
       process.send(reply_to, result)
       actor.continue(state)
     }
 
     UpdateFlareRekindle(reply_to:, id:, session_id:, status:, updated_at_ms:) -> {
-      let result = do_update_flare_rekindle(state.conn, id, session_id, status, updated_at_ms)
+      let result =
+        do_update_flare_rekindle(
+          state.conn,
+          id,
+          session_id,
+          status,
+          updated_at_ms,
+        )
       process.send(reply_to, result)
       actor.continue(state)
     }
 
-    InsertMemoryEntry(reply_to:, domain:, target:, key:, content:, created_at_ms:) -> {
-      let result = do_insert_memory_entry(state.conn, domain, target, key, content, created_at_ms)
+    InsertMemoryEntry(
+      reply_to:,
+      domain:,
+      target:,
+      key:,
+      content:,
+      created_at_ms:,
+    ) -> {
+      let result =
+        do_insert_memory_entry(
+          state.conn,
+          domain,
+          target,
+          key,
+          content,
+          created_at_ms,
+        )
       process.send(reply_to, result)
       actor.continue(state)
     }
 
-    SupersedeMemoryEntry(reply_to:, entry_id:, superseded_by:, superseded_at_ms:) -> {
-      let result = do_supersede_memory_entry(state.conn, entry_id, superseded_by, superseded_at_ms)
+    SupersedeMemoryEntry(
+      reply_to:,
+      entry_id:,
+      superseded_by:,
+      superseded_at_ms:,
+    ) -> {
+      let result =
+        do_supersede_memory_entry(
+          state.conn,
+          entry_id,
+          superseded_by,
+          superseded_at_ms,
+        )
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -726,13 +794,33 @@ fn handle_message(
     }
 
     GetActiveEntryId(reply_to:, domain:, target:, key:, exclude_id:) -> {
-      let result = do_get_active_entry_id(state.conn, domain, target, key, exclude_id)
+      let result =
+        do_get_active_entry_id(state.conn, domain, target, key, exclude_id)
       process.send(reply_to, result)
       actor.continue(state)
     }
 
-    InsertDreamRun(reply_to:, domain:, completed_at_ms:, phase_reached:, entries_consolidated:, entries_promoted:, reflections_generated:, duration_ms:) -> {
-      let result = do_insert_dream_run(state.conn, domain, completed_at_ms, phase_reached, entries_consolidated, entries_promoted, reflections_generated, duration_ms)
+    InsertDreamRun(
+      reply_to:,
+      domain:,
+      completed_at_ms:,
+      phase_reached:,
+      entries_consolidated:,
+      entries_promoted:,
+      reflections_generated:,
+      duration_ms:,
+    ) -> {
+      let result =
+        do_insert_dream_run(
+          state.conn,
+          domain,
+          completed_at_ms,
+          phase_reached,
+          entries_consolidated,
+          entries_promoted,
+          reflections_generated,
+          duration_ms,
+        )
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -744,7 +832,8 @@ fn handle_message(
     }
 
     UpdateFlareResult(reply_to:, id:, result_text:, updated_at_ms:) -> {
-      let result = do_update_flare_result(state.conn, id, result_text, updated_at_ms)
+      let result =
+        do_update_flare_result(state.conn, id, result_text, updated_at_ms)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -807,8 +896,7 @@ fn do_resolve_conversation(
       }
     }
     Ok(_) -> Ok(id)
-    Error(err) ->
-      Error("Failed to query conversation: " <> string.inspect(err))
+    Error(err) -> Error("Failed to query conversation: " <> string.inspect(err))
   }
 }
 
@@ -894,24 +982,25 @@ fn do_search(
   limit: Int,
 ) -> Result(List(SearchResult), String) {
   // Sanitize FTS5 query: strip special chars, reject empty
-  let cleaned = query
+  let cleaned =
+    query
     |> string.replace("\"", "")
     |> string.replace("*", "")
     |> string.trim
   case cleaned {
     "" -> Ok([])
     _ -> {
-  let safe_query = "\"" <> cleaned <> "\""
+      let safe_query = "\"" <> cleaned <> "\""
 
-  sqlight.query(
-    "SELECT m.conversation_id, m.role, snippet(messages_fts, 0, '>>>', '<<<', '...', 32) AS snippet, m.content, m.author_name, m.created_at, c.platform, c.platform_id FROM messages_fts AS fts JOIN messages AS m ON fts.rowid = m.id JOIN conversations AS c ON m.conversation_id = c.id WHERE messages_fts MATCH ? ORDER BY fts.rank LIMIT ?",
-    on: conn,
-    with: [sqlight.text(safe_query), sqlight.int(limit)],
-    expecting: search_result_decoder(),
-  )
-  |> result.map_error(fn(err) {
-    "Failed to search messages: " <> string.inspect(err)
-  })
+      sqlight.query(
+        "SELECT m.conversation_id, m.role, snippet(messages_fts, 0, '>>>', '<<<', '...', 32) AS snippet, m.content, m.author_name, m.created_at, c.platform, c.platform_id FROM messages_fts AS fts JOIN messages AS m ON fts.rowid = m.id JOIN conversations AS c ON m.conversation_id = c.id WHERE messages_fts MATCH ? ORDER BY fts.rank LIMIT ?",
+        on: conn,
+        with: [sqlight.text(safe_query), sqlight.int(limit)],
+        expecting: search_result_decoder(),
+      )
+      |> result.map_error(fn(err) {
+        "Failed to search messages: " <> string.inspect(err)
+      })
     }
   }
 }
@@ -948,10 +1037,7 @@ fn do_get_compaction_summary(
     Ok([summary]) -> Ok(summary)
     Ok([]) -> Ok("")
     Ok(_) -> Ok("")
-    Error(e) ->
-      Error(
-        "Failed to get compaction summary: " <> string.inspect(e),
-      )
+    Error(e) -> Error("Failed to get compaction summary: " <> string.inspect(e))
   }
 }
 
@@ -990,12 +1076,14 @@ fn do_set_domain(
 }
 
 fn do_has_messages(conn: sqlight.Connection) -> Result(Bool, String) {
-  case sqlight.query(
-    "SELECT 1 FROM messages LIMIT 1",
-    on: conn,
-    with: [],
-    expecting: decode.at([0], decode.int),
-  ) {
+  case
+    sqlight.query(
+      "SELECT 1 FROM messages LIMIT 1",
+      on: conn,
+      with: [],
+      expecting: decode.at([0], decode.int),
+    )
+  {
     Ok([]) -> Ok(False)
     Ok(_) -> Ok(True)
     Error(e) -> Error("Failed to check messages: " <> string.inspect(e))
@@ -1042,12 +1130,7 @@ fn do_load_flares(
     False ->
       "SELECT id, label, status, domain, thread_id, original_prompt, execution, triggers, tools, workspace, session_id, created_at_ms, updated_at_ms FROM flares ORDER BY created_at_ms ASC"
   }
-  sqlight.query(
-    sql,
-    on: conn,
-    with: [],
-    expecting: flare_decoder(),
-  )
+  sqlight.query(sql, on: conn, with: [], expecting: flare_decoder())
   |> result.map_error(fn(err) {
     "Failed to load flares: " <> string.inspect(err)
   })
@@ -1080,7 +1163,11 @@ fn do_update_flare_session_id(
   sqlight.query(
     "UPDATE flares SET session_id = ?, updated_at_ms = ? WHERE id = ?",
     on: conn,
-    with: [sqlight.text(session_id), sqlight.int(updated_at_ms), sqlight.text(id)],
+    with: [
+      sqlight.text(session_id),
+      sqlight.int(updated_at_ms),
+      sqlight.text(id),
+    ],
     expecting: decode.success(Nil),
   )
   |> result.map(fn(_) { Nil })
@@ -1099,7 +1186,12 @@ fn do_update_flare_rekindle(
   sqlight.query(
     "UPDATE flares SET session_id = ?1, status = ?2, updated_at_ms = ?3 WHERE id = ?4",
     on: conn,
-    with: [sqlight.text(session_id), sqlight.text(status), sqlight.int(updated_at_ms), sqlight.text(id)],
+    with: [
+      sqlight.text(session_id),
+      sqlight.text(status),
+      sqlight.int(updated_at_ms),
+      sqlight.text(id),
+    ],
     expecting: decode.success(Nil),
   )
   |> result.map(fn(_) { Nil })
@@ -1134,7 +1226,10 @@ fn do_insert_memory_entry(
   |> result.try(fn(rows) {
     case rows {
       [id] -> Ok(id)
-      _ -> Error("Expected one row from INSERT RETURNING, got " <> string.inspect(rows))
+      _ ->
+        Error(
+          "Expected one row from INSERT RETURNING, got " <> string.inspect(rows),
+        )
     }
   })
 }
@@ -1251,8 +1346,7 @@ fn do_get_last_dream_ms(
     Ok([ms]) -> Ok(ms)
     Ok([]) -> Ok(0)
     Ok(_) -> Ok(0)
-    Error(e) ->
-      Error("Failed to get last dream ms: " <> string.inspect(e))
+    Error(e) -> Error("Failed to get last dream ms: " <> string.inspect(e))
   }
 }
 
@@ -1265,7 +1359,11 @@ fn do_update_flare_result(
   sqlight.query(
     "UPDATE flares SET result_text = ?, updated_at_ms = ? WHERE id = ?",
     on: conn,
-    with: [sqlight.text(result_text), sqlight.int(updated_at_ms), sqlight.text(id)],
+    with: [
+      sqlight.text(result_text),
+      sqlight.int(updated_at_ms),
+      sqlight.text(id),
+    ],
     expecting: decode.success(Nil),
   )
   |> result.map(fn(_) { Nil })

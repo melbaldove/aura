@@ -66,27 +66,31 @@ pub fn find_tail_boundary(
 
   // Walk backward, accumulating tokens
   let reversed = list.reverse(messages)
-  let #(cut_idx, _) = list.fold(reversed, #(n, 0), fn(acc, msg) {
-    let #(idx, accumulated) = acc
-    let current_idx = idx - 1
-    case current_idx < head_end {
-      True -> acc
-      False -> {
-        let msg_tokens = estimate_tokens(message_content(msg)) + 10
-        // Include tool call argument tokens
-        let call_tokens = case msg {
-          llm.AssistantToolCallMessage(_, calls) ->
-            list.fold(calls, 0, fn(a, c) { a + estimate_tokens(c.arguments) })
-          _ -> 0
-        }
-        let total_msg = msg_tokens + call_tokens
-        case accumulated + total_msg > token_budget && n - current_idx >= min_tail_messages {
-          True -> acc
-          False -> #(current_idx, accumulated + total_msg)
+  let #(cut_idx, _) =
+    list.fold(reversed, #(n, 0), fn(acc, msg) {
+      let #(idx, accumulated) = acc
+      let current_idx = idx - 1
+      case current_idx < head_end {
+        True -> acc
+        False -> {
+          let msg_tokens = estimate_tokens(message_content(msg)) + 10
+          // Include tool call argument tokens
+          let call_tokens = case msg {
+            llm.AssistantToolCallMessage(_, calls) ->
+              list.fold(calls, 0, fn(a, c) { a + estimate_tokens(c.arguments) })
+            _ -> 0
+          }
+          let total_msg = msg_tokens + call_tokens
+          case
+            accumulated + total_msg > token_budget
+            && n - current_idx >= min_tail_messages
+          {
+            True -> acc
+            False -> #(current_idx, accumulated + total_msg)
+          }
         }
       }
-    }
-  })
+    })
 
   // Ensure at least min_tail_messages
   let fallback = n - min_tail_messages
@@ -131,7 +135,8 @@ fn walk_back_past_tools(messages: List(llm.Message), idx: Int) -> Int {
     True -> idx
     False -> {
       case list.drop(messages, idx - 1) {
-        [llm.ToolResultMessage(_, _), ..] -> walk_back_past_tools(messages, idx - 1)
+        [llm.ToolResultMessage(_, _), ..] ->
+          walk_back_past_tools(messages, idx - 1)
         [llm.AssistantToolCallMessage(_, _), ..] -> idx - 1
         _ -> idx
       }
@@ -157,10 +162,7 @@ pub fn prune_tool_outputs(
           case msg {
             llm.ToolResultMessage(id, content) -> {
               case string.length(content) > prune_min_chars {
-                True -> #(
-                  llm.ToolResultMessage(id, pruned_placeholder),
-                  True,
-                )
+                True -> #(llm.ToolResultMessage(id, pruned_placeholder), True)
                 False -> #(msg, False)
               }
             }

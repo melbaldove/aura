@@ -21,10 +21,7 @@ import test_harness
 
 pub fn channel_actor_starts_and_accepts_messages_test() {
   let deps =
-    channel_actor.TestDeps(
-      channel_id: "test-channel",
-      discord_token: "fake",
-    )
+    channel_actor.TestDeps(channel_id: "test-channel", discord_token: "fake")
   let subject = channel_actor.start_for_test(deps) |> should.be_ok
 
   // Sending messages should not crash the actor
@@ -102,10 +99,7 @@ pub fn vision_error_still_spawns_stream_worker_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_vision = channel_actor.with_fake_vision_turn(state)
   let #(_, effects) =
-    channel_actor.transition(
-      with_vision,
-      channel_actor.VisionError("rejected"),
-    )
+    channel_actor.transition(with_vision, channel_actor.VisionError("rejected"))
   let has_stream_spawn =
     list.any(effects, fn(e) {
       case e {
@@ -122,10 +116,7 @@ pub fn stream_delta_accumulates_content_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
   let #(new_state, _) =
-    channel_actor.transition(
-      with_stream,
-      channel_actor.StreamDelta("hello "),
-    )
+    channel_actor.transition(with_stream, channel_actor.StreamDelta("hello "))
   case new_state.turn {
     option.Some(t) -> t.accumulated_content |> should.equal("hello ")
     option.None -> should.fail()
@@ -358,7 +349,10 @@ pub fn cold_actor_loads_history_from_db_test() {
     conversation.save_exchange_to_db(
       sys.db_subject,
       convo_id,
-      [llm.UserMessage("earlier question"), llm.AssistantMessage("earlier answer")],
+      [
+        llm.UserMessage("earlier question"),
+        llm.AssistantMessage("earlier answer"),
+      ],
       "u1",
       "tester",
       now - 1000,
@@ -384,7 +378,10 @@ pub fn cold_actor_loads_history_from_db_test() {
 
   // Poll until the LLM call is recorded
   let _ =
-    poll.poll_until(fn() { list.length(fake_llm.calls(sys.fake_llm)) > 0 }, 2000)
+    poll.poll_until(
+      fn() { list.length(fake_llm.calls(sys.fake_llm)) > 0 },
+      2000,
+    )
 
   // Inspect the LLM call and assert history was hydrated
   let last_call = case list.last(fake_llm.calls(sys.fake_llm)) {
@@ -422,18 +419,17 @@ fn combined_system_prompts(fake: fake_llm.FakeLLM) -> String {
 pub fn system_prompt_includes_fs_section_test() {
   // "cm2-thread" is the domain channel. All channels route through channel_actor.
   let sys =
-    test_harness.fresh_system_with_domain(
-      "cm2",
-      "# AGENTS",
-      "cm2-thread",
-    )
+    test_harness.fresh_system_with_domain("cm2", "# AGENTS", "cm2-thread")
   fake_llm.script_text_response(sys.fake_llm, "ok")
   process.send(
     sys.brain_subject,
     brain.HandleMessage(test_harness.incoming("cm2-thread", "hi")),
   )
   let _ =
-    poll.poll_until(fn() { list.length(fake_llm.calls(sys.fake_llm)) > 0 }, 2000)
+    poll.poll_until(
+      fn() { list.length(fake_llm.calls(sys.fake_llm)) > 0 },
+      2000,
+    )
   let prompts = combined_system_prompts(sys.fake_llm)
   string.contains(prompts, "## File System") |> should.be_true
   test_harness.teardown(sys)
@@ -470,7 +466,10 @@ pub fn system_prompt_includes_flare_context_when_in_flare_thread_test() {
     brain.HandleMessage(test_harness.incoming("flare-thread-1", "status?")),
   )
   let _ =
-    poll.poll_until(fn() { list.length(fake_llm.calls(sys.fake_llm)) > 0 }, 2000)
+    poll.poll_until(
+      fn() { list.length(fake_llm.calls(sys.fake_llm)) > 0 },
+      2000,
+    )
   let prompts = combined_system_prompts(sys.fake_llm)
   string.contains(prompts, "## Active Flare") |> should.be_true
   string.contains(prompts, "fix-build") |> should.be_true
@@ -491,9 +490,7 @@ pub fn memory_review_spawns_after_threshold_test() {
   )
   let _ =
     poll.poll_until(
-      fn() {
-        list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 1
-      },
+      fn() { list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 1 },
       2000,
     )
   fake_review.spawn_count(sys.fake_review)
@@ -525,7 +522,11 @@ pub fn skill_review_spawns_after_threshold_test() {
   let #(sys, _) = test_harness.fresh_system_with_skill_review_interval(2)
 
   // Turn 1: read_file tool call → iteration count: 0→1, no spawn yet
-  fake_llm.script_tool_call(sys.fake_llm, "read_file", "{\"path\":\"/tmp/nosuchfile\"}")
+  fake_llm.script_tool_call(
+    sys.fake_llm,
+    "read_file",
+    "{\"path\":\"/tmp/nosuchfile\"}",
+  )
   fake_llm.script_text_response(sys.fake_llm, "reply1")
   process.send(
     sys.brain_subject,
@@ -533,16 +534,18 @@ pub fn skill_review_spawns_after_threshold_test() {
   )
   let _ =
     poll.poll_until(
-      fn() {
-        list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 1
-      },
+      fn() { list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 1 },
       2000,
     )
   fake_review.skill_spawn_count(sys.fake_review)
   |> should.equal(0)
 
   // Turn 2: read_file tool call → iteration count: 1→2 >= 2, spawn triggered
-  fake_llm.script_tool_call(sys.fake_llm, "read_file", "{\"path\":\"/tmp/nosuchfile\"}")
+  fake_llm.script_tool_call(
+    sys.fake_llm,
+    "read_file",
+    "{\"path\":\"/tmp/nosuchfile\"}",
+  )
   fake_llm.script_text_response(sys.fake_llm, "reply2")
   process.send(
     sys.brain_subject,
@@ -578,7 +581,11 @@ pub fn skill_manage_tool_call_resets_skill_review_counter_test() {
   let #(sys, _) = test_harness.fresh_system_with_skill_review_interval(3)
 
   // Turn A: LLM calls read_file (non-skill_manage) — count: 0→1
-  fake_llm.script_tool_call(sys.fake_llm, "read_file", "{\"path\":\"/tmp/nosuchfile\"}")
+  fake_llm.script_tool_call(
+    sys.fake_llm,
+    "read_file",
+    "{\"path\":\"/tmp/nosuchfile\"}",
+  )
   fake_llm.script_text_response(sys.fake_llm, "tA")
   process.send(
     sys.brain_subject,
@@ -586,15 +593,17 @@ pub fn skill_manage_tool_call_resets_skill_review_counter_test() {
   )
   let _ =
     poll.poll_until(
-      fn() {
-        list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 1
-      },
+      fn() { list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 1 },
       2000,
     )
   fake_review.skill_spawn_count(sys.fake_review) |> should.equal(0)
 
   // Turn B: skill_manage tool call — count resets to 0
-  fake_llm.script_tool_call(sys.fake_llm, "skill_manage", "{\"action\":\"list\"}")
+  fake_llm.script_tool_call(
+    sys.fake_llm,
+    "skill_manage",
+    "{\"action\":\"list\"}",
+  )
   fake_llm.script_text_response(sys.fake_llm, "tB")
   process.send(
     sys.brain_subject,
@@ -602,15 +611,17 @@ pub fn skill_manage_tool_call_resets_skill_review_counter_test() {
   )
   let _ =
     poll.poll_until(
-      fn() {
-        list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 2
-      },
+      fn() { list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 2 },
       2000,
     )
   fake_review.skill_spawn_count(sys.fake_review) |> should.equal(0)
 
   // Turn C: read_file — count: 0→1 (if no reset it would be 2→3 and spawn here)
-  fake_llm.script_tool_call(sys.fake_llm, "read_file", "{\"path\":\"/tmp/nosuchfile\"}")
+  fake_llm.script_tool_call(
+    sys.fake_llm,
+    "read_file",
+    "{\"path\":\"/tmp/nosuchfile\"}",
+  )
   fake_llm.script_text_response(sys.fake_llm, "tC")
   process.send(
     sys.brain_subject,
@@ -618,16 +629,18 @@ pub fn skill_manage_tool_call_resets_skill_review_counter_test() {
   )
   let _ =
     poll.poll_until(
-      fn() {
-        list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 3
-      },
+      fn() { list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 3 },
       2000,
     )
   // If reset didn't happen, count would be 3 and spawn_count would be 1 here.
   fake_review.skill_spawn_count(sys.fake_review) |> should.equal(0)
 
   // Turn D: read_file — count: 1→2
-  fake_llm.script_tool_call(sys.fake_llm, "read_file", "{\"path\":\"/tmp/nosuchfile\"}")
+  fake_llm.script_tool_call(
+    sys.fake_llm,
+    "read_file",
+    "{\"path\":\"/tmp/nosuchfile\"}",
+  )
   fake_llm.script_text_response(sys.fake_llm, "tD")
   process.send(
     sys.brain_subject,
@@ -635,15 +648,17 @@ pub fn skill_manage_tool_call_resets_skill_review_counter_test() {
   )
   let _ =
     poll.poll_until(
-      fn() {
-        list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 4
-      },
+      fn() { list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 4 },
       2000,
     )
   fake_review.skill_spawn_count(sys.fake_review) |> should.equal(0)
 
   // Turn E: read_file — count: 2→3, spawn fires
-  fake_llm.script_tool_call(sys.fake_llm, "read_file", "{\"path\":\"/tmp/nosuchfile\"}")
+  fake_llm.script_tool_call(
+    sys.fake_llm,
+    "read_file",
+    "{\"path\":\"/tmp/nosuchfile\"}",
+  )
   fake_llm.script_text_response(sys.fake_llm, "tE")
   process.send(
     sys.brain_subject,
@@ -672,9 +687,9 @@ fn large_tool_output_conversation() -> List(llm.Message) {
   // 300 chars > prune_min_chars (200)
   // Generate 25 pairs without list.range
   let ids = [
-    "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11",
-    "c12", "c13", "c14", "c15", "c16", "c17", "c18", "c19", "c20", "c21",
-    "c22", "c23", "c24", "c25",
+    "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11", "c12",
+    "c13", "c14", "c15", "c16", "c17", "c18", "c19", "c20", "c21", "c22", "c23",
+    "c24", "c25",
   ]
   list.flat_map(ids, fn(id) {
     [
@@ -691,7 +706,10 @@ pub fn prune_tool_outputs_effect_clears_large_outputs_test() {
   let state =
     channel_actor.initial_state_for_test("prune-ch")
     |> fn(s) {
-      channel_actor.ChannelState(..s, conversation: large_tool_output_conversation())
+      channel_actor.ChannelState(
+        ..s,
+        conversation: large_tool_output_conversation(),
+      )
     }
 
   // Execute the PruneToolOutputs effect directly.
@@ -746,11 +764,17 @@ pub fn update_compressor_tokens_zero_is_noop_test() {
 
 pub fn compression_complete_replaces_conversation_test() {
   let state = channel_actor.initial_state_for_test("comp-ch")
-  let old_history = [llm.UserMessage("old msg"), llm.AssistantMessage("old reply")]
+  let old_history = [
+    llm.UserMessage("old msg"),
+    llm.AssistantMessage("old reply"),
+  ]
   let state_with_history =
     channel_actor.ChannelState(..state, conversation: old_history)
 
-  let new_history = [llm.SystemMessage("[CONTEXT COMPACTION] summary"), llm.UserMessage("recent")]
+  let new_history = [
+    llm.SystemMessage("[CONTEXT COMPACTION] summary"),
+    llm.UserMessage("recent"),
+  ]
   let new_comp_state =
     conversation.CompressorState(
       previous_summary: option.Some("summary"),
@@ -762,7 +786,11 @@ pub fn compression_complete_replaces_conversation_test() {
   let #(new_state, effects) =
     channel_actor.transition(
       state_with_history,
-      channel_actor.CompressionComplete(new_history, new_comp_state, snapshot_len),
+      channel_actor.CompressionComplete(
+        new_history,
+        new_comp_state,
+        snapshot_len,
+      ),
     )
   new_state.conversation |> should.equal(new_history)
   new_state.compressor_state |> should.equal(new_comp_state)
@@ -789,10 +817,15 @@ pub fn compression_complete_merges_delta_when_new_messages_arrived_test() {
   let #(new_state, _effects) =
     channel_actor.transition(
       state_with_history,
-      channel_actor.CompressionComplete(compressed, new_comp_state, snapshot_len),
+      channel_actor.CompressionComplete(
+        compressed,
+        new_comp_state,
+        snapshot_len,
+      ),
     )
   // Expected: compressed + the 2 messages that arrived after the snapshot.
-  let expected = list.append(compressed, list.drop(original_history, snapshot_len))
+  let expected =
+    list.append(compressed, list.drop(original_history, snapshot_len))
   new_state.conversation |> should.equal(expected)
 }
 
@@ -862,11 +895,7 @@ pub fn system_prompt_includes_domain_agents_md_content_test() {
     sys.brain_subject,
     brain.HandleMessage(test_harness.incoming("local-test-channel", "hi")),
   )
-  let _ =
-    poll.poll_until(
-      fn() { fake_llm.calls(sys.fake_llm) != [] },
-      2000,
-    )
+  let _ = poll.poll_until(fn() { fake_llm.calls(sys.fake_llm) != [] }, 2000)
   let prompts = combined_system_prompts(sys.fake_llm)
   string.contains(prompts, "You are the local-test assistant")
   |> should.be_true
@@ -891,11 +920,7 @@ pub fn system_prompt_includes_user_memory_content_test() {
     sys.brain_subject,
     brain.HandleMessage(test_harness.incoming("ch-mem-test", "hi")),
   )
-  let _ =
-    poll.poll_until(
-      fn() { fake_llm.calls(sys.fake_llm) != [] },
-      2000,
-    )
+  let _ = poll.poll_until(fn() { fake_llm.calls(sys.fake_llm) != [] }, 2000)
   let prompts = combined_system_prompts(sys.fake_llm)
   string.contains(prompts, "favorite-color")
   |> should.be_true

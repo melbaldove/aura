@@ -19,11 +19,13 @@ pub fn start_and_stop_test() {
 pub fn resolve_conversation_creates_new_test() {
   let assert Ok(subject) = db.start(":memory:")
 
-  let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "123456", 1_711_843_200_000)
+  let assert Ok(convo_id) =
+    db.resolve_conversation(subject, "discord", "123456", 1_711_843_200_000)
   should.be_true(string.length(convo_id) > 0)
 
   // Same platform+id returns same conversation
-  let assert Ok(convo_id2) = db.resolve_conversation(subject, "discord", "123456", 1_711_843_200_000)
+  let assert Ok(convo_id2) =
+    db.resolve_conversation(subject, "discord", "123456", 1_711_843_200_000)
   should.equal(convo_id, convo_id2)
 
   process.send(subject, db.Shutdown)
@@ -31,10 +33,29 @@ pub fn resolve_conversation_creates_new_test() {
 
 pub fn append_and_load_messages_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "chan1", 1_711_843_200_000)
+  let assert Ok(convo_id) =
+    db.resolve_conversation(subject, "discord", "chan1", 1_711_843_200_000)
 
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "hello", "user123", "testuser", 1_711_843_200_000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "assistant", "hi there", "", "aura", 1_711_843_200_001)
+  let assert Ok(_) =
+    db.append_message(
+      subject,
+      convo_id,
+      "user",
+      "hello",
+      "user123",
+      "testuser",
+      1_711_843_200_000,
+    )
+  let assert Ok(_) =
+    db.append_message(
+      subject,
+      convo_id,
+      "assistant",
+      "hi there",
+      "",
+      "aura",
+      1_711_843_200_001,
+    )
 
   let assert Ok(messages) = db.load_messages(subject, convo_id, 50)
   should.equal(list.length(messages), 2)
@@ -49,11 +70,39 @@ pub fn append_and_load_messages_test() {
 
 pub fn search_messages_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "chan1", 1_711_843_200_000)
+  let assert Ok(convo_id) =
+    db.resolve_conversation(subject, "discord", "chan1", 1_711_843_200_000)
 
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "tell me about receipts", "u1", "testuser", 1_711_843_200_000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "assistant", "here are the receipt totals", "", "aura", 1_711_843_200_001)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "what about the weather", "u1", "testuser", 1_711_843_200_002)
+  let assert Ok(_) =
+    db.append_message(
+      subject,
+      convo_id,
+      "user",
+      "tell me about receipts",
+      "u1",
+      "testuser",
+      1_711_843_200_000,
+    )
+  let assert Ok(_) =
+    db.append_message(
+      subject,
+      convo_id,
+      "assistant",
+      "here are the receipt totals",
+      "",
+      "aura",
+      1_711_843_200_001,
+    )
+  let assert Ok(_) =
+    db.append_message(
+      subject,
+      convo_id,
+      "user",
+      "what about the weather",
+      "u1",
+      "testuser",
+      1_711_843_200_002,
+    )
 
   let assert Ok(results) = db.search(subject, "receipts", 10)
   should.equal(list.length(results), 2)
@@ -66,11 +115,31 @@ pub fn search_messages_test() {
 
 pub fn cross_conversation_search_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(c1) = db.resolve_conversation(subject, "discord", "chan1", 1_711_843_200_000)
-  let assert Ok(c2) = db.resolve_conversation(subject, "telegram", "chat99", 1_711_843_200_000)
+  let assert Ok(c1) =
+    db.resolve_conversation(subject, "discord", "chan1", 1_711_843_200_000)
+  let assert Ok(c2) =
+    db.resolve_conversation(subject, "telegram", "chat99", 1_711_843_200_000)
 
-  let assert Ok(_) = db.append_message(subject, c1, "user", "deploy the app", "u1", "testuser", 1_711_843_200_000)
-  let assert Ok(_) = db.append_message(subject, c2, "user", "deploy the service", "u1", "testuser", 1_711_843_200_001)
+  let assert Ok(_) =
+    db.append_message(
+      subject,
+      c1,
+      "user",
+      "deploy the app",
+      "u1",
+      "testuser",
+      1_711_843_200_000,
+    )
+  let assert Ok(_) =
+    db.append_message(
+      subject,
+      c2,
+      "user",
+      "deploy the service",
+      "u1",
+      "testuser",
+      1_711_843_200_001,
+    )
 
   let assert Ok(results) = db.search(subject, "deploy", 10)
   should.equal(list.length(results), 2)
@@ -80,14 +149,34 @@ pub fn cross_conversation_search_test() {
 
 pub fn conversation_db_roundtrip_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "roundtrip-chan", 1_000_000)
+  let assert Ok(convo_id) =
+    db.resolve_conversation(subject, "discord", "roundtrip-chan", 1_000_000)
 
   // Save via db.append_message directly
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "hello world", "user1", "testuser", 1_000_000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "assistant", "hi back", "", "aura", 1_000_001)
+  let assert Ok(_) =
+    db.append_message(
+      subject,
+      convo_id,
+      "user",
+      "hello world",
+      "user1",
+      "testuser",
+      1_000_000,
+    )
+  let assert Ok(_) =
+    db.append_message(
+      subject,
+      convo_id,
+      "assistant",
+      "hi back",
+      "",
+      "aura",
+      1_000_001,
+    )
 
   // Load via conversation module
-  let assert Ok(#(loaded_id, messages)) = conversation.load_from_db(subject, "discord", "roundtrip-chan", 1_000_001)
+  let assert Ok(#(loaded_id, messages)) =
+    conversation.load_from_db(subject, "discord", "roundtrip-chan", 1_000_001)
   should.equal(loaded_id, convo_id)
   should.equal(list.length(messages), 2)
 
@@ -107,10 +196,21 @@ pub fn conversation_db_roundtrip_test() {
 
 pub fn system_message_roundtrip_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "sys-chan", 1_000_000)
+  let assert Ok(convo_id) =
+    db.resolve_conversation(subject, "discord", "sys-chan", 1_000_000)
 
-  let assert Ok(_) = db.append_message(subject, convo_id, "system", "you are helpful", "", "", 1_000_000)
-  let assert Ok(#(_, messages)) = conversation.load_from_db(subject, "discord", "sys-chan", 1_000_001)
+  let assert Ok(_) =
+    db.append_message(
+      subject,
+      convo_id,
+      "system",
+      "you are helpful",
+      "",
+      "",
+      1_000_000,
+    )
+  let assert Ok(#(_, messages)) =
+    conversation.load_from_db(subject, "discord", "sys-chan", 1_000_001)
 
   let assert [msg] = messages
   case msg {
@@ -123,12 +223,23 @@ pub fn system_message_roundtrip_test() {
 
 pub fn tool_message_roundtrip_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "tool-chan", 1_000_000)
+  let assert Ok(convo_id) =
+    db.resolve_conversation(subject, "discord", "tool-chan", 1_000_000)
 
   // Use append_message with "tool" role; tool_call_id will be empty string (no AppendMessageFull API)
-  let assert Ok(_) = db.append_message(subject, convo_id, "tool", "file contents here", "", "", 1_000_000)
+  let assert Ok(_) =
+    db.append_message(
+      subject,
+      convo_id,
+      "tool",
+      "file contents here",
+      "",
+      "",
+      1_000_000,
+    )
 
-  let assert Ok(#(_, messages)) = conversation.load_from_db(subject, "discord", "tool-chan", 1_000_001)
+  let assert Ok(#(_, messages)) =
+    conversation.load_from_db(subject, "discord", "tool-chan", 1_000_001)
 
   let assert [msg] = messages
   case msg {
@@ -144,16 +255,40 @@ pub fn tool_message_roundtrip_test() {
 
 pub fn get_or_load_db_caches_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "cache-chan", 1_000_000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "cached msg", "u1", "testuser", 1_000_000)
+  let assert Ok(convo_id) =
+    db.resolve_conversation(subject, "discord", "cache-chan", 1_000_000)
+  let assert Ok(_) =
+    db.append_message(
+      subject,
+      convo_id,
+      "user",
+      "cached msg",
+      "u1",
+      "testuser",
+      1_000_000,
+    )
 
   let buffers = conversation.new()
   // First call: loads from DB
-  let #(buffers2, id1, msgs1) = conversation.get_or_load_db(buffers, subject, "discord", "cache-chan", 1_000_001)
+  let #(buffers2, id1, msgs1) =
+    conversation.get_or_load_db(
+      buffers,
+      subject,
+      "discord",
+      "cache-chan",
+      1_000_001,
+    )
   should.equal(list.length(msgs1), 1)
 
   // Second call: returns from cache (same buffers)
-  let #(_, id2, msgs2) = conversation.get_or_load_db(buffers2, subject, "discord", "cache-chan", 1_000_002)
+  let #(_, id2, msgs2) =
+    conversation.get_or_load_db(
+      buffers2,
+      subject,
+      "discord",
+      "cache-chan",
+      1_000_002,
+    )
   should.equal(id1, id2)
   should.equal(list.length(msgs2), 1)
 
@@ -162,16 +297,19 @@ pub fn get_or_load_db_caches_test() {
 
 pub fn update_compaction_summary_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "compact-chan", 1_000_000)
+  let assert Ok(convo_id) =
+    db.resolve_conversation(subject, "discord", "compact-chan", 1_000_000)
 
-  let assert Ok(_) = db.update_compaction_summary(subject, convo_id, "## Goal\nTest")
+  let assert Ok(_) =
+    db.update_compaction_summary(subject, convo_id, "## Goal\nTest")
 
   process.send(subject, db.Shutdown)
 }
 
 pub fn set_domain_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "ws-chan", 1_000_000)
+  let assert Ok(convo_id) =
+    db.resolve_conversation(subject, "discord", "ws-chan", 1_000_000)
 
   let assert Ok(_) = db.set_domain(subject, convo_id, "local-accounts")
 
@@ -180,19 +318,30 @@ pub fn set_domain_test() {
 
 pub fn load_messages_returns_newest_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(convo_id) = db.resolve_conversation(subject, "discord", "order-test", 1000)
+  let assert Ok(convo_id) =
+    db.resolve_conversation(subject, "discord", "order-test", 1000)
 
   // Insert 10 messages with distinct timestamps
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 1", "", "", 1000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 2", "", "", 2000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 3", "", "", 3000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 4", "", "", 4000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 5", "", "", 5000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 6", "", "", 6000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 7", "", "", 7000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 8", "", "", 8000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 9", "", "", 9000)
-  let assert Ok(_) = db.append_message(subject, convo_id, "user", "msg 10", "", "", 10_000)
+  let assert Ok(_) =
+    db.append_message(subject, convo_id, "user", "msg 1", "", "", 1000)
+  let assert Ok(_) =
+    db.append_message(subject, convo_id, "user", "msg 2", "", "", 2000)
+  let assert Ok(_) =
+    db.append_message(subject, convo_id, "user", "msg 3", "", "", 3000)
+  let assert Ok(_) =
+    db.append_message(subject, convo_id, "user", "msg 4", "", "", 4000)
+  let assert Ok(_) =
+    db.append_message(subject, convo_id, "user", "msg 5", "", "", 5000)
+  let assert Ok(_) =
+    db.append_message(subject, convo_id, "user", "msg 6", "", "", 6000)
+  let assert Ok(_) =
+    db.append_message(subject, convo_id, "user", "msg 7", "", "", 7000)
+  let assert Ok(_) =
+    db.append_message(subject, convo_id, "user", "msg 8", "", "", 8000)
+  let assert Ok(_) =
+    db.append_message(subject, convo_id, "user", "msg 9", "", "", 9000)
+  let assert Ok(_) =
+    db.append_message(subject, convo_id, "user", "msg 10", "", "", 10_000)
 
   // Load only 4 — should be the NEWEST 4, in chronological order
   let assert Ok(messages) = db.load_messages(subject, convo_id, 4)
@@ -215,10 +364,25 @@ pub fn load_messages_returns_newest_test() {
 
 pub fn upsert_and_load_flare_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(_) = db.upsert_flare(
-    subject,
-    db.StoredFlare(id: "f1", label: "Test flare", status: "active", domain: "work", thread_id: "ch1", original_prompt: "Do stuff", execution: "{}", triggers: "[]", tools: "[]", workspace: "", session_id: "", created_at_ms: 1000, updated_at_ms: 1000),
-  )
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f1",
+        label: "Test flare",
+        status: "active",
+        domain: "work",
+        thread_id: "ch1",
+        original_prompt: "Do stuff",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 1000,
+      ),
+    )
   let assert Ok(flares) = db.load_flares(subject, False)
   list.length(flares) |> should.equal(1)
   let assert Ok(f) = list.first(flares)
@@ -229,14 +393,44 @@ pub fn upsert_and_load_flare_test() {
 
 pub fn load_flares_excludes_archived_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(_) = db.upsert_flare(
-    subject,
-    db.StoredFlare(id: "f1", label: "Active", status: "active", domain: "work", thread_id: "ch1", original_prompt: "Do stuff", execution: "{}", triggers: "[]", tools: "[]", workspace: "", session_id: "", created_at_ms: 1000, updated_at_ms: 1000),
-  )
-  let assert Ok(_) = db.upsert_flare(
-    subject,
-    db.StoredFlare(id: "f2", label: "Archived", status: "archived", domain: "work", thread_id: "ch2", original_prompt: "Old stuff", execution: "{}", triggers: "[]", tools: "[]", workspace: "", session_id: "", created_at_ms: 1000, updated_at_ms: 1000),
-  )
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f1",
+        label: "Active",
+        status: "active",
+        domain: "work",
+        thread_id: "ch1",
+        original_prompt: "Do stuff",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 1000,
+      ),
+    )
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f2",
+        label: "Archived",
+        status: "archived",
+        domain: "work",
+        thread_id: "ch2",
+        original_prompt: "Old stuff",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 1000,
+      ),
+    )
   let assert Ok(all) = db.load_flares(subject, False)
   list.length(all) |> should.equal(2)
   let assert Ok(active_only) = db.load_flares(subject, True)
@@ -245,10 +439,25 @@ pub fn load_flares_excludes_archived_test() {
 
 pub fn update_flare_status_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(_) = db.upsert_flare(
-    subject,
-    db.StoredFlare(id: "f1", label: "Test", status: "active", domain: "work", thread_id: "ch1", original_prompt: "Do stuff", execution: "{}", triggers: "[]", tools: "[]", workspace: "", session_id: "", created_at_ms: 1000, updated_at_ms: 1000),
-  )
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f1",
+        label: "Test",
+        status: "active",
+        domain: "work",
+        thread_id: "ch1",
+        original_prompt: "Do stuff",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 1000,
+      ),
+    )
   let assert Ok(_) = db.update_flare_status(subject, "f1", "parked", 2000)
   let assert Ok(flares) = db.load_flares(subject, False)
   let assert Ok(f) = list.first(flares)
@@ -258,10 +467,25 @@ pub fn update_flare_status_test() {
 
 pub fn update_flare_session_id_test() {
   let assert Ok(subject) = db.start(":memory:")
-  let assert Ok(_) = db.upsert_flare(
-    subject,
-    db.StoredFlare(id: "f1", label: "Test", status: "active", domain: "work", thread_id: "ch1", original_prompt: "Do stuff", execution: "{}", triggers: "[]", tools: "[]", workspace: "", session_id: "", created_at_ms: 1000, updated_at_ms: 1000),
-  )
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f1",
+        label: "Test",
+        status: "active",
+        domain: "work",
+        thread_id: "ch1",
+        original_prompt: "Do stuff",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 1000,
+      ),
+    )
   let assert Ok(_) = db.update_flare_session_id(subject, "f1", "sess-123", 2000)
   let assert Ok(flares) = db.load_flares(subject, False)
   let assert Ok(f) = list.first(flares)
@@ -275,7 +499,14 @@ pub fn update_flare_session_id_test() {
 pub fn insert_memory_entry_returns_id_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(id) =
-    db.insert_memory_entry(subject, "work", "state", "current_task", "doing stuff", 1000)
+    db.insert_memory_entry(
+      subject,
+      "work",
+      "state",
+      "current_task",
+      "doing stuff",
+      1000,
+    )
   should.be_true(id > 0)
   process.send(subject, db.Shutdown)
 }
@@ -293,22 +524,39 @@ pub fn insert_memory_entry_increments_id_test() {
 pub fn get_active_memory_entries_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(_) =
-    db.insert_memory_entry(subject, "work", "state", "task", "doing stuff", 1000)
+    db.insert_memory_entry(
+      subject,
+      "work",
+      "state",
+      "task",
+      "doing stuff",
+      1000,
+    )
   let assert Ok(_) =
     db.insert_memory_entry(subject, "work", "state", "mood", "focused", 2000)
   let assert Ok(_) =
-    db.insert_memory_entry(subject, "work", "memory", "fact1", "gleam is great", 3000)
+    db.insert_memory_entry(
+      subject,
+      "work",
+      "memory",
+      "fact1",
+      "gleam is great",
+      3000,
+    )
 
   // Should return only the two "state" entries for "work" domain
-  let assert Ok(entries) = db.get_active_memory_entries(subject, "work", "state")
+  let assert Ok(entries) =
+    db.get_active_memory_entries(subject, "work", "state")
   list.length(entries) |> should.equal(2)
 
   // Should return only the one "memory" entry
-  let assert Ok(mem_entries) = db.get_active_memory_entries(subject, "work", "memory")
+  let assert Ok(mem_entries) =
+    db.get_active_memory_entries(subject, "work", "memory")
   list.length(mem_entries) |> should.equal(1)
 
   // Different domain returns nothing
-  let assert Ok(empty) = db.get_active_memory_entries(subject, "personal", "state")
+  let assert Ok(empty) =
+    db.get_active_memory_entries(subject, "personal", "state")
   list.length(empty) |> should.equal(0)
 
   process.send(subject, db.Shutdown)
@@ -322,11 +570,11 @@ pub fn get_active_memory_entries_excludes_superseded_test() {
     db.insert_memory_entry(subject, "work", "state", "task", "new task", 2000)
 
   // Supersede the old entry
-  let assert Ok(_) =
-    db.supersede_memory_entry(subject, old_id, new_id, 2000)
+  let assert Ok(_) = db.supersede_memory_entry(subject, old_id, new_id, 2000)
 
   // Only the new entry should be active
-  let assert Ok(entries) = db.get_active_memory_entries(subject, "work", "state")
+  let assert Ok(entries) =
+    db.get_active_memory_entries(subject, "work", "state")
   list.length(entries) |> should.equal(1)
   let assert [entry] = entries
   entry.id |> should.equal(new_id)
@@ -352,7 +600,8 @@ pub fn supersede_memory_entry_idempotent_test() {
 
   // Verify old entry still points to new_id (not newer_id)
   // We check by getting active entries — old should still be superseded
-  let assert Ok(entries) = db.get_active_memory_entries(subject, "work", "state")
+  let assert Ok(entries) =
+    db.get_active_memory_entries(subject, "work", "state")
   // new_id and newer_id should be active, old_id should be superseded
   list.length(entries) |> should.equal(2)
 
@@ -384,7 +633,8 @@ pub fn get_active_entry_id_returns_error_when_none_test() {
   should.be_error(result)
 
   // Totally nonexistent key — should also error
-  let result2 = db.get_active_entry_id(subject, "work", "state", "nonexistent", 0)
+  let result2 =
+    db.get_active_entry_id(subject, "work", "state", "nonexistent", 0)
   should.be_error(result2)
 
   process.send(subject, db.Shutdown)
@@ -393,9 +643,17 @@ pub fn get_active_entry_id_returns_error_when_none_test() {
 pub fn memory_entry_fields_roundtrip_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(id) =
-    db.insert_memory_entry(subject, "personal", "memory", "favorite_color", "blue", 42_000)
+    db.insert_memory_entry(
+      subject,
+      "personal",
+      "memory",
+      "favorite_color",
+      "blue",
+      42_000,
+    )
 
-  let assert Ok(entries) = db.get_active_memory_entries(subject, "personal", "memory")
+  let assert Ok(entries) =
+    db.get_active_memory_entries(subject, "personal", "memory")
   let assert [entry] = entries
   entry.id |> should.equal(id)
   entry.domain |> should.equal("personal")
@@ -415,16 +673,7 @@ pub fn insert_dream_run_test() {
   let assert Ok(subject) = db.start(":memory:")
 
   let assert Ok(Nil) =
-    db.insert_dream_run(
-      subject,
-      "work",
-      5000,
-      "consolidate",
-      3,
-      1,
-      2,
-      1200,
-    )
+    db.insert_dream_run(subject, "work", 5000, "consolidate", 3, 1, 2, 1200)
 
   process.send(subject, db.Shutdown)
 }
@@ -502,7 +751,12 @@ pub fn update_flare_result_test() {
 
   // Update its result_text
   let assert Ok(Nil) =
-    db.update_flare_result(subject, "f-res-1", "Feature built successfully", 2000)
+    db.update_flare_result(
+      subject,
+      "f-res-1",
+      "Feature built successfully",
+      2000,
+    )
 
   // Verify by loading the flare outcomes
   let assert Ok(outcomes) = db.get_flare_outcomes(subject, "work", 0)
@@ -537,8 +791,7 @@ pub fn update_flare_result_updates_timestamp_test() {
       ),
     )
 
-  let assert Ok(Nil) =
-    db.update_flare_result(subject, "f-ts-1", "Done", 5000)
+  let assert Ok(Nil) = db.update_flare_result(subject, "f-ts-1", "Done", 5000)
 
   // Load flares to verify updated_at_ms changed
   let assert Ok(flares) = db.load_flares(subject, False)

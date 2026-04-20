@@ -46,8 +46,16 @@ pub fn format_empty_results_test() {
 
 pub fn format_results_test() {
   let results = [
-    web.SearchResult(title: "Gleam Language", url: "https://gleam.run", description: "A friendly language"),
-    web.SearchResult(title: "Erlang", url: "https://erlang.org", description: "The BEAM VM"),
+    web.SearchResult(
+      title: "Gleam Language",
+      url: "https://gleam.run",
+      description: "A friendly language",
+    ),
+    web.SearchResult(
+      title: "Erlang",
+      url: "https://erlang.org",
+      description: "The BEAM VM",
+    ),
   ]
   let formatted = web.format_search_results(results)
   should.be_true(string.contains(formatted, "1. **Gleam Language**"))

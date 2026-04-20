@@ -1,7 +1,6 @@
 /// Tests for RegisterProposal, RegisterShellApproval, and HandleInteractionResolve
 /// transitions in channel_actor. These verify that per-channel proposal/approval
 /// state is correctly managed in the channel actor, not in brain.
-
 import aura/brain_tools
 import aura/channel_actor
 import aura/time

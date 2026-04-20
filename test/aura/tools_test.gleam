@@ -38,11 +38,9 @@ pub fn read_file_absolute_test() {
 
 pub fn write_file_tier1_test() {
   // Use an absolute path that matches tier 1 (autonomous) patterns
-  let base =
-    "/tmp/aura-tools-write1-" <> test_helpers.random_suffix()
+  let base = "/tmp/aura-tools-write1-" <> test_helpers.random_suffix()
   let aura_data = base <> "/.local/share/aura"
-  let _ =
-    simplifile.create_directory_all(aura_data <> "/domains/cm2/logs")
+  let _ = simplifile.create_directory_all(aura_data <> "/domains/cm2/logs")
 
   // Tier 1 path -- absolute path in data dir with logs/
   tools.write_file(
@@ -63,13 +61,7 @@ pub fn write_file_tier2_rejected_test() {
   let _ = simplifile.create_directory_all(base)
 
   // Tier 2 path (absolute, outside autonomous zones) without approval
-  tools.write_file(
-    base <> "/config.toml",
-    base,
-    "name = \"test\"",
-    [],
-    False,
-  )
+  tools.write_file(base <> "/config.toml", base, "name = \"test\"", [], False)
   |> should.be_error
 
   let _ = simplifile.delete_all([base])
@@ -81,13 +73,7 @@ pub fn write_file_tier2_approved_test() {
   let _ = simplifile.create_directory_all(base)
 
   // Tier 2 path WITH approval -- should succeed
-  tools.write_file(
-    base <> "/config.toml",
-    base,
-    "name = \"test\"",
-    [],
-    True,
-  )
+  tools.write_file(base <> "/config.toml", base, "name = \"test\"", [], True)
   |> should.be_ok
 
   let _ = simplifile.delete_all([base])
@@ -95,8 +81,7 @@ pub fn write_file_tier2_approved_test() {
 }
 
 pub fn write_file_validation_fail_test() {
-  let base =
-    "/tmp/aura-tools-valfail-" <> test_helpers.random_suffix()
+  let base = "/tmp/aura-tools-valfail-" <> test_helpers.random_suffix()
   let aura_data = base <> "/.local/share/aura"
   let _ = simplifile.create_directory_all(aura_data)
 
@@ -120,8 +105,7 @@ pub fn write_file_validation_fail_test() {
 }
 
 pub fn append_file_test() {
-  let base =
-    "/tmp/aura-tools-append-" <> test_helpers.random_suffix()
+  let base = "/tmp/aura-tools-append-" <> test_helpers.random_suffix()
   let aura_data = base <> "/.local/share/aura"
   let _ = simplifile.create_directory_all(aura_data)
   let _ = simplifile.write(aura_data <> "/events.jsonl", "")
@@ -176,9 +160,7 @@ pub fn split_shell_args_simple_test() {
 }
 
 pub fn split_shell_args_quoted_test() {
-  tools.split_shell_args(
-    "tickets search \"project = HY AND status = To Do\"",
-  )
+  tools.split_shell_args("tickets search \"project = HY AND status = To Do\"")
   |> should.equal(["tickets", "search", "project = HY AND status = To Do"])
 }
 
@@ -188,9 +170,7 @@ pub fn split_shell_args_single_quotes_test() {
 }
 
 pub fn split_shell_args_mixed_test() {
-  tools.split_shell_args(
-    "--instance HY tickets search \"project = HY\"",
-  )
+  tools.split_shell_args("--instance HY tickets search \"project = HY\"")
   |> should.equal([
     "--instance",
     "HY",

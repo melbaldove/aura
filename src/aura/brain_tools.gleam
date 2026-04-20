@@ -7,7 +7,6 @@ import aura/clients/discord_client.{type DiscordClient}
 import aura/clients/llm_client.{type LLMClient}
 import aura/clients/skill_runner.{type SkillRunner}
 import aura/db
-import aura/time
 import aura/discord/rest
 import aura/discord/types as discord_types
 import aura/llm
@@ -18,6 +17,7 @@ import aura/shell
 import aura/skill
 import aura/structured_memory
 import aura/tier
+import aura/time
 import aura/tools
 import aura/validator
 import aura/web
@@ -26,11 +26,11 @@ import gleam/dict
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
-import logging
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
+import logging
 
 // ---------------------------------------------------------------------------
 // Types
@@ -124,11 +124,12 @@ pub fn execute_tool(
   case get_arg(args, "_parse_error") {
     "" -> #(execute_tool_dispatch(ctx, call.name, args), args)
     raw -> {
-      logging.log(logging.Info, 
+      logging.log(
+        logging.Info,
         "[brain] Failed to parse tool args for "
-        <> call.name
-        <> ": "
-        <> string.slice(raw, 0, 200),
+          <> call.name
+          <> ": "
+          <> string.slice(raw, 0, 200),
       )
       #(
         TextResult(
@@ -222,7 +223,8 @@ fn execute_tool_dispatch(
             Ok(info) -> {
               case memory.read_file(info.path <> "/SKILL.md") {
                 Ok(content) -> TextResult(content)
-                Error(_) -> TextResult("Error: SKILL.md not found for " <> skill_name)
+                Error(_) ->
+                  TextResult("Error: SKILL.md not found for " <> skill_name)
               }
             }
             Error(_) -> TextResult("Error: Skill not found: " <> skill_name)
@@ -270,8 +272,7 @@ fn execute_tool_dispatch(
                 3 -> content
                 _ ->
                   case string.length(content) > 1500 {
-                    True ->
-                      string.slice(content, 0, 1500) <> "\n...(truncated)"
+                    True -> string.slice(content, 0, 1500) <> "\n...(truncated)"
                     False -> content
                   }
               }
@@ -285,7 +286,10 @@ fn execute_tool_dispatch(
                 <> "\n```"
 
               let buttons =
-                discord_types.approve_reject_buttons(ctx.channel_id, proposal_id)
+                discord_types.approve_reject_buttons(
+                  ctx.channel_id,
+                  proposal_id,
+                )
               case
                 rest.send_message_with_components(
                   ctx.discord_token,
@@ -312,10 +316,13 @@ fn execute_tool_dispatch(
                   ctx.on_propose(proposal)
                   // Block until user clicks approve/reject (15 min timeout)
                   case process.receive(reply_subject, 900_000) {
-                    Ok(Approved) -> TextResult("Approved. File written to `" <> path <> "`.")
+                    Ok(Approved) ->
+                      TextResult("Approved. File written to `" <> path <> "`.")
                     Ok(Rejected) -> TextResult("Rejected by user.")
-                    Ok(Expired) -> TextResult("Proposal expired (15 minute timeout).")
-                    Error(_) -> TextResult("Proposal timed out waiting for approval.")
+                    Ok(Expired) ->
+                      TextResult("Proposal expired (15 minute timeout).")
+                    Error(_) ->
+                      TextResult("Proposal timed out waiting for approval.")
                   }
                 }
                 Error(e) -> TextResult("Error posting proposal: " <> e)
@@ -382,7 +389,12 @@ fn execute_tool_dispatch(
             "user" -> Ok(xdg.user_path(ctx.paths))
             "state" -> Ok(xdg.domain_state_path(ctx.paths, ctx.domain_name))
             "memory" -> Ok(xdg.domain_memory_path(ctx.paths, ctx.domain_name))
-            unknown -> Error("Error: unknown target '" <> unknown <> "'. Use 'state', 'memory', or 'user'.")
+            unknown ->
+              Error(
+                "Error: unknown target '"
+                <> unknown
+                <> "'. Use 'state', 'memory', or 'user'.",
+              )
           }
           case path_result {
             Error(e) -> TextResult(e)
@@ -391,19 +403,28 @@ fn execute_tool_dispatch(
                 "set" -> {
                   case key {
                     "" -> TextResult("Error: 'key' is required for set action.")
-                    _ -> case structured_memory.set(path, key, content) {
-                      Ok(_) -> TextResult("Saved [" <> key <> "] to " <> target <> ".")
-                      Error(e) -> TextResult("Error: " <> e)
-                    }
+                    _ ->
+                      case structured_memory.set(path, key, content) {
+                        Ok(_) ->
+                          TextResult(
+                            "Saved [" <> key <> "] to " <> target <> ".",
+                          )
+                        Error(e) -> TextResult("Error: " <> e)
+                      }
                   }
                 }
                 "remove" -> {
                   case key {
-                    "" -> TextResult("Error: 'key' is required for remove action.")
-                    _ -> case structured_memory.remove(path, key) {
-                      Ok(_) -> TextResult("Removed [" <> key <> "] from " <> target <> ".")
-                      Error(e) -> TextResult("Error: " <> e)
-                    }
+                    "" ->
+                      TextResult("Error: 'key' is required for remove action.")
+                    _ ->
+                      case structured_memory.remove(path, key) {
+                        Ok(_) ->
+                          TextResult(
+                            "Removed [" <> key <> "] from " <> target <> ".",
+                          )
+                        Error(e) -> TextResult("Error: " <> e)
+                      }
                   }
                 }
                 "read" -> {
@@ -524,66 +545,88 @@ fn execute_tool_dispatch(
     "flare" -> {
       let resolve_flare = fn(identifier) {
         // Try session name first, then flare ID, then label
-        case flare_manager.get_flare_by_session_name(ctx.acp_subject, identifier) {
+        case
+          flare_manager.get_flare_by_session_name(ctx.acp_subject, identifier)
+        {
           Ok(f) -> Ok(f)
-          Error(_) -> case flare_manager.get_flare(ctx.acp_subject, identifier) {
-            Ok(f) -> Ok(f)
-            Error(_) -> flare_manager.get_flare_by_label(ctx.acp_subject, identifier)
-          }
+          Error(_) ->
+            case flare_manager.get_flare(ctx.acp_subject, identifier) {
+              Ok(f) -> Ok(f)
+              Error(_) ->
+                flare_manager.get_flare_by_label(ctx.acp_subject, identifier)
+            }
         }
       }
       case get_arg(args, "action") {
         "ignite" -> {
           case require_arg(args, "prompt") {
             Error(e) -> TextResult(e)
-            Ok(prompt) -> case require_arg(args, "repo") {
-              Error(e) -> TextResult(e)
-              Ok(repo) -> {
-                let task_id = "t" <> int.to_string(time.now_ms())
-                let cwd = ctx.domain_cwd <> "/" <> repo
-                let timeout_ms = case int.parse(get_arg(args, "timeout_minutes")) {
-                  Ok(m) -> m * 60_000
-                  Error(_) -> 30 * 60_000
-                }
-                let label = string.slice(prompt, 0, 50)
-                let thread_id = ctx.channel_id
-                // Create flare record first
-                case flare_manager.ignite(
-                  ctx.acp_subject,
-                  label,
-                  ctx.domain_name,
-                  thread_id,
-                  prompt,
-                  "{}",
-                  "{}",
-                  "{}",
-                  cwd,
-                ) {
-                  Ok(flare_id) -> {
-                    let task_spec = acp_types.TaskSpec(
-                      id: task_id,
-                      domain: ctx.domain_name,
-                      prompt: prompt,
-                      cwd: cwd,
-                      timeout_ms: timeout_ms,
-                      acceptance_criteria: [],
-                      provider: provider.parse_provider(ctx.acp_provider, ctx.acp_binary),
-                      worktree: ctx.acp_worktree,
-                    )
-                    case flare_manager.dispatch(ctx.acp_subject, task_spec, thread_id, flare_id) {
-                      Ok(session_name) -> {
-                        let details_msg =
-                          "Flare ignited: " <> session_name
-                          <> "\n\n**Prompt:**\n" <> prompt
-                        TextResult("Flare ignited.\n" <> details_msg)
-                      }
-                      Error(e) -> TextResult("Error dispatching flare: " <> e)
-                    }
+            Ok(prompt) ->
+              case require_arg(args, "repo") {
+                Error(e) -> TextResult(e)
+                Ok(repo) -> {
+                  let task_id = "t" <> int.to_string(time.now_ms())
+                  let cwd = ctx.domain_cwd <> "/" <> repo
+                  let timeout_ms = case
+                    int.parse(get_arg(args, "timeout_minutes"))
+                  {
+                    Ok(m) -> m * 60_000
+                    Error(_) -> 30 * 60_000
                   }
-                  Error(e) -> TextResult("Error creating flare: " <> e)
+                  let label = string.slice(prompt, 0, 50)
+                  let thread_id = ctx.channel_id
+                  // Create flare record first
+                  case
+                    flare_manager.ignite(
+                      ctx.acp_subject,
+                      label,
+                      ctx.domain_name,
+                      thread_id,
+                      prompt,
+                      "{}",
+                      "{}",
+                      "{}",
+                      cwd,
+                    )
+                  {
+                    Ok(flare_id) -> {
+                      let task_spec =
+                        acp_types.TaskSpec(
+                          id: task_id,
+                          domain: ctx.domain_name,
+                          prompt: prompt,
+                          cwd: cwd,
+                          timeout_ms: timeout_ms,
+                          acceptance_criteria: [],
+                          provider: provider.parse_provider(
+                            ctx.acp_provider,
+                            ctx.acp_binary,
+                          ),
+                          worktree: ctx.acp_worktree,
+                        )
+                      case
+                        flare_manager.dispatch(
+                          ctx.acp_subject,
+                          task_spec,
+                          thread_id,
+                          flare_id,
+                        )
+                      {
+                        Ok(session_name) -> {
+                          let details_msg =
+                            "Flare ignited: "
+                            <> session_name
+                            <> "\n\n**Prompt:**\n"
+                            <> prompt
+                          TextResult("Flare ignited.\n" <> details_msg)
+                        }
+                        Error(e) -> TextResult("Error dispatching flare: " <> e)
+                      }
+                    }
+                    Error(e) -> TextResult("Error creating flare: " <> e)
+                  }
                 }
               }
-            }
           }
         }
         "status" -> {
@@ -598,13 +641,32 @@ fn execute_tool_dispatch(
                     True -> " working"
                     False -> " idle"
                   }
-                  let state_str = " [" <> flare_manager.status_to_string(flare.status) <> activity <> "] (started " <> int.to_string(elapsed_min) <> "m ago)"
+                  let state_str =
+                    " ["
+                    <> flare_manager.status_to_string(flare.status)
+                    <> activity
+                    <> "] (started "
+                    <> int.to_string(elapsed_min)
+                    <> "m ago)"
                   TextResult(
-                    "Flare: " <> flare.id <> " \"" <> flare.label <> "\"" <> state_str
-                    <> "\nDomain: " <> flare.domain
-                    <> case flare.session_name { "" -> "" sn -> "\nSession: " <> sn }
-                    <> case flare.session_id { "" -> "" sid -> "\nRun: " <> sid }
-                    <> "\nPrompt: " <> string.slice(flare.original_prompt, 0, 200)
+                    "Flare: "
+                    <> flare.id
+                    <> " \""
+                    <> flare.label
+                    <> "\""
+                    <> state_str
+                    <> "\nDomain: "
+                    <> flare.domain
+                    <> case flare.session_name {
+                      "" -> ""
+                      sn -> "\nSession: " <> sn
+                    }
+                    <> case flare.session_id {
+                      "" -> ""
+                      sid -> "\nRun: " <> sid
+                    }
+                    <> "\nPrompt: "
+                    <> string.slice(flare.original_prompt, 0, 200),
                   )
                 }
                 Error(_) -> TextResult("Flare not found: " <> identifier)
@@ -624,10 +686,17 @@ fn execute_tool_dispatch(
                   _, _ -> ""
                 }
                 f.id
-                <> " \"" <> f.label <> "\""
-                <> " [" <> flare_manager.status_to_string(f.status) <> activity <> "]"
-                <> " domain=" <> f.domain
-                <> " thread=" <> f.thread_id
+                <> " \""
+                <> f.label
+                <> "\""
+                <> " ["
+                <> flare_manager.status_to_string(f.status)
+                <> activity
+                <> "]"
+                <> " domain="
+                <> f.domain
+                <> " thread="
+                <> f.thread_id
                 <> case f.session_name {
                   "" -> ""
                   sn -> " session=" <> sn
@@ -641,31 +710,53 @@ fn execute_tool_dispatch(
         "prompt" -> {
           case require_arg(args, "session_name") {
             Error(e) -> TextResult(e)
-            Ok(identifier) -> case require_arg(args, "prompt") {
-              Error(e) -> TextResult(e)
-              Ok(message) -> {
-                case resolve_flare(identifier) {
-                  Error(_) -> TextResult("Flare not found: " <> identifier)
-                  Ok(flare) -> {
-                    case flare_manager.resolve_prompt_action(flare.status, flare.id, flare.session_name, message) {
-                      flare_manager.SendToLive(sn) -> {
-                        case flare_manager.send_input(ctx.acp_subject, sn, message) {
-                          Ok(_) -> TextResult("Sent to " <> sn)
-                          Error(e) -> TextResult("Error: " <> e)
+            Ok(identifier) ->
+              case require_arg(args, "prompt") {
+                Error(e) -> TextResult(e)
+                Ok(message) -> {
+                  case resolve_flare(identifier) {
+                    Error(_) -> TextResult("Flare not found: " <> identifier)
+                    Ok(flare) -> {
+                      case
+                        flare_manager.resolve_prompt_action(
+                          flare.status,
+                          flare.id,
+                          flare.session_name,
+                          message,
+                        )
+                      {
+                        flare_manager.SendToLive(sn) -> {
+                          case
+                            flare_manager.send_input(
+                              ctx.acp_subject,
+                              sn,
+                              message,
+                            )
+                          {
+                            Ok(_) -> TextResult("Sent to " <> sn)
+                            Error(e) -> TextResult("Error: " <> e)
+                          }
                         }
-                      }
-                      flare_manager.RekindleFlare(flare_id, prompt) -> {
-                        case flare_manager.rekindle(ctx.acp_subject, flare_id, prompt) {
-                          Ok(new_session) -> TextResult("Flare rekindled: " <> new_session)
-                          Error(e) -> TextResult("Error: " <> e)
+                        flare_manager.RekindleFlare(flare_id, prompt) -> {
+                          case
+                            flare_manager.rekindle(
+                              ctx.acp_subject,
+                              flare_id,
+                              prompt,
+                            )
+                          {
+                            Ok(new_session) ->
+                              TextResult("Flare rekindled: " <> new_session)
+                            Error(e) -> TextResult("Error: " <> e)
+                          }
                         }
+                        flare_manager.RejectPrompt(reason) ->
+                          TextResult("Error: " <> reason)
                       }
-                      flare_manager.RejectPrompt(reason) -> TextResult("Error: " <> reason)
                     }
                   }
                 }
               }
-            }
           }
         }
         "archive" -> {
@@ -731,10 +822,14 @@ fn execute_tool_dispatch(
                   let input = get_arg(args, "prompt")
                   case input {
                     "" -> TextResult("Error: prompt is required for rekindle")
-                    _ -> case flare_manager.rekindle(ctx.acp_subject, flare.id, input) {
-                      Ok(new_session) -> TextResult("Flare rekindled: " <> new_session)
-                      Error(e) -> TextResult("Error: " <> e)
-                    }
+                    _ ->
+                      case
+                        flare_manager.rekindle(ctx.acp_subject, flare.id, input)
+                      {
+                        Ok(new_session) ->
+                          TextResult("Flare rekindled: " <> new_session)
+                        Error(e) -> TextResult("Error: " <> e)
+                      }
                   }
                 }
                 Error(_) -> TextResult("Flare not found: " <> identifier)
@@ -742,7 +837,12 @@ fn execute_tool_dispatch(
             }
           }
         }
-        unknown -> TextResult("Unknown flare action: " <> unknown <> ". Use: ignite, status, list, prompt, archive, kill, park, rekindle")
+        unknown ->
+          TextResult(
+            "Unknown flare action: "
+            <> unknown
+            <> ". Use: ignite, status, list, prompt, archive, kill, park, rekindle",
+          )
       }
     }
     "shell" -> {
@@ -822,7 +922,8 @@ fn execute_tool_dispatch(
         Ok(path) -> {
           let resolved = tools.resolve_path(path, ctx.base_dir)
           let question = case get_arg(args, "question") {
-            "" -> "Describe this image concisely. Focus on text content, numbers, structure, and any actionable information. Be specific."
+            "" ->
+              "Describe this image concisely. Focus on text content, numbers, structure, and any actionable information. Be specific."
             q -> q
           }
           case browser.read_as_data_url(resolved) {
@@ -843,7 +944,12 @@ fn execute_tool_dispatch(
       let is_skill = list.any(ctx.skill_infos, fn(s) { s.name == name })
       case is_skill {
         True -> {
-          logging.log(logging.Info, "[brain] Redirecting unknown tool '" <> name <> "' to run_skill (matches skill name)")
+          logging.log(
+            logging.Info,
+            "[brain] Redirecting unknown tool '"
+              <> name
+              <> "' to run_skill (matches skill name)",
+          )
           case
             tools.run_skill(
               ctx.skill_runner,
@@ -1103,10 +1209,7 @@ pub fn parse_tool_args(json_str: String) -> List(#(String, String)) {
       case string.split_once(json_str, "}{") {
         Ok(#(first, _)) -> {
           case
-            json.parse(
-              first <> "}",
-              decode.dict(decode.string, decode.string),
-            )
+            json.parse(first <> "}", decode.dict(decode.string, decode.string))
           {
             Ok(d) -> dict.to_list(d)
             Error(_) -> [#("_parse_error", json_str)]
@@ -1124,7 +1227,6 @@ pub fn format_tool_args(args: List(#(String, String))) -> String {
   |> list.map(fn(pair) { pair.1 })
   |> string.join(", ")
 }
-
 
 /// Get an argument value by key, returning empty string if not found.
 pub fn get_arg(args: List(#(String, String)), key: String) -> String {
@@ -1201,7 +1303,11 @@ fn skill_manage_action(
         Error(e) -> TextResult("Error: " <> e)
       }
     _ ->
-      TextResult("Error: unknown action '" <> action <> "'. Use create | edit | patch | delete.")
+      TextResult(
+        "Error: unknown action '"
+        <> action
+        <> "'. Use create | edit | patch | delete.",
+      )
   }
 }
 

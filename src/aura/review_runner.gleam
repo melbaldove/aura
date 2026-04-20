@@ -39,5 +39,8 @@ pub type ReviewRunner {
 /// Production default — delegates directly to `review.maybe_spawn_review`
 /// and `review.maybe_spawn_skill_review`.
 pub fn default() -> ReviewRunner {
-  ReviewRunner(run: review.maybe_spawn_review, skill_run: review.maybe_spawn_skill_review)
+  ReviewRunner(
+    run: review.maybe_spawn_review,
+    skill_run: review.maybe_spawn_skill_review,
+  )
 }

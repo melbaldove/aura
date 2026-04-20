@@ -21,10 +21,7 @@ pub type ShellResult {
 
 /// Pre-compiled dangerous command patterns. Built once at startup.
 pub type CompiledPatterns {
-  CompiledPatterns(
-    union: Regexp,
-    patterns: List(#(Regexp, String, String)),
-  )
+  CompiledPatterns(union: Regexp, patterns: List(#(Regexp, String, String)))
 }
 
 // ---------------------------------------------------------------------------
@@ -44,50 +41,130 @@ fn dangerous_patterns() -> List(#(String, String, String)) {
     #("\\brm\\s+(-[^\\s]*\\s+)*/", "rm_root", "Delete in root path"),
     #("\\brm\\s+-[^\\s]*r", "rm_recursive", "Recursive delete"),
     #("\\brm\\s+--recursive\\b", "rm_recursive_long", "Recursive delete"),
-    #("\\bchmod\\s+(-[^\\s]*\\s+)*(777|666|o\\+[rwx]*w|a\\+[rwx]*w)\\b", "chmod_world_writable", "World-writable permissions"),
-    #("\\bchown\\s+(-[^\\s]*)?R\\s+root", "chown_root", "Recursive chown to root"),
+    #(
+      "\\bchmod\\s+(-[^\\s]*\\s+)*(777|666|o\\+[rwx]*w|a\\+[rwx]*w)\\b",
+      "chmod_world_writable",
+      "World-writable permissions",
+    ),
+    #(
+      "\\bchown\\s+(-[^\\s]*)?R\\s+root",
+      "chown_root",
+      "Recursive chown to root",
+    ),
     #("\\bmkfs\\b", "mkfs", "Format filesystem"),
     #("\\bdd\\s+.*if=", "dd", "Disk copy"),
     #(">\\s*/dev/sd", "write_block_device", "Write to block device"),
     // -- Data (case-insensitive via inline flag) --
-    #("(?i)\\bDROP\\s+(TABLE|DATABASE)\\b", "sql_drop", "SQL DROP TABLE/DATABASE"),
-    #("(?i)\\bDELETE\\s+FROM\\b(?!.*\\bWHERE\\b)", "sql_delete_no_where", "SQL DELETE without WHERE"),
+    #(
+      "(?i)\\bDROP\\s+(TABLE|DATABASE)\\b",
+      "sql_drop",
+      "SQL DROP TABLE/DATABASE",
+    ),
+    #(
+      "(?i)\\bDELETE\\s+FROM\\b(?!.*\\bWHERE\\b)",
+      "sql_delete_no_where",
+      "SQL DELETE without WHERE",
+    ),
     #("(?i)\\bTRUNCATE\\s+(TABLE)?\\s*\\w", "sql_truncate", "SQL TRUNCATE"),
     // -- System --
-    #("\\bsystemctl\\s+(-[^\\s]+\\s+)*(stop|restart|disable|mask)\\b", "systemctl", "Stop/restart system service"),
+    #(
+      "\\bsystemctl\\s+(-[^\\s]+\\s+)*(stop|restart|disable|mask)\\b",
+      "systemctl",
+      "Stop/restart system service",
+    ),
     #("\\bkill\\s+-9\\s+-1\\b", "kill_all", "Kill all processes"),
     #("\\bpkill\\s+-9\\b", "pkill_force", "Force kill processes"),
-    #(":\\(\\)\\s*\\{\\s*:\\s*\\|\\s*:\\s*&\\s*\\}\\s*;\\s*:", "fork_bomb", "Fork bomb"),
+    #(
+      ":\\(\\)\\s*\\{\\s*:\\s*\\|\\s*:\\s*&\\s*\\}\\s*;\\s*:",
+      "fork_bomb",
+      "Fork bomb",
+    ),
     // -- Remote code execution --
-    #("\\b(bash|sh|zsh|ksh)\\s+-[^\\s]*c(\\s+|$)", "shell_exec", "Shell command via -c flag"),
-    #("\\b(python[23]?|perl|ruby|node)\\s+-[ec]\\s+", "script_exec", "Script execution via -e/-c flag"),
-    #("\\b(curl|wget)\\b.*\\|\\s*(ba)?sh\\b", "pipe_to_shell", "Pipe remote content to shell"),
-    #("\\b(bash|sh|zsh|ksh)\\s+<\\s*<\\s*\\(\\s*(curl|wget)\\b", "process_sub_shell", "Execute remote script via process substitution"),
-    #("\\b(python[23]?|perl|ruby|node)\\s+<<", "heredoc_exec", "Script execution via heredoc"),
+    #(
+      "\\b(bash|sh|zsh|ksh)\\s+-[^\\s]*c(\\s+|$)",
+      "shell_exec",
+      "Shell command via -c flag",
+    ),
+    #(
+      "\\b(python[23]?|perl|ruby|node)\\s+-[ec]\\s+",
+      "script_exec",
+      "Script execution via -e/-c flag",
+    ),
+    #(
+      "\\b(curl|wget)\\b.*\\|\\s*(ba)?sh\\b",
+      "pipe_to_shell",
+      "Pipe remote content to shell",
+    ),
+    #(
+      "\\b(bash|sh|zsh|ksh)\\s+<\\s*<\\s*\\(\\s*(curl|wget)\\b",
+      "process_sub_shell",
+      "Execute remote script via process substitution",
+    ),
+    #(
+      "\\b(python[23]?|perl|ruby|node)\\s+<<",
+      "heredoc_exec",
+      "Script execution via heredoc",
+    ),
     // -- File system --
     #(">\\s*/etc/", "overwrite_etc", "Overwrite system config"),
     #("\\btee\\b.*/etc/", "tee_etc", "Write to system config via tee"),
     #("\\bxargs\\s+.*\\brm\\b", "xargs_rm", "xargs with rm"),
     #("\\bfind\\b.*-exec\\s+(/\\S*/)?rm\\b", "find_exec_rm", "find -exec rm"),
     #("\\bfind\\b.*-delete\\b", "find_delete", "find -delete"),
-    #("\\bsed\\s+-[^\\s]*i.*\\s/etc/", "sed_inplace_etc", "In-place edit of system config"),
-    #("\\b(cp|mv|install)\\b.*\\s/etc/", "cp_to_etc", "Copy/move file into /etc/"),
+    #(
+      "\\bsed\\s+-[^\\s]*i.*\\s/etc/",
+      "sed_inplace_etc",
+      "In-place edit of system config",
+    ),
+    #(
+      "\\b(cp|mv|install)\\b.*\\s/etc/",
+      "cp_to_etc",
+      "Copy/move file into /etc/",
+    ),
     // -- Git history rewriting --
     #("\\bgit\\s+reset\\s+--hard\\b", "git_reset_hard", "git reset --hard"),
     #("\\bgit\\s+push\\b.*--force\\b", "git_push_force", "git force push"),
-    #("\\bgit\\s+push\\b.*\\s-f\\b", "git_push_force_short", "git force push (short flag)"),
+    #(
+      "\\bgit\\s+push\\b.*\\s-f\\b",
+      "git_push_force_short",
+      "git force push (short flag)",
+    ),
     #("\\bgit\\s+clean\\s+-[^\\s]*f", "git_clean_force", "git clean with force"),
-    #("\\bgit\\s+branch\\s+-D\\b", "git_branch_force_delete", "git branch force delete"),
+    #(
+      "\\bgit\\s+branch\\s+-D\\b",
+      "git_branch_force_delete",
+      "git branch force delete",
+    ),
     // -- Aura self-protection --
     #("\\bkill\\b.*\\b(beam|epmd)\\b", "kill_beam", "Kill BEAM VM"),
     #("\\bpkill\\b.*\\b(beam|epmd)\\b", "pkill_beam", "Kill BEAM VM"),
     #("\\bkillall\\b.*\\b(beam|epmd)\\b", "killall_beam", "Kill BEAM VM"),
     #("\\brm\\b.*aura\\.db", "rm_aura_db", "Delete Aura database"),
-    #("\\brm\\b.*\\.config/aura", "rm_aura_config", "Delete Aura config directory"),
-    #("\\brm\\b.*\\.local/share/aura", "rm_aura_data", "Delete Aura data directory"),
-    #("\\brm\\b.*\\.local/state/aura", "rm_aura_state", "Delete Aura state directory"),
-    #("\\blaunchctl\\b.*com\\.aura", "launchctl_aura", "Modify Aura launchd service"),
-    #("\\btmux\\s+kill-ses", "tmux_kill_session", "Kill tmux session (may have active flares)"),
+    #(
+      "\\brm\\b.*\\.config/aura",
+      "rm_aura_config",
+      "Delete Aura config directory",
+    ),
+    #(
+      "\\brm\\b.*\\.local/share/aura",
+      "rm_aura_data",
+      "Delete Aura data directory",
+    ),
+    #(
+      "\\brm\\b.*\\.local/state/aura",
+      "rm_aura_state",
+      "Delete Aura state directory",
+    ),
+    #(
+      "\\blaunchctl\\b.*com\\.aura",
+      "launchctl_aura",
+      "Modify Aura launchd service",
+    ),
+    #(
+      "\\btmux\\s+kill-ses",
+      "tmux_kill_session",
+      "Kill tmux session (may have active flares)",
+    ),
   ]
 }
 
@@ -190,7 +267,9 @@ fn check_homograph(command: String) -> Option(String) {
         |> list.any(fn(g) { string.byte_size(g) > 1 })
       case has_non_ascii {
         True ->
-          Some("Non-ASCII characters in URL command — possible homograph attack")
+          Some(
+            "Non-ASCII characters in URL command — possible homograph attack",
+          )
         False -> None
       }
     }

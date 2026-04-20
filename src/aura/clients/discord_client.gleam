@@ -10,14 +10,10 @@ pub type DiscordClient {
     edit_message: fn(String, String, String) -> Result(Nil, String),
     trigger_typing: fn(String) -> Result(Nil, String),
     get_channel_parent: fn(String) -> Result(String, String),
-    send_message_with_attachment: fn(String, String, String) -> Result(
-      String,
-      String,
-    ),
-    create_thread_from_message: fn(String, String, String) -> Result(
-      String,
-      String,
-    ),
+    send_message_with_attachment: fn(String, String, String) ->
+      Result(String, String),
+    create_thread_from_message: fn(String, String, String) ->
+      Result(String, String),
   )
 }
 
@@ -29,9 +25,7 @@ pub fn production(token: String) -> DiscordClient {
     edit_message: fn(channel_id, msg_id, content) {
       rest.edit_message(token, channel_id, msg_id, content)
     },
-    trigger_typing: fn(channel_id) {
-      rest.trigger_typing(token, channel_id)
-    },
+    trigger_typing: fn(channel_id) { rest.trigger_typing(token, channel_id) },
     get_channel_parent: fn(channel_id) {
       rest.get_channel_parent(token, channel_id)
     },
