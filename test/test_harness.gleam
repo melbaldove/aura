@@ -259,9 +259,6 @@ pub fn fresh_system_with_allowlist(
         dream: "",
       ),
       brain_context: 128_000,
-      experimental: config.ExperimentalConfig(
-        channel_actor_channels: channel_ids,
-      ),
     )
 
   let default_skill_infos = [
@@ -514,9 +511,6 @@ pub fn fresh_system_with_domain_and_allowlist(
         dream: "",
       ),
       brain_context: 128_000,
-      experimental: config.ExperimentalConfig(
-        channel_actor_channels: allowlist,
-      ),
     )
 
   let domain_info = brain.DomainInfo(name: domain_name, channel_id: channel_id)
@@ -624,8 +618,6 @@ pub fn fresh_system_with_review_interval(review_interval: Int) -> TestSystem {
         notify_on_review: False,
         skill_review_interval: 0,
       ),
-      // Channel "c" is on the allowlist so brain routes it to channel_actor.
-      experimental: config.ExperimentalConfig(channel_actor_channels: ["c"]),
     )
 
   let default_skill_infos = [
@@ -729,8 +721,6 @@ pub fn fresh_system_with_skill_review_interval(
         notify_on_review: False,
         skill_review_interval: skill_review_interval,
       ),
-      // Channel "c" is on the allowlist so brain routes it to channel_actor.
-      experimental: config.ExperimentalConfig(channel_actor_channels: ["c"]),
     )
 
   let default_skill_infos = [
