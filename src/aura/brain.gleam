@@ -344,87 +344,63 @@ fn handle_message(
           }
         }
       }
-      let allowlist =
-        state.global_config.experimental.channel_actor_channels
-      case list.contains(allowlist, msg.channel_id) {
-        True -> {
-          logging.log(
-            logging.Info,
-            "[brain] Channel " <> msg.channel_id <> " routed to channel_actor (experimental)",
-          )
-          // Detect top-level domain channel → create a thread before routing.
-          let is_top_level_domain =
-            list.any(state.domains, fn(d) { d.channel_id == msg.channel_id })
-          let #(routed_channel_id, new_state) =
-            case is_top_level_domain, domain_name {
-              True, Some(name) -> {
-                let thread_name = string.slice(msg.content, 0, 50)
-                case
-                  state.discord.create_thread_from_message(
-                    msg.channel_id,
-                    msg.message_id,
-                    thread_name,
+      // Thread creation for top-level domain channels
+      let is_top_level_domain =
+        list.any(state.domains, fn(d) { d.channel_id == msg.channel_id })
+      let #(routed_channel_id, new_state) =
+        case is_top_level_domain, domain_name {
+          True, Some(name) -> {
+            let thread_name = string.slice(msg.content, 0, 50)
+            case
+              state.discord.create_thread_from_message(
+                msg.channel_id,
+                msg.message_id,
+                thread_name,
+              )
+            {
+              Ok(thread_id) -> {
+                logging.log(
+                  logging.Info,
+                  "[brain] Created thread " <> thread_id <> " for domain " <> name,
+                )
+                let updated =
+                  BrainState(
+                    ..state,
+                    thread_domains: dict.insert(
+                      state.thread_domains,
+                      thread_id,
+                      name,
+                    ),
                   )
-                {
-                  Ok(thread_id) -> {
-                    logging.log(
-                      logging.Info,
-                      "[brain] Created thread " <> thread_id <> " for domain " <> name,
-                    )
-                    let updated =
-                      BrainState(
-                        ..state,
-                        thread_domains: dict.insert(
-                          state.thread_domains,
-                          thread_id,
-                          name,
-                        ),
-                      )
-                    #(thread_id, updated)
-                  }
-                  Error(e) -> {
-                    logging.log(
-                      logging.Error,
-                      "[brain] Thread creation failed: " <> e <> ", routing to original channel",
-                    )
-                    #(msg.channel_id, state)
-                  }
-                }
+                #(thread_id, updated)
               }
-              _, _ -> #(msg.channel_id, state)
-            }
-          let routed_msg =
-            discord.IncomingMessage(..msg, channel_id: routed_channel_id)
-          let deps =
-            build_channel_actor_deps(new_state, routed_channel_id, domain_name)
-          let subject =
-            channel_supervisor.get_or_start(
-              new_state.channel_supervisor,
-              routed_channel_id,
-              deps,
-            )
-          process.send(subject, channel_actor.HandleIncoming(routed_msg))
-          actor.continue(new_state)
-        }
-        False -> {
-          let subj = state.self_subject
-          process.spawn_unlinked(fn() {
-            case rescue(fn() { handle_with_llm(state, msg, subj, domain_name) }) {
-              Ok(_) -> Nil
-              Error(reason) -> {
-                logging.log(logging.Error, "[brain] CRASH in handle_with_llm: " <> reason)
-                let _ =
-                  state.discord.send_message(
-                    msg.channel_id,
-                    "Sorry, I crashed while processing your message. Check the logs.",
-                  )
-                Nil
+              Error(e) -> {
+                logging.log(
+                  logging.Error,
+                  "[brain] Thread creation failed: " <> e <> ", routing to original channel",
+                )
+                #(msg.channel_id, state)
               }
             }
-          })
-          actor.continue(state)
+          }
+          _, _ -> #(msg.channel_id, state)
         }
-      }
+      logging.log(
+        logging.Info,
+        "[brain] Routing msg to " <> routed_channel_id,
+      )
+      let routed_msg =
+        discord.IncomingMessage(..msg, channel_id: routed_channel_id)
+      let deps =
+        build_channel_actor_deps(new_state, routed_channel_id, domain_name)
+      let subject =
+        channel_supervisor.get_or_start(
+          new_state.channel_supervisor,
+          routed_channel_id,
+          deps,
+        )
+      process.send(subject, channel_actor.HandleIncoming(routed_msg))
+      actor.continue(new_state)
     }
     UpdateDomains(domains) -> {
       logging.log(logging.Info, 
