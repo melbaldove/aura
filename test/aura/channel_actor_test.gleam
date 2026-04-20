@@ -128,3 +128,44 @@ pub fn stream_reasoning_increments_counter_test() {
     option.None -> should.fail()
   }
 }
+
+// --- Task 11: stream complete (terminal vs tool-call) ------------------------
+
+pub fn stream_complete_no_tools_finalizes_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(new_state, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("hello world", "[]", 100),
+    )
+  new_state.turn |> should.equal(option.None)
+  let has_db_save =
+    list.any(effects, fn(e) {
+      case e {
+        channel_actor.DbSaveExchange(_, _, _, _) -> True
+        _ -> False
+      }
+    })
+  has_db_save |> should.be_true
+}
+
+pub fn stream_complete_with_tools_spawns_tool_worker_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let tool_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{}\"}]"
+  let #(_, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", tool_calls_json, 100),
+    )
+  let has_tool_spawn =
+    list.any(effects, fn(e) {
+      case e {
+        channel_actor.SpawnToolWorker(_) -> True
+        _ -> False
+      }
+    })
+  has_tool_spawn |> should.be_true
+}
