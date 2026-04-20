@@ -10,6 +10,7 @@ import aura/clients/skill_runner
 import aura/conversation
 import aura/db
 import aura/discord
+import aura/discord/message as discord_message
 import aura/llm
 import aura/notification
 import aura/shell
@@ -432,7 +433,7 @@ fn build_initial_state_for_test(
 // Message handler
 // ---------------------------------------------------------------------------
 
-/// Task 16: call the pure `transition` to compute the next state and a list
+/// Call the pure `transition` to compute the next state and a list
 /// of effects, then execute each effect. The actor only ever returns the
 /// final state via `actor.continue`.
 pub fn handle_message(
@@ -474,7 +475,7 @@ fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
           // when the send succeeds.
           case state.tool_ctx.discord.send_message(
             state.channel_id,
-            safe_truncate(content),
+            discord_message.clip_to_discord_limit(content),
           ) {
             Ok(id) -> update_turn_msg_id(state, id)
             Error(_) -> state
@@ -484,7 +485,7 @@ fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
           let _ = state.tool_ctx.discord.edit_message(
             state.channel_id,
             existing,
-            safe_truncate(content),
+            discord_message.clip_to_discord_limit(content),
           )
           state
         }
@@ -493,7 +494,7 @@ fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
     DiscordSend(content) -> {
       let _ = state.tool_ctx.discord.send_message(
         state.channel_id,
-        safe_truncate(content),
+        discord_message.clip_to_discord_limit(content),
       )
       state
     }
@@ -657,69 +658,52 @@ fn execute_spawn_vision_worker(
 // Effect helpers
 // ---------------------------------------------------------------------------
 
+/// Apply `f` to the in-flight turn if present; no-op when idle. Every
+/// effect-interpreter mutation of TurnState fields routes through here.
+fn update_turn(
+  state: ChannelState,
+  f: fn(TurnState) -> TurnState,
+) -> ChannelState {
+  case state.turn {
+    Some(turn) -> ChannelState(..state, turn: Some(f(turn)))
+    None -> state
+  }
+}
+
 fn update_turn_with_worker(
   state: ChannelState,
   pid: Pid,
   monitor: Option(Monitor),
   kind: WorkerKind,
 ) -> ChannelState {
-  case state.turn {
-    Some(turn) -> {
-      let new_turn =
-        TurnState(
-          ..turn,
-          worker_pid: pid,
-          worker_monitor: monitor,
-          worker_kind: kind,
-        )
-      ChannelState(..state, turn: Some(new_turn))
-    }
-    None -> state
-  }
+  update_turn(state, fn(turn) {
+    TurnState(
+      ..turn,
+      worker_pid: pid,
+      worker_monitor: monitor,
+      worker_kind: kind,
+    )
+  })
 }
 
 fn update_deadline_timer(
   state: ChannelState,
   timer: Option(Timer),
 ) -> ChannelState {
-  case state.turn {
-    Some(turn) -> {
-      let new_turn = TurnState(..turn, deadline_timer: timer)
-      ChannelState(..state, turn: Some(new_turn))
-    }
-    None -> state
-  }
+  update_turn(state, fn(turn) { TurnState(..turn, deadline_timer: timer) })
 }
 
 fn update_heartbeat(state: ChannelState, now_ms: Int) -> ChannelState {
-  case state.turn {
-    Some(turn) -> {
-      let new_stats =
-        StreamStats(..turn.stream_stats, last_heartbeat_ms: now_ms)
-      let new_turn = TurnState(..turn, stream_stats: new_stats)
-      ChannelState(..state, turn: Some(new_turn))
-    }
-    None -> state
-  }
+  update_turn(state, fn(turn) {
+    TurnState(
+      ..turn,
+      stream_stats: StreamStats(..turn.stream_stats, last_heartbeat_ms: now_ms),
+    )
+  })
 }
 
 fn update_turn_msg_id(state: ChannelState, msg_id: String) -> ChannelState {
-  case state.turn {
-    Some(turn) -> {
-      let new_turn = TurnState(..turn, discord_msg_id: msg_id)
-      ChannelState(..state, turn: Some(new_turn))
-    }
-    None -> state
-  }
-}
-
-/// Clip content at 1990 chars with an ellipsis, mirroring `brain.send_or_edit`.
-/// Discord's message limit is 2000 characters.
-fn safe_truncate(content: String) -> String {
-  case string.length(content) > 1990 {
-    True -> string.slice(content, 0, 1990) <> " ..."
-    False -> content
-  }
+  update_turn(state, fn(turn) { TurnState(..turn, discord_msg_id: msg_id) })
 }
 
 /// Spawn a typing-indicator loop on an unlinked process. Kill it to stop.
@@ -742,7 +726,7 @@ fn typing_loop(
 // Effect type
 // ---------------------------------------------------------------------------
 
-/// Effects emitted by `transition`. The actor's effect interpreter (Task 16)
+/// Effects emitted by `transition`. The actor's effect interpreter
 /// translates these into real side effects (spawn processes, edit Discord
 /// messages, schedule timers). Declared up-front so Tasks 9-15 can emit
 /// variants without growing the type.
@@ -775,7 +759,7 @@ pub type Effect {
 
 /// Pure state-machine transition. Given current state and an incoming
 /// message, return the next state and a list of effects for the interpreter
-/// to execute. Task 8 handles only `HandleIncoming` — queueing when busy,
+/// to execute. `HandleIncoming` queues when busy,
 /// starting a turn when idle. Tasks 9-15 will extend other arms.
 pub fn transition(
   state: ChannelState,
@@ -788,7 +772,7 @@ pub fn transition(
       #(ChannelState(..state, queue: new_queue), [])
     }
 
-    // --- Task 9: vision results ---------------------------------------------
+    // --- vision results ---------------------------------------------
     VisionComplete(description), Some(turn) -> {
       let enriched =
         enrich_messages_with_description(
@@ -814,7 +798,7 @@ pub fn transition(
     VisionComplete(_), None -> #(state, [])
     VisionError(_), None -> #(state, [])
 
-    // --- Task 10: stream deltas and reasoning -------------------------------
+    // --- stream deltas and reasoning -------------------------------
     StreamDelta(text), Some(turn) -> {
       let new_acc = turn.accumulated_content <> text
       let new_stats =
@@ -855,7 +839,7 @@ pub fn transition(
     StreamDelta(_), None -> #(state, [])
     StreamReasoning, None -> #(state, [])
 
-    // --- Task 11: stream complete (terminal vs tool-call) -------------------
+    // --- stream complete (terminal vs tool-call) -------------------
     StreamComplete(content, tool_calls_json, prompt_tokens), Some(turn) -> {
       case llm.parse_flat_tool_calls_json(tool_calls_json) {
         Ok([]) -> finalize_turn(state, turn, content, prompt_tokens)
@@ -881,7 +865,7 @@ pub fn transition(
     }
     StreamComplete(_, _, _), None -> #(state, [])
 
-    // --- Task 12: tool result sequencing ------------------------------------
+    // --- tool result sequencing ------------------------------------
     ToolResult(call_id, result, is_error), Some(turn) -> {
       let new_pending =
         dict.insert(turn.pending_tool_results, call_id, #(result, is_error))
@@ -958,7 +942,7 @@ pub fn transition(
     }
     ToolResult(_, _, _), None -> #(state, [])
 
-    // --- Task 13: stream error retry ----------------------------------------
+    // --- stream error retry ----------------------------------------
     StreamError(reason), Some(turn) -> {
       case turn.stream_retry_count < max_stream_retries {
         True -> {
@@ -979,7 +963,7 @@ pub fn transition(
     }
     StreamError(_), None -> #(state, [])
 
-    // --- Task 14: cancel + deadline -----------------------------------------
+    // --- cancel + deadline -----------------------------------------
     Cancel, Some(turn) -> {
       let kill_effects = [
         KillWorker(turn.worker_pid),
@@ -1002,7 +986,7 @@ pub fn transition(
     }
     TurnDeadline, None -> #(state, [])
 
-    // --- Task 15: worker down translation -----------------------------------
+    // --- worker down translation -----------------------------------
     WorkerDown(_ref, reason), Some(turn) -> {
       case reason {
         "normal" -> #(state, [])
@@ -1159,10 +1143,10 @@ fn start_turn(
 // Transition helpers
 // ---------------------------------------------------------------------------
 
-/// Build the message list to send to the LLM for this turn. For Task 8 the
-/// system prompt/domain context is not assembled here — the effect
-/// interpreter (Task 16) is responsible for prepending domain-aware context
-/// before handing off to the LLM call.
+/// Build the message list to send to the LLM for this turn. The system
+/// prompt/domain context is not assembled here — the effect interpreter is
+/// responsible for prepending domain-aware context before handing off to
+/// the LLM call.
 fn build_llm_messages(
   state: ChannelState,
   msg: discord.IncomingMessage,

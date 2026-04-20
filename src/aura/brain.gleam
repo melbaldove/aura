@@ -17,6 +17,7 @@ import aura/config
 import aura/conversation
 import aura/db
 import aura/discord
+import aura/discord/message as discord_message
 import aura/discord/rest
 import aura/discord/types as discord_types
 import aura/web
@@ -1209,10 +1210,7 @@ fn handle_acp_event(
       let new_state = case dict.get(state.acp_progress_msgs, session_name) {
         Ok(#(ch, mid)) -> {
           process.spawn_unlinked(fn() {
-            let safe = case string.length(msg) > 1990 {
-              True -> string.slice(msg, 0, 1990) <> " ..."
-              False -> msg
-            }
+            let safe = discord_message.clip_to_discord_limit(msg)
             case discord.edit_message(ch, mid, safe) {
               Ok(_) -> Nil
               Error(_) -> Nil
@@ -1224,10 +1222,7 @@ fn handle_acp_event(
           // First progress for this session — send inline to get message ID
           let progress_msgs = state.acp_progress_msgs
           let sn = session_name
-          let safe = case string.length(msg) > 1990 {
-            True -> string.slice(msg, 0, 1990) <> " ..."
-            False -> msg
-          }
+          let safe = discord_message.clip_to_discord_limit(msg)
           case discord.send_message(channel, safe) {
             Ok(message_id) ->
               BrainState(..state,
@@ -1643,11 +1638,7 @@ fn send_or_edit(
   msg_id: String,
   content: String,
 ) -> String {
-  // Discord message limit is 2000 chars
-  let safe_content = case string.length(content) > 1990 {
-    True -> string.slice(content, 0, 1990) <> " ..."
-    False -> content
-  }
+  let safe_content = discord_message.clip_to_discord_limit(content)
   case msg_id {
     "" -> {
       case discord.send_message(channel_id, safe_content) {
@@ -1677,11 +1668,7 @@ fn send_discord_response(
     <> ": "
     <> string.slice(content, 0, 100),
   )
-  // Discord message limit is 2000 chars
-  let safe_content = case string.length(content) > 1990 {
-    True -> string.slice(content, 0, 1990) <> " ..."
-    False -> content
-  }
+  let safe_content = discord_message.clip_to_discord_limit(content)
   case discord.send_message(channel_id, safe_content) {
     Ok(_) -> Nil
     Error(err) -> {
