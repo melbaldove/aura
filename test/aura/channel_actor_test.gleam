@@ -101,3 +101,30 @@ pub fn vision_error_still_spawns_stream_worker_test() {
     })
   has_stream_spawn |> should.be_true
 }
+
+// --- Task 10: stream deltas and reasoning ------------------------------------
+
+pub fn stream_delta_accumulates_content_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(new_state, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamDelta("hello "),
+    )
+  case new_state.turn {
+    option.Some(t) -> t.accumulated_content |> should.equal("hello ")
+    option.None -> should.fail()
+  }
+}
+
+pub fn stream_reasoning_increments_counter_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(new_state, _) =
+    channel_actor.transition(with_stream, channel_actor.StreamReasoning)
+  case new_state.turn {
+    option.Some(t) -> t.stream_stats.reasoning_count |> should.equal(1)
+    option.None -> should.fail()
+  }
+}
