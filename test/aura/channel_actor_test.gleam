@@ -169,3 +169,39 @@ pub fn stream_complete_with_tools_spawns_tool_worker_test() {
     })
   has_tool_spawn |> should.be_true
 }
+
+// --- Task 12: tool result sequencing -----------------------------------------
+
+pub fn tool_result_spawns_next_pending_tool_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_two = channel_actor.with_fake_two_tool_calls_turn(state)
+  let #(_, effects) =
+    channel_actor.transition(
+      with_two,
+      channel_actor.ToolResult("c1", "ok", False),
+    )
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.SpawnToolWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
+pub fn tool_result_all_resolved_spawns_next_stream_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_one = channel_actor.with_fake_one_tool_call_turn(state)
+  let #(_, effects) =
+    channel_actor.transition(
+      with_one,
+      channel_actor.ToolResult("c1", "done", False),
+    )
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}

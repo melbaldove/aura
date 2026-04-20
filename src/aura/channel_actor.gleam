@@ -481,7 +481,109 @@ pub fn transition(
     }
     StreamComplete(_, _, _), None -> #(state, [])
 
+    // --- Task 12: tool result sequencing ------------------------------------
+    ToolResult(call_id, result, is_error), Some(turn) -> {
+      let new_pending =
+        dict.insert(turn.pending_tool_results, call_id, #(result, is_error))
+      let trace =
+        conversation.ToolTrace(
+          name: find_tool_name(turn.accumulated_tool_calls, call_id),
+          args: "",
+          result: result,
+          is_error: is_error,
+        )
+      let new_traces = list.append(turn.traces, [trace])
+      case all_tool_calls_resolved(turn.accumulated_tool_calls, new_pending) {
+        False -> {
+          case find_next_unresolved(turn.accumulated_tool_calls, new_pending) {
+            Some(next_call) -> {
+              let new_turn =
+                TurnState(
+                  ..turn,
+                  pending_tool_results: new_pending,
+                  traces: new_traces,
+                  worker_kind: ToolWorker(next_call.name, next_call.id),
+                )
+              #(ChannelState(..state, turn: Some(new_turn)), [
+                SpawnToolWorker(next_call),
+              ])
+            }
+            None -> #(state, [])
+          }
+        }
+        True -> {
+          let tool_result_messages =
+            list.map(turn.accumulated_tool_calls, fn(call) {
+              case dict.get(new_pending, call.id) {
+                Ok(#(text, _)) -> llm.ToolResultMessage(call.id, text)
+                Error(_) -> llm.ToolResultMessage(call.id, "")
+              }
+            })
+          let new_messages =
+            list.flatten([
+              turn.new_messages,
+              [
+                llm.AssistantToolCallMessage(
+                  turn.accumulated_content,
+                  turn.accumulated_tool_calls,
+                ),
+              ],
+              tool_result_messages,
+            ])
+          let next_llm_messages = list.append(state.conversation, new_messages)
+          let new_turn =
+            TurnState(
+              ..turn,
+              iteration: turn.iteration + 1,
+              accumulated_content: "",
+              accumulated_tool_calls: [],
+              pending_tool_results: dict.new(),
+              new_messages: new_messages,
+              traces: new_traces,
+              messages_at_llm_call: next_llm_messages,
+              stream_retry_count: 0,
+              stream_stats: StreamStats(
+                start_ms: 0,
+                reasoning_count: 0,
+                delta_count: 0,
+                last_heartbeat_ms: 0,
+              ),
+              worker_kind: StreamWorker,
+            )
+          #(ChannelState(..state, turn: Some(new_turn)), [
+            SpawnStreamWorker(next_llm_messages),
+          ])
+        }
+      }
+    }
+    ToolResult(_, _, _), None -> #(state, [])
+
     _, _ -> #(state, [])
+  }
+}
+
+/// True when every accumulated tool call has a result recorded in `pending`.
+fn all_tool_calls_resolved(
+  calls: List(llm.ToolCall),
+  pending: Dict(String, #(String, Bool)),
+) -> Bool {
+  list.all(calls, fn(c) { dict.has_key(pending, c.id) })
+}
+
+/// Find the first tool call that hasn't been resolved in `pending`.
+fn find_next_unresolved(
+  calls: List(llm.ToolCall),
+  pending: Dict(String, #(String, Bool)),
+) -> Option(llm.ToolCall) {
+  list.find(calls, fn(c) { !dict.has_key(pending, c.id) })
+  |> option.from_result
+}
+
+/// Look up the tool name by call id in the accumulated tool calls.
+fn find_tool_name(calls: List(llm.ToolCall), id: String) -> String {
+  case list.find(calls, fn(c) { c.id == id }) {
+    Ok(c) -> c.name
+    Error(_) -> "unknown"
   }
 }
 
@@ -725,6 +827,33 @@ pub fn with_fake_vision_turn(state: ChannelState) -> ChannelState {
 /// `StreamDelta` / `StreamReasoning` / `StreamComplete` arms of `transition`.
 pub fn with_fake_stream_turn(state: ChannelState) -> ChannelState {
   let fake_turn = fresh_fake_turn(StreamWorker)
+  ChannelState(..state, turn: Some(fake_turn))
+}
+
+/// Build a state with a fake turn that has two pending tool calls (`c1`,
+/// `c2`) and is currently executing `c1`. Used to exercise sequential
+/// tool-call execution in `ToolResult` transitions.
+pub fn with_fake_two_tool_calls_turn(state: ChannelState) -> ChannelState {
+  let call_a = llm.ToolCall(id: "c1", name: "tool_a", arguments: "{}")
+  let call_b = llm.ToolCall(id: "c2", name: "tool_b", arguments: "{}")
+  let fake_turn =
+    TurnState(
+      ..fresh_fake_turn(ToolWorker("tool_a", "c1")),
+      accumulated_tool_calls: [call_a, call_b],
+    )
+  ChannelState(..state, turn: Some(fake_turn))
+}
+
+/// Build a state with a fake turn that has a single pending tool call (`c1`).
+/// Used to exercise the "all tools resolved, advance to next LLM iteration"
+/// branch of `ToolResult`.
+pub fn with_fake_one_tool_call_turn(state: ChannelState) -> ChannelState {
+  let call_a = llm.ToolCall(id: "c1", name: "tool_a", arguments: "{}")
+  let fake_turn =
+    TurnState(
+      ..fresh_fake_turn(ToolWorker("tool_a", "c1")),
+      accumulated_tool_calls: [call_a],
+    )
   ChannelState(..state, turn: Some(fake_turn))
 }
 
