@@ -2,7 +2,6 @@ import aura/acp/flare_manager
 import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
 import aura/brain_tools
-import aura/browser
 import aura/channel_actor
 import aura/channel_supervisor
 import aura/stream_worker
@@ -12,21 +11,15 @@ import aura/clients/browser_runner.{type BrowserRunner}
 import aura/clients/discord_client.{type DiscordClient}
 import aura/clients/llm_client.{type LLMClient}
 import aura/clients/skill_runner.{type SkillRunner}
-import aura/compressor
 import aura/config
-import aura/conversation
 import aura/db
 import aura/discord
 import aura/discord/message as discord_message
 import aura/discord/rest
-import aura/discord/types as discord_types
-import aura/web
-import aura/domain
 import aura/llm
 import aura/memory
 import aura/models
 import aura/notification
-import aura/review
 import aura/review_runner
 import aura/scheduler
 import aura/shell
@@ -46,7 +39,6 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
-import simplifile
 
 // ---------------------------------------------------------------------------
 // FFI
@@ -77,30 +69,14 @@ pub type BrainMessage {
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
   PostWelcome(channel_id: String)
-  StoreExchange(
-    channel_id: String,
-    messages: List(llm.Message),
-    domain_name: String,
-    prompt_tokens: Int,
-  )
-  CompressionComplete(
-    channel_id: String,
-    new_history: List(llm.Message),
-    new_comp_state: conversation.CompressorState,
-    snapshot_len: Int,
-  )
   RegisterThread(thread_id: String, domain_name: String)
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
-  UpdateReviewCount(channel_id: String, count: Int)
-  UpdateSkillReviewCount(channel_id: String, count: Int)
   HandleInteraction(
     interaction_id: String,
     interaction_token: String,
     custom_id: String,
     channel_id: String,
   )
-  RegisterProposal(proposal: brain_tools.PendingProposal)
-  RegisterShellApproval(approval: brain_tools.PendingShellApproval)
 }
 
 /// Configuration passed to brain.start — replaces positional params.
@@ -142,15 +118,11 @@ pub type BrainState {
     skills_dir: String,
     db_subject: process.Subject(db.DbMessage),
     built_in_tools: List(llm.ToolDefinition),
-    conversations: conversation.Buffers,
     self_subject: Option(process.Subject(BrainMessage)),
     global_config: config.GlobalConfig,
     domain_configs: List(#(String, config.DomainConfig)),
     thread_domains: dict.Dict(String, String),
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
-    review_counts: dict.Dict(String, Int),
-    skill_review_counts: dict.Dict(String, Int),
-    compressor_states: dict.Dict(String, conversation.CompressorState),
     brain_context: Int,
     shell_patterns: shell.CompiledPatterns,
     acp_progress_msgs: dict.Dict(String, #(String, String)),
@@ -234,15 +206,11 @@ pub fn start(
       skills_dir: xdg.skills_dir(brain_config.paths),
       db_subject: brain_config.db_subject,
       built_in_tools: brain_tools.make_built_in_tools(),
-      conversations: conversation.new(),
       thread_domains: dict.new(),
       self_subject: None,
       global_config: brain_config.global,
       domain_configs: brain_config.domain_configs,
       scheduler_subject: None,
-      review_counts: dict.new(),
-      skill_review_counts: dict.new(),
-      compressor_states: dict.new(),
       brain_context: brain_context,
       shell_patterns: shell.compile_patterns(),
       acp_progress_msgs: dict.new(),
@@ -457,177 +425,6 @@ fn handle_message(
       }
     }
     AcpEvent(event) -> handle_acp_event(state, event)
-    StoreExchange(channel_id, messages, dn, prompt_tok) -> {
-      let now = time.now_ms()
-      let cache_key = "discord:" <> channel_id
-      let #(hydrated, _, _) =
-        conversation.get_or_load_db(
-          state.conversations,
-          state.db_subject,
-          "discord",
-          channel_id,
-          now,
-        )
-      let new_convos =
-        conversation.append_messages(hydrated, cache_key, messages)
-
-      let comp_state = case dict.get(state.compressor_states, cache_key) {
-        Ok(s) -> s
-        Error(_) -> conversation.new_compressor_state()
-      }
-      // Update compressor state with real token count from API
-      let comp_state = case prompt_tok > 0 {
-        True ->
-          conversation.CompressorState(
-            ..comp_state,
-            last_prompt_tokens: prompt_tok,
-          )
-        False -> comp_state
-      }
-
-      let history = conversation.get_history(new_convos, cache_key)
-      case
-        conversation.needs_full_compression(
-          history,
-          state.brain_context,
-          comp_state.last_prompt_tokens,
-        )
-      {
-        True -> {
-          logging.log(logging.Info, "[brain] Full compression triggered for " <> cache_key)
-          let snapshot_len = list.length(history)
-          let llm_config = state.llm_config
-          let db_subject = state.db_subject
-          let brain_subject = state.self_subject
-          let paths = state.paths
-          let brain_context = state.brain_context
-          let monitor_model = state.global_config.models.monitor
-          process.spawn_unlinked(fn() {
-            // Read domain files in the spawned process, not the actor
-            let #(a_md, s_md) = load_domain_context_files(paths, dn)
-            // Flush memories before compression discards messages
-            case models.build_llm_config(monitor_model) {
-              Ok(monitor_llm_config) ->
-                review.flush_before_compression(
-                  monitor_llm_config,
-                  history,
-                  dn,
-                  paths,
-                )
-              Error(e) -> {
-                logging.log(logging.Info, 
-                  "[brain] Flush skipped — monitor LLM config failed: " <> e,
-                )
-                Nil
-              }
-            }
-            let #(new_history, new_comp_state) =
-              conversation.compress_history(
-                history,
-                llm_config,
-                comp_state,
-                dn,
-                a_md,
-                s_md,
-                db_subject,
-                cache_key,
-                brain_context,
-              )
-            case brain_subject {
-              Some(subj) ->
-                process.send(
-                  subj,
-                  CompressionComplete(
-                    cache_key,
-                    new_history,
-                    new_comp_state,
-                    snapshot_len,
-                  ),
-                )
-              None -> Nil
-            }
-          })
-          actor.continue(BrainState(..state, conversations: new_convos))
-        }
-        False -> {
-          let #(final_convos, new_comp_state) = case
-            conversation.needs_tool_pruning(
-              history,
-              state.brain_context,
-              comp_state.last_prompt_tokens,
-            )
-          {
-            True -> {
-              let #(pruned, count) =
-                compressor.prune_tool_outputs(
-                  history,
-                  compressor.min_tail_messages,
-                )
-              case count > 0 {
-                True ->
-                  logging.log(logging.Info, 
-                    "[brain] Tool pruning: cleared "
-                    <> int.to_string(count)
-                    <> " output(s) for "
-                    <> cache_key,
-                  )
-                False -> Nil
-              }
-              #(dict.insert(new_convos, cache_key, pruned), comp_state)
-            }
-            False -> #(new_convos, comp_state)
-          }
-          let new_comp_states =
-            dict.insert(state.compressor_states, cache_key, new_comp_state)
-          actor.continue(
-            BrainState(
-              ..state,
-              conversations: final_convos,
-              compressor_states: new_comp_states,
-            ),
-          )
-        }
-      }
-    }
-    CompressionComplete(
-      channel_id,
-      compressed_history,
-      new_comp_state,
-      snapshot_len,
-    ) -> {
-      // Merge: compressed history + any messages that arrived during compression
-      let current = conversation.get_history(state.conversations, channel_id)
-      let current_len = list.length(current)
-      let merged = case current_len > snapshot_len {
-        True -> {
-          // New messages arrived — append the delta to compressed history
-          let delta = list.drop(current, snapshot_len)
-          let delta_len = list.length(delta)
-          logging.log(logging.Info, 
-            "[brain] Compression complete for "
-            <> channel_id
-            <> " (merging "
-            <> int.to_string(delta_len)
-            <> " new messages)",
-          )
-          list.append(compressed_history, delta)
-        }
-        False -> {
-          logging.log(logging.Info, "[brain] Compression complete for " <> channel_id)
-          compressed_history
-        }
-      }
-      let new_convos = dict.insert(state.conversations, channel_id, merged)
-      let new_comp_states =
-        dict.insert(state.compressor_states, channel_id, new_comp_state)
-      actor.continue(
-        BrainState(
-          ..state,
-          conversations: new_convos,
-          compressor_states: new_comp_states,
-        ),
-      )
-    }
     RegisterThread(thread_id:, domain_name:) -> {
       let new_threads =
         dict.insert(state.thread_domains, thread_id, domain_name)
@@ -636,14 +433,6 @@ fn handle_message(
     SetScheduler(subject) -> {
       logging.log(logging.Info, "[brain] Scheduler connected")
       actor.continue(BrainState(..state, scheduler_subject: Some(subject)))
-    }
-    UpdateReviewCount(channel_id:, count:) -> {
-      let new_counts = dict.insert(state.review_counts, channel_id, count)
-      actor.continue(BrainState(..state, review_counts: new_counts))
-    }
-    UpdateSkillReviewCount(channel_id:, count:) -> {
-      let new_counts = dict.insert(state.skill_review_counts, channel_id, count)
-      actor.continue(BrainState(..state, skill_review_counts: new_counts))
     }
     HandleInteraction(
       interaction_id:,
@@ -692,8 +481,6 @@ fn handle_message(
         }
       }
     }
-    RegisterProposal(_) -> actor.continue(state)
-    RegisterShellApproval(_) -> actor.continue(state)
   }
 }
 
@@ -1170,47 +957,6 @@ fn send_discord_response(
     Error(err) -> {
       logging.log(logging.Error, "[brain] Failed to send message: " <> err)
       Nil
-    }
-  }
-}
-// ---------------------------------------------------------------------------
-// Domain context helpers
-// ---------------------------------------------------------------------------
-
-fn load_domain_context_files(
-  paths: xdg.Paths,
-  domain_name: String,
-) -> #(String, String) {
-  case domain_name {
-    "aura" -> #("", "")
-    name -> {
-      let agents_path = xdg.domain_config_dir(paths, name) <> "/AGENTS.md"
-      let state_path = xdg.domain_state_path(paths, name)
-      let a_md = case simplifile.read(agents_path) {
-        Ok(c) -> c
-        Error(e) -> {
-          logging.log(logging.Info, 
-            "[brain] Failed to read AGENTS.md for "
-            <> name
-            <> ": "
-            <> string.inspect(e),
-          )
-          ""
-        }
-      }
-      let s_md = case simplifile.read(state_path) {
-        Ok(c) -> c
-        Error(e) -> {
-          logging.log(logging.Info, 
-            "[brain] Failed to read STATE.md for "
-            <> name
-            <> ": "
-            <> string.inspect(e),
-          )
-          ""
-        }
-      }
-      #(a_md, s_md)
     }
   }
 }
