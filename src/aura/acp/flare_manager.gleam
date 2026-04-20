@@ -160,6 +160,12 @@ pub type FlareMsg {
   ListParkedWithTriggers(
     reply_to: process.Subject(List(FlareRecord)),
   )
+
+  // Test-only
+  RegisterForTest(
+    flare: FlareRecord,
+    reply_to: process.Subject(Nil),
+  )
 }
 
 type FlareManagerState {
@@ -356,6 +362,16 @@ pub fn list_parked_with_triggers(
   })
 }
 
+/// Test-only: register a flare session directly, bypassing the dispatch path.
+pub fn register_for_test(
+  subject: process.Subject(FlareMsg),
+  flare: FlareRecord,
+) -> Nil {
+  process.call(subject, 5000, fn(reply_to) {
+    RegisterForTest(flare: flare, reply_to: reply_to)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Actor lifecycle
 // ---------------------------------------------------------------------------
@@ -491,6 +507,22 @@ fn handle_message(
         })
       process.send(reply_to, parked_with_triggers)
       actor.continue(state)
+    }
+
+    RegisterForTest(flare:, reply_to:) -> {
+      let new_flares = dict.insert(state.flares, flare.id, flare)
+      let new_session_to_flare = case flare.session_name {
+        "" -> state.session_to_flare
+        sn -> dict.insert(state.session_to_flare, sn, flare.id)
+      }
+      process.send(reply_to, Nil)
+      actor.continue(
+        FlareManagerState(
+          ..state,
+          flares: new_flares,
+          session_to_flare: new_session_to_flare,
+        ),
+      )
     }
   }
 }

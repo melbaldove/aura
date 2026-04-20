@@ -617,11 +617,27 @@ fn execute_spawn_stream_worker(
     True -> process.sleep(backoff_ms)
     False -> Nil
   }
+  // Prepend the assembled system prompt as a SystemMessage. This is done
+  // here in the effect interpreter (not in the pure transition) so that the
+  // flare_manager.list_sessions call doesn't break pure unit tests that use
+  // stub acp_subject values.
+  let domain_name = case state.tool_ctx.domain_name {
+    "" -> option.None
+    name -> option.Some(name)
+  }
+  let system_prompt =
+    assemble_system_prompt(
+      "",
+      domain_name,
+      state.channel_id,
+      state.tool_ctx.acp_subject,
+    )
+  let messages_with_system = [llm.SystemMessage(system_prompt), ..messages]
   let pid =
     state.stream_spawn(
       state.tool_ctx.llm_client.stream_with_tools,
       state.llm_config,
-      messages,
+      messages_with_system,
       state.built_in_tools,
       state.self_subject,
     )
@@ -1152,10 +1168,78 @@ fn start_turn(
 // Transition helpers
 // ---------------------------------------------------------------------------
 
-/// Build the message list to send to the LLM for this turn. The system
-/// prompt/domain context is not assembled here — the effect interpreter is
-/// responsible for prepending domain-aware context before handing off to
-/// the LLM call.
+/// Assemble the full system prompt: base + fs_section + flare_context.
+///
+/// `base` is whatever base system prompt the caller has already built (e.g.
+/// from a future `build_llm_context` port — currently empty string until that
+/// task lands). `fs_section` describes XDG paths and the autonomy-tier policy.
+/// `flare_context` is appended when `channel_id` matches an active flare's
+/// `thread_id`.
+pub fn assemble_system_prompt(
+  base: String,
+  domain_name: option.Option(String),
+  channel_id: String,
+  acp_subject: process.Subject(flare_manager.FlareMsg),
+) -> String {
+  let fs_section =
+    "\n\n## File System\n"
+    <> "You can read any file. Use ~ for home directory.\n"
+    <> "\nAura directories:"
+    <> "\n  Config: ~/.config/aura/"
+    <> "\n  Data: ~/.local/share/aura/"
+    <> "\n  State: ~/.local/state/aura/"
+    <> case domain_name {
+      option.Some(name) ->
+        "\n\nCurrent domain: "
+        <> name
+        <> "\n  Instructions: ~/.config/aura/domains/"
+        <> name
+        <> "/AGENTS.md"
+        <> "\n  Config: ~/.config/aura/domains/"
+        <> name
+        <> "/config.toml"
+        <> "\n  Memory: ~/.local/share/aura/domains/"
+        <> name
+        <> "/MEMORY.md"
+        <> "\n  State: ~/.local/state/aura/domains/"
+        <> name
+        <> "/STATE.md"
+        <> "\n  Repos: ~/.local/share/aura/domains/"
+        <> name
+        <> "/repos/"
+      option.None -> ""
+    }
+    <> "\n\nWrites to logs, memory, state, and skills are autonomous."
+    <> "\nAll other writes require approval -- use propose(path, content, description)."
+
+  let flare_context =
+    case
+      list.find(flare_manager.list_sessions(acp_subject), fn(s) {
+        s.thread_id == channel_id
+      })
+    {
+      Ok(flare) ->
+        "\n\n## Active Flare"
+        <> "\nYou are in a flare thread."
+        <> "\nSession: "
+        <> flare.session_name
+        <> "\nState: "
+        <> flare_manager.status_to_string(flare.status)
+        <> "\nDomain: "
+        <> flare.domain
+        <> "\nTask: "
+        <> string.slice(flare.original_prompt, 0, 300)
+        <> "\n\nUse flare(action='status', session_name='...') to check progress, flare(action='prompt', ...) to send instructions, flare(action='list') to see all flares."
+      Error(_) -> ""
+    }
+
+  base <> fs_section <> flare_context
+}
+
+/// Build the message list to send to the LLM for this turn. Does NOT prepend
+/// a SystemMessage here — that is added by the effect interpreter in
+/// `execute_spawn_stream_worker`, which can safely call `flare_manager.list_sessions`
+/// without breaking the purity of `transition`.
 fn build_llm_messages(
   state: ChannelState,
   msg: discord.IncomingMessage,

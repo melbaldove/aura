@@ -55,6 +55,7 @@ pub type TestSystem {
     fake_skill_runner: FakeSkillRunner,
     db_path: String,
     db_subject: Subject(db.DbMessage),
+    acp_subject: Subject(flare_manager.FlareMsg),
   )
 }
 
@@ -181,6 +182,7 @@ pub fn fresh_system() -> TestSystem {
     fake_skill_runner: fake_skill_runner,
     db_path: db_path,
     db_subject: db_subject,
+    acp_subject: flare_subject,
   )
 }
 
@@ -284,6 +286,7 @@ pub fn fresh_system_with_allowlist(
     fake_skill_runner: fake_skill_runner,
     db_path: db_path,
     db_subject: db_subject,
+    acp_subject: flare_subject,
   )
 }
 
@@ -402,6 +405,7 @@ pub fn fresh_system_with_domain(
     fake_skill_runner: fake_skill_runner,
     db_path: db_path,
     db_subject: db_subject,
+    acp_subject: flare_subject,
   )
 }
 
@@ -530,6 +534,7 @@ pub fn fresh_system_with_domain_and_allowlist(
     fake_skill_runner: fake_skill_runner,
     db_path: db_path,
     db_subject: db_subject,
+    acp_subject: flare_subject,
   )
 }
 

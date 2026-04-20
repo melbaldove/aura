@@ -1,3 +1,5 @@
+import aura/acp/flare_manager
+import aura/acp/transport
 import aura/brain
 import aura/channel_actor
 import aura/conversation
@@ -365,5 +367,81 @@ pub fn cold_actor_loads_history_from_db_test() {
     })
     |> string.join("\n")
   string.contains(joined, "earlier question") |> should.be_true
+  test_harness.teardown(sys)
+}
+
+// --- Task 3: system prompt fs_section ----------------------------------------
+
+fn combined_system_prompts(fake: fake_llm.FakeLLM) -> String {
+  fake_llm.calls(fake)
+  |> list.flat_map(fn(c) {
+    list.filter_map(c.messages, fn(m) {
+      case m {
+        llm.SystemMessage(content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+  })
+  |> string.join("\n")
+}
+
+pub fn system_prompt_includes_fs_section_test() {
+  // "cm2-thread" is both the domain channel and the allowlisted channel.
+  // Brain routes it to channel_actor (possibly after creating a thread first,
+  // which is fine — the channel_actor for that thread will still include fs_section).
+  let sys =
+    test_harness.fresh_system_with_domain_and_allowlist(
+      "cm2",
+      "# AGENTS",
+      "cm2-thread",
+      ["cm2-thread"],
+    )
+  fake_llm.script_text_response(sys.fake_llm, "ok")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("cm2-thread", "hi")),
+  )
+  let _ =
+    poll.poll_until(fn() { list.length(fake_llm.calls(sys.fake_llm)) > 0 }, 2000)
+  let prompts = combined_system_prompts(sys.fake_llm)
+  string.contains(prompts, "## File System") |> should.be_true
+  test_harness.teardown(sys)
+}
+
+pub fn system_prompt_includes_flare_context_when_in_flare_thread_test() {
+  let sys = test_harness.fresh_system_with_allowlist(["flare-thread-1"])
+  // Register a flare session keyed on thread_id = "flare-thread-1"
+  let now = time.now_ms()
+  flare_manager.register_for_test(
+    sys.acp_subject,
+    flare_manager.FlareRecord(
+      id: "f-test-1",
+      label: "fix-build",
+      status: flare_manager.Active,
+      domain: "cm2",
+      thread_id: "flare-thread-1",
+      original_prompt: "make the build pass",
+      execution_json: "",
+      triggers_json: "",
+      tools_json: "",
+      workspace: "",
+      session_id: "sess-1",
+      session_name: "fix-build-session",
+      handle: option.None,
+      started_at_ms: now,
+      updated_at_ms: now,
+      awaiting_response: False,
+    ),
+  )
+  fake_llm.script_text_response(sys.fake_llm, "ok")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("flare-thread-1", "status?")),
+  )
+  let _ =
+    poll.poll_until(fn() { list.length(fake_llm.calls(sys.fake_llm)) > 0 }, 2000)
+  let prompts = combined_system_prompts(sys.fake_llm)
+  string.contains(prompts, "## Active Flare") |> should.be_true
+  string.contains(prompts, "fix-build") |> should.be_true
   test_harness.teardown(sys)
 }
