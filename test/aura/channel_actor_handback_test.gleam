@@ -106,7 +106,11 @@ pub fn handback_queued_when_turn_in_flight_test() {
   let #(new_state, effects) =
     channel_actor.transition(
       busy,
-      channel_actor.HandleHandback(flare_id: "f1", result: "done"),
+      channel_actor.HandleHandback(
+        flare_id: "f1",
+        session_name: "fix-build",
+        result: "done",
+      ),
     )
 
   list.length(new_state.queue) |> should.equal(1)

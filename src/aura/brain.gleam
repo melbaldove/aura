@@ -911,7 +911,10 @@ fn route_handback_to_channel_actor(
           flare.thread_id,
           deps,
         )
-      process.send(subject, channel_actor.HandleHandback(flare.id, text))
+      process.send(
+        subject,
+        channel_actor.HandleHandback(flare.id, flare.session_name, text),
+      )
     }
     Error(_) ->
       logging.log(

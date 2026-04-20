@@ -69,7 +69,7 @@ pub type VisionWorkerSpawn =
 
 pub type ChannelMessage {
   HandleIncoming(discord.IncomingMessage)
-  HandleHandback(flare_id: String, result: String)
+  HandleHandback(flare_id: String, session_name: String, result: String)
   HandleInteraction(
     interaction_id: String,
     interaction_token: String,
@@ -104,7 +104,7 @@ pub type ChannelMessage {
 
 pub type TurnKind {
   UserTurn(message_id: String, author_id: String)
-  HandbackTurn(flare_id: String, result: String)
+  HandbackTurn(flare_id: String, session_name: String)
 }
 
 pub type WorkerKind {
@@ -146,7 +146,7 @@ pub type TurnState {
 
 pub type PendingWork {
   PendingUserMessage(discord.IncomingMessage)
-  PendingHandback(flare_id: String, result: String)
+  PendingHandback(flare_id: String, session_name: String, result: String)
 }
 
 pub type ChannelState {
@@ -885,29 +885,7 @@ fn execute_spawn_stream_worker(
       state.channel_id,
       state.tool_ctx.acp_subject,
     )
-  // For handback turns, append the handback system message after history.
-  // Resolve session_name by looking up the flare by id; fall back to flare_id.
-  let messages_with_system = case state.turn {
-    Some(TurnState(kind: HandbackTurn(flare_id, result), ..)) -> {
-      let session_name = case
-        list.find(
-          flare_manager.list_sessions(state.tool_ctx.acp_subject),
-          fn(s) { s.id == flare_id },
-        )
-      {
-        Ok(s) -> s.session_name
-        Error(_) -> flare_id
-      }
-      let handback_msg =
-        "[Flare reported back: \"" <> session_name <> "\"]\n\n" <> result
-      list.flatten([
-        [llm.SystemMessage(system_prompt)],
-        messages,
-        [llm.SystemMessage(handback_msg)],
-      ])
-    }
-    _ -> [llm.SystemMessage(system_prompt), ..messages]
-  }
+  let messages_with_system = [llm.SystemMessage(system_prompt), ..messages]
   let pid =
     state.stream_spawn(
       state.tool_ctx.llm_client.stream_with_tools,
@@ -1083,11 +1061,14 @@ pub fn transition(
     VisionComplete(description), Some(turn) -> {
       let enriched =
         enrich_messages_with_description(turn.messages_at_llm_call, description)
+      let enriched_new =
+        enrich_messages_with_description(turn.new_messages, description)
       let new_turn =
         TurnState(
           ..turn,
           worker_kind: StreamWorker,
           messages_at_llm_call: enriched,
+          new_messages: enriched_new,
         )
       #(ChannelState(..state, turn: Some(new_turn)), [
         SpawnStreamWorker(enriched),
@@ -1368,11 +1349,13 @@ pub fn transition(
     WorkerDown(_, _), None -> #(state, [])
 
     // --- handback ---------------------------------------------------
-    HandleHandback(flare_id, result), None ->
-      start_turn(state, PendingHandback(flare_id, result))
-    HandleHandback(flare_id, result), Some(_) -> {
+    HandleHandback(flare_id, session_name, result), None ->
+      start_turn(state, PendingHandback(flare_id, session_name, result))
+    HandleHandback(flare_id, session_name, result), Some(_) -> {
       let new_queue =
-        list.append(state.queue, [PendingHandback(flare_id, result)])
+        list.append(state.queue, [
+          PendingHandback(flare_id, session_name, result),
+        ])
       #(ChannelState(..state, queue: new_queue), [])
     }
 
@@ -1567,30 +1550,33 @@ fn start_turn(
 ) -> #(ChannelState, List(Effect)) {
   case work {
     PendingUserMessage(msg) -> {
-      let messages = build_llm_messages(state, msg)
+      let user_msg = llm.UserMessage(content: msg.content)
+      let new_messages = [user_msg]
+      let messages = list.append(state.conversation, new_messages)
       case has_image_attachment(msg) {
         True -> {
           let #(path, question) = first_image_and_question(msg)
-          #(state_with_pending_vision(state, messages, msg), [
+          #(state_with_pending_vision(state, messages, new_messages, msg), [
             SpawnVisionWorker(path, question),
             StartTyping,
             ScheduleDeadline(600_000),
           ])
         }
-        False -> #(state_with_pending_stream(state, messages, msg), [
+        False -> #(state_with_pending_stream(state, messages, new_messages, msg), [
           SpawnStreamWorker(messages),
           StartTyping,
           ScheduleDeadline(600_000),
         ])
       }
     }
-    PendingHandback(flare_id, result) -> {
-      // Build messages from current conversation history. The handback system
-      // message is injected in execute_spawn_stream_worker (effect interpreter)
-      // so that the flare_manager.list_sessions call stays out of pure transition.
-      let messages = state.conversation
-      let kind = HandbackTurn(flare_id, result)
-      let turn = new_turn_state(kind, StreamWorker, messages)
+    PendingHandback(flare_id, session_name, result) -> {
+      let handback_msg =
+        "[Flare reported back: \"" <> session_name <> "\"]\n\n" <> result
+      let handback_system = llm.SystemMessage(handback_msg)
+      let new_messages = [handback_system]
+      let messages = list.append(state.conversation, new_messages)
+      let kind = HandbackTurn(flare_id, session_name)
+      let turn = new_turn_state(kind, StreamWorker, messages, new_messages)
       #(ChannelState(..state, turn: Some(turn)), [
         SpawnStreamWorker(messages),
         StartTyping,
@@ -1785,6 +1771,7 @@ fn new_turn_state(
   kind: TurnKind,
   worker_kind: WorkerKind,
   messages: List(llm.Message),
+  initial_new_messages: List(llm.Message),
 ) -> TurnState {
   TurnState(
     kind: kind,
@@ -1797,7 +1784,7 @@ fn new_turn_state(
     accumulated_content: "",
     accumulated_tool_calls: [],
     pending_tool_results: dict.new(),
-    new_messages: [],
+    new_messages: initial_new_messages,
     traces: [],
     messages_at_llm_call: messages,
     stream_retry_count: 0,
@@ -1815,20 +1802,22 @@ fn new_turn_state(
 fn state_with_pending_vision(
   state: ChannelState,
   messages: List(llm.Message),
+  new_messages: List(llm.Message),
   msg: discord.IncomingMessage,
 ) -> ChannelState {
   let kind = UserTurn(message_id: msg.message_id, author_id: msg.author_id)
-  let turn = new_turn_state(kind, VisionWorker, messages)
+  let turn = new_turn_state(kind, VisionWorker, messages, new_messages)
   ChannelState(..state, turn: Some(turn))
 }
 
 fn state_with_pending_stream(
   state: ChannelState,
   messages: List(llm.Message),
+  new_messages: List(llm.Message),
   msg: discord.IncomingMessage,
 ) -> ChannelState {
   let kind = UserTurn(message_id: msg.message_id, author_id: msg.author_id)
-  let turn = new_turn_state(kind, StreamWorker, messages)
+  let turn = new_turn_state(kind, StreamWorker, messages, new_messages)
   ChannelState(..state, turn: Some(turn))
 }
 
@@ -2080,7 +2069,7 @@ pub fn with_fake_handback_turn(
   let fake_turn =
     TurnState(
       ..fresh_fake_turn(StreamWorker),
-      kind: HandbackTurn(flare_id, "result"),
+      kind: HandbackTurn(flare_id, "fake-session"),
     )
   ChannelState(..state, turn: Some(fake_turn))
 }

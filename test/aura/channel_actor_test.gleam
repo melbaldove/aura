@@ -211,6 +211,60 @@ pub fn finalize_turn_appends_to_state_conversation_test() {
   { list.length(after_state.conversation) > before } |> should.be_true
 }
 
+/// Regression: the user's message must travel through the turn so that
+/// finalize_turn persists it AND subsequent tool iterations keep it in the
+/// LLM prompt. Previously `new_messages` was initialized empty; the user
+/// message lived only in `messages_at_llm_call` for the first iteration and
+/// was never saved or carried forward. Symptom: DB had assistant/tool rows
+/// but no user rows after the first turn; the LLM looped on tool calls
+/// because it lost the question.
+pub fn user_message_persisted_through_finalize_test() {
+  let incoming =
+    discord.IncomingMessage(
+      message_id: "m1",
+      channel_id: "ch1",
+      channel_name: option.None,
+      guild_id: "g1",
+      author_id: "u1",
+      author_name: "tester",
+      content: "did we update the bruno docs?",
+      is_bot: False,
+      attachments: [],
+    )
+  let state = channel_actor.initial_state_for_test("ch1")
+  let #(started, _) =
+    channel_actor.transition(state, channel_actor.HandleIncoming(incoming))
+  let #(finalized, effects) =
+    channel_actor.transition(
+      started,
+      channel_actor.StreamComplete("ok", "[]", 100),
+    )
+
+  let user_in_conversation =
+    list.any(finalized.conversation, fn(m) {
+      case m {
+        llm.UserMessage("did we update the bruno docs?") -> True
+        _ -> False
+      }
+    })
+  user_in_conversation |> should.be_true
+
+  let user_in_db_save =
+    list.any(effects, fn(e) {
+      case e {
+        channel_actor.DbSaveExchange(messages, _, _, _) ->
+          list.any(messages, fn(m) {
+            case m {
+              llm.UserMessage("did we update the bruno docs?") -> True
+              _ -> False
+            }
+          })
+        _ -> False
+      }
+    })
+  user_in_db_save |> should.be_true
+}
+
 pub fn stream_complete_with_tools_spawns_tool_worker_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
