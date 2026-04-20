@@ -1,9 +1,18 @@
+import aura/brain
 import aura/channel_actor
+import aura/conversation
+import aura/db
 import aura/discord
+import aura/llm
+import aura/time
+import fakes/fake_llm
 import gleam/erlang/process
 import gleam/list
 import gleam/option
+import gleam/string
 import gleeunit/should
+import poll
+import test_harness
 
 pub fn channel_actor_starts_and_accepts_messages_test() {
   let deps =
@@ -299,4 +308,62 @@ pub fn worker_down_stream_translates_to_stream_error_test() {
   })
   |> should.be_true
   let _ = new_state
+}
+
+// --- Task 1: cold actor loads history from DB --------------------------------
+
+pub fn cold_actor_loads_history_from_db_test() {
+  let sys = test_harness.fresh_system_with_allowlist(["cold-channel"])
+  let now = time.now_ms()
+  // Seed the DB with two prior messages for "cold-channel"
+  let assert Ok(convo_id) =
+    db.resolve_conversation(sys.db_subject, "discord", "cold-channel", now)
+  let assert Ok(_) =
+    conversation.save_exchange_to_db(
+      sys.db_subject,
+      convo_id,
+      [llm.UserMessage("earlier question"), llm.AssistantMessage("earlier answer")],
+      "u1",
+      "tester",
+      now - 1000,
+    )
+
+  // Script the LLM to return a response
+  fake_llm.script_text_response(sys.fake_llm, "ok")
+
+  // Send a new message to the same channel — this will start a fresh channel_actor
+  let msg =
+    discord.IncomingMessage(
+      message_id: "new-msg",
+      channel_id: "cold-channel",
+      channel_name: option.None,
+      guild_id: "test-guild",
+      author_id: "u1",
+      author_name: "tester",
+      content: "follow up",
+      is_bot: False,
+      attachments: [],
+    )
+  process.send(sys.brain_subject, brain.HandleMessage(msg))
+
+  // Poll until the LLM call is recorded
+  let _ =
+    poll.poll_until(fn() { list.length(fake_llm.calls(sys.fake_llm)) > 0 }, 2000)
+
+  // Inspect the LLM call and assert history was hydrated
+  let last_call = case list.last(fake_llm.calls(sys.fake_llm)) {
+    Ok(c) -> c
+    Error(_) -> panic as "no LLM call recorded"
+  }
+  let joined =
+    list.filter_map(last_call.messages, fn(m) {
+      case m {
+        llm.UserMessage(c) -> Ok(c)
+        llm.AssistantMessage(c) -> Ok(c)
+        _ -> Error(Nil)
+      }
+    })
+    |> string.join("\n")
+  string.contains(joined, "earlier question") |> should.be_true
+  test_harness.teardown(sys)
 }

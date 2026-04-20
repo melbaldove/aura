@@ -53,6 +53,7 @@ pub type TestSystem {
     fake_llm: FakeLLM,
     fake_skill_runner: FakeSkillRunner,
     db_path: String,
+    db_subject: Subject(db.DbMessage),
   )
 }
 
@@ -178,6 +179,7 @@ pub fn fresh_system() -> TestSystem {
     fake_llm: fake_llm,
     fake_skill_runner: fake_skill_runner,
     db_path: db_path,
+    db_subject: db_subject,
   )
 }
 
@@ -280,6 +282,7 @@ pub fn fresh_system_with_allowlist(
     fake_llm: fake_llm,
     fake_skill_runner: fake_skill_runner,
     db_path: db_path,
+    db_subject: db_subject,
   )
 }
 
@@ -397,6 +400,7 @@ pub fn fresh_system_with_domain(
     fake_llm: fake_llm,
     fake_skill_runner: fake_skill_runner,
     db_path: db_path,
+    db_subject: db_subject,
   )
 }
 

@@ -45,6 +45,55 @@ pub fn new_compressor_state() -> CompressorState {
   )
 }
 
+/// Load conversation history and reconstruct compressor state for a channel
+/// at actor startup. Mirrors the brain's existing cold-start behavior:
+/// history is loaded from DB (compaction summary prepended as a SystemMessage),
+/// and compressor state is initialised with defaults — `last_prompt_tokens`
+/// stays 0 until the first API response updates it.
+///
+/// The compaction summary is surfaced inside the returned history as a leading
+/// `SystemMessage`; `CompressorState.previous_summary` is populated from it
+/// so that subsequent compressions can build on the existing summary.
+pub fn load_channel_bootstrap(
+  db_subject: process.Subject(db.DbMessage),
+  platform: String,
+  channel_id: String,
+  now_ts: Int,
+) -> #(List(llm.Message), CompressorState) {
+  case load_from_db(db_subject, platform, channel_id, now_ts) {
+    Ok(#(_convo_id, messages)) -> {
+      // Reconstruct previous_summary from the leading SystemMessage (if any),
+      // so that the next compression update builds on the persisted summary
+      // rather than starting from scratch.
+      let comp_state = case messages {
+        [llm.SystemMessage(content), ..] ->
+          case compressor.is_compaction_summary(content) {
+            True ->
+              CompressorState(
+                ..new_compressor_state(),
+                previous_summary: Some(compressor.strip_summary_prefix(content)),
+              )
+            False -> new_compressor_state()
+          }
+        _ -> new_compressor_state()
+      }
+      #(messages, comp_state)
+    }
+    Error(e) -> {
+      logging.log(
+        logging.Error,
+        "[conversation] load_channel_bootstrap failed for "
+          <> platform
+          <> ":"
+          <> channel_id
+          <> ": "
+          <> e,
+      )
+      #([], new_compressor_state())
+    }
+  }
+}
+
 /// Return an empty buffer dict.
 pub fn new() -> Buffers {
   dict.new()

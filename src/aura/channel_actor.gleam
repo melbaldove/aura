@@ -250,11 +250,18 @@ fn build_initial_state(
       skill_runner: deps.skill_runner,
       browser_runner: deps.browser_runner,
     )
+  let #(history, comp_state) =
+    conversation.load_channel_bootstrap(
+      deps.db_subject,
+      "discord",
+      deps.channel_id,
+      time.now_ms(),
+    )
   ChannelState(
     channel_id: deps.channel_id,
     domain: None,
-    conversation: [],
-    compressor_state: conversation.new_compressor_state(),
+    conversation: history,
+    compressor_state: comp_state,
     tool_ctx: tool_ctx,
     turn: None,
     queue: [],
@@ -287,7 +294,9 @@ pub type TestDeps {
 /// duplicating stub wiring logic.
 pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
   let paths = xdg.resolve()
-  let db_subject = process.new_subject()
+  // Start a real in-memory DB so load_channel_bootstrap can call into it
+  // without blocking on a dead subject.
+  let assert Ok(db_subject) = db.start(":memory:")
   let acp_subject = process.new_subject()
   Deps(
     channel_id: channel_id,
