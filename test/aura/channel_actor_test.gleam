@@ -1,5 +1,4 @@
 import aura/acp/flare_manager
-import aura/acp/transport
 import aura/brain
 import aura/channel_actor
 import aura/conversation
