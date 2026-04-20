@@ -120,7 +120,7 @@ fn given_fresh_system_allowlisted(
   ctx: StepContext,
 ) -> Result(dream_types.AssertionResult, String) {
   use channel_id <- result_try(get_string(ctx.captures, 0))
-  let system = test_harness.fresh_system_with_allowlist([channel_id])
+  let #(system, _paths) = test_harness.fresh_system_with_allowlist([channel_id])
   world.put(ctx.world, "system", system)
   Ok(succeed())
 }

@@ -23,7 +23,7 @@ import test_harness
 pub fn handback_injects_system_message_into_turn_test() {
   // Fresh system with "flare-thread-1" on the allowlist so brain routes it
   // through channel_actor.
-  let sys =
+  let #(sys, _) =
     test_harness.fresh_system_with_allowlist(["flare-thread-1"])
 
   // Register a flare so brain can look it up by session_name and get thread_id.

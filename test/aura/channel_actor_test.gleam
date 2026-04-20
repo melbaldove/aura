@@ -6,6 +6,7 @@ import aura/db
 import aura/discord
 import aura/llm
 import aura/time
+import aura/xdg
 import fakes/fake_discord
 import fakes/fake_llm
 import fakes/fake_review
@@ -15,6 +16,7 @@ import gleam/option
 import gleam/string
 import gleeunit/should
 import poll
+import simplifile
 import test_harness
 
 pub fn channel_actor_starts_and_accepts_messages_test() {
@@ -347,7 +349,7 @@ pub fn worker_down_stream_translates_to_stream_error_test() {
 // --- Task 1: cold actor loads history from DB --------------------------------
 
 pub fn cold_actor_loads_history_from_db_test() {
-  let sys = test_harness.fresh_system_with_allowlist(["cold-channel"])
+  let #(sys, _) = test_harness.fresh_system_with_allowlist(["cold-channel"])
   let now = time.now_ms()
   // Seed the DB with two prior messages for "cold-channel"
   let assert Ok(convo_id) =
@@ -421,7 +423,7 @@ pub fn system_prompt_includes_fs_section_test() {
   // "cm2-thread" is both the domain channel and the allowlisted channel.
   // Brain routes it to channel_actor (possibly after creating a thread first,
   // which is fine — the channel_actor for that thread will still include fs_section).
-  let sys =
+  let #(sys, _) =
     test_harness.fresh_system_with_domain_and_allowlist(
       "cm2",
       "# AGENTS",
@@ -441,7 +443,7 @@ pub fn system_prompt_includes_fs_section_test() {
 }
 
 pub fn system_prompt_includes_flare_context_when_in_flare_thread_test() {
-  let sys = test_harness.fresh_system_with_allowlist(["flare-thread-1"])
+  let #(sys, _) = test_harness.fresh_system_with_allowlist(["flare-thread-1"])
   // Register a flare session keyed on thread_id = "flare-thread-1"
   let now = time.now_ms()
   flare_manager.register_for_test(
@@ -845,4 +847,65 @@ pub fn finalize_turn_emits_prune_when_over_threshold_test() {
       }
     })
   has_prune |> should.be_true
+}
+
+// --- Task 8a: base prompt in channel_actor -----------------------------------
+
+/// Domain AGENTS.md content must appear in the channel_actor system prompt.
+/// This exercises build_base_system_prompt's domain_prompt section.
+pub fn system_prompt_includes_domain_agents_md_content_test() {
+  let #(sys, _) =
+    test_harness.fresh_system_with_domain_and_allowlist(
+      "local-test",
+      "You are the local-test assistant. Tone: terse.",
+      "local-test-channel",
+      ["local-test-channel"],
+    )
+  fake_llm.script_text_response(sys.fake_llm, "ok")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("local-test-channel", "hi")),
+  )
+  let _ =
+    poll.poll_until(
+      fn() { fake_llm.calls(sys.fake_llm) != [] },
+      2000,
+    )
+  let prompts = combined_system_prompts(sys.fake_llm)
+  string.contains(prompts, "You are the local-test assistant")
+  |> should.be_true
+  test_harness.teardown(sys)
+}
+
+/// USER.md content written to disk before the turn must appear in the
+/// channel_actor system prompt. This exercises build_base_system_prompt's
+/// memory read (format_for_display re-read on every turn).
+pub fn system_prompt_includes_user_memory_content_test() {
+  let #(sys, paths) =
+    test_harness.fresh_system_with_allowlist(["ch-mem-test"])
+  // Write directly to USER.md before sending the message.
+  let user_file_path = xdg.user_path(paths)
+  // Ensure parent directory exists (user_path returns config/USER.md).
+  let user_dir =
+    string.slice(user_file_path, 0, string.length(user_file_path) - 8)
+  let _ = simplifile.create_directory_all(user_dir)
+  let _ = simplifile.write(user_file_path, "§ favorite-color\norange\n")
+
+  fake_llm.script_text_response(sys.fake_llm, "ok")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("ch-mem-test", "hi")),
+  )
+  let _ =
+    poll.poll_until(
+      fn() { fake_llm.calls(sys.fake_llm) != [] },
+      2000,
+    )
+  let prompts = combined_system_prompts(sys.fake_llm)
+  string.contains(prompts, "favorite-color")
+  |> should.be_true
+
+  // Cleanup
+  let _ = simplifile.delete(user_file_path)
+  test_harness.teardown(sys)
 }

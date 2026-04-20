@@ -8,6 +8,7 @@ import aura/clients/discord_client
 import aura/clients/llm_client
 import aura/clients/skill_runner
 import aura/compressor
+import aura/config
 import aura/conversation
 import aura/db
 import aura/discord
@@ -20,6 +21,8 @@ import aura/review
 import aura/review_runner.{type ReviewRunner}
 import aura/shell
 import aura/skill
+import aura/structured_memory
+import aura/system_prompt
 import aura/time
 import aura/tools
 import aura/validator
@@ -184,6 +187,9 @@ pub type ChannelState {
     vision_spawn: VisionWorkerSpawn,
     self_subject: Subject(ChannelMessage),
     brain_context: Int,
+    soul: String,
+    domain_names: List(String),
+    domain_configs: List(#(String, config.DomainConfig)),
   )
 }
 
@@ -222,6 +228,9 @@ pub type Deps {
     tool_spawn: ToolWorkerSpawn,
     vision_spawn: VisionWorkerSpawn,
     brain_context: Int,
+    soul: String,
+    domain_names: List(String),
+    domain_configs: List(#(String, config.DomainConfig)),
   )
 }
 
@@ -310,6 +319,9 @@ fn build_initial_state(
     vision_spawn: deps.vision_spawn,
     self_subject: self,
     brain_context: deps.brain_context,
+    soul: deps.soul,
+    domain_names: deps.domain_names,
+    domain_configs: deps.domain_configs,
   )
 }
 
@@ -360,6 +372,9 @@ pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
     tool_spawn: dummy_tool_spawn,
     vision_spawn: dummy_vision_spawn,
     brain_context: 128_000,
+    soul: "",
+    domain_names: [],
+    domain_configs: [],
   )
 }
 
@@ -482,6 +497,9 @@ fn build_initial_state_for_test(
     vision_spawn: dummy_vision_spawn,
     self_subject: self,
     brain_context: 128_000,
+    soul: "",
+    domain_names: [],
+    domain_configs: [],
   )
 }
 
@@ -892,9 +910,10 @@ fn execute_spawn_stream_worker(
     "" -> option.None
     name -> option.Some(name)
   }
+  let base_prompt = build_base_system_prompt(state)
   let system_prompt =
     assemble_system_prompt(
-      "",
+      base_prompt,
       domain_name,
       state.channel_id,
       state.tool_ctx.acp_subject,
@@ -1635,13 +1654,92 @@ fn start_turn(
 // Transition helpers
 // ---------------------------------------------------------------------------
 
+/// Build the base system prompt for channel_actor: soul + domain names +
+/// skill infos + memory/user content + domain prompt (AGENTS.md/MEMORY.md/STATE.md)
+/// + flare roster section. This mirrors brain.build_llm_context's system_prompt
+/// construction (lines 1253-1388). Called fresh on every turn so memory is
+/// always current.
+fn build_base_system_prompt(state: ChannelState) -> String {
+  let memory_content =
+    case structured_memory.format_for_display(xdg.memory_path(state.paths)) {
+      Ok(c) -> c
+      Error(_) -> ""
+    }
+  let user_content =
+    case structured_memory.format_for_display(xdg.user_path(state.paths)) {
+      Ok(c) -> c
+      Error(_) -> ""
+    }
+  let system_prompt_text =
+    system_prompt.build_system_prompt(
+      state.soul,
+      state.domain_names,
+      state.tool_ctx.skill_infos,
+      memory_content,
+      user_content,
+    )
+
+  let domain_prompt = case state.domain {
+    Some(name) -> {
+      let config_dir = xdg.domain_config_dir(state.paths, name)
+      let data_dir = xdg.domain_data_dir(state.paths, name)
+      let state_dir = xdg.domain_state_dir(state.paths, name)
+      let ctx =
+        domain.load_context(
+          config_dir,
+          data_dir,
+          state_dir,
+          state.tool_ctx.skill_infos,
+        )
+      "\n\n" <> domain.build_domain_prompt(ctx)
+    }
+    None -> ""
+  }
+  let base_with_domain = system_prompt_text <> domain_prompt
+
+  // Build roster summary (active + parked flares)
+  let flares = flare_manager.list_flares(state.tool_ctx.acp_subject)
+  let active_flares =
+    list.filter(flares, fn(f) { f.status == flare_manager.Active })
+  let parked_flares =
+    list.filter(flares, fn(f) { f.status == flare_manager.Parked })
+  let roster_section =
+    case list.length(active_flares) + list.length(parked_flares) {
+      0 -> ""
+      _ -> {
+        let active_lines =
+          list.map(active_flares, fn(f) {
+            "- \""
+            <> f.label
+            <> "\" ("
+            <> f.domain
+            <> ") — active, session: "
+            <> f.session_name
+          })
+        let parked_lines =
+          list.map(parked_flares, fn(f) {
+            "- \"" <> f.label <> "\" (" <> f.domain <> ") — parked"
+          })
+        "\n\n## Flare Roster"
+        <> case active_lines {
+          [] -> ""
+          lines -> "\nActive:\n" <> string.join(lines, "\n")
+        }
+        <> case parked_lines {
+          [] -> ""
+          lines -> "\nParked:\n" <> string.join(lines, "\n")
+        }
+        <> "\n\nUse flare(action='rekindle', ...) to resume a parked flare. Use flare(action='ignite', ...) to start new work."
+      }
+    }
+  base_with_domain <> roster_section
+}
+
 /// Assemble the full system prompt: base + fs_section + flare_context.
 ///
-/// `base` is whatever base system prompt the caller has already built (e.g.
-/// from a future `build_llm_context` port — currently empty string until that
-/// task lands). `fs_section` describes XDG paths and the autonomy-tier policy.
-/// `flare_context` is appended when `channel_id` matches an active flare's
-/// `thread_id`.
+/// `base` is the base prompt from `build_base_system_prompt`. `fs_section`
+/// describes XDG paths and the autonomy-tier policy. `flare_context` is
+/// appended when `channel_id` matches an active flare's `thread_id`.
 pub fn assemble_system_prompt(
   base: String,
   domain_name: option.Option(String),

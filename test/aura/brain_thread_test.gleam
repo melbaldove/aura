@@ -10,7 +10,7 @@ pub fn top_level_domain_message_creates_thread_test() {
   // Fresh system with a cm2 domain whose channel_id is "cm2-channel".
   // Also allowlist "cm2-channel" so brain routes it through the channel_actor
   // path, where the thread-creation logic lives.
-  let sys =
+  let #(sys, _) =
     test_harness.fresh_system_with_domain_and_allowlist(
       "cm2",
       "# CM2",

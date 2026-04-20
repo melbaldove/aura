@@ -195,9 +195,12 @@ pub fn fresh_system() -> TestSystem {
 /// channel_actor allowlist. Messages to these channels route through the new
 /// concurrent channel_actor path instead of the legacy synchronous brain
 /// loop. All other behavior matches `fresh_system/0`.
+///
+/// Returns `#(TestSystem, xdg.Paths)` so tests that need to write files to
+/// the scratch root (e.g. USER.md) can resolve paths without guessing.
 pub fn fresh_system_with_allowlist(
   channel_ids: List(String),
-) -> TestSystem {
+) -> #(TestSystem, xdg.Paths) {
   // 1. Build the four fakes.
   let #(fake_discord, discord_client) = fake_discord.new()
   let #(fake_llm, llm_client) = fake_llm.new()
@@ -286,15 +289,18 @@ pub fn fresh_system_with_allowlist(
 
   let assert Ok(brain_subject) = brain.start(brain_config)
 
-  TestSystem(
-    brain_subject: brain_subject,
-    fake_discord: fake_discord,
-    fake_llm: fake_llm,
-    fake_skill_runner: fake_skill_runner,
-    fake_review: fake_review_inst,
-    db_path: db_path,
-    db_subject: db_subject,
-    acp_subject: flare_subject,
+  #(
+    TestSystem(
+      brain_subject: brain_subject,
+      fake_discord: fake_discord,
+      fake_llm: fake_llm,
+      fake_skill_runner: fake_skill_runner,
+      fake_review: fake_review_inst,
+      db_path: db_path,
+      db_subject: db_subject,
+      acp_subject: flare_subject,
+    ),
+    paths,
   )
 }
 
@@ -447,7 +453,7 @@ pub fn fresh_system_with_domain_and_allowlist(
   agents_md: String,
   channel_id: String,
   allowlist: List(String),
-) -> TestSystem {
+) -> #(TestSystem, xdg.Paths) {
   // 1. Build the four fakes.
   let #(fake_discord, discord_client) = fake_discord.new()
   let #(fake_llm, llm_client) = fake_llm.new()
@@ -540,15 +546,18 @@ pub fn fresh_system_with_domain_and_allowlist(
 
   let assert Ok(brain_subject) = brain.start(brain_config)
 
-  TestSystem(
-    brain_subject: brain_subject,
-    fake_discord: fake_discord,
-    fake_llm: fake_llm,
-    fake_skill_runner: fake_skill_runner,
-    fake_review: fake_review_inst,
-    db_path: db_path,
-    db_subject: db_subject,
-    acp_subject: flare_subject,
+  #(
+    TestSystem(
+      brain_subject: brain_subject,
+      fake_discord: fake_discord,
+      fake_llm: fake_llm,
+      fake_skill_runner: fake_skill_runner,
+      fake_review: fake_review_inst,
+      db_path: db_path,
+      db_subject: db_subject,
+      acp_subject: flare_subject,
+    ),
+    paths,
   )
 }
 
