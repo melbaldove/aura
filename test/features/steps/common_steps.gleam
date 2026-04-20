@@ -14,6 +14,7 @@ import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/option.{None}
+import poll
 import simplifile
 import test_harness.{type TestSystem}
 
@@ -216,57 +217,28 @@ fn then_discord_at_least_n_edits(
   use expected <- result_try(get_int(ctx.captures, 0))
   use system <- result_try(world.get(ctx.world, "system"))
   let sys: TestSystem = system
-  case poll_for_edit_count(sys.fake_discord, expected, 0, 2000) {
+  let check = fn() { edit_count(sys.fake_discord) >= expected }
+  case poll.poll_until(check, 2000) {
     True -> Ok(succeed())
-    False -> {
-      let events = fake_discord.all_events(sys.fake_discord)
-      let edit_count =
-        list.filter(events, fn(e) {
-          case e {
-            fake_discord.Edited(_, _, _) -> True
-            _ -> False
-          }
-        })
-        |> list.length
+    False ->
       Error(
         "expected >= "
         <> int.to_string(expected)
         <> " edits to same message, got "
-        <> int.to_string(edit_count),
+        <> int.to_string(edit_count(sys.fake_discord)),
       )
-    }
   }
 }
 
-/// Poll every 10ms until `fake_discord` has recorded at least `expected`
-/// Edited events, or until `timeout_ms` elapses. Returns True on success.
-fn poll_for_edit_count(
-  fake: fake_discord.FakeDiscord,
-  expected: Int,
-  elapsed: Int,
-  timeout_ms: Int,
-) -> Bool {
-  let events = fake_discord.all_events(fake)
-  let edit_count =
-    list.filter(events, fn(e) {
-      case e {
-        fake_discord.Edited(_, _, _) -> True
-        _ -> False
-      }
-    })
-    |> list.length
-  case edit_count >= expected {
-    True -> True
-    False -> {
-      case elapsed >= timeout_ms {
-        True -> False
-        False -> {
-          let _ = process.sleep(10)
-          poll_for_edit_count(fake, expected, elapsed + 10, timeout_ms)
-        }
-      }
+fn edit_count(fake: fake_discord.FakeDiscord) -> Int {
+  fake_discord.all_events(fake)
+  |> list.filter(fn(e) {
+    case e {
+      fake_discord.Edited(_, _, _) -> True
+      _ -> False
     }
-  }
+  })
+  |> list.length
 }
 
 // ---------------------------------------------------------------------------

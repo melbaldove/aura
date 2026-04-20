@@ -4,9 +4,9 @@ import dream_test/gherkin/world
 import dream_test/matchers.{contain_string, or_fail_with, should, succeed}
 import dream_test/types as dream_types  // AssertionResult used in handler return types
 import fakes/fake_llm
-import gleam/erlang/process
 import gleam/list
 import gleam/string
+import poll
 import test_harness.{type TestSystem}
 
 // ---------------------------------------------------------------------------
@@ -203,8 +203,11 @@ fn then_llm_system_prompt_contains(
   use expected <- result_try(get_string(ctx.captures, 0))
   use system <- result_try(world.get(ctx.world, "system"))
   let sys: TestSystem = system
-  let combined = poll_for_system_prompt(sys.fake_llm, expected, 0, 2000)
-  combined
+  let check = fn() {
+    string.contains(combined_system_prompts(sys.fake_llm), expected)
+  }
+  let _ = poll.poll_until(check, 2000)
+  combined_system_prompts(sys.fake_llm)
   |> should
   |> contain_string(expected)
   |> or_fail_with(
@@ -212,34 +215,17 @@ fn then_llm_system_prompt_contains(
   )
 }
 
-/// Poll every 10ms until a system message containing `expected` appears in the
-/// recorded LLM calls, or until `timeout_ms` elapses. Returns the combined
-/// system message content (possibly not containing `expected` on timeout).
-fn poll_for_system_prompt(
-  fake: fake_llm.FakeLLM,
-  expected: String,
-  elapsed: Int,
-  timeout_ms: Int,
-) -> String {
-  let calls = fake_llm.calls(fake)
-  let combined =
-    calls
-    |> list.flat_map(fn(c) {
-      list.filter_map(c.messages, fn(m) {
-        case m {
-          llm.SystemMessage(content) -> Ok(content)
-          _ -> Error(Nil)
-        }
-      })
+fn combined_system_prompts(fake: fake_llm.FakeLLM) -> String {
+  fake_llm.calls(fake)
+  |> list.flat_map(fn(c) {
+    list.filter_map(c.messages, fn(m) {
+      case m {
+        llm.SystemMessage(content) -> Ok(content)
+        _ -> Error(Nil)
+      }
     })
-    |> string.join("\n")
-  case string.contains(combined, expected) || elapsed >= timeout_ms {
-    True -> combined
-    False -> {
-      let _ = process.sleep(10)
-      poll_for_system_prompt(fake, expected, elapsed + 10, timeout_ms)
-    }
-  }
+  })
+  |> string.join("\n")
 }
 
 /// Assert that the most-recent `stream_with_tools` call carried at least one
@@ -252,8 +238,11 @@ fn then_llm_last_call_messages_contain(
   use expected <- result_try(get_string(ctx.captures, 0))
   use system <- result_try(world.get(ctx.world, "system"))
   let sys: TestSystem = system
-  let combined = poll_for_any_message(sys.fake_llm, expected, 0, 2000)
-  combined
+  let check = fn() {
+    string.contains(last_call_combined(sys.fake_llm), expected)
+  }
+  let _ = poll.poll_until(check, 2000)
+  last_call_combined(sys.fake_llm)
   |> should
   |> contain_string(expected)
   |> or_fail_with(
@@ -261,39 +250,23 @@ fn then_llm_last_call_messages_contain(
   )
 }
 
-/// Poll every 10ms until any message in the latest LLM call contains
-/// `expected`, or until `timeout_ms` elapses.
-fn poll_for_any_message(
-  fake: fake_llm.FakeLLM,
-  expected: String,
-  elapsed: Int,
-  timeout_ms: Int,
-) -> String {
-  let calls = fake_llm.calls(fake)
-  let last_call_messages = case list.last(calls) {
+fn last_call_combined(fake: fake_llm.FakeLLM) -> String {
+  let last_call_messages = case list.last(fake_llm.calls(fake)) {
     Ok(c) -> c.messages
     Error(_) -> []
   }
-  let combined =
-    last_call_messages
-    |> list.filter_map(fn(m) {
-      case m {
-        llm.UserMessage(content) -> Ok(content)
-        llm.UserMessageWithImage(content, _) -> Ok(content)
-        llm.AssistantMessage(content) -> Ok(content)
-        llm.AssistantToolCallMessage(content, _) -> Ok(content)
-        llm.SystemMessage(content) -> Ok(content)
-        llm.ToolResultMessage(_, content) -> Ok(content)
-      }
-    })
-    |> string.join("\n")
-  case string.contains(combined, expected) || elapsed >= timeout_ms {
-    True -> combined
-    False -> {
-      let _ = process.sleep(10)
-      poll_for_any_message(fake, expected, elapsed + 10, timeout_ms)
+  last_call_messages
+  |> list.filter_map(fn(m) {
+    case m {
+      llm.UserMessage(content) -> Ok(content)
+      llm.UserMessageWithImage(content, _) -> Ok(content)
+      llm.AssistantMessage(content) -> Ok(content)
+      llm.AssistantToolCallMessage(content, _) -> Ok(content)
+      llm.SystemMessage(content) -> Ok(content)
+      llm.ToolResultMessage(_, content) -> Ok(content)
     }
-  }
+  })
+  |> string.join("\n")
 }
 
 // ---------------------------------------------------------------------------
