@@ -1153,47 +1153,6 @@ fn resolve_finding_channel(
   resolve_domain_channel(state, finding.domain)
 }
 
-/// Spawn a process that sends typing indicators every 8 seconds.
-/// Returns the PID of the typing process. Kill it to stop.
-fn start_typing_loop(
-  discord: DiscordClient,
-  channel_id: String,
-) -> process.Pid {
-  process.spawn_unlinked(fn() { typing_loop(discord, channel_id) })
-}
-
-fn typing_loop(discord: DiscordClient, channel_id: String) -> Nil {
-  let _ = discord.trigger_typing(channel_id)
-  process.sleep(8000)
-  typing_loop(discord, channel_id)
-}
-
-/// Send a new message or edit an existing one. Returns the message ID.
-fn send_or_edit(
-  discord: DiscordClient,
-  channel_id: String,
-  msg_id: String,
-  content: String,
-) -> String {
-  let safe_content = discord_message.clip_to_discord_limit(content)
-  case msg_id {
-    "" -> {
-      case discord.send_message(channel_id, safe_content) {
-        Ok(id) -> id
-        Error(_) -> ""
-      }
-    }
-    existing -> {
-      let _ = discord.edit_message(channel_id, existing, safe_content)
-      existing
-    }
-  }
-}
-
-fn stop_typing_loop(pid: process.Pid) -> Nil {
-  process.kill(pid)
-}
-
 fn send_discord_response(
   discord: DiscordClient,
   channel_id: String,
