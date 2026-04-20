@@ -23,6 +23,7 @@
 import aura/acp/flare_manager
 import aura/acp/transport
 import aura/brain
+import aura/channel_supervisor
 import aura/clients/browser_runner
 import aura/config
 import aura/db
@@ -96,6 +97,9 @@ pub fn fresh_system() -> TestSystem {
       db_subject,
     )
 
+  // 5b. Channel supervisor — idle in tests until allowlisted channels are exercised.
+  let assert Ok(channel_sup) = channel_supervisor.start()
+
   // 6. Build BrainConfig with test-safe defaults.
   //
   // NOTE: `paths` points at /tmp so any accidental file I/O lands in the
@@ -157,6 +161,7 @@ pub fn fresh_system() -> TestSystem {
       llm: llm_client,
       skill_runner: skill_runner_client,
       browser_runner: browser_runner.production(),
+      channel_supervisor: channel_sup,
     )
 
   let assert Ok(brain_subject) = brain.start(brain_config)
@@ -212,6 +217,9 @@ pub fn fresh_system_with_domain(
       transport.Tmux,
       db_subject,
     )
+
+  // 5b. Channel supervisor — idle in tests until allowlisted channels are exercised.
+  let assert Ok(channel_sup) = channel_supervisor.start()
 
   // 6. Build paths pointing at a unique tmp root.
   let tmp_root = "/tmp/aura-test-root-" <> int.to_string(unique_integer())
@@ -270,6 +278,7 @@ pub fn fresh_system_with_domain(
       llm: llm_client,
       skill_runner: skill_runner_client,
       browser_runner: browser_runner.production(),
+      channel_supervisor: channel_sup,
     )
 
   let assert Ok(brain_subject) = brain.start(brain_config)

@@ -3,6 +3,7 @@ import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
 import aura/brain_tools
 import aura/browser
+import aura/channel_supervisor
 import aura/clients/browser_runner.{type BrowserRunner}
 import aura/clients/discord_client.{type DiscordClient}
 import aura/clients/llm_client.{type LLMClient}
@@ -127,6 +128,7 @@ pub type BrainConfig {
     llm: LLMClient,
     skill_runner: SkillRunner,
     browser_runner: BrowserRunner,
+    channel_supervisor: process.Subject(channel_supervisor.SupervisorMessage),
   )
 }
 
@@ -167,6 +169,7 @@ pub type BrainState {
     llm_client: LLMClient,
     skill_runner: SkillRunner,
     browser_runner: BrowserRunner,
+    channel_supervisor: process.Subject(channel_supervisor.SupervisorMessage),
   )
 }
 
@@ -321,6 +324,7 @@ pub fn start(
       llm_client: brain_config.llm,
       skill_runner: brain_config.skill_runner,
       browser_runner: brain_config.browser_runner,
+      channel_supervisor: brain_config.channel_supervisor,
     )
 
   actor.new_with_initialiser(10_000, fn(self_subject) {

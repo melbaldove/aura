@@ -1,6 +1,7 @@
 import aura/acp/flare_manager
 import aura/acp/transport
 import aura/brain
+import aura/channel_supervisor
 import aura/clients/browser_runner
 import aura/clients/discord_client
 import aura/clients/llm_client
@@ -171,7 +172,11 @@ pub fn start(
   )
   logging.log(logging.Info, "[supervisor] Flare manager started")
 
-  // 6. Start brain (with flare_subject)
+  // 6. Start channel_supervisor (sibling of brain under root supervisor)
+  let assert Ok(channel_sup) = channel_supervisor.start()
+  logging.log(logging.Info, "[supervisor] Channel supervisor started")
+
+  // 6. Start brain (with flare_subject and channel_supervisor)
   let discord_client_val = discord_client.production(global_config.discord.token)
   let llm_client_val = llm_client.production()
   let skill_runner_val = skill_runner.production()
@@ -191,6 +196,7 @@ pub fn start(
       llm: llm_client_val,
       skill_runner: skill_runner_val,
       browser_runner: browser_runner_val,
+      channel_supervisor: channel_sup,
     )),
   )
   logging.log(logging.Info, "[supervisor] Brain started")
