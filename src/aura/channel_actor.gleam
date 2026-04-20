@@ -274,7 +274,7 @@ fn build_initial_state(
   let #(history, comp_state) =
     conversation.load_channel_bootstrap(
       deps.db_subject,
-      "discord",
+      platform,
       deps.channel_id,
       time.now_ms(),
     )
@@ -564,7 +564,7 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       case
         db.resolve_conversation(
           state.tool_ctx.db_subject,
-          "discord",
+          platform,
           state.channel_id,
           now,
         )
@@ -644,7 +644,7 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       state
     }
     SpawnSkillReview(history, new_iterations, current_count) -> {
-      let resolved_domain = option.unwrap(state.domain, "aura")
+      let resolved_domain = option.unwrap(state.domain, default_domain)
       let new_count =
         state.review_runner.skill_run(
           state.skill_review_interval,
@@ -661,7 +661,7 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       ChannelState(..state, review_counts: #(state.review_counts.0, new_count))
     }
     SpawnMemoryReview(history) -> {
-      let resolved_domain = option.unwrap(state.domain, "aura")
+      let resolved_domain = option.unwrap(state.domain, default_domain)
       let new_count =
         state.review_runner.run(
           state.review_interval,
@@ -678,7 +678,7 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
     }
     ResolveProposal(proposal, action) -> {
       let now = time.now_ms()
-      let expired = now - proposal.requested_at_ms > 900_000
+      let expired = now - proposal.requested_at_ms > approval_expiry_ms
       case expired {
         True -> {
           logging.log(
@@ -744,7 +744,7 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
     }
     ResolveShellApproval(approval, action) -> {
       let now = time.now_ms()
-      let expired = now - approval.requested_at_ms > 900_000
+      let expired = now - approval.requested_at_ms > approval_expiry_ms
       case expired {
         True -> {
           process.send(approval.reply_to, brain_tools.Expired)
@@ -825,7 +825,7 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       let comp_state = state.compressor_state
       let brain_context = state.brain_context
       let monitor_model = state.monitor_model
-      let cache_key = "discord:" <> state.channel_id
+      let cache_key = platform <> ":" <> state.channel_id
       logging.log(
         logging.Info,
         "[channel_actor] Full compression triggered for " <> cache_key,
@@ -1859,8 +1859,18 @@ fn state_with_pending_stream(
   ChannelState(..state, turn: Some(turn))
 }
 
+/// 15-minute expiry for proposals and shell approvals.
+const approval_expiry_ms: Int = 900_000
+
+/// Default domain name when a channel has no domain resolved (e.g. #aura).
+const default_domain: String = "aura"
+
+/// Platform identifier used for conversation keys and DB rows. Only "discord"
+/// is supported today; Telegram/Slack would add more.
+const platform: String = "discord"
+
 /// Progressive-edit threshold: re-render the Discord message every N chars
-/// of accumulated content. Mirrors `brain.progressive_edit_chars`.
+/// of accumulated content.
 const progressive_edit_chars: Int = 150
 
 /// Append the vision description to the last `UserMessage` in the history,
@@ -1951,7 +1961,7 @@ fn finalize_turn(
     False -> state.compressor_state.last_prompt_tokens
   }
   // Resolve domain name for compression context loading.
-  let resolved_domain = option.unwrap(state.domain, "aura")
+  let resolved_domain = option.unwrap(state.domain, default_domain)
   // Emit compression effects after DbSaveExchange, mirroring brain's
   // StoreExchange handler (brain.gleam:561-691).
   let compression_effects = case
