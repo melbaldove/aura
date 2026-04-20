@@ -2,13 +2,21 @@
 //// Phase 1: types + skeleton. Phase 2+ adds the state machine.
 
 import aura/brain_tools
+import aura/clients/browser_runner
+import aura/clients/discord_client
+import aura/clients/llm_client
+import aura/clients/skill_runner
 import aura/conversation
 import aura/discord
 import aura/llm
 import aura/notification
+import aura/shell
+import aura/xdg
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Monitor, type Pid, type Subject, type Timer}
-import gleam/option.{type Option}
+import gleam/option.{type Option, None}
+import gleam/otp/actor
+import gleam/result
 
 pub type ChannelMessage {
   HandleIncoming(discord.IncomingMessage)
@@ -114,3 +122,97 @@ pub type ChannelState {
     self_subject: Subject(ChannelMessage),
   )
 }
+
+// ---------------------------------------------------------------------------
+// Test construction
+// ---------------------------------------------------------------------------
+
+/// Minimal deps for test-only actor construction.
+pub type TestDeps {
+  TestDeps(channel_id: String, discord_token: String)
+}
+
+/// Start a channel actor with stubbed deps for smoke tests.
+/// Production clients are used but no real network calls will be made
+/// since the no-op handle_message never invokes the tool context.
+pub fn start_for_test(
+  deps: TestDeps,
+) -> Result(Subject(ChannelMessage), actor.StartError) {
+  actor.new_with_initialiser(5000, fn(self_subject) {
+    let state = build_initial_state_for_test(deps, self_subject)
+    Ok(actor.initialised(state) |> actor.returning(self_subject))
+  })
+  |> actor.on_message(handle_message)
+  |> actor.start
+  |> result.map(fn(started) { started.data })
+}
+
+fn build_initial_state_for_test(
+  deps: TestDeps,
+  self: Subject(ChannelMessage),
+) -> ChannelState {
+  let paths = xdg.resolve()
+  // Stub subjects that won't receive messages in smoke tests
+  let db_subject = process.new_subject()
+  let acp_subject = process.new_subject()
+  let tool_ctx =
+    brain_tools.ToolContext(
+      base_dir: "/tmp",
+      discord_token: deps.discord_token,
+      guild_id: "",
+      message_id: "",
+      channel_id: deps.channel_id,
+      paths: paths,
+      skill_infos: [],
+      skills_dir: "",
+      validation_rules: [],
+      db_subject: db_subject,
+      scheduler_subject: None,
+      acp_subject: acp_subject,
+      domain_name: "",
+      domain_cwd: "",
+      acp_provider: "",
+      acp_binary: "",
+      acp_worktree: False,
+      acp_server_url: "",
+      acp_agent_name: "",
+      on_propose: fn(_proposal) { Nil },
+      shell_patterns: shell.compile_patterns(),
+      on_shell_approve: fn(_approval) { Nil },
+      vision_fn: fn(_url, _question) { Error("stub") },
+      discord: discord_client.production(deps.discord_token),
+      llm_client: llm_client.production(),
+      skill_runner: skill_runner.production(),
+      browser_runner: browser_runner.production(),
+    )
+  ChannelState(
+    channel_id: deps.channel_id,
+    domain: None,
+    conversation: [],
+    compressor_state: conversation.new_compressor_state(),
+    tool_ctx: tool_ctx,
+    turn: None,
+    queue: [],
+    review_counts: #(0, 0),
+    pending_proposals: [],
+    pending_shell_approvals: [],
+    typing_pid: None,
+    discord_token: deps.discord_token,
+    self_subject: self,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Message handler (Phase 1 stub)
+// ---------------------------------------------------------------------------
+
+/// Phase 1: no-op handler. Every message is acknowledged and state is
+/// returned unchanged. Later tasks replace individual arms with real
+/// state-machine transitions.
+fn handle_message(
+  state: ChannelState,
+  _message: ChannelMessage,
+) -> actor.Next(ChannelState, ChannelMessage) {
+  actor.continue(state)
+}
+
