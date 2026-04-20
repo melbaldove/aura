@@ -1,16 +1,20 @@
 //// Per-channel actor that runs turns concurrently with other channels.
 //// Phase 1: types + skeleton. Phase 2+ adds the state machine.
 
+import aura/acp/flare_manager
 import aura/brain_tools
 import aura/clients/browser_runner
 import aura/clients/discord_client
 import aura/clients/llm_client
 import aura/clients/skill_runner
 import aura/conversation
+import aura/db
 import aura/discord
 import aura/llm
 import aura/notification
 import aura/shell
+import aura/skill
+import aura/validator
 import aura/xdg
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Monitor, type Pid, type Subject, type Timer}
@@ -124,12 +128,127 @@ pub type ChannelState {
 }
 
 // ---------------------------------------------------------------------------
+// Production Deps type
+// ---------------------------------------------------------------------------
+
+/// Full dependencies for production channel actor construction.
+pub type Deps {
+  Deps(
+    channel_id: String,
+    discord_token: String,
+    db_subject: process.Subject(db.DbMessage),
+    acp_subject: process.Subject(flare_manager.FlareMsg),
+    paths: xdg.Paths,
+    discord: discord_client.DiscordClient,
+    llm_client: llm_client.LLMClient,
+    skill_runner: skill_runner.SkillRunner,
+    browser_runner: browser_runner.BrowserRunner,
+    skill_infos: List(skill.SkillInfo),
+    skills_dir: String,
+    validation_rules: List(validator.Rule),
+    base_dir: String,
+    domain_name: String,
+    domain_cwd: String,
+  )
+}
+
+/// Start a channel actor with production deps.
+pub fn start(
+  deps: Deps,
+) -> Result(Subject(ChannelMessage), actor.StartError) {
+  actor.new_with_initialiser(5000, fn(self_subject) {
+    let state = build_initial_state(deps, self_subject)
+    Ok(actor.initialised(state) |> actor.returning(self_subject))
+  })
+  |> actor.on_message(handle_message)
+  |> actor.start
+  |> result.map(fn(started) { started.data })
+}
+
+fn build_initial_state(
+  deps: Deps,
+  self: Subject(ChannelMessage),
+) -> ChannelState {
+  let tool_ctx =
+    brain_tools.ToolContext(
+      base_dir: deps.base_dir,
+      discord_token: deps.discord_token,
+      guild_id: "",
+      message_id: "",
+      channel_id: deps.channel_id,
+      paths: deps.paths,
+      skill_infos: deps.skill_infos,
+      skills_dir: deps.skills_dir,
+      validation_rules: deps.validation_rules,
+      db_subject: deps.db_subject,
+      scheduler_subject: None,
+      acp_subject: deps.acp_subject,
+      domain_name: deps.domain_name,
+      domain_cwd: deps.domain_cwd,
+      acp_provider: "",
+      acp_binary: "",
+      acp_worktree: False,
+      acp_server_url: "",
+      acp_agent_name: "",
+      on_propose: fn(_proposal) { Nil },
+      shell_patterns: shell.compile_patterns(),
+      on_shell_approve: fn(_approval) { Nil },
+      vision_fn: fn(_url, _question) { Error("stub") },
+      discord: deps.discord,
+      llm_client: deps.llm_client,
+      skill_runner: deps.skill_runner,
+      browser_runner: deps.browser_runner,
+    )
+  ChannelState(
+    channel_id: deps.channel_id,
+    domain: None,
+    conversation: [],
+    compressor_state: conversation.new_compressor_state(),
+    tool_ctx: tool_ctx,
+    turn: None,
+    queue: [],
+    review_counts: #(0, 0),
+    pending_proposals: [],
+    pending_shell_approvals: [],
+    typing_pid: None,
+    discord_token: deps.discord_token,
+    self_subject: self,
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Test construction
 // ---------------------------------------------------------------------------
 
 /// Minimal deps for test-only actor construction.
 pub type TestDeps {
   TestDeps(channel_id: String, discord_token: String)
+}
+
+/// Build a `Deps` record suitable for tests, using stub subjects and real
+/// (but network-idle) production clients. Reuse this in test files to avoid
+/// duplicating stub wiring logic.
+pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
+  let paths = xdg.resolve()
+  let db_subject = process.new_subject()
+  let acp_subject = process.new_subject()
+  Deps(
+    channel_id: channel_id,
+    discord_token: discord_token,
+    db_subject: db_subject,
+    acp_subject: acp_subject,
+    paths: paths,
+    discord: discord_client.production(discord_token),
+    llm_client: llm_client.production(),
+    skill_runner: skill_runner.production(),
+    browser_runner: browser_runner.production(),
+    skill_infos: [],
+    skills_dir: "",
+    validation_rules: [],
+    base_dir: "/tmp",
+    domain_name: "",
+    domain_cwd: "",
+  )
 }
 
 /// Start a channel actor with stubbed deps for smoke tests.
