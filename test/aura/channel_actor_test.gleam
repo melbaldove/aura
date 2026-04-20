@@ -246,3 +246,36 @@ pub fn stream_error_exhausts_retries_fails_turn_test() {
   })
   |> should.be_true
 }
+
+// --- Task 14: cancel + deadline ----------------------------------------------
+
+pub fn cancel_kills_worker_and_fails_turn_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(new_state, effects) =
+    channel_actor.transition(with_stream, channel_actor.Cancel)
+  new_state.turn |> should.equal(option.None)
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.KillWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
+pub fn cancel_idle_is_noop_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let #(new_state, effects) =
+    channel_actor.transition(state, channel_actor.Cancel)
+  new_state |> should.equal(state)
+  effects |> should.equal([])
+}
+
+pub fn turn_deadline_fails_turn_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(new_state, _) =
+    channel_actor.transition(with_stream, channel_actor.TurnDeadline)
+  new_state.turn |> should.equal(option.None)
+}

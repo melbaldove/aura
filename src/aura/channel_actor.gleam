@@ -580,6 +580,29 @@ pub fn transition(
     }
     StreamError(_), None -> #(state, [])
 
+    // --- Task 14: cancel + deadline -----------------------------------------
+    Cancel, Some(turn) -> {
+      let kill_effects = [
+        KillWorker(turn.worker_pid),
+        DiscordEdit(turn.discord_msg_id, "Cancelled by user"),
+      ]
+      let fail_effects = fail_turn_effects(state, turn, "cancelled")
+      let #(cleared, deq_effects) = clear_and_dequeue(state)
+      #(cleared, list.flatten([kill_effects, fail_effects, deq_effects]))
+    }
+    Cancel, None -> #(state, [])
+
+    TurnDeadline, Some(turn) -> {
+      let kill_effects = [
+        KillWorker(turn.worker_pid),
+        DiscordEdit(turn.discord_msg_id, "Turn exceeded 10-minute deadline"),
+      ]
+      let fail_effects = fail_turn_effects(state, turn, "deadline")
+      let #(cleared, deq_effects) = clear_and_dequeue(state)
+      #(cleared, list.flatten([kill_effects, fail_effects, deq_effects]))
+    }
+    TurnDeadline, None -> #(state, [])
+
     _, _ -> #(state, [])
   }
 }
@@ -643,6 +666,45 @@ fn fail_turn_internal(
         start_turn(ChannelState(..cleared, queue: rest), next)
       #(new_state, list.append(effects, start_effects))
     }
+  }
+}
+
+/// Side-effect list for a turn that failed for non-retry reasons (cancel,
+/// deadline). Omits the Discord error message since the caller decides the
+/// user-facing text.
+fn fail_turn_effects(
+  state: ChannelState,
+  turn: TurnState,
+  outcome: String,
+) -> List(Effect) {
+  let base = [
+    LogStreamSummary(
+      turn.stream_stats,
+      outcome,
+      string.length(turn.accumulated_content),
+    ),
+  ]
+  let with_typing = case state.typing_pid {
+    Some(pid) -> [StopTyping(pid), ..base]
+    None -> base
+  }
+  case turn.deadline_timer {
+    Some(timer) -> [CancelDeadline(timer), ..with_typing]
+    None -> with_typing
+  }
+}
+
+/// Clear the in-flight turn (and typing pid) and, if the queue is non-empty,
+/// start the next turn. Returns the post-clear state plus any start effects
+/// from the dequeued turn.
+fn clear_and_dequeue(
+  state: ChannelState,
+) -> #(ChannelState, List(Effect)) {
+  let cleared = ChannelState(..state, turn: None, typing_pid: None)
+  case state.queue {
+    [] -> #(cleared, [])
+    [next, ..rest] ->
+      start_turn(ChannelState(..cleared, queue: rest), next)
   }
 }
 
