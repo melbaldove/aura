@@ -146,6 +146,7 @@ pub type TurnState {
     stream_retry_count: Int,
     stream_stats: StreamStats,
     deadline_timer: Option(Timer),
+    last_edit_len: Int,
   )
 }
 
@@ -1136,18 +1137,26 @@ pub fn transition(
           ..turn.stream_stats,
           delta_count: turn.stream_stats.delta_count + 1,
         )
+      let #(edit_effects, new_last_edit_len) =
+        case should_progressive_edit(turn, new_acc) {
+          True -> #(
+            [
+              DiscordEdit(
+                turn.discord_msg_id,
+                format_progress(new_acc, turn.traces),
+              ),
+            ],
+            string.length(new_acc),
+          )
+          False -> #([], turn.last_edit_len)
+        }
       let new_turn =
         TurnState(
           ..turn,
           accumulated_content: new_acc,
           stream_stats: new_stats,
+          last_edit_len: new_last_edit_len,
         )
-      let edit_effects = case should_progressive_edit(turn, new_acc) {
-        True -> [
-          DiscordEdit(turn.discord_msg_id, format_progress(new_acc, turn.traces)),
-        ]
-        False -> []
-      }
       #(
         ChannelState(..state, turn: Some(new_turn)),
         list.append(edit_effects, [
@@ -1753,6 +1762,7 @@ fn new_turn_state(
       last_heartbeat_ms: 0,
     ),
     deadline_timer: None,
+    last_edit_len: 0,
   )
 }
 
@@ -1821,11 +1831,10 @@ fn replace_last_user_message(
 }
 
 /// Trigger a progressive edit every `progressive_edit_chars` characters of
-/// newly accumulated content. Uses `delta_count` as a coarse pacing signal
-/// — since deltas are small and frequent, this keeps edit cadence bounded.
+/// newly accumulated content. Compares the current length against the length
+/// at which the last edit was emitted, tracked on the turn state.
 fn should_progressive_edit(turn: TurnState, new_acc: String) -> Bool {
-  let last_edit_len = turn.stream_stats.delta_count * progressive_edit_chars
-  string.length(new_acc) - last_edit_len > progressive_edit_chars
+  string.length(new_acc) - turn.last_edit_len > progressive_edit_chars
 }
 
 /// Format the in-progress message for Discord, mirroring how
@@ -2037,6 +2046,7 @@ fn fresh_fake_turn(worker_kind: WorkerKind) -> TurnState {
       last_heartbeat_ms: 0,
     ),
     deadline_timer: None,
+    last_edit_len: 0,
   )
 }
 

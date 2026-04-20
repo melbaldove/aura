@@ -141,6 +141,37 @@ pub fn stream_reasoning_increments_counter_test() {
   }
 }
 
+/// Regression: should_progressive_edit previously computed last_edit_len as
+/// delta_count × threshold, which grew faster than the content and prevented
+/// any edit from firing. Feeding 10 deltas of 100 chars each must now produce
+/// multiple DiscordEdit effects (threshold is 150, content reaches 1000).
+pub fn stream_deltas_emit_progressive_edits_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let start_state = channel_actor.with_fake_stream_turn(state)
+  let delta_text = string.repeat("a", 100)
+  let #(final_state, total_edits) =
+    list.fold(list.range(1, 10), #(start_state, 0), fn(acc, _) {
+      let #(s, edits_so_far) = acc
+      let #(next, effects) =
+        channel_actor.transition(s, channel_actor.StreamDelta(delta_text))
+      let new_edits =
+        list.count(effects, fn(e) {
+          case e {
+            channel_actor.DiscordEdit(_, _) -> True
+            _ -> False
+          }
+        })
+      #(next, edits_so_far + new_edits)
+    })
+  let _ = final_state
+  // 1000 chars of content / 150-char threshold → at least 6 edits in theory,
+  // accept 3 as the conservative floor (matches the progressive-edits BDD).
+  case total_edits >= 3 {
+    True -> Nil
+    False -> should.fail()
+  }
+}
+
 // --- Task 11: stream complete (terminal vs tool-call) ------------------------
 
 pub fn stream_complete_no_tools_finalizes_test() {
