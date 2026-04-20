@@ -1183,6 +1183,7 @@ fn build_channel_actor_deps(
     stream_spawn: stream_worker.spawn,
     tool_spawn: tool_worker.spawn,
     vision_spawn: vision_worker.spawn,
+    brain_context: state.brain_context,
   )
 }
 

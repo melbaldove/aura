@@ -7,12 +7,16 @@ import aura/clients/browser_runner
 import aura/clients/discord_client
 import aura/clients/llm_client
 import aura/clients/skill_runner
+import aura/compressor
 import aura/conversation
 import aura/db
 import aura/discord
 import aura/discord/message as discord_message
+import aura/domain
 import aura/llm
+import aura/models
 import aura/notification
+import aura/review
 import aura/review_runner.{type ReviewRunner}
 import aura/shell
 import aura/skill
@@ -178,6 +182,7 @@ pub type ChannelState {
     tool_spawn: ToolWorkerSpawn,
     vision_spawn: VisionWorkerSpawn,
     self_subject: Subject(ChannelMessage),
+    brain_context: Int,
   )
 }
 
@@ -215,6 +220,7 @@ pub type Deps {
     stream_spawn: StreamWorkerSpawn,
     tool_spawn: ToolWorkerSpawn,
     vision_spawn: VisionWorkerSpawn,
+    brain_context: Int,
   )
 }
 
@@ -302,6 +308,7 @@ fn build_initial_state(
     tool_spawn: deps.tool_spawn,
     vision_spawn: deps.vision_spawn,
     self_subject: self,
+    brain_context: deps.brain_context,
   )
 }
 
@@ -351,6 +358,7 @@ pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
     stream_spawn: dummy_stream_spawn,
     tool_spawn: dummy_tool_spawn,
     vision_spawn: dummy_vision_spawn,
+    brain_context: 128_000,
   )
 }
 
@@ -472,6 +480,7 @@ fn build_initial_state_for_test(
     tool_spawn: dummy_tool_spawn,
     vision_spawn: dummy_vision_spawn,
     self_subject: self,
+    brain_context: 128_000,
   )
 }
 
@@ -495,7 +504,7 @@ pub fn handle_message(
 // Effect interpreter
 // ---------------------------------------------------------------------------
 
-fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
+pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
   case effect {
     SpawnStreamWorker(messages) -> execute_spawn_stream_worker(state, messages)
     SpawnToolWorker(call) -> execute_spawn_tool_worker(state, call)
@@ -767,6 +776,89 @@ fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
           }
       }
     }
+    UpdateCompressorTokens(prompt_tokens) -> {
+      case prompt_tokens > 0 {
+        True -> {
+          let new_cs =
+            conversation.CompressorState(
+              ..state.compressor_state,
+              last_prompt_tokens: prompt_tokens,
+            )
+          ChannelState(..state, compressor_state: new_cs)
+        }
+        False -> state
+      }
+    }
+    PruneToolOutputs -> {
+      let #(pruned, count) =
+        compressor.prune_tool_outputs(
+          state.conversation,
+          compressor.min_tail_messages,
+        )
+      case count > 0 {
+        True ->
+          logging.log(
+            logging.Info,
+            "[channel_actor] Tool pruning: cleared "
+              <> int.to_string(count)
+              <> " output(s) for "
+              <> state.channel_id,
+          )
+        False -> Nil
+      }
+      ChannelState(..state, conversation: pruned)
+    }
+    SpawnCompression(domain, history) -> {
+      let snapshot_len = list.length(history)
+      let paths = state.paths
+      let db_subject = state.tool_ctx.db_subject
+      let self = state.self_subject
+      let llm_config = state.llm_config
+      let comp_state = state.compressor_state
+      let brain_context = state.brain_context
+      let monitor_model = state.monitor_model
+      let cache_key = "discord:" <> state.channel_id
+      logging.log(
+        logging.Info,
+        "[channel_actor] Full compression triggered for " <> cache_key,
+      )
+      process.spawn_unlinked(fn() {
+        // Read domain files in the spawned process, not the actor
+        let #(a_md, s_md) = domain.load_context_files(paths, domain)
+        // Flush memories before compression discards messages
+        case models.build_llm_config(monitor_model) {
+          Ok(monitor_llm_config) ->
+            review.flush_before_compression(
+              monitor_llm_config,
+              history,
+              domain,
+              paths,
+            )
+          Error(e) ->
+            logging.log(
+              logging.Info,
+              "[channel_actor] Flush skipped — monitor LLM config failed: " <> e,
+            )
+        }
+        let #(new_history, new_comp_state) =
+          conversation.compress_history(
+            history,
+            llm_config,
+            comp_state,
+            domain,
+            a_md,
+            s_md,
+            db_subject,
+            cache_key,
+            brain_context,
+          )
+        process.send(
+          self,
+          CompressionComplete(new_history, new_comp_state, snapshot_len),
+        )
+      })
+      state
+    }
   }
 }
 
@@ -986,6 +1078,9 @@ pub type Effect {
     approval: brain_tools.PendingShellApproval,
     action: String,
   )
+  UpdateCompressorTokens(prompt_tokens: Int)
+  PruneToolOutputs
+  SpawnCompression(domain: String, history: List(llm.Message))
 }
 
 // ---------------------------------------------------------------------------
@@ -1220,6 +1315,51 @@ pub fn transition(
       #(cleared, list.flatten([kill_effects, fail_effects, deq_effects]))
     }
     TurnDeadline, None -> #(state, [])
+
+    // --- compression complete -------------------------------------
+    CompressionComplete(new_history, new_comp_state, snapshot_len), _ -> {
+      // Merge: compressed history + any messages that arrived during compression.
+      // Mirrors brain.gleam:693-730.
+      let current_len = list.length(state.conversation)
+      let merged = case current_len > snapshot_len {
+        True -> {
+          // New messages arrived while compression was running — append the
+          // delta to the compressed history so nothing is lost.
+          let delta = list.drop(state.conversation, snapshot_len)
+          let delta_len = list.length(delta)
+          logging.log(
+            logging.Info,
+            "[channel_actor] Compression complete for "
+              <> state.channel_id
+              <> " (merging "
+              <> int.to_string(delta_len)
+              <> " new messages)",
+          )
+          list.append(new_history, delta)
+        }
+        False -> {
+          logging.log(
+            logging.Info,
+            "[channel_actor] Compression complete for "
+              <> state.channel_id
+              <> " ("
+              <> int.to_string(list.length(state.conversation))
+              <> " → "
+              <> int.to_string(list.length(new_history))
+              <> " messages)",
+          )
+          new_history
+        }
+      }
+      #(
+        ChannelState(
+          ..state,
+          conversation: merged,
+          compressor_state: new_comp_state,
+        ),
+        [],
+      )
+    }
 
     // --- worker down translation -----------------------------------
     WorkerDown(_ref, reason), Some(turn) -> {
@@ -1722,16 +1862,52 @@ fn finalize_turn(
         False -> #(state.review_counts.1, 1)
       }
   }
+  // Determine the effective token count for compression threshold checks:
+  // use the real API-reported value if available, else fall back to the
+  // last known value from state.
+  let effective_tokens = case prompt_tokens > 0 {
+    True -> prompt_tokens
+    False -> state.compressor_state.last_prompt_tokens
+  }
+  // Resolve domain name for compression context loading.
+  let resolved_domain = option.unwrap(state.domain, "aura")
+  // Emit compression effects after DbSaveExchange, mirroring brain's
+  // StoreExchange handler (brain.gleam:561-691).
+  let compression_effects = case
+    conversation.needs_full_compression(
+      full_history,
+      state.brain_context,
+      effective_tokens,
+    )
+  {
+    True -> [SpawnCompression(resolved_domain, full_history)]
+    False ->
+      case
+        conversation.needs_tool_pruning(
+          full_history,
+          state.brain_context,
+          effective_tokens,
+        )
+      {
+        True -> [PruneToolOutputs]
+        False -> []
+      }
+  }
   let base_effects = [
     DiscordEdit(turn.discord_msg_id, format_progress(content, turn.traces)),
     DbSaveExchange(final_messages, author_id, author_name, prompt_tokens),
-    SpawnMemoryReview(full_history),
-    SpawnSkillReview(full_history, new_skill_iterations, skill_review_count),
-    LogStreamSummary(turn.stream_stats, "complete", string.length(content)),
+    UpdateCompressorTokens(prompt_tokens),
+    ..compression_effects
   ]
+  let base_with_reviews =
+    list.append(base_effects, [
+      SpawnMemoryReview(full_history),
+      SpawnSkillReview(full_history, new_skill_iterations, skill_review_count),
+      LogStreamSummary(turn.stream_stats, "complete", string.length(content)),
+    ])
   let with_typing = case state.typing_pid {
-    Some(pid) -> list.append(base_effects, [StopTyping(pid)])
-    None -> base_effects
+    Some(pid) -> list.append(base_with_reviews, [StopTyping(pid)])
+    None -> base_with_reviews
   }
   let with_deadline = case turn.deadline_timer {
     Some(timer) -> list.append(with_typing, [CancelDeadline(timer)])

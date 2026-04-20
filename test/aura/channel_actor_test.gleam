@@ -628,3 +628,190 @@ pub fn skill_manage_tool_call_resets_skill_review_counter_test() {
 
   test_harness.teardown(sys)
 }
+
+// --- Task 8: in-actor compression --------------------------------------------
+
+/// Build a conversation with (min_tail_messages + extra) messages where the
+/// early tool results have long content so `prune_tool_outputs` will clear them.
+/// We need more than min_tail_messages so that some fall before the prune boundary.
+fn large_tool_output_conversation() -> List(llm.Message) {
+  // Build 25 pairs of AssistantToolCallMessage + ToolResultMessage.
+  // That's well over min_tail_messages (20), so the first several results
+  // will be eligible for pruning.
+  let large_content = string.repeat("x", 300)
+  // 300 chars > prune_min_chars (200)
+  // Generate 25 pairs without list.range
+  let ids = [
+    "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11",
+    "c12", "c13", "c14", "c15", "c16", "c17", "c18", "c19", "c20", "c21",
+    "c22", "c23", "c24", "c25",
+  ]
+  list.flat_map(ids, fn(id) {
+    [
+      llm.AssistantToolCallMessage("", [
+        llm.ToolCall(id: id, name: "read_file", arguments: "{}"),
+      ]),
+      llm.ToolResultMessage(id, large_content),
+    ]
+  })
+}
+
+pub fn prune_tool_outputs_effect_clears_large_outputs_test() {
+  // Build a state with an oversized conversation.
+  let state =
+    channel_actor.initial_state_for_test("prune-ch")
+    |> fn(s) {
+      channel_actor.ChannelState(..s, conversation: large_tool_output_conversation())
+    }
+
+  // Execute the PruneToolOutputs effect directly.
+  let new_state =
+    channel_actor.execute_effect(state, channel_actor.PruneToolOutputs)
+
+  // At least some tool results should be replaced by the pruned placeholder.
+  let pruned_count =
+    list.count(new_state.conversation, fn(msg) {
+      case msg {
+        llm.ToolResultMessage(_, content) ->
+          content == "[Output cleared to save context]"
+        _ -> False
+      }
+    })
+  { pruned_count > 0 }
+  |> should.be_true
+}
+
+pub fn update_compressor_tokens_effect_sets_last_prompt_tokens_test() {
+  let state = channel_actor.initial_state_for_test("tok-ch")
+  // Initially last_prompt_tokens should be 0.
+  state.compressor_state.last_prompt_tokens |> should.equal(0)
+
+  let new_state =
+    channel_actor.execute_effect(
+      state,
+      channel_actor.UpdateCompressorTokens(5000),
+    )
+  new_state.compressor_state.last_prompt_tokens |> should.equal(5000)
+}
+
+pub fn update_compressor_tokens_zero_is_noop_test() {
+  let state = channel_actor.initial_state_for_test("tok-ch2")
+  // Set a non-zero initial value.
+  let state_with_tokens =
+    channel_actor.ChannelState(
+      ..state,
+      compressor_state: conversation.CompressorState(
+        ..state.compressor_state,
+        last_prompt_tokens: 1000,
+      ),
+    )
+  // UpdateCompressorTokens(0) should NOT reset to 0.
+  let new_state =
+    channel_actor.execute_effect(
+      state_with_tokens,
+      channel_actor.UpdateCompressorTokens(0),
+    )
+  new_state.compressor_state.last_prompt_tokens |> should.equal(1000)
+}
+
+pub fn compression_complete_replaces_conversation_test() {
+  let state = channel_actor.initial_state_for_test("comp-ch")
+  let old_history = [llm.UserMessage("old msg"), llm.AssistantMessage("old reply")]
+  let state_with_history =
+    channel_actor.ChannelState(..state, conversation: old_history)
+
+  let new_history = [llm.SystemMessage("[CONTEXT COMPACTION] summary"), llm.UserMessage("recent")]
+  let new_comp_state =
+    conversation.CompressorState(
+      previous_summary: option.Some("summary"),
+      last_prompt_tokens: 9000,
+      compression_count: 1,
+      cooldown_until: 0,
+    )
+  let snapshot_len = list.length(old_history)
+  let #(new_state, effects) =
+    channel_actor.transition(
+      state_with_history,
+      channel_actor.CompressionComplete(new_history, new_comp_state, snapshot_len),
+    )
+  new_state.conversation |> should.equal(new_history)
+  new_state.compressor_state |> should.equal(new_comp_state)
+  effects |> should.equal([])
+}
+
+pub fn compression_complete_merges_delta_when_new_messages_arrived_test() {
+  // If more messages arrived since the snapshot was taken, the delta is
+  // appended to the compressed history.
+  let state = channel_actor.initial_state_for_test("comp-delta-ch")
+  let original_history = [
+    llm.UserMessage("m1"),
+    llm.AssistantMessage("r1"),
+    llm.UserMessage("m2"),
+    llm.AssistantMessage("r2"),
+  ]
+  let state_with_history =
+    channel_actor.ChannelState(..state, conversation: original_history)
+
+  // Snapshot was taken when only 2 messages existed.
+  let snapshot_len = 2
+  let compressed = [llm.SystemMessage("[CONTEXT COMPACTION] compressed")]
+  let new_comp_state = conversation.new_compressor_state()
+  let #(new_state, _effects) =
+    channel_actor.transition(
+      state_with_history,
+      channel_actor.CompressionComplete(compressed, new_comp_state, snapshot_len),
+    )
+  // Expected: compressed + the 2 messages that arrived after the snapshot.
+  let expected = list.append(compressed, list.drop(original_history, snapshot_len))
+  new_state.conversation |> should.equal(expected)
+}
+
+pub fn finalize_turn_emits_update_compressor_tokens_test() {
+  // StreamComplete with a non-zero prompt_tokens should produce
+  // UpdateCompressorTokens in the effects.
+  let state = channel_actor.initial_state_for_test("ct-ch")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(_, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("hello", "[]", 7777),
+    )
+  let has_update =
+    list.any(effects, fn(e) {
+      case e {
+        channel_actor.UpdateCompressorTokens(7777) -> True
+        _ -> False
+      }
+    })
+  has_update |> should.be_true
+}
+
+pub fn finalize_turn_emits_prune_when_over_threshold_test() {
+  // Set a very small brain_context so that even a short conversation triggers
+  // pruning but NOT full compression. With brain_context=1000:
+  //   - pruning threshold:    tokens > 500   (50% of 1000)
+  //   - full compression:     tokens > 700   (70% of 1000)
+  // Use prompt_tokens=600 to land in the "prune only" zone.
+  let state = channel_actor.initial_state_for_test("prune-thresh-ch")
+  let state_small_ctx =
+    channel_actor.ChannelState(
+      ..state,
+      brain_context: 1000,
+      conversation: large_tool_output_conversation(),
+    )
+  let with_stream = channel_actor.with_fake_stream_turn(state_small_ctx)
+  let #(_, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("reply", "[]", 600),
+    )
+  // With prompt_tokens=600 > 500 but <= 700: pruning fires, not full compression.
+  let has_prune =
+    list.any(effects, fn(e) {
+      case e {
+        channel_actor.PruneToolOutputs -> True
+        _ -> False
+      }
+    })
+  has_prune |> should.be_true
+}

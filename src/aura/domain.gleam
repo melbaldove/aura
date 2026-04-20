@@ -1,6 +1,7 @@
 import aura/memory
 import aura/skill
 import aura/time
+import aura/xdg
 import logging
 import gleam/list
 import gleam/string
@@ -150,6 +151,49 @@ fn extract_domain_name(data_dir: String) -> String {
   case list.last(parts) {
     Ok(name) -> name
     Error(_) -> ""
+  }
+}
+
+/// Load the AGENTS.md and STATE.md files for a domain, returning their
+/// contents as a pair. Returns empty strings for the "aura" meta-domain
+/// or when files are missing/unreadable.
+pub fn load_context_files(
+  paths: xdg.Paths,
+  domain_name: String,
+) -> #(String, String) {
+  case domain_name {
+    "aura" -> #("", "")
+    name -> {
+      let agents_path = xdg.domain_config_dir(paths, name) <> "/AGENTS.md"
+      let state_path = xdg.domain_state_path(paths, name)
+      let a_md = case simplifile.read(agents_path) {
+        Ok(c) -> c
+        Error(e) -> {
+          logging.log(
+            logging.Info,
+            "[domain] Failed to read AGENTS.md for "
+              <> name
+              <> ": "
+              <> string.inspect(e),
+          )
+          ""
+        }
+      }
+      let s_md = case simplifile.read(state_path) {
+        Ok(c) -> c
+        Error(e) -> {
+          logging.log(
+            logging.Info,
+            "[domain] Failed to read STATE.md for "
+              <> name
+              <> ": "
+              <> string.inspect(e),
+          )
+          ""
+        }
+      }
+      #(a_md, s_md)
+    }
   }
 }
 
