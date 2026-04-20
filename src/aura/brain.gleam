@@ -27,6 +27,7 @@ import aura/memory
 import aura/models
 import aura/notification
 import aura/review
+import aura/review_runner
 import aura/scheduler
 import aura/shell
 import aura/skill
@@ -134,6 +135,7 @@ pub type BrainConfig {
     skill_runner: SkillRunner,
     browser_runner: BrowserRunner,
     channel_supervisor: process.Subject(channel_supervisor.SupervisorMessage),
+    review_runner: review_runner.ReviewRunner,
   )
 }
 
@@ -175,6 +177,7 @@ pub type BrainState {
     skill_runner: SkillRunner,
     browser_runner: BrowserRunner,
     channel_supervisor: process.Subject(channel_supervisor.SupervisorMessage),
+    review_runner: review_runner.ReviewRunner,
   )
 }
 
@@ -330,6 +333,7 @@ pub fn start(
       skill_runner: brain_config.skill_runner,
       browser_runner: brain_config.browser_runner,
       channel_supervisor: brain_config.channel_supervisor,
+      review_runner: brain_config.review_runner,
     )
 
   actor.new_with_initialiser(10_000, fn(self_subject) {
@@ -1369,6 +1373,11 @@ fn build_channel_actor_deps(
     db_subject: state.db_subject,
     acp_subject: state.acp_subject,
     paths: state.paths,
+    domain: domain_name,
+    review_interval: state.global_config.memory.review_interval,
+    notify_on_review: state.global_config.memory.notify_on_review,
+    monitor_model: state.global_config.models.monitor,
+    review_runner: state.review_runner,
     discord: state.discord,
     llm_client: state.llm_client,
     skill_runner: state.skill_runner,

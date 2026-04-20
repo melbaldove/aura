@@ -6,7 +6,9 @@ import aura/db
 import aura/discord
 import aura/llm
 import aura/time
+import fakes/fake_discord
 import fakes/fake_llm
+import fakes/fake_review
 import gleam/erlang/process
 import gleam/list
 import gleam/option
@@ -442,5 +444,44 @@ pub fn system_prompt_includes_flare_context_when_in_flare_thread_test() {
   let prompts = combined_system_prompts(sys.fake_llm)
   string.contains(prompts, "## Active Flare") |> should.be_true
   string.contains(prompts, "fix-build") |> should.be_true
+  test_harness.teardown(sys)
+}
+
+// --- Task 4: post-response memory review -----------------------------------------
+
+pub fn memory_review_spawns_after_threshold_test() {
+  // fresh_system with review_interval=2 so we need only 2 turns to trigger
+  let sys = test_harness.fresh_system_with_review_interval(2)
+
+  // Turn 1: count goes to 1, no spawn yet (count < interval)
+  fake_llm.script_text_response(sys.fake_llm, "reply1")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("c", "m1")),
+  )
+  let _ =
+    poll.poll_until(
+      fn() {
+        list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 1
+      },
+      2000,
+    )
+  fake_review.spawn_count(sys.fake_review)
+  |> should.equal(0)
+
+  // Turn 2: count hits interval, spawn triggered
+  fake_llm.script_text_response(sys.fake_llm, "reply2")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("c", "m2")),
+  )
+  let _ =
+    poll.poll_until(
+      fn() { fake_review.spawn_count(sys.fake_review) >= 1 },
+      2000,
+    )
+  fake_review.spawn_count(sys.fake_review)
+  |> should.equal(1)
+
   test_harness.teardown(sys)
 }

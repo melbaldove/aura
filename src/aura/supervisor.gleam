@@ -2,6 +2,7 @@ import aura/acp/flare_manager
 import aura/acp/transport
 import aura/brain
 import aura/channel_supervisor
+import aura/review_runner
 import aura/clients/browser_runner
 import aura/clients/discord_client
 import aura/clients/llm_client
@@ -197,6 +198,7 @@ pub fn start(
       skill_runner: skill_runner_val,
       browser_runner: browser_runner_val,
       channel_supervisor: channel_sup,
+      review_runner: review_runner.default(),
     )),
   )
   logging.log(logging.Info, "[supervisor] Brain started")

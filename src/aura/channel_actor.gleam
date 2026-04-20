@@ -13,6 +13,7 @@ import aura/discord
 import aura/discord/message as discord_message
 import aura/llm
 import aura/notification
+import aura/review_runner.{type ReviewRunner}
 import aura/shell
 import aura/skill
 import aura/time
@@ -162,6 +163,11 @@ pub type ChannelState {
     pending_shell_approvals: List(brain_tools.PendingShellApproval),
     typing_pid: Option(Pid),
     discord_token: String,
+    paths: xdg.Paths,
+    review_interval: Int,
+    notify_on_review: Bool,
+    monitor_model: String,
+    review_runner: ReviewRunner,
     llm_config: llm.LlmConfig,
     vision_config: llm.LlmConfig,
     built_in_tools: List(llm.ToolDefinition),
@@ -184,6 +190,11 @@ pub type Deps {
     db_subject: process.Subject(db.DbMessage),
     acp_subject: process.Subject(flare_manager.FlareMsg),
     paths: xdg.Paths,
+    domain: option.Option(String),
+    review_interval: Int,
+    notify_on_review: Bool,
+    monitor_model: String,
+    review_runner: ReviewRunner,
     discord: discord_client.DiscordClient,
     llm_client: llm_client.LLMClient,
     skill_runner: skill_runner.SkillRunner,
@@ -259,7 +270,7 @@ fn build_initial_state(
     )
   ChannelState(
     channel_id: deps.channel_id,
-    domain: None,
+    domain: deps.domain,
     conversation: history,
     compressor_state: comp_state,
     tool_ctx: tool_ctx,
@@ -270,6 +281,11 @@ fn build_initial_state(
     pending_shell_approvals: [],
     typing_pid: None,
     discord_token: deps.discord_token,
+    paths: deps.paths,
+    review_interval: deps.review_interval,
+    notify_on_review: deps.notify_on_review,
+    monitor_model: deps.monitor_model,
+    review_runner: deps.review_runner,
     llm_config: deps.llm_config,
     vision_config: deps.vision_config,
     built_in_tools: deps.built_in_tools,
@@ -304,6 +320,11 @@ pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
     db_subject: db_subject,
     acp_subject: acp_subject,
     paths: paths,
+    domain: None,
+    review_interval: 0,
+    notify_on_review: False,
+    monitor_model: "",
+    review_runner: review_runner.default(),
     discord: discord_client.production(discord_token),
     llm_client: llm_client.production(),
     skill_runner: skill_runner.production(),
@@ -428,6 +449,11 @@ fn build_initial_state_for_test(
     pending_shell_approvals: [],
     typing_pid: None,
     discord_token: deps.discord_token,
+    paths: xdg.resolve(),
+    review_interval: 0,
+    notify_on_review: False,
+    monitor_model: "",
+    review_runner: review_runner.default(),
     llm_config: dummy_llm_config(),
     vision_config: dummy_llm_config(),
     built_in_tools: [],
@@ -592,7 +618,22 @@ fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       state
     }
     SpawnSkillReview -> state
-    SpawnMemoryReview -> state
+    SpawnMemoryReview(history) -> {
+      let resolved_domain = option.unwrap(state.domain, "aura")
+      let new_count =
+        state.review_runner.run(
+          state.review_interval,
+          state.notify_on_review,
+          resolved_domain,
+          state.channel_id,
+          state.discord_token,
+          history,
+          state.review_counts.0,
+          state.paths,
+          state.monitor_model,
+        )
+      ChannelState(..state, review_counts: #(new_count, state.review_counts.1))
+    }
   }
 }
 
@@ -775,7 +816,7 @@ pub type Effect {
   LogHeartbeat(stats: StreamStats, content_chars: Int)
   LogStreamSummary(stats: StreamStats, outcome: String, content_chars: Int)
   SpawnSkillReview
-  SpawnMemoryReview
+  SpawnMemoryReview(history: List(llm.Message))
 }
 
 // ---------------------------------------------------------------------------
@@ -1391,9 +1432,11 @@ fn finalize_turn(
     UserTurn(_, author_id) -> author_id
     _ -> ""
   }
+  let full_history = list.append(state.conversation, final_messages)
   let base_effects = [
     DiscordEdit(turn.discord_msg_id, format_progress(content, turn.traces)),
     DbSaveExchange(final_messages, author_id, "", prompt_tokens),
+    SpawnMemoryReview(full_history),
     LogStreamSummary(turn.stream_stats, "complete", string.length(content)),
   ]
   let with_typing = case state.typing_pid {
