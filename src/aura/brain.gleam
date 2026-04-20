@@ -23,7 +23,6 @@ import aura/shell
 import aura/skill
 import aura/stream_worker
 import aura/structured_memory
-import aura/system_prompt
 import aura/time
 import aura/tool_worker
 import aura/validator
@@ -149,23 +148,6 @@ pub fn route_message(
     Ok(d) -> DirectRoute(d.name)
     Error(_) -> NeedsClassification
   }
-}
-
-/// Build system prompt from soul, domains, skills, memory, and user profile.
-pub fn build_system_prompt(
-  soul_content: String,
-  domain_names: List(String),
-  skill_infos: List(skill.SkillInfo),
-  memory_content: String,
-  user_content: String,
-) -> String {
-  system_prompt.build_system_prompt(
-    soul_content,
-    domain_names,
-    skill_infos,
-    memory_content,
-    user_content,
-  )
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 import aura/brain
 import aura/models
 import aura/skill
+import aura/system_prompt
 import gleam/string
 import gleeunit/should
 
@@ -41,7 +42,7 @@ pub fn build_system_prompt_test() {
     skill.SkillInfo(name: "google", description: "Google search", path: ""),
   ]
   let prompt =
-    brain.build_system_prompt(
+    system_prompt.build_system_prompt(
       "You are Aura. Direct. Concise.",
       ["cm2", "hy"],
       skills,
@@ -56,7 +57,7 @@ pub fn build_system_prompt_test() {
 
 pub fn build_system_prompt_includes_soul_content_test() {
   let prompt =
-    brain.build_system_prompt("Custom personality goes here.", [], [], "", "")
+    system_prompt.build_system_prompt("Custom personality goes here.", [], [], "", "")
   prompt |> string.contains("Custom personality goes here.") |> should.be_true
   prompt |> string.contains("No domains") |> should.be_true
 }
