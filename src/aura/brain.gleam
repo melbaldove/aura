@@ -879,7 +879,6 @@ fn build_channel_actor_deps(
     brain_context: state.brain_context,
     soul: state.soul,
     domain_names: domain_names,
-    domain_configs: state.domain_configs,
   )
 }
 

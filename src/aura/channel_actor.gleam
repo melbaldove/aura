@@ -1,5 +1,4 @@
-//// Per-channel actor that runs turns concurrently with other channels.
-//// Phase 1: types + skeleton. Phase 2+ adds the state machine.
+//// Per-channel actor that runs turns concurrently across channels.
 
 import aura/acp/flare_manager
 import aura/brain_tools
@@ -8,7 +7,6 @@ import aura/clients/discord_client
 import aura/clients/llm_client
 import aura/clients/skill_runner
 import aura/compressor
-import aura/config
 import aura/conversation
 import aura/db
 import aura/discord
@@ -16,7 +14,6 @@ import aura/discord/message as discord_message
 import aura/domain
 import aura/llm
 import aura/models
-import aura/notification
 import aura/review
 import aura/review_runner.{type ReviewRunner}
 import aura/shell
@@ -73,7 +70,6 @@ pub type VisionWorkerSpawn =
 pub type ChannelMessage {
   HandleIncoming(discord.IncomingMessage)
   HandleHandback(flare_id: String, result: String)
-  HandleFinding(notification.Finding)
   HandleInteraction(
     interaction_id: String,
     interaction_token: String,
@@ -109,7 +105,6 @@ pub type ChannelMessage {
 pub type TurnKind {
   UserTurn(message_id: String, author_id: String)
   HandbackTurn(flare_id: String, result: String)
-  FindingTurn(finding: notification.Finding)
 }
 
 pub type WorkerKind {
@@ -152,7 +147,6 @@ pub type TurnState {
 pub type PendingWork {
   PendingUserMessage(discord.IncomingMessage)
   PendingHandback(flare_id: String, result: String)
-  PendingFinding(notification.Finding)
 }
 
 pub type ChannelState {
@@ -185,7 +179,6 @@ pub type ChannelState {
     brain_context: Int,
     soul: String,
     domain_names: List(String),
-    domain_configs: List(#(String, config.DomainConfig)),
   )
 }
 
@@ -226,7 +219,6 @@ pub type Deps {
     brain_context: Int,
     soul: String,
     domain_names: List(String),
-    domain_configs: List(#(String, config.DomainConfig)),
   )
 }
 
@@ -315,7 +307,6 @@ fn build_initial_state(
     brain_context: deps.brain_context,
     soul: deps.soul,
     domain_names: deps.domain_names,
-    domain_configs: deps.domain_configs,
   )
 }
 
@@ -368,7 +359,6 @@ pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
     brain_context: 128_000,
     soul: "",
     domain_names: [],
-    domain_configs: [],
   )
 }
 
@@ -493,7 +483,6 @@ fn build_initial_state_for_test(
     brain_context: 128_000,
     soul: "",
     domain_names: [],
-    domain_configs: [],
   )
 }
 
@@ -1633,8 +1622,6 @@ fn start_turn(
         ScheduleDeadline(600_000),
       ])
     }
-
-    _ -> #(state, [])
   }
 }
 
@@ -1943,7 +1930,6 @@ fn finalize_turn(
   let #(author_id, author_name) = case turn.kind {
     UserTurn(_, aid) -> #(aid, "")
     HandbackTurn(_, _) -> #("aura", "Aura")
-    FindingTurn(_) -> #("aura", "Aura")
   }
   let full_history = list.append(state.conversation, final_messages)
   // Compute skill-review counter logic: reset to 0 when the current turn
