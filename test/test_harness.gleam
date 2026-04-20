@@ -23,10 +23,15 @@
 import aura/acp/flare_manager
 import aura/acp/transport
 import aura/brain
+import aura/brain_tools
 import aura/channel_supervisor
 import aura/clients/browser_runner
+import aura/clients/discord_client
+import aura/clients/llm_client
+import aura/clients/skill_runner
 import aura/config
 import aura/db
+import aura/shell
 import aura/skill
 import aura/xdg
 import fakes/fake_discord.{type FakeDiscord}
@@ -34,6 +39,7 @@ import fakes/fake_llm.{type FakeLLM}
 import fakes/fake_skill_runner.{type FakeSkillRunner}
 import gleam/erlang/process.{type Subject}
 import gleam/int
+import gleam/option.{None}
 import simplifile
 
 // ---------------------------------------------------------------------------
@@ -306,4 +312,50 @@ pub fn teardown(system: TestSystem) -> Nil {
   }
   let _ = simplifile.delete(system.db_path)
   Nil
+}
+
+/// Build a standalone `ToolContext` suitable for tests that need to invoke
+/// `brain_tools.execute_tool` directly (e.g. tool_worker_test). Uses stub
+/// subjects and production clients that make no real network calls.
+///
+/// Callers that need a real system wired end-to-end should use
+/// `fresh_system()` instead. Use this when you only need the ToolContext.
+pub fn standalone_tool_context() -> brain_tools.ToolContext {
+  let db_subject = process.new_subject()
+  let acp_subject = process.new_subject()
+  let paths =
+    xdg.Paths(
+      config: "/tmp/aura-tool-ctx-test/config",
+      data: "/tmp/aura-tool-ctx-test/data",
+      state: "/tmp/aura-tool-ctx-test/state",
+    )
+  brain_tools.ToolContext(
+    base_dir: "/tmp",
+    discord_token: "fake",
+    guild_id: "",
+    message_id: "",
+    channel_id: "test-channel",
+    paths: paths,
+    skill_infos: [],
+    skills_dir: "",
+    validation_rules: [],
+    db_subject: db_subject,
+    scheduler_subject: None,
+    acp_subject: acp_subject,
+    domain_name: "",
+    domain_cwd: "",
+    acp_provider: "",
+    acp_binary: "",
+    acp_worktree: False,
+    acp_server_url: "",
+    acp_agent_name: "",
+    on_propose: fn(_proposal) { Nil },
+    shell_patterns: shell.compile_patterns(),
+    on_shell_approve: fn(_approval) { Nil },
+    vision_fn: fn(_url, _question) { Error("stub") },
+    discord: discord_client.production("fake"),
+    llm_client: llm_client.production(),
+    skill_runner: skill_runner.production(),
+    browser_runner: browser_runner.production(),
+  )
 }
