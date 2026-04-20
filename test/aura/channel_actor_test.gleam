@@ -485,3 +485,146 @@ pub fn memory_review_spawns_after_threshold_test() {
 
   test_harness.teardown(sys)
 }
+
+// --- Task 5: post-response skill review -----------------------------------------
+
+pub fn skill_review_spawns_after_threshold_test() {
+  // fresh_system with skill_review_interval=2.
+  // Skill review counter only increments on turns with non-skill_manage tool traces.
+  // Use read_file tool calls (each turn: tool call → final text response).
+  let #(sys, _) = test_harness.fresh_system_with_skill_review_interval(2)
+
+  // Turn 1: read_file tool call → iteration count: 0→1, no spawn yet
+  fake_llm.script_tool_call(sys.fake_llm, "read_file", "{\"path\":\"/tmp/nosuchfile\"}")
+  fake_llm.script_text_response(sys.fake_llm, "reply1")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("c", "m1")),
+  )
+  let _ =
+    poll.poll_until(
+      fn() {
+        list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 1
+      },
+      2000,
+    )
+  fake_review.skill_spawn_count(sys.fake_review)
+  |> should.equal(0)
+
+  // Turn 2: read_file tool call → iteration count: 1→2 >= 2, spawn triggered
+  fake_llm.script_tool_call(sys.fake_llm, "read_file", "{\"path\":\"/tmp/nosuchfile\"}")
+  fake_llm.script_text_response(sys.fake_llm, "reply2")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("c", "m2")),
+  )
+  let _ =
+    poll.poll_until(
+      fn() { fake_review.skill_spawn_count(sys.fake_review) >= 1 },
+      2000,
+    )
+  fake_review.skill_spawn_count(sys.fake_review)
+  |> should.equal(1)
+
+  test_harness.teardown(sys)
+}
+
+pub fn skill_manage_tool_call_resets_skill_review_counter_test() {
+  // Pure transition test: verify that a turn with a skill_manage trace resets
+  // the skill review counter to 0, while a turn with a non-skill_manage trace
+  // increments it. Uses a fake state with review_counts seeded directly.
+  //
+  // Scenario (skill_review_interval=3 via fake_review):
+  //   turn A (trace: read_file):      count: 0→1, no spawn
+  //   turn B (trace: skill_manage):   count: 1→0 (reset), no spawn
+  //   turn C (trace: read_file):      count: 0→1, no spawn
+  //   turn D (trace: read_file):      count: 1→2, no spawn
+  //   turn E (trace: read_file):      count: 2→3, SPAWN (returns 0)
+
+  // Turn A: read_file tool call (non-skill_manage) → counter: 0→1.
+  // Turn B: skill_manage → reset to 0.
+  // Turns C, D, E: read_file → counter: 0→1→2→3 → SPAWN.
+  // If reset didn't work, C would bring the counter to 3 and spawn too early.
+  let #(sys, _) = test_harness.fresh_system_with_skill_review_interval(3)
+
+  // Turn A: LLM calls read_file (non-skill_manage) — count: 0→1
+  fake_llm.script_tool_call(sys.fake_llm, "read_file", "{\"path\":\"/tmp/nosuchfile\"}")
+  fake_llm.script_text_response(sys.fake_llm, "tA")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("c", "tA")),
+  )
+  let _ =
+    poll.poll_until(
+      fn() {
+        list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 1
+      },
+      2000,
+    )
+  fake_review.skill_spawn_count(sys.fake_review) |> should.equal(0)
+
+  // Turn B: skill_manage tool call — count resets to 0
+  fake_llm.script_tool_call(sys.fake_llm, "skill_manage", "{\"action\":\"list\"}")
+  fake_llm.script_text_response(sys.fake_llm, "tB")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("c", "tB")),
+  )
+  let _ =
+    poll.poll_until(
+      fn() {
+        list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 2
+      },
+      2000,
+    )
+  fake_review.skill_spawn_count(sys.fake_review) |> should.equal(0)
+
+  // Turn C: read_file — count: 0→1 (if no reset it would be 2→3 and spawn here)
+  fake_llm.script_tool_call(sys.fake_llm, "read_file", "{\"path\":\"/tmp/nosuchfile\"}")
+  fake_llm.script_text_response(sys.fake_llm, "tC")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("c", "tC")),
+  )
+  let _ =
+    poll.poll_until(
+      fn() {
+        list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 3
+      },
+      2000,
+    )
+  // If reset didn't happen, count would be 3 and spawn_count would be 1 here.
+  fake_review.skill_spawn_count(sys.fake_review) |> should.equal(0)
+
+  // Turn D: read_file — count: 1→2
+  fake_llm.script_tool_call(sys.fake_llm, "read_file", "{\"path\":\"/tmp/nosuchfile\"}")
+  fake_llm.script_text_response(sys.fake_llm, "tD")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("c", "tD")),
+  )
+  let _ =
+    poll.poll_until(
+      fn() {
+        list.length(fake_discord.all_sent_to(sys.fake_discord, "c")) >= 4
+      },
+      2000,
+    )
+  fake_review.skill_spawn_count(sys.fake_review) |> should.equal(0)
+
+  // Turn E: read_file — count: 2→3, spawn fires
+  fake_llm.script_tool_call(sys.fake_llm, "read_file", "{\"path\":\"/tmp/nosuchfile\"}")
+  fake_llm.script_text_response(sys.fake_llm, "tE")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming("c", "tE")),
+  )
+  let _ =
+    poll.poll_until(
+      fn() { fake_review.skill_spawn_count(sys.fake_review) >= 1 },
+      2000,
+    )
+  fake_review.skill_spawn_count(sys.fake_review) |> should.equal(1)
+
+  test_harness.teardown(sys)
+}

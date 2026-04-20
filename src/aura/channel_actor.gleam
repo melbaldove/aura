@@ -165,6 +165,7 @@ pub type ChannelState {
     discord_token: String,
     paths: xdg.Paths,
     review_interval: Int,
+    skill_review_interval: Int,
     notify_on_review: Bool,
     monitor_model: String,
     review_runner: ReviewRunner,
@@ -192,6 +193,7 @@ pub type Deps {
     paths: xdg.Paths,
     domain: option.Option(String),
     review_interval: Int,
+    skill_review_interval: Int,
     notify_on_review: Bool,
     monitor_model: String,
     review_runner: ReviewRunner,
@@ -283,6 +285,7 @@ fn build_initial_state(
     discord_token: deps.discord_token,
     paths: deps.paths,
     review_interval: deps.review_interval,
+    skill_review_interval: deps.skill_review_interval,
     notify_on_review: deps.notify_on_review,
     monitor_model: deps.monitor_model,
     review_runner: deps.review_runner,
@@ -322,6 +325,7 @@ pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
     paths: paths,
     domain: None,
     review_interval: 0,
+    skill_review_interval: 0,
     notify_on_review: False,
     monitor_model: "",
     review_runner: review_runner.default(),
@@ -451,6 +455,7 @@ fn build_initial_state_for_test(
     discord_token: deps.discord_token,
     paths: xdg.resolve(),
     review_interval: 0,
+    skill_review_interval: 0,
     notify_on_review: False,
     monitor_model: "",
     review_runner: review_runner.default(),
@@ -617,7 +622,23 @@ fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       )
       state
     }
-    SpawnSkillReview -> state
+    SpawnSkillReview(history, new_iterations, current_count) -> {
+      let resolved_domain = option.unwrap(state.domain, "aura")
+      let new_count =
+        state.review_runner.skill_run(
+          state.skill_review_interval,
+          resolved_domain,
+          state.channel_id,
+          state.discord_token,
+          history,
+          current_count,
+          new_iterations,
+          state.paths,
+          state.monitor_model,
+          state.tool_ctx.skills_dir,
+        )
+      ChannelState(..state, review_counts: #(state.review_counts.0, new_count))
+    }
     SpawnMemoryReview(history) -> {
       let resolved_domain = option.unwrap(state.domain, "aura")
       let new_count =
@@ -815,7 +836,11 @@ pub type Effect {
   StartTyping
   LogHeartbeat(stats: StreamStats, content_chars: Int)
   LogStreamSummary(stats: StreamStats, outcome: String, content_chars: Int)
-  SpawnSkillReview
+  SpawnSkillReview(
+    history: List(llm.Message),
+    new_iterations: Int,
+    current_count: Int,
+  )
   SpawnMemoryReview(history: List(llm.Message))
 }
 
@@ -1433,10 +1458,22 @@ fn finalize_turn(
     _ -> ""
   }
   let full_history = list.append(state.conversation, final_messages)
+  // Compute skill-review counter logic: reset to 0 when the current turn
+  // included a skill_manage tool call (a fresh save makes review redundant),
+  // otherwise increment by 1. Mirrors brain.gleam:1998-2005.
+  let #(skill_review_count, new_skill_iterations) = case turn.traces {
+    [] -> #(state.review_counts.1, 0)
+    _ ->
+      case list.any(turn.traces, fn(t) { t.name == "skill_manage" }) {
+        True -> #(0, 0)
+        False -> #(state.review_counts.1, 1)
+      }
+  }
   let base_effects = [
     DiscordEdit(turn.discord_msg_id, format_progress(content, turn.traces)),
     DbSaveExchange(final_messages, author_id, "", prompt_tokens),
     SpawnMemoryReview(full_history),
+    SpawnSkillReview(full_history, new_skill_iterations, skill_review_count),
     LogStreamSummary(turn.stream_stats, "complete", string.length(content)),
   ]
   let with_typing = case state.typing_pid {

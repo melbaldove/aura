@@ -1375,6 +1375,7 @@ fn build_channel_actor_deps(
     paths: state.paths,
     domain: domain_name,
     review_interval: state.global_config.memory.review_interval,
+    skill_review_interval: state.global_config.memory.skill_review_interval,
     notify_on_review: state.global_config.memory.notify_on_review,
     monitor_model: state.global_config.models.monitor,
     review_runner: state.review_runner,

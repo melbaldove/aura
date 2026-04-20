@@ -656,6 +656,114 @@ pub fn fresh_system_with_review_interval(review_interval: Int) -> TestSystem {
   )
 }
 
+/// Spin up a fresh `TestSystem` with the given `skill_review_interval`. The
+/// channel "c" is on the allowlist so it routes through channel_actor.
+/// The fake_review in the returned TestSystem records skill review spawns.
+/// Returns `#(TestSystem, Int)` — the Int is reserved for future use (0).
+pub fn fresh_system_with_skill_review_interval(
+  skill_review_interval: Int,
+) -> #(TestSystem, Int) {
+  // 1. Build the four fakes.
+  let #(fake_discord, discord_client) = fake_discord.new()
+  let #(fake_llm, llm_client) = fake_llm.new()
+  let #(fake_skill_runner, skill_runner_client) = fake_skill_runner.new()
+  let fake_review_inst = fake_review.new()
+
+  // 2. Unique scratch DB path.
+  let db_path =
+    "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
+  let _ = simplifile.delete(db_path)
+
+  set_env("ZAI_API_KEY", "test-harness-dummy-key")
+
+  let assert Ok(db_subject) = db.start(db_path)
+
+  let assert Ok(flare_subject) =
+    flare_manager.start(
+      1,
+      "zai/glm-5-turbo",
+      fn(_event) { Nil },
+      transport.Tmux,
+      db_subject,
+    )
+
+  let assert Ok(channel_sup) = channel_supervisor.start()
+
+  let tmp_root = "/tmp/aura-test-root-" <> int.to_string(unique_integer())
+  let paths =
+    xdg.Paths(
+      config: tmp_root <> "/config",
+      data: tmp_root <> "/data",
+      state: tmp_root <> "/state",
+    )
+
+  let assert Ok(_) = simplifile.create_directory_all(paths.config)
+  let assert Ok(_) = simplifile.create_directory_all(paths.data)
+  let assert Ok(_) = simplifile.create_directory_all(paths.state)
+
+  let default = config.default_global()
+  let global =
+    config.GlobalConfig(
+      ..default,
+      models: config.ModelsConfig(
+        brain: "zai/glm-5-turbo",
+        domain: "",
+        acp: "",
+        heartbeat: "",
+        monitor: "",
+        vision: "zai/glm-5v-turbo",
+        dream: "",
+      ),
+      brain_context: 128_000,
+      memory: config.MemoryConfig(
+        review_interval: 0,
+        notify_on_review: False,
+        skill_review_interval: skill_review_interval,
+      ),
+      // Channel "c" is on the allowlist so brain routes it to channel_actor.
+      experimental: config.ExperimentalConfig(channel_actor_channels: ["c"]),
+    )
+
+  let default_skill_infos = [
+    skill.SkillInfo(name: "jira", description: "test", path: "/tmp/nonexistent-jira"),
+  ]
+
+  let brain_config =
+    brain.BrainConfig(
+      global: global,
+      paths: paths,
+      soul: "You are Aura, under test.",
+      domains: [],
+      domain_configs: [],
+      skill_infos: default_skill_infos,
+      validation_rules: [],
+      db_subject: db_subject,
+      acp_subject: flare_subject,
+      discord: discord_client,
+      llm: llm_client,
+      skill_runner: skill_runner_client,
+      browser_runner: browser_runner.production(),
+      channel_supervisor: channel_sup,
+      review_runner: fake_review.as_runner(fake_review_inst),
+    )
+
+  let assert Ok(brain_subject) = brain.start(brain_config)
+
+  #(
+    TestSystem(
+      brain_subject: brain_subject,
+      fake_discord: fake_discord,
+      fake_llm: fake_llm,
+      fake_skill_runner: fake_skill_runner,
+      fake_review: fake_review_inst,
+      db_path: db_path,
+      db_subject: db_subject,
+      acp_subject: flare_subject,
+    ),
+    0,
+  )
+}
+
 pub fn teardown(system: TestSystem) -> Nil {
   case process.subject_owner(system.brain_subject) {
     Ok(pid) -> {
