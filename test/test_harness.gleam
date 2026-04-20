@@ -58,6 +58,7 @@ pub type TestSystem {
     db_path: String,
     db_subject: Subject(db.DbMessage),
     acp_subject: Subject(flare_manager.FlareMsg),
+    paths: xdg.Paths,
   )
 }
 
@@ -188,116 +189,7 @@ pub fn fresh_system() -> TestSystem {
     db_path: db_path,
     db_subject: db_subject,
     acp_subject: flare_subject,
-  )
-}
-
-/// Spin up a fresh `TestSystem` where the given channel_ids are in the
-/// channel_actor allowlist. Messages to these channels route through the new
-/// concurrent channel_actor path instead of the legacy synchronous brain
-/// loop. All other behavior matches `fresh_system/0`.
-///
-/// Returns `#(TestSystem, xdg.Paths)` so tests that need to write files to
-/// the scratch root (e.g. USER.md) can resolve paths without guessing.
-pub fn fresh_system_with_allowlist(
-  channel_ids: List(String),
-) -> #(TestSystem, xdg.Paths) {
-  // 1. Build the four fakes.
-  let #(fake_discord, discord_client) = fake_discord.new()
-  let #(fake_llm, llm_client) = fake_llm.new()
-  let #(fake_skill_runner, skill_runner_client) = fake_skill_runner.new()
-  let fake_review_inst = fake_review.new()
-
-  // 2. Unique scratch DB path; delete any pre-existing file.
-  let db_path =
-    "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
-  let _ = simplifile.delete(db_path)
-
-  // 3. Ensure models.build_llm_config can resolve an API key.
-  set_env("ZAI_API_KEY", "test-harness-dummy-key")
-
-  // 4. DB actor at the scratch path.
-  let assert Ok(db_subject) = db.start(db_path)
-
-  // 5. Live flare_manager.
-  let assert Ok(flare_subject) =
-    flare_manager.start(
-      1,
-      "zai/glm-5-turbo",
-      fn(_event) { Nil },
-      transport.Tmux,
-      db_subject,
-    )
-
-  // 5b. Channel supervisor.
-  let assert Ok(channel_sup) = channel_supervisor.start()
-
-  // 6. Build paths pointing at a unique tmp root.
-  let tmp_root = "/tmp/aura-test-root-" <> int.to_string(unique_integer())
-  let paths =
-    xdg.Paths(
-      config: tmp_root <> "/config",
-      data: tmp_root <> "/data",
-      state: tmp_root <> "/state",
-    )
-
-  let assert Ok(_) = simplifile.create_directory_all(paths.config)
-  let assert Ok(_) = simplifile.create_directory_all(paths.data)
-  let assert Ok(_) = simplifile.create_directory_all(paths.state)
-
-  // 7. Build GlobalConfig with the allowlist set.
-  let default = config.default_global()
-  let global =
-    config.GlobalConfig(
-      ..default,
-      models: config.ModelsConfig(
-        brain: "zai/glm-5-turbo",
-        domain: "",
-        acp: "",
-        heartbeat: "",
-        monitor: "",
-        vision: "zai/glm-5v-turbo",
-        dream: "",
-      ),
-      brain_context: 128_000,
-    )
-
-  let default_skill_infos = [
-    skill.SkillInfo(name: "jira", description: "test", path: "/tmp/nonexistent-jira"),
-  ]
-
-  let brain_config =
-    brain.BrainConfig(
-      global: global,
-      paths: paths,
-      soul: "You are Aura, under test.",
-      domains: [],
-      domain_configs: [],
-      skill_infos: default_skill_infos,
-      validation_rules: [],
-      db_subject: db_subject,
-      acp_subject: flare_subject,
-      discord: discord_client,
-      llm: llm_client,
-      skill_runner: skill_runner_client,
-      browser_runner: browser_runner.production(),
-      channel_supervisor: channel_sup,
-      review_runner: fake_review.as_runner(fake_review_inst),
-    )
-
-  let assert Ok(brain_subject) = brain.start(brain_config)
-
-  #(
-    TestSystem(
-      brain_subject: brain_subject,
-      fake_discord: fake_discord,
-      fake_llm: fake_llm,
-      fake_skill_runner: fake_skill_runner,
-      fake_review: fake_review_inst,
-      db_path: db_path,
-      db_subject: db_subject,
-      acp_subject: flare_subject,
-    ),
-    paths,
+    paths: paths,
   )
 }
 
@@ -420,6 +312,7 @@ pub fn fresh_system_with_domain(
     db_path: db_path,
     db_subject: db_subject,
     acp_subject: flare_subject,
+    paths: paths,
   )
 }
 
@@ -436,122 +329,6 @@ pub fn incoming(channel_id: String, content: String) -> discord.IncomingMessage 
     content: content,
     is_bot: False,
     attachments: [],
-  )
-}
-
-/// Spin up a fresh `TestSystem` with a single domain pre-configured AND
-/// a set of channel IDs on the channel_actor allowlist. Combining both is
-/// necessary for tests that exercise thread creation — the top-level domain
-/// channel must be on the allowlist so brain routes through channel_actor,
-/// and the domain must be registered so brain detects it as a top-level
-/// domain channel and creates a thread.
-pub fn fresh_system_with_domain_and_allowlist(
-  domain_name: String,
-  agents_md: String,
-  channel_id: String,
-  allowlist: List(String),
-) -> #(TestSystem, xdg.Paths) {
-  // 1. Build the four fakes.
-  let #(fake_discord, discord_client) = fake_discord.new()
-  let #(fake_llm, llm_client) = fake_llm.new()
-  let #(fake_skill_runner, skill_runner_client) = fake_skill_runner.new()
-  let fake_review_inst = fake_review.new()
-
-  // 2. Unique scratch DB path; delete any pre-existing file.
-  let db_path =
-    "/tmp/aura-test-" <> int.to_string(unique_integer()) <> ".db"
-  let _ = simplifile.delete(db_path)
-
-  // 3. Ensure models.build_llm_config can resolve an API key.
-  set_env("ZAI_API_KEY", "test-harness-dummy-key")
-
-  // 4. DB actor at the scratch path.
-  let assert Ok(db_subject) = db.start(db_path)
-
-  // 5. Live flare_manager.
-  let assert Ok(flare_subject) =
-    flare_manager.start(
-      1,
-      "zai/glm-5-turbo",
-      fn(_event) { Nil },
-      transport.Tmux,
-      db_subject,
-    )
-
-  // 5b. Channel supervisor.
-  let assert Ok(channel_sup) = channel_supervisor.start()
-
-  // 6. Build paths pointing at a unique tmp root.
-  let tmp_root = "/tmp/aura-test-root-" <> int.to_string(unique_integer())
-  let paths =
-    xdg.Paths(
-      config: tmp_root <> "/config",
-      data: tmp_root <> "/data",
-      state: tmp_root <> "/state",
-    )
-
-  // 7. Create the domain config directory and write AGENTS.md.
-  let domain_config_dir =
-    paths.config <> "/domains/" <> domain_name
-  let assert Ok(_) = simplifile.create_directory_all(domain_config_dir)
-  let assert Ok(_) =
-    simplifile.write(domain_config_dir <> "/AGENTS.md", agents_md)
-
-  // 8. Build GlobalConfig with the domain and the allowlist.
-  let global =
-    config.GlobalConfig(
-      ..config.default_global(),
-      models: config.ModelsConfig(
-        brain: "zai/glm-5-turbo",
-        domain: "",
-        acp: "",
-        heartbeat: "",
-        monitor: "",
-        vision: "zai/glm-5v-turbo",
-        dream: "",
-      ),
-      brain_context: 128_000,
-    )
-
-  let domain_info = brain.DomainInfo(name: domain_name, channel_id: channel_id)
-
-  let default_skill_infos = [
-    skill.SkillInfo(name: "jira", description: "test", path: "/tmp/nonexistent-jira"),
-  ]
-
-  let brain_config =
-    brain.BrainConfig(
-      global: global,
-      paths: paths,
-      soul: "You are Aura, under test.",
-      domains: [domain_info],
-      domain_configs: [],
-      skill_infos: default_skill_infos,
-      validation_rules: [],
-      db_subject: db_subject,
-      acp_subject: flare_subject,
-      discord: discord_client,
-      llm: llm_client,
-      skill_runner: skill_runner_client,
-      browser_runner: browser_runner.production(),
-      channel_supervisor: channel_sup,
-      review_runner: fake_review.as_runner(fake_review_inst),
-    )
-
-  let assert Ok(brain_subject) = brain.start(brain_config)
-
-  #(
-    TestSystem(
-      brain_subject: brain_subject,
-      fake_discord: fake_discord,
-      fake_llm: fake_llm,
-      fake_skill_runner: fake_skill_runner,
-      fake_review: fake_review_inst,
-      db_path: db_path,
-      db_subject: db_subject,
-      acp_subject: flare_subject,
-    ),
-    paths,
   )
 }
 
@@ -654,6 +431,7 @@ pub fn fresh_system_with_review_interval(review_interval: Int) -> TestSystem {
     db_path: db_path,
     db_subject: db_subject,
     acp_subject: flare_subject,
+    paths: paths,
   )
 }
 
@@ -758,6 +536,7 @@ pub fn fresh_system_with_skill_review_interval(
       db_path: db_path,
       db_subject: db_subject,
       acp_subject: flare_subject,
+      paths: paths,
     ),
     0,
   )

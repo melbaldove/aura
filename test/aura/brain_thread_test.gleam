@@ -8,14 +8,12 @@ import test_harness
 
 pub fn top_level_domain_message_creates_thread_test() {
   // Fresh system with a cm2 domain whose channel_id is "cm2-channel".
-  // Also allowlist "cm2-channel" so brain routes it through the channel_actor
-  // path, where the thread-creation logic lives.
-  let #(sys, _) =
-    test_harness.fresh_system_with_domain_and_allowlist(
+  // All channels route through channel_actor, so no allowlist setup needed.
+  let sys =
+    test_harness.fresh_system_with_domain(
       "cm2",
       "# CM2",
       "cm2-channel",
-      ["cm2-channel"],
     )
 
   // Script the fake Discord client to return a known thread_id.
