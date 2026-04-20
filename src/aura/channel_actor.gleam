@@ -1047,8 +1047,7 @@ fn typing_loop(discord: discord_client.DiscordClient, channel_id: String) -> Nil
 
 /// Effects emitted by `transition`. The actor's effect interpreter
 /// translates these into real side effects (spawn processes, edit Discord
-/// messages, schedule timers). Declared up-front so Tasks 9-15 can emit
-/// variants without growing the type.
+/// messages, schedule timers).
 pub type Effect {
   SpawnStreamWorker(messages: List(llm.Message))
   SpawnToolWorker(call: llm.ToolCall)
@@ -1090,8 +1089,7 @@ pub type Effect {
 
 /// Pure state-machine transition. Given current state and an incoming
 /// message, return the next state and a list of effects for the interpreter
-/// to execute. `HandleIncoming` queues when busy,
-/// starting a turn when idle. Tasks 9-15 will extend other arms.
+/// to execute. `HandleIncoming` queues when busy, starting a turn when idle.
 pub fn transition(
   state: ChannelState,
   message: ChannelMessage,
@@ -1330,7 +1328,6 @@ pub fn transition(
     // --- compression complete -------------------------------------
     CompressionComplete(new_history, new_comp_state, snapshot_len), _ -> {
       // Merge: compressed history + any messages that arrived during compression.
-      // Mirrors brain.gleam:693-730.
       let current_len = list.length(state.conversation)
       let merged = case current_len > snapshot_len {
         True -> {
@@ -1631,9 +1628,7 @@ fn start_turn(
 
 /// Build the base system prompt for channel_actor: soul + domain names +
 /// skill infos + memory/user content + domain prompt (AGENTS.md/MEMORY.md/STATE.md)
-/// + flare roster section. This mirrors brain.build_llm_context's system_prompt
-/// construction (lines 1253-1388). Called fresh on every turn so memory is
-/// always current.
+/// + flare roster section. Called fresh on every turn so memory is always current.
 fn build_base_system_prompt(state: ChannelState) -> String {
   let memory_content = case
     structured_memory.format_for_display(xdg.memory_path(state.paths))
@@ -1873,9 +1868,8 @@ const platform: String = "discord"
 /// of accumulated content.
 const progressive_edit_chars: Int = 150
 
-/// Append the vision description to the last `UserMessage` in the history,
-/// mirroring the `[Image: <desc>]` prefix that `brain.preprocess_attachments`
-/// produces. If there is no `UserMessage`, append a new one carrying just the
+/// Append the vision description to the last `UserMessage` in the history.
+/// If there is no `UserMessage`, append a new one carrying just the
 /// description so the stream worker still sees the context.
 fn enrich_messages_with_description(
   messages: List(llm.Message),
@@ -1944,7 +1938,7 @@ fn finalize_turn(
   let full_history = list.append(state.conversation, final_messages)
   // Compute skill-review counter logic: reset to 0 when the current turn
   // included a skill_manage tool call (a fresh save makes review redundant),
-  // otherwise increment by 1. Mirrors brain.gleam:1998-2005.
+  // otherwise increment by 1.
   let #(skill_review_count, new_skill_iterations) = case turn.traces {
     [] -> #(state.review_counts.1, 0)
     _ ->
@@ -1962,8 +1956,7 @@ fn finalize_turn(
   }
   // Resolve domain name for compression context loading.
   let resolved_domain = option.unwrap(state.domain, default_domain)
-  // Emit compression effects after DbSaveExchange, mirroring brain's
-  // StoreExchange handler (brain.gleam:561-691).
+  // Emit compression effects after DbSaveExchange.
   let compression_effects = case
     conversation.needs_full_compression(
       full_history,
