@@ -63,3 +63,41 @@ pub fn incoming_when_turn_in_flight_queues_test() {
   list.length(new_state.queue) |> should.equal(1)
   effects |> should.equal([])
 }
+
+// --- Task 9: vision ----------------------------------------------------------
+
+pub fn vision_complete_spawns_stream_worker_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_vision = channel_actor.with_fake_vision_turn(state)
+  let #(_new_state, effects) =
+    channel_actor.transition(
+      with_vision,
+      channel_actor.VisionComplete("a cat on a mat"),
+    )
+  let has_stream_spawn =
+    list.any(effects, fn(e) {
+      case e {
+        channel_actor.SpawnStreamWorker(_) -> True
+        _ -> False
+      }
+    })
+  has_stream_spawn |> should.be_true
+}
+
+pub fn vision_error_still_spawns_stream_worker_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_vision = channel_actor.with_fake_vision_turn(state)
+  let #(_, effects) =
+    channel_actor.transition(
+      with_vision,
+      channel_actor.VisionError("rejected"),
+    )
+  let has_stream_spawn =
+    list.any(effects, fn(e) {
+      case e {
+        channel_actor.SpawnStreamWorker(_) -> True
+        _ -> False
+      }
+    })
+  has_stream_spawn |> should.be_true
+}

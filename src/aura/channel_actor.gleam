@@ -23,6 +23,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
+import gleam/string
 
 pub type ChannelMessage {
   HandleIncoming(discord.IncomingMessage)
@@ -386,6 +387,100 @@ pub fn transition(
       let new_queue = list.append(state.queue, [PendingUserMessage(msg)])
       #(ChannelState(..state, queue: new_queue), [])
     }
+
+    // --- Task 9: vision results ---------------------------------------------
+    VisionComplete(description), Some(turn) -> {
+      let enriched =
+        enrich_messages_with_description(
+          turn.messages_at_llm_call,
+          description,
+        )
+      let new_turn =
+        TurnState(
+          ..turn,
+          worker_kind: StreamWorker,
+          messages_at_llm_call: enriched,
+        )
+      #(ChannelState(..state, turn: Some(new_turn)), [
+        SpawnStreamWorker(enriched),
+      ])
+    }
+    VisionError(_reason), Some(turn) -> {
+      let new_turn = TurnState(..turn, worker_kind: StreamWorker)
+      #(ChannelState(..state, turn: Some(new_turn)), [
+        SpawnStreamWorker(turn.messages_at_llm_call),
+      ])
+    }
+    VisionComplete(_), None -> #(state, [])
+    VisionError(_), None -> #(state, [])
+
+    // --- Task 10: stream deltas and reasoning -------------------------------
+    StreamDelta(text), Some(turn) -> {
+      let new_acc = turn.accumulated_content <> text
+      let new_stats =
+        StreamStats(
+          ..turn.stream_stats,
+          delta_count: turn.stream_stats.delta_count + 1,
+        )
+      let new_turn =
+        TurnState(
+          ..turn,
+          accumulated_content: new_acc,
+          stream_stats: new_stats,
+        )
+      let edit_effects = case should_progressive_edit(turn, new_acc) {
+        True -> [
+          DiscordEdit(turn.discord_msg_id, format_progress(new_acc, turn.traces)),
+        ]
+        False -> []
+      }
+      #(
+        ChannelState(..state, turn: Some(new_turn)),
+        list.append(edit_effects, [
+          LogHeartbeat(new_stats, string.length(new_acc)),
+        ]),
+      )
+    }
+    StreamReasoning, Some(turn) -> {
+      let new_stats =
+        StreamStats(
+          ..turn.stream_stats,
+          reasoning_count: turn.stream_stats.reasoning_count + 1,
+        )
+      let new_turn = TurnState(..turn, stream_stats: new_stats)
+      #(ChannelState(..state, turn: Some(new_turn)), [
+        LogHeartbeat(new_stats, string.length(turn.accumulated_content)),
+      ])
+    }
+    StreamDelta(_), None -> #(state, [])
+    StreamReasoning, None -> #(state, [])
+
+    // --- Task 11: stream complete (terminal vs tool-call) -------------------
+    StreamComplete(content, tool_calls_json, prompt_tokens), Some(turn) -> {
+      case llm.parse_flat_tool_calls_json(tool_calls_json) {
+        Ok([]) -> finalize_turn(state, turn, content, prompt_tokens)
+        Error(_) -> finalize_turn(state, turn, content, prompt_tokens)
+        Ok([first_call, ..rest]) -> {
+          let new_turn =
+            TurnState(
+              ..turn,
+              accumulated_tool_calls: [first_call, ..rest],
+              pending_tool_results: dict.new(),
+              worker_kind: ToolWorker(first_call.name, first_call.id),
+            )
+          #(ChannelState(..state, turn: Some(new_turn)), [
+            SpawnToolWorker(first_call),
+            LogStreamSummary(
+              turn.stream_stats,
+              "complete",
+              string.length(content),
+            ),
+          ])
+        }
+      }
+    }
+    StreamComplete(_, _, _), None -> #(state, [])
+
     _, _ -> #(state, [])
   }
 }
@@ -504,6 +599,103 @@ fn state_with_pending_stream(
   ChannelState(..state, turn: Some(turn))
 }
 
+/// Progressive-edit threshold: re-render the Discord message every N chars
+/// of accumulated content. Mirrors `brain.progressive_edit_chars`.
+const progressive_edit_chars: Int = 150
+
+/// Append the vision description to the last `UserMessage` in the history,
+/// mirroring the `[Image: <desc>]` prefix that `brain.preprocess_attachments`
+/// produces. If there is no `UserMessage`, append a new one carrying just the
+/// description so the stream worker still sees the context.
+fn enrich_messages_with_description(
+  messages: List(llm.Message),
+  description: String,
+) -> List(llm.Message) {
+  let reversed = list.reverse(messages)
+  case replace_last_user_message(reversed, description, []) {
+    Ok(enriched) -> enriched
+    Error(_) ->
+      list.append(messages, [
+        llm.UserMessage(content: "[Image description: " <> description <> "]"),
+      ])
+  }
+}
+
+fn replace_last_user_message(
+  reversed: List(llm.Message),
+  description: String,
+  acc_forward_suffix: List(llm.Message),
+) -> Result(List(llm.Message), Nil) {
+  case reversed {
+    [] -> Error(Nil)
+    [llm.UserMessage(content: original), ..rest] -> {
+      let enriched =
+        llm.UserMessage(
+          content: original
+            <> "\n\n[Image description: "
+            <> description
+            <> "]",
+        )
+      Ok(list.append(list.reverse(rest), [enriched, ..acc_forward_suffix]))
+    }
+    [other, ..rest] ->
+      replace_last_user_message(rest, description, [other, ..acc_forward_suffix])
+  }
+}
+
+/// Trigger a progressive edit every `progressive_edit_chars` characters of
+/// newly accumulated content. Uses `delta_count` as a coarse pacing signal
+/// — since deltas are small and frequent, this keeps edit cadence bounded.
+fn should_progressive_edit(turn: TurnState, new_acc: String) -> Bool {
+  let last_edit_len = turn.stream_stats.delta_count * progressive_edit_chars
+  string.length(new_acc) - last_edit_len > progressive_edit_chars
+}
+
+/// Format the in-progress message for Discord, mirroring how
+/// `brain.collect_stream_loop` renders partial content.
+fn format_progress(content: String, traces: List(conversation.ToolTrace)) -> String {
+  conversation.format_full_message(traces, content <> " ...")
+}
+
+/// Finalize a turn with no further tool calls: emit the final Discord edit,
+/// persist the exchange, log the stream summary, and (conditionally) stop
+/// typing / cancel the deadline. If work is queued, start the next turn.
+fn finalize_turn(
+  state: ChannelState,
+  turn: TurnState,
+  content: String,
+  prompt_tokens: Int,
+) -> #(ChannelState, List(Effect)) {
+  let final_messages =
+    list.append(turn.new_messages, [llm.AssistantMessage(content)])
+  let author_id = case turn.kind {
+    UserTurn(_, author_id) -> author_id
+    _ -> ""
+  }
+  let base_effects = [
+    DiscordEdit(turn.discord_msg_id, format_progress(content, turn.traces)),
+    DbSaveExchange(final_messages, author_id, "", prompt_tokens),
+    LogStreamSummary(turn.stream_stats, "complete", string.length(content)),
+  ]
+  let with_typing = case state.typing_pid {
+    Some(pid) -> list.append(base_effects, [StopTyping(pid)])
+    None -> base_effects
+  }
+  let with_deadline = case turn.deadline_timer {
+    Some(timer) -> list.append(with_typing, [CancelDeadline(timer)])
+    None -> with_typing
+  }
+  let cleared = ChannelState(..state, turn: None, typing_pid: None)
+  case state.queue {
+    [] -> #(cleared, with_deadline)
+    [next, ..rest] -> {
+      let #(new_state, start_effects) =
+        start_turn(ChannelState(..cleared, queue: rest), next)
+      #(new_state, list.append(with_deadline, start_effects))
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -518,30 +710,47 @@ pub fn initial_state_for_test(channel_id: String) -> ChannelState {
 /// Build a state with a fake in-flight turn. Used to exercise the "busy"
 /// path of `transition` without standing up real workers/monitors.
 pub fn with_fake_in_flight_turn(state: ChannelState) -> ChannelState {
-  let fake_turn =
-    TurnState(
-      kind: UserTurn(message_id: "fake", author_id: "fake"),
-      discord_msg_id: "",
-      started_at: 0,
-      iteration: 0,
-      worker_pid: process.self(),
-      worker_monitor: None,
-      worker_kind: StreamWorker,
-      accumulated_content: "",
-      accumulated_tool_calls: [],
-      pending_tool_results: dict.new(),
-      new_messages: [],
-      traces: [],
-      messages_at_llm_call: [],
-      stream_retry_count: 0,
-      stream_stats: StreamStats(
-        start_ms: 0,
-        reasoning_count: 0,
-        delta_count: 0,
-        last_heartbeat_ms: 0,
-      ),
-      deadline_timer: None,
-    )
+  let fake_turn = fresh_fake_turn(StreamWorker)
   ChannelState(..state, turn: Some(fake_turn))
+}
+
+/// Build a state with a fake vision-in-flight turn. Exercises the
+/// `VisionComplete` / `VisionError` arms of `transition`.
+pub fn with_fake_vision_turn(state: ChannelState) -> ChannelState {
+  let fake_turn = fresh_fake_turn(VisionWorker)
+  ChannelState(..state, turn: Some(fake_turn))
+}
+
+/// Build a state with a fake stream-in-flight turn. Exercises the
+/// `StreamDelta` / `StreamReasoning` / `StreamComplete` arms of `transition`.
+pub fn with_fake_stream_turn(state: ChannelState) -> ChannelState {
+  let fake_turn = fresh_fake_turn(StreamWorker)
+  ChannelState(..state, turn: Some(fake_turn))
+}
+
+fn fresh_fake_turn(worker_kind: WorkerKind) -> TurnState {
+  TurnState(
+    kind: UserTurn(message_id: "fake", author_id: "fake"),
+    discord_msg_id: "",
+    started_at: 0,
+    iteration: 0,
+    worker_pid: process.self(),
+    worker_monitor: None,
+    worker_kind: worker_kind,
+    accumulated_content: "",
+    accumulated_tool_calls: [],
+    pending_tool_results: dict.new(),
+    new_messages: [],
+    traces: [],
+    messages_at_llm_call: [],
+    stream_retry_count: 0,
+    stream_stats: StreamStats(
+      start_ms: 0,
+      reasoning_count: 0,
+      delta_count: 0,
+      last_heartbeat_ms: 0,
+    ),
+    deadline_timer: None,
+  )
 }
 
