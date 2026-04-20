@@ -205,3 +205,44 @@ pub fn tool_result_all_resolved_spawns_next_stream_test() {
   })
   |> should.be_true
 }
+
+// --- Task 13: stream error retry ---------------------------------------------
+
+pub fn stream_error_retries_up_to_max_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(s1, effects1) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamError("rate limit"),
+    )
+  list.any(effects1, fn(e) {
+    case e {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+  case s1.turn {
+    option.Some(t) -> t.stream_retry_count |> should.equal(1)
+    option.None -> should.fail()
+  }
+}
+
+pub fn stream_error_exhausts_retries_fails_turn_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream_3 = channel_actor.with_fake_stream_turn_at_retry(state, 3)
+  let #(new_state, effects) =
+    channel_actor.transition(
+      with_stream_3,
+      channel_actor.StreamError("timeout"),
+    )
+  new_state.turn |> should.equal(option.None)
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.DiscordSend(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}

@@ -19,6 +19,7 @@ import aura/vision
 import aura/xdg
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Monitor, type Pid, type Subject, type Timer}
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -558,9 +559,32 @@ pub fn transition(
     }
     ToolResult(_, _, _), None -> #(state, [])
 
+    // --- Task 13: stream error retry ----------------------------------------
+    StreamError(reason), Some(turn) -> {
+      case turn.stream_retry_count < max_stream_retries {
+        True -> {
+          let new_retry = turn.stream_retry_count + 1
+          let new_turn = TurnState(..turn, stream_retry_count: new_retry)
+          #(ChannelState(..state, turn: Some(new_turn)), [
+            SpawnStreamWorker(turn.messages_at_llm_call),
+            LogStreamSummary(
+              turn.stream_stats,
+              "retry-" <> int.to_string(new_retry),
+              string.length(turn.accumulated_content),
+            ),
+          ])
+        }
+        False ->
+          fail_turn_internal(state, turn, "stream exhausted retries: " <> reason)
+      }
+    }
+    StreamError(_), None -> #(state, [])
+
     _, _ -> #(state, [])
   }
 }
+
+const max_stream_retries = 3
 
 /// True when every accumulated tool call has a result recorded in `pending`.
 fn all_tool_calls_resolved(
@@ -584,6 +608,41 @@ fn find_tool_name(calls: List(llm.ToolCall), id: String) -> String {
   case list.find(calls, fn(c) { c.id == id }) {
     Ok(c) -> c.name
     Error(_) -> "unknown"
+  }
+}
+
+/// Common failure path: emit user-facing error, optional typing stop,
+/// optional deadline cancel, stream summary log, clear turn, and advance
+/// the queue if non-empty.
+fn fail_turn_internal(
+  state: ChannelState,
+  turn: TurnState,
+  reason: String,
+) -> #(ChannelState, List(Effect)) {
+  let base = [
+    DiscordSend("Error: " <> reason),
+    LogStreamSummary(
+      turn.stream_stats,
+      "failed",
+      string.length(turn.accumulated_content),
+    ),
+  ]
+  let with_typing = case state.typing_pid {
+    Some(pid) -> list.append(base, [StopTyping(pid)])
+    None -> base
+  }
+  let effects = case turn.deadline_timer {
+    Some(timer) -> list.append(with_typing, [CancelDeadline(timer)])
+    None -> with_typing
+  }
+  let cleared = ChannelState(..state, turn: None, typing_pid: None)
+  case state.queue {
+    [] -> #(cleared, effects)
+    [next, ..rest] -> {
+      let #(new_state, start_effects) =
+        start_turn(ChannelState(..cleared, queue: rest), next)
+      #(new_state, list.append(effects, start_effects))
+    }
   }
 }
 
@@ -854,6 +913,18 @@ pub fn with_fake_one_tool_call_turn(state: ChannelState) -> ChannelState {
       ..fresh_fake_turn(ToolWorker("tool_a", "c1")),
       accumulated_tool_calls: [call_a],
     )
+  ChannelState(..state, turn: Some(fake_turn))
+}
+
+/// Build a state with a fake stream turn whose retry counter has been
+/// pre-incremented to `n`. Used to exercise retry-exhaustion paths in
+/// `StreamError` transitions.
+pub fn with_fake_stream_turn_at_retry(
+  state: ChannelState,
+  n: Int,
+) -> ChannelState {
+  let fake_turn =
+    TurnState(..fresh_fake_turn(StreamWorker), stream_retry_count: n)
   ChannelState(..state, turn: Some(fake_turn))
 }
 
