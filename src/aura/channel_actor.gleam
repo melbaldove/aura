@@ -17,6 +17,7 @@ import aura/review_runner.{type ReviewRunner}
 import aura/shell
 import aura/skill
 import aura/time
+import aura/tools
 import aura/validator
 import aura/vision
 import aura/xdg
@@ -99,6 +100,7 @@ pub type ChannelMessage {
 
   RegisterProposal(proposal: brain_tools.PendingProposal)
   RegisterShellApproval(approval: brain_tools.PendingShellApproval)
+  HandleInteractionResolve(action: String, approval_id: String)
 }
 
 pub type TurnKind {
@@ -254,9 +256,13 @@ fn build_initial_state(
       acp_worktree: False,
       acp_server_url: "",
       acp_agent_name: "",
-      on_propose: fn(_proposal) { Nil },
+      on_propose: fn(proposal) {
+        process.send(self, RegisterProposal(proposal))
+      },
       shell_patterns: shell.compile_patterns(),
-      on_shell_approve: fn(_approval) { Nil },
+      on_shell_approve: fn(approval) {
+        process.send(self, RegisterShellApproval(approval))
+      },
       vision_fn: fn(_url, _question) { Error("stub") },
       discord: deps.discord,
       llm_client: deps.llm_client,
@@ -655,6 +661,112 @@ fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
         )
       ChannelState(..state, review_counts: #(new_count, state.review_counts.1))
     }
+    ResolveProposal(proposal, action) -> {
+      let now = time.now_ms()
+      let expired = now - proposal.requested_at_ms > 900_000
+      case expired {
+        True -> {
+          logging.log(
+            logging.Info,
+            "[channel_actor] Proposal expired: " <> proposal.id,
+          )
+          process.send(proposal.reply_to, brain_tools.Expired)
+          let _ =
+            state.tool_ctx.discord.edit_message(
+              proposal.channel_id,
+              proposal.message_id,
+              "**Expired** -- proposal timed out after 15 minutes.",
+            )
+          state
+        }
+        False ->
+          case action {
+            "approve" -> {
+              case
+                tools.write_file(
+                  proposal.path,
+                  state.paths.data,
+                  proposal.content,
+                  state.tool_ctx.validation_rules,
+                  True,
+                )
+              {
+                Ok(_) -> {
+                  process.send(proposal.reply_to, brain_tools.Approved)
+                  let _ =
+                    state.tool_ctx.discord.edit_message(
+                      proposal.channel_id,
+                      proposal.message_id,
+                      "**Approved** -- wrote `" <> proposal.path <> "`",
+                    )
+                  state
+                }
+                Error(e) -> {
+                  process.send(proposal.reply_to, brain_tools.Rejected)
+                  let _ =
+                    state.tool_ctx.discord.edit_message(
+                      proposal.channel_id,
+                      proposal.message_id,
+                      "**Failed** -- " <> e,
+                    )
+                  state
+                }
+              }
+            }
+            _ -> {
+              // "reject" or anything else
+              process.send(proposal.reply_to, brain_tools.Rejected)
+              let _ =
+                state.tool_ctx.discord.edit_message(
+                  proposal.channel_id,
+                  proposal.message_id,
+                  "**Rejected**",
+                )
+              state
+            }
+          }
+      }
+    }
+    ResolveShellApproval(approval, action) -> {
+      let now = time.now_ms()
+      let expired = now - approval.requested_at_ms > 900_000
+      case expired {
+        True -> {
+          process.send(approval.reply_to, brain_tools.Expired)
+          let _ =
+            state.tool_ctx.discord.edit_message(
+              approval.channel_id,
+              approval.message_id,
+              "**Expired** -- approval timed out after 15 minutes.",
+            )
+          state
+        }
+        False ->
+          case action {
+            "approve" -> {
+              process.send(approval.reply_to, brain_tools.Approved)
+              let _ =
+                state.tool_ctx.discord.edit_message(
+                  approval.channel_id,
+                  approval.message_id,
+                  ":white_check_mark: **Approved** -- `" <> approval.command <> "`",
+                )
+              state
+            }
+            _ -> {
+              // "reject" or anything else
+              process.send(approval.reply_to, brain_tools.Rejected)
+              let _ =
+                state.tool_ctx.discord.edit_message(
+                  approval.channel_id,
+                  approval.message_id,
+                  ":x: **Rejected**",
+                )
+              state
+            }
+          }
+      }
+    }
   }
 }
 
@@ -869,6 +981,11 @@ pub type Effect {
     current_count: Int,
   )
   SpawnMemoryReview(history: List(llm.Message))
+  ResolveProposal(proposal: brain_tools.PendingProposal, action: String)
+  ResolveShellApproval(
+    approval: brain_tools.PendingShellApproval,
+    action: String,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -1131,6 +1248,91 @@ pub fn transition(
       let new_queue =
         list.append(state.queue, [PendingHandback(flare_id, result)])
       #(ChannelState(..state, queue: new_queue), [])
+    }
+
+    // --- proposal / shell approval registration --------------------
+    RegisterProposal(proposal), _ -> {
+      // Supersede existing proposal for same channel
+      let #(new_proposals, supersede_effects) = case
+        list.find(state.pending_proposals, fn(p) {
+          p.channel_id == proposal.channel_id
+        })
+      {
+        Ok(old) -> {
+          process.send(old.reply_to, brain_tools.Expired)
+          let effects = [DiscordEdit(old.message_id, "~~Superseded~~")]
+          let pruned =
+            list.filter(state.pending_proposals, fn(p) { p.id != old.id })
+          #(pruned, effects)
+        }
+        Error(_) -> #(state.pending_proposals, [])
+      }
+      let updated_proposals = list.append(new_proposals, [proposal])
+      #(
+        ChannelState(..state, pending_proposals: updated_proposals),
+        supersede_effects,
+      )
+    }
+
+    RegisterShellApproval(approval), _ -> {
+      // Supersede existing shell approval for same channel
+      let #(new_approvals, supersede_effects) = case
+        list.find(state.pending_shell_approvals, fn(a) {
+          a.channel_id == approval.channel_id
+        })
+      {
+        Ok(old) -> {
+          process.send(old.reply_to, brain_tools.Expired)
+          let effects = [DiscordEdit(old.message_id, "~~Superseded~~")]
+          let pruned =
+            list.filter(state.pending_shell_approvals, fn(a) { a.id != old.id })
+          #(pruned, effects)
+        }
+        Error(_) -> #(state.pending_shell_approvals, [])
+      }
+      let updated_approvals = list.append(new_approvals, [approval])
+      #(
+        ChannelState(..state, pending_shell_approvals: updated_approvals),
+        supersede_effects,
+      )
+    }
+
+    // --- interaction resolve (proposal or shell approval) ----------
+    HandleInteractionResolve(action, approval_id), _ -> {
+      case list.find(state.pending_proposals, fn(p) { p.id == approval_id }) {
+        Ok(proposal) -> {
+          let new_proposals =
+            list.filter(state.pending_proposals, fn(p) { p.id != approval_id })
+          #(
+            ChannelState(..state, pending_proposals: new_proposals),
+            [ResolveProposal(proposal, action)],
+          )
+        }
+        Error(_) ->
+          case
+            list.find(state.pending_shell_approvals, fn(a) {
+              a.id == approval_id
+            })
+          {
+            Ok(approval) -> {
+              let new_approvals =
+                list.filter(state.pending_shell_approvals, fn(a) {
+                  a.id != approval_id
+                })
+              #(
+                ChannelState(..state, pending_shell_approvals: new_approvals),
+                [ResolveShellApproval(approval, action)],
+              )
+            }
+            Error(_) -> {
+              logging.log(
+                logging.Info,
+                "[channel_actor] Unknown approval: " <> approval_id,
+              )
+              #(state, [])
+            }
+          }
+      }
     }
 
     _, _ -> #(state, [])

@@ -284,7 +284,8 @@ fn execute_tool_dispatch(
                 <> preview
                 <> "\n```"
 
-              let buttons = discord_types.approve_reject_buttons(proposal_id)
+              let buttons =
+                discord_types.approve_reject_buttons(ctx.channel_id, proposal_id)
               case
                 rest.send_message_with_components(
                   ctx.discord_token,
@@ -902,7 +903,8 @@ fn request_shell_approval(
     <> command
     <> "`\n**Reason:** "
     <> description
-  let buttons = discord_types.approve_reject_buttons(approval_id)
+  let buttons =
+    discord_types.approve_reject_buttons(ctx.channel_id, approval_id)
   case
     rest.send_message_with_components(
       ctx.discord_token,

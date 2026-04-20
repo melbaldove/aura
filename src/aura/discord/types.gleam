@@ -189,7 +189,11 @@ pub fn resume_payload(
 }
 
 /// Build an action row with Approve and Reject buttons for a proposal.
-pub fn approve_reject_buttons(proposal_id: String) -> json.Json {
+/// custom_id format: "{action}:{channel_id}:{approval_id}"
+pub fn approve_reject_buttons(
+  channel_id: String,
+  approval_id: String,
+) -> json.Json {
   json.array(
     [
       json.object([
@@ -202,13 +206,19 @@ pub fn approve_reject_buttons(proposal_id: String) -> json.Json {
                 #("type", json.int(2)),
                 #("style", json.int(3)),
                 #("label", json.string("Approve")),
-                #("custom_id", json.string("approve:" <> proposal_id)),
+                #(
+                  "custom_id",
+                  json.string("approve:" <> channel_id <> ":" <> approval_id),
+                ),
               ]),
               json.object([
                 #("type", json.int(2)),
                 #("style", json.int(4)),
                 #("label", json.string("Reject")),
-                #("custom_id", json.string("reject:" <> proposal_id)),
+                #(
+                  "custom_id",
+                  json.string("reject:" <> channel_id <> ":" <> approval_id),
+                ),
               ]),
             ],
             fn(x) { x },
