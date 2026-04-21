@@ -15,6 +15,27 @@ import logging
 /// GUILDS (1) + GUILD_MESSAGES (512) + DIRECT_MESSAGES (4096) + MESSAGE_CONTENT (32768)
 const default_intents = 37_377
 
+/// Reconnect backoff: 5s → 10s → 20s → 40s → 60s (capped).
+/// Public so it can be unit-tested without touching the network.
+pub fn compute_backoff_ms(attempt: Int) -> Int {
+  let safe = int.max(attempt, 0)
+  let shifted = case safe > 20 {
+    True -> 60_000
+    False -> 5000 * int.bitwise_shift_left(1, safe)
+  }
+  int.min(shifted, 60_000)
+}
+
+/// Network error signature returned by rest/gateway when the HTTP or WS
+/// layer can't reach Discord. Anything else (401, parse failure) is treated
+/// as fatal and fails init fast so we don't spin forever on a bad token.
+fn is_transient_network_error(message: String) -> Bool {
+  case message {
+    "HTTP request failed" -> True
+    _ -> False
+  }
+}
+
 /// Create a supervised child spec for the Discord gateway.
 /// OTP restarts it automatically if it crashes — no manual reconnect loop needed.
 pub fn supervised(
@@ -26,9 +47,22 @@ pub fn supervised(
 
 /// Start the Discord poller.
 /// Fetches gateway URL, connects, and forwards messages to the brain actor.
+/// On transient network errors, retries in-place with exponential backoff
+/// so the root supervisor's restart budget isn't burned during outages.
 fn start(
   discord_config: config.DiscordConfig,
   brain_subject: process.Subject(brain.BrainMessage),
+) -> Result(
+  actor.Started(process.Subject(gateway.GatewayMessage)),
+  actor.StartError,
+) {
+  connect_loop(discord_config, brain_subject, 0)
+}
+
+fn connect_loop(
+  discord_config: config.DiscordConfig,
+  brain_subject: process.Subject(brain.BrainMessage),
+  attempt: Int,
 ) -> Result(
   actor.Started(process.Subject(gateway.GatewayMessage)),
   actor.StartError,
@@ -39,7 +73,18 @@ fn start(
   case rest.get_gateway_url(token) {
     Error(e) -> {
       logging.log(logging.Error, "[poller] Failed to get gateway URL: " <> e)
-      Error(actor.InitTimeout)
+      case is_transient_network_error(e) {
+        True -> {
+          let delay = compute_backoff_ms(attempt)
+          logging.log(
+            logging.Info,
+            "[poller] Retrying in " <> int.to_string(delay) <> "ms",
+          )
+          process.sleep(delay)
+          connect_loop(discord_config, brain_subject, attempt + 1)
+        }
+        False -> Error(actor.InitTimeout)
+      }
     }
     Ok(gateway_url) -> {
       logging.log(logging.Info, "[poller] Gateway URL: " <> gateway_url)
@@ -106,7 +151,18 @@ fn start(
         }
         Error(e) -> {
           logging.log(logging.Error, "[poller] Gateway connect failed: " <> e)
-          Error(actor.InitTimeout)
+          case is_transient_network_error(e) {
+            True -> {
+              let delay = compute_backoff_ms(attempt)
+              logging.log(
+                logging.Info,
+                "[poller] Retrying in " <> int.to_string(delay) <> "ms",
+              )
+              process.sleep(delay)
+              connect_loop(discord_config, brain_subject, attempt + 1)
+            }
+            False -> Error(actor.InitTimeout)
+          }
         }
       }
     }
