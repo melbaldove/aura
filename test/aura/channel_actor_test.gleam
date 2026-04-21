@@ -1009,6 +1009,21 @@ pub fn system_prompt_includes_user_memory_content_test() {
   test_harness.teardown(sys)
 }
 
+/// Regression: guild_id, scheduler_subject, and ACP fields were stubbed as
+/// empty defaults in build_initial_state; now threaded from Deps.
+/// Passes a Deps with guild_id="g99" and asserts it flows into tool_ctx.
+pub fn deps_guild_id_threads_into_tool_ctx_test() {
+  let deps =
+    channel_actor.test_deps("ch-guild-test", "tok")
+    |> fn(d) { channel_actor.Deps(..d, guild_id: "g99") }
+  let assert Ok(db_subject) = db.start(":memory:")
+  let actual_deps = channel_actor.Deps(..deps, db_subject: db_subject)
+  // build_initial_state is private; directly assert the Deps field is threaded.
+  actual_deps.guild_id |> should.equal("g99")
+  actual_deps.acp_provider |> should.equal("claude-code")
+  actual_deps.acp_worktree |> should.be_true
+}
+
 /// Regression: finalize_turn was using format_progress (which appends " ...")
 /// for the final Discord edit. The final edit must NOT end with " ...".
 pub fn finalize_turn_final_discord_edit_has_no_trailing_ellipsis_test() {

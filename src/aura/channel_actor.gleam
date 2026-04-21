@@ -16,6 +16,7 @@ import aura/llm
 import aura/models
 import aura/review
 import aura/review_runner.{type ReviewRunner}
+import aura/scheduler
 import aura/shell
 import aura/skill
 import aura/structured_memory
@@ -191,8 +192,10 @@ pub type Deps {
   Deps(
     channel_id: String,
     discord_token: String,
+    guild_id: String,
     db_subject: process.Subject(db.DbMessage),
     acp_subject: process.Subject(flare_manager.FlareMsg),
+    scheduler_subject: option.Option(process.Subject(scheduler.SchedulerMessage)),
     paths: xdg.Paths,
     domain: option.Option(String),
     review_interval: Int,
@@ -210,6 +213,11 @@ pub type Deps {
     base_dir: String,
     domain_name: String,
     domain_cwd: String,
+    acp_provider: String,
+    acp_binary: String,
+    acp_worktree: Bool,
+    acp_server_url: String,
+    acp_agent_name: String,
     llm_config: llm.LlmConfig,
     vision_config: llm.LlmConfig,
     built_in_tools: List(llm.ToolDefinition),
@@ -241,7 +249,7 @@ fn build_initial_state(
     brain_tools.ToolContext(
       base_dir: deps.base_dir,
       discord_token: deps.discord_token,
-      guild_id: "",
+      guild_id: deps.guild_id,
       message_id: "",
       channel_id: deps.channel_id,
       paths: deps.paths,
@@ -249,15 +257,15 @@ fn build_initial_state(
       skills_dir: deps.skills_dir,
       validation_rules: deps.validation_rules,
       db_subject: deps.db_subject,
-      scheduler_subject: None,
+      scheduler_subject: deps.scheduler_subject,
       acp_subject: deps.acp_subject,
       domain_name: deps.domain_name,
       domain_cwd: deps.domain_cwd,
-      acp_provider: "",
-      acp_binary: "",
-      acp_worktree: False,
-      acp_server_url: "",
-      acp_agent_name: "",
+      acp_provider: deps.acp_provider,
+      acp_binary: deps.acp_binary,
+      acp_worktree: deps.acp_worktree,
+      acp_server_url: deps.acp_server_url,
+      acp_agent_name: deps.acp_agent_name,
       on_propose: fn(proposal) {
         process.send(self, RegisterProposal(proposal))
       },
@@ -331,8 +339,10 @@ pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
   Deps(
     channel_id: channel_id,
     discord_token: discord_token,
+    guild_id: "",
     db_subject: db_subject,
     acp_subject: acp_subject,
+    scheduler_subject: None,
     paths: paths,
     domain: None,
     review_interval: 0,
@@ -350,6 +360,11 @@ pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
     base_dir: "/tmp",
     domain_name: "",
     domain_cwd: "",
+    acp_provider: "claude-code",
+    acp_binary: "",
+    acp_worktree: True,
+    acp_server_url: "",
+    acp_agent_name: "",
     llm_config: dummy_llm_config(),
     vision_config: dummy_llm_config(),
     built_in_tools: [],

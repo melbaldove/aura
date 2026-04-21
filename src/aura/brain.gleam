@@ -829,12 +829,31 @@ fn build_channel_actor_deps(
     Error(_) -> llm.LlmConfig(base_url: "", api_key: "", model: "")
   }
 
+  // Resolve ACP fields from domain config, mirroring old build_llm_context logic.
+  let #(acp_provider, acp_binary, acp_worktree, acp_server_url, acp_agent_name) =
+    case domain_name {
+      Some(name) ->
+        case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
+          Ok(#(_, cfg)) -> #(
+            cfg.acp_provider,
+            cfg.acp_binary,
+            cfg.acp_worktree,
+            cfg.acp_server_url,
+            cfg.acp_agent_name,
+          )
+          Error(_) -> #("claude-code", "", True, "", "")
+        }
+      None -> #("claude-code", "", True, "", "")
+    }
+
   let domain_names = list.map(state.domains, fn(d) { d.name })
   channel_actor.Deps(
     channel_id: channel_id,
     discord_token: state.discord_token,
+    guild_id: state.guild_id,
     db_subject: state.db_subject,
     acp_subject: state.acp_subject,
+    scheduler_subject: state.scheduler_subject,
     paths: state.paths,
     domain: domain_name,
     review_interval: state.global_config.memory.review_interval,
@@ -852,6 +871,11 @@ fn build_channel_actor_deps(
     base_dir: base_dir,
     domain_name: option.unwrap(domain_name, ""),
     domain_cwd: domain_cwd,
+    acp_provider: acp_provider,
+    acp_binary: acp_binary,
+    acp_worktree: acp_worktree,
+    acp_server_url: acp_server_url,
+    acp_agent_name: acp_agent_name,
     llm_config: state.llm_config,
     vision_config: vision_llm_config,
     built_in_tools: state.built_in_tools,
