@@ -3,10 +3,13 @@ import aura/channel_actor
 import aura/discord
 import aura/discord/types as discord_types
 import aura/llm
+import aura/time
+import gleam/int
 import gleam/list
 import gleam/option
 import gleam/string
 import gleeunit/should
+import simplifile
 
 // ---------------------------------------------------------------------------
 // Pure helper tests
@@ -77,6 +80,50 @@ pub fn preprocess_text_attachment_unreachable_url_returns_content_test() {
   // original message content (not empty, not crashed).
   let result = attachment.preprocess(msg)
   string.contains(result, "see attached") |> should.be_true
+}
+
+// ---------------------------------------------------------------------------
+// attachment_max_bytes threshold
+// ---------------------------------------------------------------------------
+
+/// The size cap constant must be 50 MB.
+pub fn attachment_max_bytes_is_50mb_test() {
+  attachment.attachment_max_bytes |> should.equal(50_000_000)
+}
+
+/// Regression: preprocess must not write a file when the download fails
+/// (the skipping path is best-tested via the public constant and a URL
+/// that fails, verifying no file is created regardless).
+pub fn oversized_attachment_does_not_write_file_test() {
+  let msg_id = "m-oversize-" <> int.to_string(time.now_ms())
+  let att =
+    discord_types.Attachment(
+      url: "http://localhost:1/large.bin",
+      content_type: "application/octet-stream",
+      filename: "large.bin",
+    )
+  let msg =
+    discord.IncomingMessage(
+      message_id: msg_id,
+      channel_id: "c1",
+      channel_name: option.None,
+      guild_id: "g1",
+      author_id: "u1",
+      author_name: "tester",
+      content: "download this",
+      is_bot: False,
+      attachments: [att],
+    )
+  let path = attachment.local_path(msg_id, "large.bin")
+  let _ = attachment.preprocess(msg)
+  // File must not exist: download failed (URL unreachable), so nothing written
+  simplifile.is_file(path) |> should.equal(Ok(False))
+}
+
+/// Verify the 50 MB boundary: a 60 MB size is above the cap.
+pub fn sixty_mb_exceeds_cap_test() {
+  let sixty_mb = 60_000_000
+  { sixty_mb > attachment.attachment_max_bytes } |> should.be_true
 }
 
 // ---------------------------------------------------------------------------

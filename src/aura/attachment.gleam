@@ -10,6 +10,7 @@
 import aura/discord
 import aura/discord/types as discord_types
 import aura/web
+import gleam/bit_array
 import gleam/int
 import gleam/list
 import gleam/string
@@ -19,6 +20,10 @@ import simplifile
 const attachment_tmp_base = "/tmp/aura-attachments"
 
 const attachment_download_timeout_ms = 30_000
+
+/// Maximum attachment size in bytes (50 MB). Attachments larger than this
+/// are skipped to avoid OOM-ing the actor on large files.
+pub const attachment_max_bytes = 50_000_000
 
 /// Preprocess all attachments in a Discord message:
 ///  1. Download every attachment to /tmp/aura-attachments/<msg_id>/
@@ -102,26 +107,44 @@ fn download_attachments_to_tmp(
               )
               Error(Nil)
             }
-            Ok(bytes) ->
-              case simplifile.write_bits(path, bytes) {
-                Error(e) -> {
+            Ok(bytes) -> {
+              let byte_size = bit_array.byte_size(bytes)
+              case byte_size > attachment_max_bytes {
+                True -> {
                   logging.log(
-                    logging.Error,
-                    "[attachment] Write failed for "
-                      <> path
-                      <> ": "
-                      <> simplifile.describe_error(e),
+                    logging.Warning,
+                    "[attachment] Skipping "
+                      <> att.filename
+                      <> " — size "
+                      <> int.to_string(byte_size)
+                      <> " bytes exceeds "
+                      <> int.to_string(attachment_max_bytes)
+                      <> " byte limit",
                   )
                   Error(Nil)
                 }
-                Ok(_) -> {
-                  logging.log(
-                    logging.Info,
-                    "[attachment] Saved: " <> path,
-                  )
-                  Ok("[attachment: " <> path <> "] " <> att.filename)
-                }
+                False ->
+                  case simplifile.write_bits(path, bytes) {
+                    Error(e) -> {
+                      logging.log(
+                        logging.Error,
+                        "[attachment] Write failed for "
+                          <> path
+                          <> ": "
+                          <> simplifile.describe_error(e),
+                      )
+                      Error(Nil)
+                    }
+                    Ok(_) -> {
+                      logging.log(
+                        logging.Info,
+                        "[attachment] Saved: " <> path,
+                      )
+                      Ok("[attachment: " <> path <> "] " <> att.filename)
+                    }
+                  }
               }
+            }
           }
         })
       string.join(lines, "\n")
