@@ -1,7 +1,9 @@
 //// Per-channel actor that runs turns concurrently across channels.
 
 import aura/acp/flare_manager
+import aura/attachment
 import aura/brain_tools
+import aura/browser
 import aura/clients/browser_runner
 import aura/clients/discord_client
 import aura/clients/llm_client
@@ -1588,11 +1590,17 @@ fn start_turn(
 ) -> #(ChannelState, List(Effect)) {
   case work {
     PendingUserMessage(msg) -> {
-      let user_msg = llm.UserMessage(content: msg.content)
+      // Preprocess attachments synchronously: download to /tmp, inline text
+      // file content. This enriches the user message content before it ever
+      // reaches the LLM or is persisted. Best-effort — fails gracefully.
+      let enriched_content = attachment.preprocess(msg)
+      let user_msg = llm.UserMessage(content: enriched_content)
       let new_messages = [user_msg]
       let messages = list.append(state.conversation, new_messages)
       case has_image_attachment(msg) {
         True -> {
+          // Prefer the local copy as a data URL to avoid Discord CDN HMAC
+          // rejection. attachment.preprocess has already downloaded the file.
           let #(path, question) = first_image_and_question(msg)
           #(state_with_pending_vision(state, messages, new_messages, msg), [
             SpawnVisionWorker(path, question),
@@ -1600,11 +1608,10 @@ fn start_turn(
             ScheduleDeadline(600_000),
           ])
         }
-        False -> #(state_with_pending_stream(state, messages, new_messages, msg), [
-          SpawnStreamWorker(messages),
-          StartTyping,
-          ScheduleDeadline(600_000),
-        ])
+        False -> #(
+          state_with_pending_stream(state, messages, new_messages, msg),
+          [SpawnStreamWorker(messages), StartTyping, ScheduleDeadline(600_000)],
+        )
       }
     }
     PendingHandback(flare_id, session_name, result) -> {
@@ -1791,16 +1798,20 @@ fn has_image_attachment(msg: discord.IncomingMessage) -> Bool {
 }
 
 fn first_image_and_question(msg: discord.IncomingMessage) -> #(String, String) {
-  let first_url =
-    list.find_map(msg.attachments, fn(att) {
-      case vision.is_image_attachment(att) {
-        True -> Ok(att.url)
-        False -> Error(Nil)
-      }
-    })
-  let url = case first_url {
-    Ok(u) -> u
+  let first_att =
+    list.find(msg.attachments, fn(att) { vision.is_image_attachment(att) })
+  let url = case first_att {
     Error(_) -> ""
+    Ok(att) -> {
+      // Prefer the local copy downloaded by attachment.preprocess as a
+      // base64 data URL — Discord CDN URLs with HMAC query strings get
+      // rejected by some vision endpoints (e.g. GLM returns 400 on them).
+      let local = attachment.local_path(msg.message_id, att.filename)
+      case browser.read_as_data_url(local) {
+        Ok(data_url) -> data_url
+        Error(_) -> att.url
+      }
+    }
   }
   #(url, "Describe this image in detail for downstream tool use.")
 }
