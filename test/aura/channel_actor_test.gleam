@@ -4,8 +4,10 @@ import aura/channel_actor
 import aura/conversation
 import aura/db
 import aura/discord
+import aura/discord/types as discord_types
 import aura/llm
 import aura/time
+import aura/vision
 import aura/xdg
 import fakes/fake_discord
 import fakes/fake_llm
@@ -1225,4 +1227,56 @@ pub fn compression_complete_clears_in_flight_flag_test() {
       channel_actor.CompressionComplete([], new_comp_state, 0),
     )
   new_state.compression_in_flight |> should.be_false
+}
+
+// --- Fix 1: vision prompt from config (not hardcoded) -------------------------
+
+/// Regression: start_turn for a message with an image attachment must use the
+/// configured resolved_vision_config.prompt rather than the old hardcoded string.
+/// Construct a state with a known prompt and verify SpawnVisionWorker carries it.
+pub fn vision_spawn_uses_configured_prompt_test() {
+  let state = channel_actor.initial_state_for_test("ch-vision-prompt")
+  let custom_prompt = "Summarise this chart for data analysis."
+  let state_with_vision =
+    channel_actor.ChannelState(
+      ..state,
+      resolved_vision_config: vision.ResolvedVisionConfig(
+        model_spec: "fake-model",
+        prompt: custom_prompt,
+      ),
+    )
+  let msg =
+    discord.IncomingMessage(
+      message_id: "m-img",
+      channel_id: "ch-vision-prompt",
+      channel_name: option.None,
+      guild_id: "g1",
+      author_id: "u1",
+      author_name: "tester",
+      content: "check this chart",
+      is_bot: False,
+      attachments: [
+        discord_types.Attachment(
+          url: "https://example.com/chart.png",
+          filename: "chart.png",
+          content_type: "image/png",
+        ),
+      ],
+    )
+  let #(_new_state, effects) =
+    channel_actor.transition(
+      state_with_vision,
+      channel_actor.HandleIncoming(msg),
+    )
+  let vision_spawn_question =
+    list.find_map(effects, fn(e) {
+      case e {
+        channel_actor.SpawnVisionWorker(_path, question) -> Ok(question)
+        _ -> Error(Nil)
+      }
+    })
+  case vision_spawn_question {
+    Ok(q) -> q |> should.equal(custom_prompt)
+    Error(_) -> should.fail()
+  }
 }

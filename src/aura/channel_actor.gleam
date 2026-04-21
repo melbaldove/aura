@@ -176,6 +176,7 @@ pub type ChannelState {
     review_runner: ReviewRunner,
     llm_config: llm.LlmConfig,
     vision_config: llm.LlmConfig,
+    resolved_vision_config: vision.ResolvedVisionConfig,
     built_in_tools: List(llm.ToolDefinition),
     stream_spawn: StreamWorkerSpawn,
     tool_spawn: ToolWorkerSpawn,
@@ -331,6 +332,7 @@ fn build_initial_state(
     review_runner: deps.review_runner,
     llm_config: deps.llm_config,
     vision_config: deps.vision_config,
+    resolved_vision_config: deps.resolved_vision_config,
     built_in_tools: deps.built_in_tools,
     stream_spawn: deps.stream_spawn,
     tool_spawn: deps.tool_spawn,
@@ -519,6 +521,10 @@ fn build_initial_state_for_test(
     review_runner: review_runner.default(),
     llm_config: dummy_llm_config(),
     vision_config: dummy_llm_config(),
+    resolved_vision_config: vision.ResolvedVisionConfig(
+      model_spec: "",
+      prompt: "",
+    ),
     built_in_tools: [],
     stream_spawn: dummy_stream_spawn,
     tool_spawn: dummy_tool_spawn,
@@ -1633,7 +1639,11 @@ fn start_turn(
         True -> {
           // Prefer the local copy as a data URL to avoid Discord CDN HMAC
           // rejection. attachment.preprocess has already downloaded the file.
-          let #(path, question) = first_image_and_question(msg)
+          let #(path, question) =
+            first_image_and_question(
+              msg,
+              state.resolved_vision_config.prompt,
+            )
           #(state_with_pending_vision(state, messages, new_messages, msg), [
             SpawnVisionWorker(path, question),
             StartTyping,
@@ -1829,7 +1839,10 @@ fn has_image_attachment(msg: discord.IncomingMessage) -> Bool {
   list.any(msg.attachments, vision.is_image_attachment)
 }
 
-fn first_image_and_question(msg: discord.IncomingMessage) -> #(String, String) {
+fn first_image_and_question(
+  msg: discord.IncomingMessage,
+  prompt: String,
+) -> #(String, String) {
   let first_att =
     list.find(msg.attachments, fn(att) { vision.is_image_attachment(att) })
   let url = case first_att {
@@ -1845,7 +1858,11 @@ fn first_image_and_question(msg: discord.IncomingMessage) -> #(String, String) {
       }
     }
   }
-  #(url, "Describe this image in detail for downstream tool use.")
+  let question = case prompt {
+    "" -> "Describe this image in detail for downstream tool use."
+    q -> q
+  }
+  #(url, question)
 }
 
 fn new_turn_state(
