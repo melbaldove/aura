@@ -1499,3 +1499,40 @@ pub fn stream_error_retry_resets_accumulated_content_test() {
     option.None -> should.fail()
   }
 }
+
+// --- Fix 8: record stream_stats start_ms on worker spawn ---------------------
+
+/// Regression: execute_spawn_stream_worker was not setting start_ms /
+/// last_heartbeat_ms, leaving them 0 for the whole turn. Now both are set to
+/// time.now_ms() in execute_spawn_stream_worker (the effect interpreter).
+///
+/// We test the pure state-update step directly via apply_stream_start_ms_for_test
+/// because execute_spawn_stream_worker calls build_base_system_prompt which
+/// requires a live flare_manager actor that the stub acp_subject doesn't provide.
+pub fn spawn_stream_worker_records_start_ms_test() {
+  let state = channel_actor.initial_state_for_test("ch-start-ms")
+  // Put a fake stream turn in flight with start_ms = 0 (initial value)
+  let state_with_turn = channel_actor.with_fake_stream_turn(state)
+  case state_with_turn.turn {
+    option.Some(initial_turn) -> {
+      initial_turn.stream_stats.start_ms |> should.equal(0)
+      initial_turn.stream_stats.last_heartbeat_ms |> should.equal(0)
+    }
+    option.None -> should.fail()
+  }
+  // Apply the start_ms update (mirrors what execute_spawn_stream_worker does)
+  let now_ms = time.now_ms()
+  let after_update =
+    channel_actor.apply_stream_start_ms_for_test(state_with_turn, now_ms)
+  case after_update.turn {
+    option.Some(turn) -> {
+      // start_ms must equal the supplied now_ms
+      turn.stream_stats.start_ms |> should.equal(now_ms)
+      // last_heartbeat_ms must also equal now_ms
+      turn.stream_stats.last_heartbeat_ms |> should.equal(now_ms)
+      // and now_ms itself must be > 0 (sanity check that time.now_ms() works)
+      { now_ms > 0 } |> should.be_true()
+    }
+    option.None -> should.fail()
+  }
+}

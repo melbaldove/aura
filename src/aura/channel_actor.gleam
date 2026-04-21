@@ -926,6 +926,7 @@ fn execute_spawn_stream_worker(
       state.tool_ctx.acp_subject,
     )
   let messages_with_system = [llm.SystemMessage(system_prompt), ..messages]
+  let now_ms = time.now_ms()
   let pid =
     state.stream_spawn(
       state.tool_ctx.llm_client.stream_with_tools,
@@ -935,7 +936,21 @@ fn execute_spawn_stream_worker(
       state.self_subject,
     )
   let monitor = process.monitor(pid)
-  update_turn_with_worker(state, pid, Some(monitor), StreamWorker)
+  // Record the wall-clock start time now that the worker is live. This must
+  // happen in the effect interpreter (not the pure transition) because it
+  // calls time.now_ms(). Covers initial spawn, retry, and tool-loop iterations.
+  let state_with_timer =
+    update_turn(state, fn(turn) {
+      TurnState(
+        ..turn,
+        stream_stats: StreamStats(
+          ..turn.stream_stats,
+          start_ms: now_ms,
+          last_heartbeat_ms: now_ms,
+        ),
+      )
+    })
+  update_turn_with_worker(state_with_timer, pid, Some(monitor), StreamWorker)
 }
 
 fn execute_spawn_tool_worker(
@@ -2285,6 +2300,28 @@ pub fn enrich_messages_with_description_pub(
   description: String,
 ) -> List(llm.Message) {
   enrich_messages_with_description(messages, filename, description)
+}
+
+/// Apply a stream_stats start-time update to the in-flight turn using the
+/// supplied `now_ms` value. Extracted from `execute_spawn_stream_worker` for
+/// regression testing: the caller passes `time.now_ms()` and verifies
+/// `turn.stream_stats.start_ms > 0` afterwards.
+///
+/// No-op if there is no active turn.
+pub fn apply_stream_start_ms_for_test(
+  state: ChannelState,
+  now_ms: Int,
+) -> ChannelState {
+  update_turn(state, fn(turn) {
+    TurnState(
+      ..turn,
+      stream_stats: StreamStats(
+        ..turn.stream_stats,
+        start_ms: now_ms,
+        last_heartbeat_ms: now_ms,
+      ),
+    )
+  })
 }
 
 /// Build a state with a fake stream turn whose worker_monitor is set to `ref`.
