@@ -1326,7 +1326,16 @@ pub fn transition(
             2 -> 500
             _ -> 2000
           }
-          let new_turn = TurnState(..turn, stream_retry_count: new_retry)
+          // Reset streaming state on retry so stale partial content from the
+          // failed stream does not bleed into the new attempt.
+          let new_turn =
+            TurnState(
+              ..turn,
+              stream_retry_count: new_retry,
+              accumulated_content: "",
+              accumulated_tool_calls: [],
+              pending_tool_results: dict.new(),
+            )
           #(ChannelState(..state, turn: Some(new_turn)), [
             ScheduleRetry(turn.messages_at_llm_call, backoff_ms),
             LogStreamSummary(

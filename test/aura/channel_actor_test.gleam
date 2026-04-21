@@ -1455,3 +1455,47 @@ pub fn finalize_turn_stop_typing_before_discord_edit_test() {
     _, _ -> should.fail()
   }
 }
+
+// --- Fix 7: reset accumulated_content on StreamError retry -------------------
+
+/// Regression: StreamError retry preserved the stale accumulated_content from
+/// the failed stream. Now the retry turn must start clean with
+/// accumulated_content == "" so the new stream is not contaminated.
+pub fn stream_error_retry_resets_accumulated_content_test() {
+  let state = channel_actor.initial_state_for_test("ch-retry")
+  let incoming =
+    discord.IncomingMessage(
+      message_id: "m-retry",
+      channel_id: "ch-retry",
+      channel_name: option.None,
+      guild_id: "g1",
+      author_id: "u1",
+      author_name: "tester",
+      content: "hello",
+      is_bot: False,
+      attachments: [],
+    )
+  // Start a turn
+  let #(started, _) =
+    channel_actor.transition(state, channel_actor.HandleIncoming(incoming))
+  // Send a StreamDelta to accumulate some content
+  let #(with_delta, _) =
+    channel_actor.transition(
+      started,
+      channel_actor.StreamDelta("partial content"),
+    )
+  // Trigger a StreamError (retry_count < max_stream_retries=3, so retries)
+  let #(after_error, _effects) =
+    channel_actor.transition(
+      with_delta,
+      channel_actor.StreamError("network blip"),
+    )
+  // The turn must still be active (it retried, not failed)
+  case after_error.turn {
+    option.Some(turn) -> {
+      // accumulated_content must be reset to "" by the retry
+      turn.accumulated_content |> should.equal("")
+    }
+    option.None -> should.fail()
+  }
+}
