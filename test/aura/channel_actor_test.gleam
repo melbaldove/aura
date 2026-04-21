@@ -1229,6 +1229,54 @@ pub fn compression_complete_clears_in_flight_flag_test() {
   new_state.compression_in_flight |> should.be_false
 }
 
+/// Regression: WorkerDown for the compression monitor must reset
+/// compression_in_flight to False so compression is never silently disabled
+/// for the lifetime of the channel_actor after a worker crash.
+pub fn compression_worker_crash_resets_in_flight_test() {
+  let state = channel_actor.initial_state_for_test("comp-crash-ch")
+  let comp_ref = channel_actor.fake_monitor_ref()
+  let state_with_flag =
+    channel_actor.ChannelState(
+      ..state,
+      compression_in_flight: True,
+      compression_monitor: option.Some(comp_ref),
+    )
+  // Simulate a non-normal WorkerDown for the compression monitor
+  let #(new_state, effects) =
+    channel_actor.transition(
+      state_with_flag,
+      channel_actor.WorkerDown(comp_ref, "killed"),
+    )
+  // compression_in_flight must be reset to False
+  new_state.compression_in_flight |> should.be_false
+  // compression_monitor must be cleared
+  new_state.compression_monitor |> should.equal(option.None)
+  // No effects should be emitted (the failure is logged, not propagated)
+  effects |> should.equal([])
+}
+
+/// WorkerDown with "normal" reason for the compression monitor must only
+/// clear compression_monitor, not reset compression_in_flight (normal exit
+/// means CompressionComplete was already sent).
+pub fn compression_worker_normal_exit_clears_monitor_test() {
+  let state = channel_actor.initial_state_for_test("comp-normal-ch")
+  let comp_ref = channel_actor.fake_monitor_ref()
+  let state_with_flag =
+    channel_actor.ChannelState(
+      ..state,
+      compression_in_flight: True,
+      compression_monitor: option.Some(comp_ref),
+    )
+  let #(new_state, effects) =
+    channel_actor.transition(
+      state_with_flag,
+      channel_actor.WorkerDown(comp_ref, "normal"),
+    )
+  // Normal exit: monitor cleared but in_flight unchanged (CompressionComplete will arrive)
+  new_state.compression_monitor |> should.equal(option.None)
+  effects |> should.equal([])
+}
+
 // --- Fix 5: preserve author_name on UserTurn ------------------------------------
 
 /// Regression: finalize_turn was hardcoding author_name="" for UserTurn. Now

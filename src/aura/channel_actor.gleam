@@ -182,6 +182,7 @@ pub type ChannelState {
     soul: String,
     domain_names: List(String),
     compression_in_flight: Bool,
+    compression_monitor: Option(Monitor),
   )
 }
 
@@ -338,6 +339,7 @@ fn build_initial_state(
     soul: deps.soul,
     domain_names: deps.domain_names,
     compression_in_flight: False,
+    compression_monitor: None,
   )
 }
 
@@ -531,6 +533,7 @@ fn build_initial_state_for_test(
     soul: "",
     domain_names: [],
     compression_in_flight: False,
+    compression_monitor: None,
   )
 }
 
@@ -819,42 +822,48 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
         logging.Info,
         "[channel_actor] Full compression triggered for " <> cache_key,
       )
-      process.spawn_unlinked(fn() {
-        // Read domain files in the spawned process, not the actor
-        let #(a_md, s_md) = domain.load_context_files(paths, domain)
-        // Flush memories before compression discards messages
-        case models.build_llm_config(monitor_model) {
-          Ok(monitor_llm_config) ->
-            review.flush_before_compression(
-              monitor_llm_config,
+      let pid =
+        process.spawn(fn() {
+          // Read domain files in the spawned process, not the actor
+          let #(a_md, s_md) = domain.load_context_files(paths, domain)
+          // Flush memories before compression discards messages
+          case models.build_llm_config(monitor_model) {
+            Ok(monitor_llm_config) ->
+              review.flush_before_compression(
+                monitor_llm_config,
+                history,
+                domain,
+                paths,
+              )
+            Error(e) ->
+              logging.log(
+                logging.Info,
+                "[channel_actor] Flush skipped — monitor LLM config failed: " <> e,
+              )
+          }
+          let #(new_history, new_comp_state) =
+            conversation.compress_history(
               history,
+              llm_config,
+              comp_state,
               domain,
-              paths,
+              a_md,
+              s_md,
+              db_subject,
+              cache_key,
+              brain_context,
             )
-          Error(e) ->
-            logging.log(
-              logging.Info,
-              "[channel_actor] Flush skipped — monitor LLM config failed: " <> e,
-            )
-        }
-        let #(new_history, new_comp_state) =
-          conversation.compress_history(
-            history,
-            llm_config,
-            comp_state,
-            domain,
-            a_md,
-            s_md,
-            db_subject,
-            cache_key,
-            brain_context,
+          process.send(
+            self,
+            CompressionComplete(new_history, new_comp_state, snapshot_len),
           )
-        process.send(
-          self,
-          CompressionComplete(new_history, new_comp_state, snapshot_len),
-        )
-      })
-      ChannelState(..state, compression_in_flight: True)
+        })
+      let mon = process.monitor(pid)
+      ChannelState(
+        ..state,
+        compression_in_flight: True,
+        compression_monitor: Some(mon),
+      )
     }
   }
 }
@@ -1436,6 +1445,7 @@ pub fn transition(
           conversation: merged,
           compressor_state: new_comp_state,
           compression_in_flight: False,
+          compression_monitor: None,
         ),
         [],
       )
@@ -1443,35 +1453,96 @@ pub fn transition(
 
     // --- worker down translation -----------------------------------
     WorkerDown(ref, reason), Some(turn) -> {
-      case Some(ref) == turn.worker_monitor {
-        False -> {
-          // Stale DOWN from a superseded worker — ignore.
-          #(state, [])
-        }
+      // Check compression monitor first (orthogonal to turn worker).
+      case state.compression_monitor == Some(ref) {
         True -> {
           case reason {
-            "normal" -> #(state, [])
-            _ ->
-              case turn.worker_kind {
-                StreamWorker ->
-                  transition(state, StreamError("worker crashed: " <> reason))
-                ToolWorker(_, call_id) ->
-                  transition(
-                    state,
-                    ToolResult(
-                      call_id,
-                      "Error: worker crashed: " <> reason,
-                      True,
-                    ),
-                  )
-                VisionWorker ->
-                  transition(state, VisionError("crashed: " <> reason))
-              }
+            "normal" -> #(
+              ChannelState(..state, compression_monitor: None),
+              [],
+            )
+            _ -> {
+              logging.log(
+                logging.Error,
+                "[channel_actor] Compression worker crashed ("
+                  <> reason
+                  <> ") for "
+                  <> state.channel_id
+                  <> " — resetting compression_in_flight",
+              )
+              #(
+                ChannelState(
+                  ..state,
+                  compression_in_flight: False,
+                  compression_monitor: None,
+                ),
+                [],
+              )
+            }
           }
         }
+        False ->
+          case Some(ref) == turn.worker_monitor {
+            False -> {
+              // Stale DOWN from a superseded worker — ignore.
+              #(state, [])
+            }
+            True -> {
+              case reason {
+                "normal" -> #(state, [])
+                _ ->
+                  case turn.worker_kind {
+                    StreamWorker ->
+                      transition(state, StreamError("worker crashed: " <> reason))
+                    ToolWorker(_, call_id) ->
+                      transition(
+                        state,
+                        ToolResult(
+                          call_id,
+                          "Error: worker crashed: " <> reason,
+                          True,
+                        ),
+                      )
+                    VisionWorker ->
+                      transition(state, VisionError("crashed: " <> reason))
+                  }
+              }
+            }
+          }
       }
     }
-    WorkerDown(_, _), None -> #(state, [])
+    WorkerDown(ref, reason), None -> {
+      // No turn in flight, but a compression worker might be running.
+      case state.compression_monitor == Some(ref) {
+        True -> {
+          case reason {
+            "normal" -> #(
+              ChannelState(..state, compression_monitor: None),
+              [],
+            )
+            _ -> {
+              logging.log(
+                logging.Error,
+                "[channel_actor] Compression worker crashed ("
+                  <> reason
+                  <> ") for "
+                  <> state.channel_id
+                  <> " — resetting compression_in_flight",
+              )
+              #(
+                ChannelState(
+                  ..state,
+                  compression_in_flight: False,
+                  compression_monitor: None,
+                ),
+                [],
+              )
+            }
+          }
+        }
+        False -> #(state, [])
+      }
+    }
 
     // --- handback ---------------------------------------------------
     HandleHandback(flare_id, session_name, result), None ->
@@ -1566,8 +1637,6 @@ pub fn transition(
           }
       }
     }
-
-    _, _ -> #(state, [])
   }
 }
 
