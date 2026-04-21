@@ -184,6 +184,7 @@ pub type ChannelState {
     brain_context: Int,
     soul: String,
     domain_names: List(String),
+    compression_in_flight: Bool,
   )
 }
 
@@ -338,6 +339,7 @@ fn build_initial_state(
     brain_context: deps.brain_context,
     soul: deps.soul,
     domain_names: deps.domain_names,
+    compression_in_flight: False,
   )
 }
 
@@ -525,6 +527,7 @@ fn build_initial_state_for_test(
     brain_context: 128_000,
     soul: "",
     domain_names: [],
+    compression_in_flight: False,
   )
 }
 
@@ -848,7 +851,7 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
           CompressionComplete(new_history, new_comp_state, snapshot_len),
         )
       })
-      state
+      ChannelState(..state, compression_in_flight: True)
     }
   }
 }
@@ -1379,6 +1382,7 @@ pub fn transition(
           ..state,
           conversation: merged,
           compressor_state: new_comp_state,
+          compression_in_flight: False,
         ),
         [],
       )
@@ -2001,24 +2005,31 @@ fn finalize_turn(
   // Resolve domain name for compression context loading.
   let resolved_domain = option.unwrap(state.domain, default_domain)
   // Emit compression effects after DbSaveExchange.
-  let compression_effects = case
-    conversation.needs_full_compression(
-      full_history,
-      state.brain_context,
-      effective_tokens,
-    )
-  {
-    True -> [SpawnCompression(resolved_domain, full_history)]
+  // If a compression is already running, skip SpawnCompression to avoid
+  // the concurrent-compression race (the in-flight process will complete
+  // and clear the flag; the next turn can trigger if still needed).
+  let compression_effects = case state.compression_in_flight {
+    True -> []
     False ->
       case
-        conversation.needs_tool_pruning(
+        conversation.needs_full_compression(
           full_history,
           state.brain_context,
           effective_tokens,
         )
       {
-        True -> [PruneToolOutputs]
-        False -> []
+        True -> [SpawnCompression(resolved_domain, full_history)]
+        False ->
+          case
+            conversation.needs_tool_pruning(
+              full_history,
+              state.brain_context,
+              effective_tokens,
+            )
+          {
+            True -> [PruneToolOutputs]
+            False -> []
+          }
       }
   }
   let base_effects = [

@@ -1177,3 +1177,52 @@ pub fn worker_down_matching_ref_dispatches_stream_error_test() {
     option.None -> should.fail()
   }
 }
+
+// --- Fix 3: mutex concurrent compressions via in_flight flag ------------------
+
+/// Regression: when compression_in_flight is True, finalize_turn must NOT
+/// emit SpawnCompression even when needs_full_compression would return True.
+pub fn finalize_turn_skips_compression_when_in_flight_test() {
+  let state = channel_actor.initial_state_for_test("comp-mutex-ch")
+  // Set compression_in_flight = True and a conversation large enough that
+  // needs_full_compression would normally trigger.
+  // We use a tiny brain_context (1) to force the threshold to be breached.
+  let state_with_flag =
+    channel_actor.ChannelState(
+      ..state,
+      compression_in_flight: True,
+      brain_context: 1,
+      compressor_state: conversation.CompressorState(
+        ..state.compressor_state,
+        last_prompt_tokens: 9999,
+      ),
+    )
+  let with_stream = channel_actor.with_fake_stream_turn(state_with_flag)
+  let #(_, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("done", "[]", 9999),
+    )
+  // No SpawnCompression should be emitted while in_flight is True
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.SpawnCompression(_, _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+}
+
+/// Regression: CompressionComplete must reset compression_in_flight to False.
+pub fn compression_complete_clears_in_flight_flag_test() {
+  let state = channel_actor.initial_state_for_test("comp-flag-ch")
+  let state_with_flag =
+    channel_actor.ChannelState(..state, compression_in_flight: True)
+  let new_comp_state = conversation.new_compressor_state()
+  let #(new_state, _) =
+    channel_actor.transition(
+      state_with_flag,
+      channel_actor.CompressionComplete([], new_comp_state, 0),
+    )
+  new_state.compression_in_flight |> should.be_false
+}
