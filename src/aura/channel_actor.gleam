@@ -74,11 +74,6 @@ pub type VisionWorkerSpawn =
 pub type ChannelMessage {
   HandleIncoming(discord.IncomingMessage)
   HandleHandback(flare_id: String, session_name: String, result: String)
-  HandleInteraction(
-    interaction_id: String,
-    interaction_token: String,
-    custom_id: String,
-  )
   Cancel
 
   VisionComplete(filename: String, description: String)
@@ -1878,17 +1873,6 @@ pub fn assemble_system_prompt(
   }
 
   base <> fs_section <> flare_context
-}
-
-/// Build the message list to send to the LLM for this turn. Does NOT prepend
-/// a SystemMessage here — that is added by the effect interpreter in
-/// `execute_spawn_stream_worker`, which can safely call `flare_manager.list_sessions`
-/// without breaking the purity of `transition`.
-fn build_llm_messages(
-  state: ChannelState,
-  msg: discord.IncomingMessage,
-) -> List(llm.Message) {
-  list.append(state.conversation, [llm.UserMessage(content: msg.content)])
 }
 
 fn has_image_attachment(msg: discord.IncomingMessage) -> Bool {
