@@ -88,6 +88,8 @@ pub type ChannelMessage {
   StreamComplete(content: String, tool_calls_json: String, prompt_tokens: Int)
   StreamError(reason: String)
 
+  RetryStream(messages: List(llm.Message))
+
   ToolResult(call_id: String, result: String, is_error: Bool)
 
   CompressionComplete(
@@ -793,6 +795,10 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       }
       ChannelState(..state, conversation: pruned)
     }
+    ScheduleRetry(messages, delay_ms) -> {
+      let _ = process.send_after(state.self_subject, delay_ms, RetryStream(messages))
+      state
+    }
     SpawnCompression(domain, history) -> {
       let snapshot_len = list.length(history)
       let paths = state.paths
@@ -892,23 +898,6 @@ fn execute_spawn_stream_worker(
   state: ChannelState,
   messages: List(llm.Message),
 ) -> ChannelState {
-  // If this is a retry, apply exponential backoff before spawning. The
-  // transition has already incremented stream_retry_count, so 1 = first
-  // retry (0ms), 2 = second (500ms), 3+ = 2s.
-  let backoff_ms = case state.turn {
-    Some(turn) ->
-      case turn.stream_retry_count {
-        0 -> 0
-        1 -> 0
-        2 -> 500
-        _ -> 2000
-      }
-    None -> 0
-  }
-  case backoff_ms > 0 {
-    True -> process.sleep(backoff_ms)
-    False -> Nil
-  }
   // Prepend the assembled system prompt as a SystemMessage. This is done
   // here in the effect interpreter (not in the pure transition) so that the
   // flare_manager.list_sessions call doesn't break pure unit tests that use
@@ -1077,6 +1066,7 @@ pub type Effect {
   UpdateCompressorTokens(prompt_tokens: Int)
   PruneToolOutputs
   SpawnCompression(domain: String, history: List(llm.Message))
+  ScheduleRetry(messages: List(llm.Message), delay_ms: Int)
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,9 +1271,14 @@ pub fn transition(
       case turn.stream_retry_count < max_stream_retries {
         True -> {
           let new_retry = turn.stream_retry_count + 1
+          let backoff_ms = case new_retry {
+            1 -> 0
+            2 -> 500
+            _ -> 2000
+          }
           let new_turn = TurnState(..turn, stream_retry_count: new_retry)
           #(ChannelState(..state, turn: Some(new_turn)), [
-            SpawnStreamWorker(turn.messages_at_llm_call),
+            ScheduleRetry(turn.messages_at_llm_call, backoff_ms),
             LogStreamSummary(
               turn.stream_stats,
               "retry-" <> int.to_string(new_retry),
@@ -1300,6 +1295,14 @@ pub fn transition(
       }
     }
     StreamError(_), None -> #(state, [])
+
+    // --- scheduled retry (non-blocking backoff) --------------------
+    RetryStream(messages), Some(_) -> {
+      // The backoff delay has already elapsed via send_after. Spawn the
+      // worker directly — no further backoff here.
+      #(state, [SpawnStreamWorker(messages)])
+    }
+    RetryStream(_), None -> #(state, [])
 
     // --- cancel + deadline -----------------------------------------
     Cancel, Some(turn) -> {

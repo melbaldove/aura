@@ -331,13 +331,22 @@ pub fn stream_error_retries_up_to_max_test() {
       with_stream,
       channel_actor.StreamError("rate limit"),
     )
+  // StreamError now emits ScheduleRetry (non-blocking), not SpawnStreamWorker
+  list.any(effects1, fn(e) {
+    case e {
+      channel_actor.ScheduleRetry(_, _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+  // No immediate SpawnStreamWorker on StreamError
   list.any(effects1, fn(e) {
     case e {
       channel_actor.SpawnStreamWorker(_) -> True
       _ -> False
     }
   })
-  |> should.be_true
+  |> should.be_false
   case s1.turn {
     option.Some(t) -> t.stream_retry_count |> should.equal(1)
     option.None -> should.fail()
@@ -401,14 +410,27 @@ pub fn worker_down_stream_translates_to_stream_error_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
   let ref = channel_actor.fake_monitor_ref()
+  // Attach the fake monitor ref to the turn so WorkerDown matches it
+  let with_monitor = case with_stream.turn {
+    option.Some(t) ->
+      channel_actor.ChannelState(
+        ..with_stream,
+        turn: option.Some(channel_actor.TurnState(
+          ..t,
+          worker_monitor: option.Some(ref),
+        )),
+      )
+    option.None -> with_stream
+  }
   let #(new_state, effects) =
     channel_actor.transition(
-      with_stream,
+      with_monitor,
       channel_actor.WorkerDown(ref, "killed"),
     )
+  // WorkerDown translates to StreamError, which now emits ScheduleRetry
   list.any(effects, fn(e) {
     case e {
-      channel_actor.SpawnStreamWorker(_) -> True
+      channel_actor.ScheduleRetry(_, _) -> True
       _ -> False
     }
   })
@@ -1050,4 +1072,68 @@ pub fn finalize_turn_final_discord_edit_has_no_trailing_ellipsis_test() {
   // None of the final DiscordEdit bodies should end with " ..."
   list.all(discord_edits, fn(body) { !string.ends_with(body, " ...") })
   |> should.be_true
+}
+
+// --- Fix 1: non-blocking stream retry backoff -----------------------------------
+
+/// Regression: StreamError with retry_count=2 (third attempt triggers 500ms
+/// backoff) must emit ScheduleRetry(_, 500), not SpawnStreamWorker directly.
+pub fn stream_error_retry_count_2_emits_schedule_retry_500ms_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  // retry_count=2 means the NEXT retry (3rd attempt) uses 500ms backoff.
+  // The backoff is: retry 1→0ms, retry 2→500ms, retry 3+→2000ms.
+  // With current retry_count=1, new_retry=2, backoff=500ms.
+  let with_stream = channel_actor.with_fake_stream_turn_at_retry(state, 1)
+  let #(_, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamError("rate limit"),
+    )
+  // Must contain ScheduleRetry with 500ms delay
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.ScheduleRetry(_, 500) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+  // Must NOT contain a direct SpawnStreamWorker
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+}
+
+/// RetryStream message spawns a stream worker directly (backoff already elapsed).
+pub fn retry_stream_message_spawns_stream_worker_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let messages = [llm.UserMessage("test")]
+  let #(_, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.RetryStream(messages),
+    )
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
+/// RetryStream when idle is a no-op.
+pub fn retry_stream_when_idle_is_noop_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let #(new_state, effects) =
+    channel_actor.transition(
+      state,
+      channel_actor.RetryStream([llm.UserMessage("test")]),
+    )
+  effects |> should.equal([])
+  new_state.turn |> should.equal(option.None)
 }
