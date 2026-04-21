@@ -823,7 +823,7 @@ fn build_channel_actor_deps(
   let resolved_vision =
     vision.resolve_vision_config(state.global_config, domain_cfg_opt)
 
-  // Resolve ACP fields from domain config, mirroring old build_llm_context logic.
+  // Resolve ACP fields from domain config.
   let #(acp_provider, acp_binary, acp_worktree, acp_server_url, acp_agent_name) =
     case domain_name {
       Some(name) ->

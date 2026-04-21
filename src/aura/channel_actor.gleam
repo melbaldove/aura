@@ -84,7 +84,8 @@ pub type ChannelMessage {
   StreamComplete(content: String, tool_calls_json: String, prompt_tokens: Int)
   StreamError(reason: String)
 
-  RetryStream(messages: List(llm.Message))
+  /// Internal self-send. Sent via send_after after the stream backoff; callers must not send externally.
+  RetryStream
 
   ToolResult(call_id: String, result: String, is_error: Bool)
 
@@ -799,8 +800,8 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       }
       ChannelState(..state, conversation: pruned)
     }
-    ScheduleRetry(messages, delay_ms) -> {
-      let _ = process.send_after(state.self_subject, delay_ms, RetryStream(messages))
+    ScheduleRetry(_, delay_ms) -> {
+      let _ = process.send_after(state.self_subject, delay_ms, RetryStream)
       state
     }
     SpawnCompression(domain, history) -> {
@@ -1378,12 +1379,12 @@ pub fn transition(
     StreamError(_), None -> #(state, [])
 
     // --- scheduled retry (non-blocking backoff) --------------------
-    RetryStream(messages), Some(_) -> {
+    RetryStream, Some(turn) -> {
       // The backoff delay has already elapsed via send_after. Spawn the
       // worker directly — no further backoff here.
-      #(state, [SpawnStreamWorker(messages)])
+      #(state, [SpawnStreamWorker(turn.messages_at_llm_call)])
     }
-    RetryStream(_), None -> #(state, [])
+    RetryStream, None -> #(state, [])
 
     // --- cancel + deadline -----------------------------------------
     Cancel, Some(turn) -> {
@@ -2221,6 +2222,13 @@ fn finalize_turn(
 pub fn initial_state_for_test(channel_id: String) -> ChannelState {
   let deps = TestDeps(channel_id: channel_id, discord_token: "")
   build_initial_state_for_test(deps, process.new_subject())
+}
+
+/// Build a real `ChannelState` from a `Deps` record for testing.
+/// Uses the same code path as the production `start/1` so that field
+/// threading (e.g. guild_id → tool_ctx.guild_id) can be verified directly.
+pub fn initial_state_from_deps_for_test(deps: Deps) -> ChannelState {
+  build_initial_state(deps, process.new_subject())
 }
 
 /// Build a state with a fake in-flight turn. Used to exercise the "busy"

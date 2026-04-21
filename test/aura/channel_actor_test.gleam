@@ -1026,15 +1026,18 @@ pub fn system_prompt_includes_user_memory_content_test() {
 /// empty defaults in build_initial_state; now threaded from Deps.
 /// Passes a Deps with guild_id="g99" and asserts it flows into tool_ctx.
 pub fn deps_guild_id_threads_into_tool_ctx_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
   let deps =
     channel_actor.test_deps("ch-guild-test", "tok")
-    |> fn(d) { channel_actor.Deps(..d, guild_id: "g99") }
-  let assert Ok(db_subject) = db.start(":memory:")
-  let actual_deps = channel_actor.Deps(..deps, db_subject: db_subject)
-  // build_initial_state is private; directly assert the Deps field is threaded.
-  actual_deps.guild_id |> should.equal("g99")
-  actual_deps.acp_provider |> should.equal("claude-code")
-  actual_deps.acp_worktree |> should.be_true
+    |> fn(d) {
+      channel_actor.Deps(..d, guild_id: "g99", db_subject: db_subject)
+    }
+  // Build a real ChannelState using the production build_initial_state path
+  // to verify that guild_id is threaded through to tool_ctx.guild_id.
+  let state = channel_actor.initial_state_from_deps_for_test(deps)
+  state.tool_ctx.guild_id |> should.equal("g99")
+  state.tool_ctx.acp_provider |> should.equal("claude-code")
+  state.tool_ctx.acp_worktree |> should.be_true
 }
 
 /// Regression: finalize_turn was using format_progress (which appends " ...")
@@ -1065,7 +1068,7 @@ pub fn finalize_turn_final_discord_edit_has_no_trailing_ellipsis_test() {
   |> should.be_true
 }
 
-// --- Fix 1: non-blocking stream retry backoff -----------------------------------
+// --- non-blocking stream retry backoff -----------------------------------
 
 /// Regression: StreamError with retry_count=2 (third attempt triggers 500ms
 /// backoff) must emit ScheduleRetry(_, 500), not SpawnStreamWorker directly.
@@ -1102,11 +1105,10 @@ pub fn stream_error_retry_count_2_emits_schedule_retry_500ms_test() {
 pub fn retry_stream_message_spawns_stream_worker_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
-  let messages = [llm.UserMessage("test")]
   let #(_, effects) =
     channel_actor.transition(
       with_stream,
-      channel_actor.RetryStream(messages),
+      channel_actor.RetryStream,
     )
   list.any(effects, fn(e) {
     case e {
@@ -1123,13 +1125,13 @@ pub fn retry_stream_when_idle_is_noop_test() {
   let #(new_state, effects) =
     channel_actor.transition(
       state,
-      channel_actor.RetryStream([llm.UserMessage("test")]),
+      channel_actor.RetryStream,
     )
   effects |> should.equal([])
   new_state.turn |> should.equal(option.None)
 }
 
-// --- Fix 2: WorkerDown ref-check + demonitor on worker swap -------------------
+// --- WorkerDown ref-check + demonitor on worker swap -------------------
 
 /// Regression: WorkerDown with a ref that does NOT match turn.worker_monitor
 /// must be silently ignored (stale DOWN from superseded worker).
@@ -1180,7 +1182,7 @@ pub fn worker_down_matching_ref_dispatches_stream_error_test() {
   }
 }
 
-// --- Fix 3: mutex concurrent compressions via in_flight flag ------------------
+// --- mutex concurrent compressions via in_flight flag ------------------
 
 /// Regression: when compression_in_flight is True, finalize_turn must NOT
 /// emit SpawnCompression even when needs_full_compression would return True.
@@ -1277,7 +1279,7 @@ pub fn compression_worker_normal_exit_clears_monitor_test() {
   effects |> should.equal([])
 }
 
-// --- Fix 5: preserve author_name on UserTurn ------------------------------------
+// --- preserve author_name on UserTurn ------------------------------------
 
 /// Regression: finalize_turn was hardcoding author_name="" for UserTurn. Now
 /// it reads author_name from turn.kind. Verify that DbSaveExchange carries
@@ -1319,7 +1321,7 @@ pub fn finalize_turn_preserves_author_name_test() {
   }
 }
 
-// --- Fix 3: max 80 tool iterations guard --------------------------------------
+// --- max 80 tool iterations guard --------------------------------------
 
 /// Regression: ToolResult that resolves all tool calls when turn.iteration
 /// is already 79 (so iteration + 1 = 80 >= max_tool_iterations) must fail
@@ -1374,7 +1376,7 @@ pub fn tool_result_below_max_iterations_spawns_stream_test() {
   |> should.be_true
 }
 
-// --- Fix 2: image prefix format + position matches sync path -------------------
+// --- image prefix format + position -------------------
 
 /// Regression: enrich_messages_with_description must PREPEND
 /// "[Image <filename>: <desc>]\n\n" BEFORE the original content, not append after.
@@ -1394,7 +1396,7 @@ pub fn enrich_messages_prepend_with_filename_test() {
   }
 }
 
-// --- Fix 1: vision prompt from config (not hardcoded) -------------------------
+// --- vision prompt from config (not hardcoded) -------------------------
 
 /// Regression: start_turn for a message with an image attachment must use the
 /// configured resolved_vision_config.prompt rather than the old hardcoded string.
@@ -1447,7 +1449,7 @@ pub fn vision_spawn_uses_configured_prompt_test() {
   }
 }
 
-// --- Fix 6: StopTyping before DiscordEdit in finalize_turn -------------------
+// --- StopTyping before DiscordEdit in finalize_turn -------------------
 
 /// Regression: finalize_turn was appending StopTyping after DiscordEdit.
 /// Now StopTyping must appear before DiscordEdit in the effect list so the
@@ -1504,7 +1506,7 @@ pub fn finalize_turn_stop_typing_before_discord_edit_test() {
   }
 }
 
-// --- Fix 7: reset accumulated_content on StreamError retry -------------------
+// --- reset accumulated_content on StreamError retry -------------------
 
 /// Regression: StreamError retry preserved the stale accumulated_content from
 /// the failed stream. Now the retry turn must start clean with
@@ -1548,7 +1550,7 @@ pub fn stream_error_retry_resets_accumulated_content_test() {
   }
 }
 
-// --- Fix 8: record stream_stats start_ms on worker spawn ---------------------
+// --- record stream_stats start_ms on worker spawn ---------------------
 
 /// Regression: execute_spawn_stream_worker was not setting start_ms /
 /// last_heartbeat_ms, leaving them 0 for the whole turn. Now both are set to

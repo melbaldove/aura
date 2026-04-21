@@ -66,7 +66,7 @@ pub fn preprocess_text_attachment_unreachable_url_returns_content_test() {
     )
   let msg =
     discord.IncomingMessage(
-      message_id: "m-attach-test",
+      message_id: "m-attach-test-" <> int.to_string(time.now_ms()),
       channel_id: "c1",
       channel_name: option.None,
       guild_id: "g1",
@@ -138,7 +138,7 @@ pub fn start_turn_user_message_content_from_preprocess_test() {
   let state = channel_actor.initial_state_for_test("ch-att-test")
   let msg =
     discord.IncomingMessage(
-      message_id: "att-m1",
+      message_id: "att-m1-" <> int.to_string(time.now_ms()),
       channel_id: "ch-att-test",
       channel_name: option.None,
       guild_id: "g1",
