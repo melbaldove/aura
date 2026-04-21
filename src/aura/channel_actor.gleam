@@ -109,7 +109,7 @@ pub type ChannelMessage {
 }
 
 pub type TurnKind {
-  UserTurn(message_id: String, author_id: String)
+  UserTurn(message_id: String, author_id: String, author_name: String)
   HandbackTurn(flare_id: String, session_name: String)
 }
 
@@ -1936,7 +1936,12 @@ fn state_with_pending_vision(
   new_messages: List(llm.Message),
   msg: discord.IncomingMessage,
 ) -> ChannelState {
-  let kind = UserTurn(message_id: msg.message_id, author_id: msg.author_id)
+  let kind =
+    UserTurn(
+      message_id: msg.message_id,
+      author_id: msg.author_id,
+      author_name: msg.author_name,
+    )
   let turn = new_turn_state(kind, VisionWorker, messages, new_messages)
   ChannelState(..state, turn: Some(turn))
 }
@@ -1947,7 +1952,12 @@ fn state_with_pending_stream(
   new_messages: List(llm.Message),
   msg: discord.IncomingMessage,
 ) -> ChannelState {
-  let kind = UserTurn(message_id: msg.message_id, author_id: msg.author_id)
+  let kind =
+    UserTurn(
+      message_id: msg.message_id,
+      author_id: msg.author_id,
+      author_name: msg.author_name,
+    )
   let turn = new_turn_state(kind, StreamWorker, messages, new_messages)
   ChannelState(..state, turn: Some(turn))
 }
@@ -2028,7 +2038,7 @@ fn finalize_turn(
   let final_messages =
     list.append(turn.new_messages, [llm.AssistantMessage(content)])
   let #(author_id, author_name) = case turn.kind {
-    UserTurn(_, aid) -> #(aid, "")
+    UserTurn(_, aid, aname) -> #(aid, aname)
     HandbackTurn(_, _) -> #("aura", "Aura")
   }
   let full_history = list.append(state.conversation, final_messages)
@@ -2232,7 +2242,7 @@ pub fn with_fake_handback_turn(
 
 fn fresh_fake_turn(worker_kind: WorkerKind) -> TurnState {
   TurnState(
-    kind: UserTurn(message_id: "fake", author_id: "fake"),
+    kind: UserTurn(message_id: "fake", author_id: "fake", author_name: ""),
     discord_msg_id: "",
     started_at: 0,
     iteration: 0,

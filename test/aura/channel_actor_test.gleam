@@ -1229,6 +1229,48 @@ pub fn compression_complete_clears_in_flight_flag_test() {
   new_state.compression_in_flight |> should.be_false
 }
 
+// --- Fix 5: preserve author_name on UserTurn ------------------------------------
+
+/// Regression: finalize_turn was hardcoding author_name="" for UserTurn. Now
+/// it reads author_name from turn.kind. Verify that DbSaveExchange carries
+/// the author_name that was set when the turn was started.
+pub fn finalize_turn_preserves_author_name_test() {
+  let state = channel_actor.initial_state_for_test("ch-author")
+  let incoming =
+    discord.IncomingMessage(
+      message_id: "m-alice",
+      channel_id: "ch-author",
+      channel_name: option.None,
+      guild_id: "g1",
+      author_id: "u-alice",
+      author_name: "Alice",
+      content: "hello",
+      is_bot: False,
+      attachments: [],
+    )
+  // Start the turn — this populates author_name in UserTurn
+  let #(started, _) =
+    channel_actor.transition(state, channel_actor.HandleIncoming(incoming))
+  // Finalize the turn
+  let #(_finalized, effects) =
+    channel_actor.transition(
+      started,
+      channel_actor.StreamComplete("reply", "[]", 100),
+    )
+  // DbSaveExchange must carry author_name: "Alice"
+  let author_name_in_db =
+    list.find_map(effects, fn(e) {
+      case e {
+        channel_actor.DbSaveExchange(_, _, name, _) -> Ok(name)
+        _ -> Error(Nil)
+      }
+    })
+  case author_name_in_db {
+    Ok(name) -> name |> should.equal("Alice")
+    Error(_) -> should.fail()
+  }
+}
+
 // --- Fix 3: max 80 tool iterations guard --------------------------------------
 
 /// Regression: ToolResult that resolves all tool calls when turn.iteration
