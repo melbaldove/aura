@@ -822,12 +822,6 @@ fn build_channel_actor_deps(
   }
   let resolved_vision =
     vision.resolve_vision_config(state.global_config, domain_cfg_opt)
-  let vision_llm_config = case
-    models.build_llm_config(resolved_vision.model_spec)
-  {
-    Ok(cfg) -> cfg
-    Error(_) -> llm.LlmConfig(base_url: "", api_key: "", model: "")
-  }
 
   // Resolve ACP fields from domain config, mirroring old build_llm_context logic.
   let #(acp_provider, acp_binary, acp_worktree, acp_server_url, acp_agent_name) =
@@ -877,7 +871,6 @@ fn build_channel_actor_deps(
     acp_server_url: acp_server_url,
     acp_agent_name: acp_agent_name,
     llm_config: state.llm_config,
-    vision_config: vision_llm_config,
     resolved_vision_config: resolved_vision,
     built_in_tools: state.built_in_tools,
     stream_spawn: stream_worker.spawn,

@@ -171,7 +171,6 @@ pub type ChannelState {
     monitor_model: String,
     review_runner: ReviewRunner,
     llm_config: llm.LlmConfig,
-    vision_config: llm.LlmConfig,
     resolved_vision_config: vision.ResolvedVisionConfig,
     built_in_tools: List(llm.ToolDefinition),
     stream_spawn: StreamWorkerSpawn,
@@ -222,7 +221,6 @@ pub type Deps {
     acp_server_url: String,
     acp_agent_name: String,
     llm_config: llm.LlmConfig,
-    vision_config: llm.LlmConfig,
     resolved_vision_config: vision.ResolvedVisionConfig,
     built_in_tools: List(llm.ToolDefinition),
     stream_spawn: StreamWorkerSpawn,
@@ -328,7 +326,6 @@ fn build_initial_state(
     monitor_model: deps.monitor_model,
     review_runner: deps.review_runner,
     llm_config: deps.llm_config,
-    vision_config: deps.vision_config,
     resolved_vision_config: deps.resolved_vision_config,
     built_in_tools: deps.built_in_tools,
     stream_spawn: deps.stream_spawn,
@@ -391,7 +388,6 @@ pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
     acp_server_url: "",
     acp_agent_name: "",
     llm_config: dummy_llm_config(),
-    vision_config: dummy_llm_config(),
     resolved_vision_config: vision.ResolvedVisionConfig(
       model_spec: "",
       prompt: "",
@@ -519,7 +515,6 @@ fn build_initial_state_for_test(
     monitor_model: "",
     review_runner: review_runner.default(),
     llm_config: dummy_llm_config(),
-    vision_config: dummy_llm_config(),
     resolved_vision_config: vision.ResolvedVisionConfig(
       model_spec: "",
       prompt: "",
@@ -980,10 +975,18 @@ fn execute_spawn_vision_worker(
   let messages = [
     llm.UserMessageWithImage(content: question, image_url: image_path),
   ]
+  // Resolve LlmConfig from resolved_vision_config at call time. Falls back to
+  // a blank config (which will produce a VisionError) if the model spec is
+  // unresolvable — same graceful-degradation policy as the vision_fn closure.
+  let vision_llm_config =
+    case models.build_llm_config(state.resolved_vision_config.model_spec) {
+      Ok(cfg) -> cfg
+      Error(_) -> llm.LlmConfig(base_url: "", api_key: "", model: "")
+    }
   let pid =
     state.vision_spawn(
       state.tool_ctx.llm_client.chat_text,
-      state.vision_config,
+      vision_llm_config,
       messages,
       None,
       filename,
