@@ -1,7 +1,11 @@
+import aura/clients/llm_client
 import aura/config
 import aura/discord/types
+import aura/llm
+import aura/models
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 
 /// Resolved vision configuration after tiered override.
@@ -80,4 +84,31 @@ pub fn is_image_attachment(att: types.Attachment) -> Bool {
       || string.ends_with(lower, ".webp")
     }
   }
+}
+
+/// Call the vision model to describe an image. Resolves the LlmConfig from
+/// the vision config's model_spec, then calls the LLM client's `chat_text`.
+/// Shared helper used by channel_actor's vision_fn closure and other callers.
+pub fn describe_via_client(
+  client: llm_client.LLMClient,
+  cfg: ResolvedVisionConfig,
+  image_url: String,
+) -> Result(String, String) {
+  use llm_config <- result.try(models.build_llm_config(cfg.model_spec))
+  describe_with_config(client, llm_config, cfg.prompt, image_url)
+}
+
+/// Lower-level helper: describe an image using a pre-built `LlmConfig` and
+/// an explicit prompt. Useful in tests where the model spec cannot be resolved
+/// from environment variables.
+pub fn describe_with_config(
+  client: llm_client.LLMClient,
+  llm_config: llm.LlmConfig,
+  prompt: String,
+  image_url: String,
+) -> Result(String, String) {
+  let messages = [
+    llm.UserMessageWithImage(content: prompt, image_url: image_url),
+  ]
+  client.chat_text(llm_config, messages, None)
 }

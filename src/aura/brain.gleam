@@ -878,6 +878,7 @@ fn build_channel_actor_deps(
     acp_agent_name: acp_agent_name,
     llm_config: state.llm_config,
     vision_config: vision_llm_config,
+    resolved_vision_config: resolved_vision,
     built_in_tools: state.built_in_tools,
     stream_spawn: stream_worker.spawn,
     tool_spawn: tool_worker.spawn,

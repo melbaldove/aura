@@ -220,6 +220,7 @@ pub type Deps {
     acp_agent_name: String,
     llm_config: llm.LlmConfig,
     vision_config: llm.LlmConfig,
+    resolved_vision_config: vision.ResolvedVisionConfig,
     built_in_tools: List(llm.ToolDefinition),
     stream_spawn: StreamWorkerSpawn,
     tool_spawn: ToolWorkerSpawn,
@@ -273,7 +274,25 @@ fn build_initial_state(
       on_shell_approve: fn(approval) {
         process.send(self, RegisterShellApproval(approval))
       },
-      vision_fn: fn(_url, _question) { Error("stub") },
+      vision_fn: {
+        let rvc = deps.resolved_vision_config
+        let llm_client = deps.llm_client
+        fn(image_url: String, question: String) -> Result(String, String) {
+          case vision.is_enabled(rvc) {
+            False ->
+              Error(
+                "vision not configured (set [models] vision in config.toml)",
+              )
+            True -> {
+              let cfg = case question {
+                "" -> rvc
+                q -> vision.ResolvedVisionConfig(..rvc, prompt: q)
+              }
+              vision.describe_via_client(llm_client, cfg, image_url)
+            }
+          }
+        }
+      },
       discord: deps.discord,
       llm_client: deps.llm_client,
       skill_runner: deps.skill_runner,
@@ -367,6 +386,10 @@ pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
     acp_agent_name: "",
     llm_config: dummy_llm_config(),
     vision_config: dummy_llm_config(),
+    resolved_vision_config: vision.ResolvedVisionConfig(
+      model_spec: "",
+      prompt: "",
+    ),
     built_in_tools: [],
     stream_spawn: dummy_stream_spawn,
     tool_spawn: dummy_tool_spawn,
