@@ -1945,7 +1945,10 @@ fn finalize_turn(
       }
   }
   let base_effects = [
-    DiscordEdit(turn.discord_msg_id, format_progress(content, turn.traces)),
+    DiscordEdit(
+      turn.discord_msg_id,
+      conversation.format_full_message(turn.traces, content),
+    ),
     DbSaveExchange(final_messages, author_id, author_name, prompt_tokens),
     UpdateCompressorTokens(prompt_tokens),
     ..compression_effects

@@ -1008,3 +1008,31 @@ pub fn system_prompt_includes_user_memory_content_test() {
   let _ = simplifile.delete(user_file_path)
   test_harness.teardown(sys)
 }
+
+/// Regression: finalize_turn was using format_progress (which appends " ...")
+/// for the final Discord edit. The final edit must NOT end with " ...".
+pub fn finalize_turn_final_discord_edit_has_no_trailing_ellipsis_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let content = "Here is the final answer"
+  let #(_, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete(content, "[]", 100),
+    )
+  let discord_edits =
+    list.filter_map(effects, fn(e) {
+      case e {
+        channel_actor.DiscordEdit(_, body) -> Ok(body)
+        _ -> Error(Nil)
+      }
+    })
+  // There must be at least one DiscordEdit
+  case discord_edits {
+    [] -> should.fail()
+    _ -> Nil
+  }
+  // None of the final DiscordEdit bodies should end with " ..."
+  list.all(discord_edits, fn(body) { !string.ends_with(body, " ...") })
+  |> should.be_true
+}
