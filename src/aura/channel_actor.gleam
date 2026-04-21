@@ -2105,8 +2105,10 @@ fn finalize_turn(
       SpawnSkillReview(full_history, new_skill_iterations, skill_review_count),
       LogStreamSummary(turn.stream_stats, "complete", string.length(content)),
     ])
+  // Stop the typing indicator before the final Discord edit so the user sees
+  // the typing indicator disappear before the message is updated.
   let with_typing = case state.typing_pid {
-    Some(pid) -> list.append(base_with_reviews, [StopTyping(pid)])
+    Some(pid) -> [StopTyping(pid), ..base_with_reviews]
     None -> base_with_reviews
   }
   let with_deadline = case turn.deadline_timer {

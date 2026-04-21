@@ -1398,3 +1398,60 @@ pub fn vision_spawn_uses_configured_prompt_test() {
     Error(_) -> should.fail()
   }
 }
+
+// --- Fix 6: StopTyping before DiscordEdit in finalize_turn -------------------
+
+/// Regression: finalize_turn was appending StopTyping after DiscordEdit.
+/// Now StopTyping must appear before DiscordEdit in the effect list so the
+/// typing indicator is cleared before the final message is edited.
+pub fn finalize_turn_stop_typing_before_discord_edit_test() {
+  let state = channel_actor.initial_state_for_test("ch-typing")
+  let incoming =
+    discord.IncomingMessage(
+      message_id: "m-typing",
+      channel_id: "ch-typing",
+      channel_name: option.None,
+      guild_id: "g1",
+      author_id: "u1",
+      author_name: "tester",
+      content: "hello",
+      is_bot: False,
+      attachments: [],
+    )
+  // Start a turn so there is an active turn in state
+  let #(started, _) =
+    channel_actor.transition(state, channel_actor.HandleIncoming(incoming))
+  // Inject a fake typing pid into the state
+  let fake_pid = process.self()
+  let state_with_typing =
+    channel_actor.ChannelState(..started, typing_pid: option.Some(fake_pid))
+  // Finalize the turn
+  let #(_finalized, effects) =
+    channel_actor.transition(
+      state_with_typing,
+      channel_actor.StreamComplete("reply", "[]", 100),
+    )
+  // Find the position of StopTyping and DiscordEdit in the effect list
+  let indexed = list.index_map(effects, fn(e, i) { #(i, e) })
+  let stop_typing_pos =
+    list.find_map(indexed, fn(pair) {
+      case pair.1 {
+        channel_actor.StopTyping(_) -> Ok(pair.0)
+        _ -> Error(Nil)
+      }
+    })
+  let discord_edit_pos =
+    list.find_map(indexed, fn(pair) {
+      case pair.1 {
+        channel_actor.DiscordEdit(_, _) -> Ok(pair.0)
+        _ -> Error(Nil)
+      }
+    })
+  case stop_typing_pos, discord_edit_pos {
+    Ok(stop_i), Ok(edit_i) -> {
+      // StopTyping must come BEFORE DiscordEdit
+      { stop_i < edit_i } |> should.be_true()
+    }
+    _, _ -> should.fail()
+  }
+}
