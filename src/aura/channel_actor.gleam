@@ -2060,7 +2060,7 @@ const progressive_edit_chars: Int = 150
 /// Format: `"[Image <filename>: <description>]\n\n<original content>"`.
 /// If there is no `UserMessage`, prepend a new one carrying just the
 /// description so the stream worker still sees the context.
-fn enrich_messages_with_description(
+pub fn enrich_messages_with_description(
   messages: List(llm.Message),
   filename: String,
   description: String,
@@ -2349,19 +2349,11 @@ fn fresh_fake_turn(worker_kind: WorkerKind) -> TurnState {
   )
 }
 
-/// Public wrapper for `enrich_messages_with_description` for regression tests.
-pub fn enrich_messages_with_description_pub(
-  messages: List(llm.Message),
-  filename: String,
-  description: String,
-) -> List(llm.Message) {
-  enrich_messages_with_description(messages, filename, description)
-}
-
 /// Apply a stream_stats start-time update to the in-flight turn using the
 /// supplied `now_ms` value. Extracted from `execute_spawn_stream_worker` for
 /// regression testing: the caller passes `time.now_ms()` and verifies
-/// `turn.stream_stats.start_ms > 0` afterwards.
+/// `turn.stream_stats.start_ms > 0` afterwards. This is test-only — callers
+/// must not send it externally; use execute_spawn_stream_worker for production.
 ///
 /// No-op if there is no active turn.
 pub fn apply_stream_start_ms_for_test(

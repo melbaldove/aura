@@ -1381,7 +1381,7 @@ pub fn tool_result_below_max_iterations_spawns_stream_test() {
 pub fn enrich_messages_prepend_with_filename_test() {
   let messages = [llm.UserMessage("hi")]
   let result =
-    channel_actor.enrich_messages_with_description_pub(
+    channel_actor.enrich_messages_with_description(
       messages,
       "photo.png",
       "a cat",
