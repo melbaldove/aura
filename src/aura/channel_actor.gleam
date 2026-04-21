@@ -1246,7 +1246,15 @@ pub fn transition(
                 SpawnToolWorker(next_call),
               ])
             }
-            None -> #(state, [])
+            None -> {
+              logging.log(
+                logging.Error,
+                "[channel "
+                  <> state.channel_id
+                  <> "] ToolResult inconsistency: not all resolved but no next unresolved found",
+              )
+              fail_turn_internal(state, turn, "tool_result inconsistency")
+            }
           }
         }
         True -> {
