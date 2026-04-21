@@ -983,6 +983,19 @@ fn update_turn_with_worker(
   monitor: Option(Monitor),
   kind: WorkerKind,
 ) -> ChannelState {
+  // Demonitor the prior worker's monitor ref if present, so stale DOWN
+  // messages from superseded workers don't fire against the new worker.
+  case state.turn {
+    Some(turn) ->
+      case turn.worker_monitor {
+        Some(old_ref) -> {
+          let _ = process.demonitor_process(old_ref)
+          Nil
+        }
+        None -> Nil
+      }
+    None -> Nil
+  }
   update_turn(state, fn(turn) {
     TurnState(
       ..turn,
@@ -1372,21 +1385,33 @@ pub fn transition(
     }
 
     // --- worker down translation -----------------------------------
-    WorkerDown(_ref, reason), Some(turn) -> {
-      case reason {
-        "normal" -> #(state, [])
-        _ ->
-          case turn.worker_kind {
-            StreamWorker ->
-              transition(state, StreamError("worker crashed: " <> reason))
-            ToolWorker(_, call_id) ->
-              transition(
-                state,
-                ToolResult(call_id, "Error: worker crashed: " <> reason, True),
-              )
-            VisionWorker ->
-              transition(state, VisionError("crashed: " <> reason))
+    WorkerDown(ref, reason), Some(turn) -> {
+      case Some(ref) == turn.worker_monitor {
+        False -> {
+          // Stale DOWN from a superseded worker — ignore.
+          #(state, [])
+        }
+        True -> {
+          case reason {
+            "normal" -> #(state, [])
+            _ ->
+              case turn.worker_kind {
+                StreamWorker ->
+                  transition(state, StreamError("worker crashed: " <> reason))
+                ToolWorker(_, call_id) ->
+                  transition(
+                    state,
+                    ToolResult(
+                      call_id,
+                      "Error: worker crashed: " <> reason,
+                      True,
+                    ),
+                  )
+                VisionWorker ->
+                  transition(state, VisionError("crashed: " <> reason))
+              }
           }
+        }
       }
     }
     WorkerDown(_, _), None -> #(state, [])
@@ -2154,4 +2179,15 @@ fn fresh_fake_turn(worker_kind: WorkerKind) -> TurnState {
     deadline_timer: None,
     last_edit_len: 0,
   )
+}
+
+/// Build a state with a fake stream turn whose worker_monitor is set to `ref`.
+/// Used to test WorkerDown ref-matching logic.
+pub fn with_fake_stream_turn_monitored(
+  state: ChannelState,
+  ref: Monitor,
+) -> ChannelState {
+  let fake_turn =
+    TurnState(..fresh_fake_turn(StreamWorker), worker_monitor: Some(ref))
+  ChannelState(..state, turn: Some(fake_turn))
 }

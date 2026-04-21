@@ -408,26 +408,15 @@ pub fn turn_deadline_fails_turn_test() {
 
 pub fn worker_down_stream_translates_to_stream_error_test() {
   let state = channel_actor.initial_state_for_test("ch1")
-  let with_stream = channel_actor.with_fake_stream_turn(state)
   let ref = channel_actor.fake_monitor_ref()
-  // Attach the fake monitor ref to the turn so WorkerDown matches it
-  let with_monitor = case with_stream.turn {
-    option.Some(t) ->
-      channel_actor.ChannelState(
-        ..with_stream,
-        turn: option.Some(channel_actor.TurnState(
-          ..t,
-          worker_monitor: option.Some(ref),
-        )),
-      )
-    option.None -> with_stream
-  }
+  let with_monitor =
+    channel_actor.with_fake_stream_turn_monitored(state, ref)
   let #(new_state, effects) =
     channel_actor.transition(
       with_monitor,
       channel_actor.WorkerDown(ref, "killed"),
     )
-  // WorkerDown translates to StreamError, which now emits ScheduleRetry
+  // WorkerDown with matching ref translates to StreamError → ScheduleRetry
   list.any(effects, fn(e) {
     case e {
       channel_actor.ScheduleRetry(_, _) -> True
@@ -1136,4 +1125,55 @@ pub fn retry_stream_when_idle_is_noop_test() {
     )
   effects |> should.equal([])
   new_state.turn |> should.equal(option.None)
+}
+
+// --- Fix 2: WorkerDown ref-check + demonitor on worker swap -------------------
+
+/// Regression: WorkerDown with a ref that does NOT match turn.worker_monitor
+/// must be silently ignored (stale DOWN from superseded worker).
+pub fn worker_down_stale_ref_is_ignored_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let current_ref = channel_actor.fake_monitor_ref()
+  let stale_ref = channel_actor.fake_monitor_ref()
+  // Turn monitors `current_ref`; incoming DOWN carries `stale_ref`.
+  let with_stream =
+    channel_actor.with_fake_stream_turn_monitored(state, current_ref)
+  let #(new_state, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.WorkerDown(stale_ref, "crashed"),
+    )
+  // Stale DOWN must produce no effects and leave the turn intact.
+  effects |> should.equal([])
+  case new_state.turn {
+    option.Some(_) -> Nil
+    option.None -> should.fail()
+  }
+}
+
+/// Regression: WorkerDown with a ref that MATCHES turn.worker_monitor must
+/// dispatch to the correct handler (StreamError for StreamWorker).
+pub fn worker_down_matching_ref_dispatches_stream_error_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let ref = channel_actor.fake_monitor_ref()
+  let with_stream =
+    channel_actor.with_fake_stream_turn_monitored(state, ref)
+  let #(new_state, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.WorkerDown(ref, "crashed"),
+    )
+  // Matching ref + "crashed" → StreamError → ScheduleRetry (retry_count was 0)
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.ScheduleRetry(_, _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+  // Turn should still be active (retry scheduled, not failed)
+  case new_state.turn {
+    option.Some(_) -> Nil
+    option.None -> should.fail()
+  }
 }
