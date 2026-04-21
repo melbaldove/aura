@@ -1229,6 +1229,61 @@ pub fn compression_complete_clears_in_flight_flag_test() {
   new_state.compression_in_flight |> should.be_false
 }
 
+// --- Fix 3: max 80 tool iterations guard --------------------------------------
+
+/// Regression: ToolResult that resolves all tool calls when turn.iteration
+/// is already 79 (so iteration + 1 = 80 >= max_tool_iterations) must fail
+/// the turn, not spawn another stream worker.
+pub fn tool_result_at_max_iterations_fails_turn_test() {
+  let state = channel_actor.initial_state_for_test("ch-iter")
+  // iteration = 79: next would be 80 which hits the limit
+  let with_turn =
+    channel_actor.with_fake_one_tool_call_turn_at_iteration(state, 79)
+  let #(new_state, effects) =
+    channel_actor.transition(
+      with_turn,
+      channel_actor.ToolResult("c1", "done", False),
+    )
+  // Turn must be cleared (fail_turn_internal clears it)
+  new_state.turn |> should.equal(option.None)
+  // Must NOT contain a SpawnStreamWorker
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+  // Must contain a DiscordSend with an error message
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.DiscordSend(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
+/// Regression: ToolResult that resolves all tool calls when turn.iteration
+/// is 78 (so iteration + 1 = 79 < 80) must still spawn a stream worker.
+pub fn tool_result_below_max_iterations_spawns_stream_test() {
+  let state = channel_actor.initial_state_for_test("ch-iter2")
+  let with_turn =
+    channel_actor.with_fake_one_tool_call_turn_at_iteration(state, 78)
+  let #(_new_state, effects) =
+    channel_actor.transition(
+      with_turn,
+      channel_actor.ToolResult("c1", "done", False),
+    )
+  list.any(effects, fn(e) {
+    case e {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
 // --- Fix 2: image prefix format + position matches sync path -------------------
 
 /// Regression: enrich_messages_with_description must PREPEND

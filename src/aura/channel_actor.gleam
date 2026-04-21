@@ -1250,47 +1250,59 @@ pub fn transition(
           }
         }
         True -> {
-          let tool_result_messages =
-            list.map(turn.accumulated_tool_calls, fn(call) {
-              case dict.get(new_pending, call.id) {
-                Ok(#(text, _)) -> llm.ToolResultMessage(call.id, text)
-                Error(_) -> llm.ToolResultMessage(call.id, "")
-              }
-            })
-          let new_messages =
-            list.flatten([
-              turn.new_messages,
-              [
-                llm.AssistantToolCallMessage(
-                  turn.accumulated_content,
-                  turn.accumulated_tool_calls,
-                ),
-              ],
-              tool_result_messages,
-            ])
-          let next_llm_messages = list.append(state.conversation, new_messages)
-          let new_turn =
-            TurnState(
-              ..turn,
-              iteration: turn.iteration + 1,
-              accumulated_content: "",
-              accumulated_tool_calls: [],
-              pending_tool_results: dict.new(),
-              new_messages: new_messages,
-              traces: new_traces,
-              messages_at_llm_call: next_llm_messages,
-              stream_retry_count: 0,
-              stream_stats: StreamStats(
-                start_ms: 0,
-                reasoning_count: 0,
-                delta_count: 0,
-                last_heartbeat_ms: 0,
-              ),
-              worker_kind: StreamWorker,
-            )
-          #(ChannelState(..state, turn: Some(new_turn)), [
-            SpawnStreamWorker(next_llm_messages),
-          ])
+          // Guard against runaway tool loops.
+          case turn.iteration + 1 >= max_tool_iterations {
+            True ->
+              fail_turn_internal(
+                state,
+                turn,
+                "Tool loop exceeded maximum iterations",
+              )
+            False -> {
+              let tool_result_messages =
+                list.map(turn.accumulated_tool_calls, fn(call) {
+                  case dict.get(new_pending, call.id) {
+                    Ok(#(text, _)) -> llm.ToolResultMessage(call.id, text)
+                    Error(_) -> llm.ToolResultMessage(call.id, "")
+                  }
+                })
+              let new_messages =
+                list.flatten([
+                  turn.new_messages,
+                  [
+                    llm.AssistantToolCallMessage(
+                      turn.accumulated_content,
+                      turn.accumulated_tool_calls,
+                    ),
+                  ],
+                  tool_result_messages,
+                ])
+              let next_llm_messages =
+                list.append(state.conversation, new_messages)
+              let new_turn =
+                TurnState(
+                  ..turn,
+                  iteration: turn.iteration + 1,
+                  accumulated_content: "",
+                  accumulated_tool_calls: [],
+                  pending_tool_results: dict.new(),
+                  new_messages: new_messages,
+                  traces: new_traces,
+                  messages_at_llm_call: next_llm_messages,
+                  stream_retry_count: 0,
+                  stream_stats: StreamStats(
+                    start_ms: 0,
+                    reasoning_count: 0,
+                    delta_count: 0,
+                    last_heartbeat_ms: 0,
+                  ),
+                  worker_kind: StreamWorker,
+                )
+              #(ChannelState(..state, turn: Some(new_turn)), [
+                SpawnStreamWorker(next_llm_messages),
+              ])
+            }
+          }
         }
       }
     }
@@ -1533,6 +1545,10 @@ pub fn transition(
 }
 
 const max_stream_retries = 3
+
+/// Maximum number of tool-call iterations per turn. Prevents runaway LLM tool
+/// loops that could otherwise only be bounded by the 10-minute turn deadline.
+const max_tool_iterations: Int = 80
 
 /// True when every accumulated tool call has a result recorded in `pending`.
 fn all_tool_calls_resolved(
@@ -2151,6 +2167,23 @@ pub fn with_fake_one_tool_call_turn(state: ChannelState) -> ChannelState {
     TurnState(
       ..fresh_fake_turn(ToolWorker("tool_a", "c1")),
       accumulated_tool_calls: [call_a],
+    )
+  ChannelState(..state, turn: Some(fake_turn))
+}
+
+/// Build a state with a fake turn that has a single pending tool call (`c1`)
+/// and the iteration counter pre-set to `n`. Used to exercise the max tool
+/// iterations guard in `ToolResult` transitions.
+pub fn with_fake_one_tool_call_turn_at_iteration(
+  state: ChannelState,
+  n: Int,
+) -> ChannelState {
+  let call_a = llm.ToolCall(id: "c1", name: "tool_a", arguments: "{}")
+  let fake_turn =
+    TurnState(
+      ..fresh_fake_turn(ToolWorker("tool_a", "c1")),
+      accumulated_tool_calls: [call_a],
+      iteration: n,
     )
   ChannelState(..state, turn: Some(fake_turn))
 }
