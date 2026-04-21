@@ -66,6 +66,7 @@ pub type VisionWorkerSpawn =
     llm.LlmConfig,
     List(llm.Message),
     option.Option(Float),
+    String,
     Subject(ChannelMessage),
   ) ->
     Pid
@@ -80,7 +81,7 @@ pub type ChannelMessage {
   )
   Cancel
 
-  VisionComplete(description: String)
+  VisionComplete(filename: String, description: String)
   VisionError(reason: String)
 
   StreamDelta(text: String)
@@ -436,6 +437,7 @@ fn dummy_vision_spawn(
   _config: llm.LlmConfig,
   _messages: List(llm.Message),
   _temperature: option.Option(Float),
+  _filename: String,
   _parent: Subject(ChannelMessage),
 ) -> Pid {
   process.self()
@@ -561,8 +563,8 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
   case effect {
     SpawnStreamWorker(messages) -> execute_spawn_stream_worker(state, messages)
     SpawnToolWorker(call) -> execute_spawn_tool_worker(state, call)
-    SpawnVisionWorker(image_path, question) ->
-      execute_spawn_vision_worker(state, image_path, question)
+    SpawnVisionWorker(image_path, question, filename) ->
+      execute_spawn_vision_worker(state, image_path, question, filename)
     KillWorker(pid) -> {
       process.kill(pid)
       state
@@ -954,6 +956,7 @@ fn execute_spawn_vision_worker(
   state: ChannelState,
   image_path: String,
   question: String,
+  filename: String,
 ) -> ChannelState {
   let messages = [
     llm.UserMessageWithImage(content: question, image_url: image_path),
@@ -964,6 +967,7 @@ fn execute_spawn_vision_worker(
       state.vision_config,
       messages,
       None,
+      filename,
       state.self_subject,
     )
   let monitor = process.monitor(pid)
@@ -1058,7 +1062,7 @@ fn typing_loop(discord: discord_client.DiscordClient, channel_id: String) -> Nil
 pub type Effect {
   SpawnStreamWorker(messages: List(llm.Message))
   SpawnToolWorker(call: llm.ToolCall)
-  SpawnVisionWorker(image_path: String, question: String)
+  SpawnVisionWorker(image_path: String, question: String, filename: String)
   KillWorker(pid: Pid)
   CancelDeadline(timer: Timer)
   ScheduleDeadline(ms: Int)
@@ -1110,11 +1114,15 @@ pub fn transition(
     }
 
     // --- vision results ---------------------------------------------
-    VisionComplete(description), Some(turn) -> {
+    VisionComplete(filename, description), Some(turn) -> {
       let enriched =
-        enrich_messages_with_description(turn.messages_at_llm_call, description)
+        enrich_messages_with_description(
+          turn.messages_at_llm_call,
+          filename,
+          description,
+        )
       let enriched_new =
-        enrich_messages_with_description(turn.new_messages, description)
+        enrich_messages_with_description(turn.new_messages, filename, description)
       let new_turn =
         TurnState(
           ..turn,
@@ -1132,7 +1140,7 @@ pub fn transition(
         SpawnStreamWorker(turn.messages_at_llm_call),
       ])
     }
-    VisionComplete(_), None -> #(state, [])
+    VisionComplete(_, _), None -> #(state, [])
     VisionError(_), None -> #(state, [])
 
     // --- stream deltas and reasoning -------------------------------
@@ -1639,13 +1647,13 @@ fn start_turn(
         True -> {
           // Prefer the local copy as a data URL to avoid Discord CDN HMAC
           // rejection. attachment.preprocess has already downloaded the file.
-          let #(path, question) =
+          let #(path, question, filename) =
             first_image_and_question(
               msg,
               state.resolved_vision_config.prompt,
             )
           #(state_with_pending_vision(state, messages, new_messages, msg), [
-            SpawnVisionWorker(path, question),
+            SpawnVisionWorker(path, question, filename),
             StartTyping,
             ScheduleDeadline(600_000),
           ])
@@ -1842,27 +1850,28 @@ fn has_image_attachment(msg: discord.IncomingMessage) -> Bool {
 fn first_image_and_question(
   msg: discord.IncomingMessage,
   prompt: String,
-) -> #(String, String) {
+) -> #(String, String, String) {
   let first_att =
     list.find(msg.attachments, fn(att) { vision.is_image_attachment(att) })
-  let url = case first_att {
-    Error(_) -> ""
+  let #(url, filename) = case first_att {
+    Error(_) -> #("", "")
     Ok(att) -> {
       // Prefer the local copy downloaded by attachment.preprocess as a
       // base64 data URL — Discord CDN URLs with HMAC query strings get
       // rejected by some vision endpoints (e.g. GLM returns 400 on them).
       let local = attachment.local_path(msg.message_id, att.filename)
-      case browser.read_as_data_url(local) {
+      let resolved_url = case browser.read_as_data_url(local) {
         Ok(data_url) -> data_url
         Error(_) -> att.url
       }
+      #(resolved_url, att.filename)
     }
   }
   let question = case prompt {
     "" -> "Describe this image in detail for downstream tool use."
     q -> q
   }
-  #(url, question)
+  #(url, question, filename)
 }
 
 fn new_turn_state(
@@ -1933,39 +1942,37 @@ const platform: String = "discord"
 /// of accumulated content.
 const progressive_edit_chars: Int = 150
 
-/// Append the vision description to the last `UserMessage` in the history.
-/// If there is no `UserMessage`, append a new one carrying just the
+/// Prepend the vision description to the last `UserMessage` in the history.
+/// Format: `"[Image <filename>: <description>]\n\n<original content>"`.
+/// If there is no `UserMessage`, prepend a new one carrying just the
 /// description so the stream worker still sees the context.
 fn enrich_messages_with_description(
   messages: List(llm.Message),
+  filename: String,
   description: String,
 ) -> List(llm.Message) {
+  let prefix = "[Image " <> filename <> ": " <> description <> "]\n\n"
   let reversed = list.reverse(messages)
-  case replace_last_user_message(reversed, description, []) {
+  case replace_last_user_message(reversed, prefix, []) {
     Ok(enriched) -> enriched
     Error(_) ->
-      list.append(messages, [
-        llm.UserMessage(content: "[Image description: " <> description <> "]"),
-      ])
+      list.append(messages, [llm.UserMessage(content: prefix)])
   }
 }
 
 fn replace_last_user_message(
   reversed: List(llm.Message),
-  description: String,
+  prefix: String,
   acc_forward_suffix: List(llm.Message),
 ) -> Result(List(llm.Message), Nil) {
   case reversed {
     [] -> Error(Nil)
     [llm.UserMessage(content: original), ..rest] -> {
-      let enriched =
-        llm.UserMessage(
-          content: original <> "\n\n[Image description: " <> description <> "]",
-        )
+      let enriched = llm.UserMessage(content: prefix <> original)
       Ok(list.append(list.reverse(rest), [enriched, ..acc_forward_suffix]))
     }
     [other, ..rest] ->
-      replace_last_user_message(rest, description, [other, ..acc_forward_suffix])
+      replace_last_user_message(rest, prefix, [other, ..acc_forward_suffix])
   }
 }
 
@@ -2207,6 +2214,15 @@ fn fresh_fake_turn(worker_kind: WorkerKind) -> TurnState {
     deadline_timer: None,
     last_edit_len: 0,
   )
+}
+
+/// Public wrapper for `enrich_messages_with_description` for regression tests.
+pub fn enrich_messages_with_description_pub(
+  messages: List(llm.Message),
+  filename: String,
+  description: String,
+) -> List(llm.Message) {
+  enrich_messages_with_description(messages, filename, description)
 }
 
 /// Build a state with a fake stream turn whose worker_monitor is set to `ref`.

@@ -20,11 +20,21 @@ pub fn vision_worker_forwards_complete_on_success_test() {
 
   let parent: process.Subject(channel_actor.ChannelMessage) =
     process.new_subject()
-  let _ = vision_worker.spawn(client.chat_text, fake_config(), [], None, parent)
+  let _ =
+    vision_worker.spawn(
+      client.chat_text,
+      fake_config(),
+      [],
+      None,
+      "photo.jpg",
+      parent,
+    )
 
   case process.receive(parent, 2000) {
-    Ok(channel_actor.VisionComplete(description)) ->
+    Ok(channel_actor.VisionComplete(filename, description)) -> {
+      filename |> should.equal("photo.jpg")
       description |> should.equal("a cat on a mat")
+    }
     _ -> should.fail()
   }
 }
@@ -35,7 +45,15 @@ pub fn vision_worker_forwards_error_on_failure_test() {
 
   let parent: process.Subject(channel_actor.ChannelMessage) =
     process.new_subject()
-  let _ = vision_worker.spawn(client.chat_text, fake_config(), [], None, parent)
+  let _ =
+    vision_worker.spawn(
+      client.chat_text,
+      fake_config(),
+      [],
+      None,
+      "photo.jpg",
+      parent,
+    )
 
   case process.receive(parent, 2000) {
     Ok(channel_actor.VisionError(_)) -> Nil

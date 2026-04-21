@@ -85,7 +85,7 @@ pub fn vision_complete_spawns_stream_worker_test() {
   let #(_new_state, effects) =
     channel_actor.transition(
       with_vision,
-      channel_actor.VisionComplete("a cat on a mat"),
+      channel_actor.VisionComplete("photo.jpg", "a cat on a mat"),
     )
   let has_stream_spawn =
     list.any(effects, fn(e) {
@@ -1229,6 +1229,26 @@ pub fn compression_complete_clears_in_flight_flag_test() {
   new_state.compression_in_flight |> should.be_false
 }
 
+// --- Fix 2: image prefix format + position matches sync path -------------------
+
+/// Regression: enrich_messages_with_description must PREPEND
+/// "[Image <filename>: <desc>]\n\n" BEFORE the original content, not append after.
+pub fn enrich_messages_prepend_with_filename_test() {
+  let messages = [llm.UserMessage("hi")]
+  let result =
+    channel_actor.enrich_messages_with_description_pub(
+      messages,
+      "photo.png",
+      "a cat",
+    )
+  case result {
+    [llm.UserMessage(content)] ->
+      content
+      |> should.equal("[Image photo.png: a cat]\n\nhi")
+    _ -> should.fail()
+  }
+}
+
 // --- Fix 1: vision prompt from config (not hardcoded) -------------------------
 
 /// Regression: start_turn for a message with an image attachment must use the
@@ -1271,7 +1291,8 @@ pub fn vision_spawn_uses_configured_prompt_test() {
   let vision_spawn_question =
     list.find_map(effects, fn(e) {
       case e {
-        channel_actor.SpawnVisionWorker(_path, question) -> Ok(question)
+        channel_actor.SpawnVisionWorker(_path, question, _filename) ->
+          Ok(question)
         _ -> Error(Nil)
       }
     })
