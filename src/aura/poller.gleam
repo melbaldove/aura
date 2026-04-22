@@ -1,3 +1,4 @@
+import aura/backoff
 import aura/brain
 import aura/config
 import aura/discord
@@ -19,12 +20,6 @@ const default_intents = 37_377
 const base_backoff_ms = 5000
 
 const max_backoff_ms = 60_000
-
-/// Reconnect backoff: 5s → 10s → 20s → 40s → 60s (capped).
-pub fn compute_backoff_ms(attempt: Int) -> Int {
-  let shift = int.clamp(attempt, min: 0, max: 4)
-  int.min(base_backoff_ms * int.bitwise_shift_left(1, shift), max_backoff_ms)
-}
 
 /// Only known-hopeless errors are fatal: 4xx responses (bad token, forbidden,
 /// wrong endpoint) and parse failures (Discord changed the response shape).
@@ -158,7 +153,8 @@ fn retry_or_fail(
   case is_fatal_error(error) {
     True -> Error(actor.InitTimeout)
     False -> {
-      let delay = compute_backoff_ms(attempt)
+      let delay =
+        backoff.compute(attempt, base: base_backoff_ms, cap: max_backoff_ms)
       logging.log(
         logging.Info,
         "[poller] Retrying in " <> int.to_string(delay) <> "ms",
