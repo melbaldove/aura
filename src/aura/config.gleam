@@ -1,4 +1,6 @@
 import aura/cron
+import aura/env
+import gleam/dict
 import gleam/int
 import gleam/list
 import gleam/result
@@ -49,6 +51,31 @@ pub type MemoryConfig {
   )
 }
 
+/// Transport used to talk to an MCP server. Phase 1 only supports stdio.
+pub type McpTransport {
+  StdioTransport
+}
+
+/// One `[mcp.servers.<name>]` block parsed from the global config.
+/// `name` is the dict key from the TOML table, not a parsed field.
+/// `env` values and other fields have `${VAR}` references pre-expanded.
+pub type McpServerConfig {
+  McpServerConfig(
+    name: String,
+    transport: McpTransport,
+    command: String,
+    args: List(String),
+    env: List(#(String, String)),
+    subscribe: List(String),
+  )
+}
+
+/// Aggregate of all parsed `[mcp.servers.*]` blocks. Empty if no blocks
+/// exist.
+pub type McpConfig {
+  McpConfig(servers: List(McpServerConfig))
+}
+
 /// Top-level configuration loaded from the global `config.toml`.
 pub type GlobalConfig {
   GlobalConfig(
@@ -65,6 +92,7 @@ pub type GlobalConfig {
     brain_context: Int,
     dreaming_cron: String,
     dreaming_budget_percent: Int,
+    mcp: McpConfig,
   )
 }
 
@@ -121,6 +149,7 @@ pub fn default_global() -> GlobalConfig {
     brain_context: 0,
     dreaming_cron: "0 4 * * *",
     dreaming_budget_percent: 10,
+    mcp: McpConfig(servers: []),
   )
 }
 
@@ -285,6 +314,8 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     Error(_) -> 10
   }
 
+  use mcp <- result.try(parse_mcp(doc))
+
   Ok(GlobalConfig(
     discord: DiscordConfig(
       token: token,
@@ -319,7 +350,170 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     brain_context: brain_context,
     dreaming_cron: dreaming_cron,
     dreaming_budget_percent: dreaming_budget_percent,
+    mcp: mcp,
   ))
+}
+
+/// Parse the `[mcp.servers.*]` section. Missing section is valid and yields
+/// an empty server list.
+fn parse_mcp(doc: dict.Dict(String, tom.Toml)) -> Result(McpConfig, String) {
+  case tom.get_table(doc, ["mcp", "servers"]) {
+    Error(_) -> Ok(McpConfig(servers: []))
+    Ok(servers_table) -> {
+      let entries = dict.to_list(servers_table)
+      use servers <- result.try(
+        list.try_map(entries, fn(entry) {
+          let #(name, value) = entry
+          case value {
+            tom.Table(fields) -> parse_mcp_server(name, fields)
+            tom.InlineTable(fields) -> parse_mcp_server(name, fields)
+            _ ->
+              Error(
+                "[mcp.servers." <> name <> "] expected table, got non-table",
+              )
+          }
+        }),
+      )
+      Ok(McpConfig(servers: servers))
+    }
+  }
+}
+
+fn parse_mcp_server(
+  name: String,
+  fields: dict.Dict(String, tom.Toml),
+) -> Result(McpServerConfig, String) {
+  let prefix = "[mcp.servers." <> name <> "]"
+
+  use transport <- result.try(parse_mcp_transport(prefix, fields))
+
+  use command_raw <- result.try(case tom.get_string(fields, ["command"]) {
+    Ok(c) -> Ok(c)
+    Error(_) -> Error(prefix <> " missing command")
+  })
+  use command <- result.try(expand_env(command_raw, prefix <> " command"))
+  use _ <- result.try(case command {
+    "" -> Error(prefix <> " missing command")
+    _ -> Ok(Nil)
+  })
+  use args <- result.try(parse_mcp_string_list(
+    fields,
+    "args",
+    prefix <> " args",
+    allow_missing: True,
+  ))
+  use env_list <- result.try(parse_mcp_env(fields, prefix))
+  use subscribe <- result.try(parse_mcp_string_list(
+    fields,
+    "subscribe",
+    prefix <> " subscribe",
+    allow_missing: False,
+  ))
+  case subscribe {
+    [] -> Error(prefix <> " subscribe must be a non-empty list")
+    _ ->
+      Ok(McpServerConfig(
+        name: name,
+        transport: transport,
+        command: command,
+        args: args,
+        env: env_list,
+        subscribe: subscribe,
+      ))
+  }
+}
+
+fn parse_mcp_transport(
+  prefix: String,
+  fields: dict.Dict(String, tom.Toml),
+) -> Result(McpTransport, String) {
+  case tom.get_string(fields, ["transport"]) {
+    Error(_) -> Ok(StdioTransport)
+    Ok("stdio") -> Ok(StdioTransport)
+    Ok(other) ->
+      Error(
+        prefix
+        <> " unsupported transport: "
+        <> other
+        <> " (phase 1 supports only stdio)",
+      )
+  }
+}
+
+fn parse_mcp_string_list(
+  fields: dict.Dict(String, tom.Toml),
+  key: String,
+  context: String,
+  allow_missing allow_missing: Bool,
+) -> Result(List(String), String) {
+  case tom.get_array(fields, [key]) {
+    Error(_) ->
+      case allow_missing {
+        True -> Ok([])
+        False -> Error(context <> " must be a non-empty list")
+      }
+    Ok(values) -> {
+      list.try_map(values, fn(v) {
+        case v {
+          tom.String(s) -> expand_env(s, context)
+          _ -> Error(context <> " entries must be strings")
+        }
+      })
+    }
+  }
+}
+
+fn parse_mcp_env(
+  fields: dict.Dict(String, tom.Toml),
+  prefix: String,
+) -> Result(List(#(String, String)), String) {
+  case tom.get_table(fields, ["env"]) {
+    Error(_) -> Ok([])
+    Ok(env_table) -> {
+      list.try_map(dict.to_list(env_table), fn(entry) {
+        let #(key, value) = entry
+        case value {
+          tom.String(s) -> {
+            use expanded <- result.try(expand_env(
+              s,
+              prefix <> " env." <> key,
+            ))
+            Ok(#(key, expanded))
+          }
+          _ -> Error(prefix <> " env." <> key <> " must be a string")
+        }
+      })
+    }
+  }
+}
+
+/// Expand a single `${VAR}` reference. Non-matching values pass through
+/// unchanged. A missing env var substitutes empty string and logs a
+/// warning so startup isn't blocked by a typo.
+fn expand_env(value: String, context: String) -> Result(String, String) {
+  case string.starts_with(value, "${") && string.ends_with(value, "}") {
+    False -> Ok(value)
+    True -> {
+      let var_name =
+        value
+        |> string.drop_start(2)
+        |> string.drop_end(1)
+      case env.get_env(var_name) {
+        Ok(v) -> Ok(v)
+        Error(_) -> {
+          logging.log(
+            logging.Warning,
+            "[config] "
+              <> context
+              <> ": env var "
+              <> var_name
+              <> " not set, using empty string",
+          )
+          Ok("")
+        }
+      }
+    }
+  }
 }
 
 /// Parse a TOML string into a `DomainConfig`. Optional fields
