@@ -3,7 +3,7 @@ import gleam/result
 import gleam/string
 import sqlight
 
-const current_version = 4
+const current_version = 5
 
 /// Create all tables, indexes, FTS5 virtual table, and triggers if they do not
 /// already exist, then run any pending schema migrations.
@@ -197,6 +197,72 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
     "CREATE INDEX IF NOT EXISTS idx_dream_runs_domain ON dream_runs(domain)",
   ))
 
+  use _ <- result.try(exec(
+    conn,
+    "
+    CREATE TABLE IF NOT EXISTS events (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      type TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      time_ms INTEGER NOT NULL,
+      tags_json TEXT NOT NULL DEFAULT '{}',
+      external_id TEXT NOT NULL,
+      data_json TEXT NOT NULL DEFAULT '{}',
+      UNIQUE (source, external_id)
+    )
+  ",
+  ))
+  use _ <- result.try(exec(
+    conn,
+    "CREATE INDEX IF NOT EXISTS idx_events_source_time ON events(source, time_ms DESC)",
+  ))
+  use _ <- result.try(exec(
+    conn,
+    "CREATE INDEX IF NOT EXISTS idx_events_subject ON events(subject)",
+  ))
+  use _ <- result.try(exec(
+    conn,
+    "CREATE INDEX IF NOT EXISTS idx_events_time_ms ON events(time_ms DESC)",
+  ))
+
+  use _ <- result.try(exec(
+    conn,
+    "
+    CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+      id UNINDEXED,
+      source,
+      type,
+      subject,
+      tags_json,
+      data_json,
+      content='events',
+      content_rowid='rowid'
+    )
+  ",
+  ))
+
+  use _ <- result.try(exec(
+    conn,
+    "
+    CREATE TRIGGER IF NOT EXISTS events_fts_insert
+      AFTER INSERT ON events BEGIN
+      INSERT INTO events_fts(rowid, id, source, type, subject, tags_json, data_json)
+        VALUES (new.rowid, new.id, new.source, new.type, new.subject, new.tags_json, new.data_json);
+    END
+  ",
+  ))
+  use _ <- result.try(exec(
+    conn,
+    "
+    CREATE TRIGGER IF NOT EXISTS events_fts_delete
+      AFTER DELETE ON events BEGIN
+      INSERT INTO events_fts(events_fts, rowid, id, source, type, subject, tags_json, data_json)
+        VALUES('delete', old.rowid, old.id, old.source, old.type, old.subject, old.tags_json, old.data_json);
+    END
+  ",
+  ))
+
   // Set or migrate schema version
   migrate_version(conn)
 }
@@ -354,6 +420,74 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
               exec(conn, "ALTER TABLE flares ADD COLUMN result_text TEXT")
             // Fallback: try anyway
           }
+        }
+        False -> Ok(Nil)
+      })
+      use _ <- result.try(case v < 5 {
+        True -> {
+          use _ <- result.try(exec(
+            conn,
+            "
+            CREATE TABLE IF NOT EXISTS events (
+              id TEXT PRIMARY KEY,
+              source TEXT NOT NULL,
+              type TEXT NOT NULL,
+              subject TEXT NOT NULL,
+              time_ms INTEGER NOT NULL,
+              tags_json TEXT NOT NULL DEFAULT '{}',
+              external_id TEXT NOT NULL,
+              data_json TEXT NOT NULL DEFAULT '{}',
+              UNIQUE (source, external_id)
+            )
+          ",
+          ))
+          use _ <- result.try(exec(
+            conn,
+            "CREATE INDEX IF NOT EXISTS idx_events_source_time ON events(source, time_ms DESC)",
+          ))
+          use _ <- result.try(exec(
+            conn,
+            "CREATE INDEX IF NOT EXISTS idx_events_subject ON events(subject)",
+          ))
+          use _ <- result.try(exec(
+            conn,
+            "CREATE INDEX IF NOT EXISTS idx_events_time_ms ON events(time_ms DESC)",
+          ))
+          use _ <- result.try(exec(
+            conn,
+            "
+            CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+              id UNINDEXED,
+              source,
+              type,
+              subject,
+              tags_json,
+              data_json,
+              content='events',
+              content_rowid='rowid'
+            )
+          ",
+          ))
+          use _ <- result.try(exec(
+            conn,
+            "
+            CREATE TRIGGER IF NOT EXISTS events_fts_insert
+              AFTER INSERT ON events BEGIN
+              INSERT INTO events_fts(rowid, id, source, type, subject, tags_json, data_json)
+                VALUES (new.rowid, new.id, new.source, new.type, new.subject, new.tags_json, new.data_json);
+            END
+          ",
+          ))
+          exec(
+            conn,
+            "
+            CREATE TRIGGER IF NOT EXISTS events_fts_delete
+              AFTER DELETE ON events BEGIN
+              INSERT INTO events_fts(events_fts, rowid, id, source, type, subject, tags_json, data_json)
+                VALUES('delete', old.rowid, old.id, old.source, old.type, old.subject, old.tags_json, old.data_json);
+            END
+          ",
+          )
         }
         False -> Ok(Nil)
       })
