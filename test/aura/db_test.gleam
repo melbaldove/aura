@@ -1,8 +1,11 @@
 import aura/conversation
 import aura/db
+import aura/event
 import aura/llm
+import gleam/dict
 import gleam/erlang/process
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/string
 import gleeunit
 import gleeunit/should
@@ -1026,6 +1029,149 @@ pub fn get_flare_outcomes_ordered_by_updated_at_asc_test() {
   let assert [#(first_label, _), #(second_label, _)] = outcomes
   first_label |> should.equal("Earlier task")
   second_label |> should.equal("Later task")
+
+  process.send(subject, db.Shutdown)
+}
+
+// ---------------------------------------------------------------------------
+// Event tests
+// ---------------------------------------------------------------------------
+
+fn sample_event(
+  id: String,
+  source: String,
+  external_id: String,
+  subject: String,
+  time_ms: Int,
+) -> event.AuraEvent {
+  event.AuraEvent(
+    id: id,
+    source: source,
+    type_: "message",
+    subject: subject,
+    time_ms: time_ms,
+    tags: dict.new(),
+    external_id: external_id,
+    data: "{}",
+  )
+}
+
+pub fn insert_event_new_returns_true_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let e = sample_event("e1", "gmail", "msg-1", "hello world", 1000)
+  let assert Ok(inserted) = db.insert_event(subject, e)
+  should.be_true(inserted)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn insert_event_duplicate_returns_false_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let first = sample_event("e1", "gmail", "msg-1", "hello world", 1000)
+  let assert Ok(True) = db.insert_event(subject, first)
+
+  // Second insert with same (source, external_id) should be ignored
+  let second = sample_event("e2", "gmail", "msg-1", "different subject", 2000)
+  let assert Ok(inserted) = db.insert_event(subject, second)
+  should.be_false(inserted)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn search_events_finds_by_subject_fts_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let e1 = sample_event("e1", "gmail", "m1", "quarterly invoice attached", 1000)
+  let e2 = sample_event("e2", "gmail", "m2", "lunch plans tomorrow", 2000)
+  let assert Ok(True) = db.insert_event(subject, e1)
+  let assert Ok(True) = db.insert_event(subject, e2)
+
+  let assert Ok(results) =
+    db.search_events(subject, "invoice", None, None, 10)
+  list.length(results) |> should.equal(1)
+  let assert [hit] = results
+  hit.id |> should.equal("e1")
+  hit.subject |> should.equal("quarterly invoice attached")
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn search_events_filters_by_source_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let g = sample_event("g1", "gmail", "m1", "ship the feature", 1000)
+  let l = sample_event("l1", "linear", "iss-1", "ship the feature", 2000)
+  let assert Ok(True) = db.insert_event(subject, g)
+  let assert Ok(True) = db.insert_event(subject, l)
+
+  let assert Ok(results) =
+    db.search_events(subject, "ship", None, Some("gmail"), 10)
+  list.length(results) |> should.equal(1)
+  let assert [hit] = results
+  hit.source |> should.equal("gmail")
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn search_events_filters_by_time_range_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let past = sample_event("p", "gmail", "p1", "budget report ready", 1000)
+  let now = sample_event("n", "gmail", "n1", "budget report ready", 5000)
+  let future = sample_event("f", "gmail", "f1", "budget report ready", 9000)
+  let assert Ok(True) = db.insert_event(subject, past)
+  let assert Ok(True) = db.insert_event(subject, now)
+  let assert Ok(True) = db.insert_event(subject, future)
+
+  // Window [3000, 7000] should only include `now`
+  let assert Ok(results) =
+    db.search_events(subject, "budget", Some(#(3000, 7000)), None, 10)
+  list.length(results) |> should.equal(1)
+  let assert [hit] = results
+  hit.id |> should.equal("n")
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn search_events_empty_query_returns_recent_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let e1 = sample_event("e1", "gmail", "m1", "first", 1000)
+  let e2 = sample_event("e2", "gmail", "m2", "second", 2000)
+  let e3 = sample_event("e3", "gmail", "m3", "third", 3000)
+  let assert Ok(True) = db.insert_event(subject, e1)
+  let assert Ok(True) = db.insert_event(subject, e2)
+  let assert Ok(True) = db.insert_event(subject, e3)
+
+  // Empty query bypasses FTS; results ordered by time_ms DESC
+  let assert Ok(results) = db.search_events(subject, "", None, None, 10)
+  list.length(results) |> should.equal(3)
+  let assert [first, second, third] = results
+  first.id |> should.equal("e3")
+  second.id |> should.equal("e2")
+  third.id |> should.equal("e1")
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn search_events_respects_limit_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(True) =
+    db.insert_event(subject, sample_event("e1", "gmail", "m1", "ping", 1000))
+  let assert Ok(True) =
+    db.insert_event(subject, sample_event("e2", "gmail", "m2", "ping", 2000))
+  let assert Ok(True) =
+    db.insert_event(subject, sample_event("e3", "gmail", "m3", "ping", 3000))
+  let assert Ok(True) =
+    db.insert_event(subject, sample_event("e4", "gmail", "m4", "ping", 4000))
+  let assert Ok(True) =
+    db.insert_event(subject, sample_event("e5", "gmail", "m5", "ping", 5000))
+
+  let assert Ok(results) = db.search_events(subject, "ping", None, None, 2)
+  list.length(results) |> should.equal(2)
 
   process.send(subject, db.Shutdown)
 }

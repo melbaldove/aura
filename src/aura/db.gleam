@@ -1,6 +1,9 @@
 import aura/db_schema
+import aura/event
 import gleam/dynamic/decode
 import gleam/erlang/process
+import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
@@ -213,6 +216,17 @@ pub type DbMessage {
   GetCompactionSummaries(
     reply_to: process.Subject(Result(List(String), String)),
     domain: String,
+  )
+  InsertEvent(
+    reply_to: process.Subject(Result(Bool, String)),
+    event: event.AuraEvent,
+  )
+  SearchEvents(
+    reply_to: process.Subject(Result(List(event.AuraEvent), String)),
+    query: String,
+    time_range_ms: Option(#(Int, Int)),
+    source: Option(String),
+    limit: Int,
   )
 }
 
@@ -597,6 +611,39 @@ pub fn get_compaction_summaries(
   })
 }
 
+/// Insert an ambient event. Returns `True` if a new row was written, or
+/// `False` if the (source, external_id) pair already existed and the insert
+/// was ignored. Use this to make event ingestion idempotent.
+pub fn insert_event(
+  subject: process.Subject(DbMessage),
+  event: event.AuraEvent,
+) -> Result(Bool, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    InsertEvent(reply_to: reply_to, event: event)
+  })
+}
+
+/// Search ambient events. An empty `query` skips the FTS MATCH and returns
+/// rows ordered by `time_ms DESC`, subject to the optional filters. A
+/// non-empty `query` matches against `events_fts` (source/type/subject/tags/data).
+pub fn search_events(
+  subject: process.Subject(DbMessage),
+  query: String,
+  time_range_ms: Option(#(Int, Int)),
+  source: Option(String),
+  limit: Int,
+) -> Result(List(event.AuraEvent), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    SearchEvents(
+      reply_to: reply_to,
+      query: query,
+      time_range_ms: time_range_ms,
+      source: source,
+      limit: limit,
+    )
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
@@ -846,6 +893,19 @@ fn handle_message(
 
     GetCompactionSummaries(reply_to:, domain:) -> {
       let result = do_get_compaction_summaries(state.conn, domain)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    InsertEvent(reply_to:, event:) -> {
+      let result = do_insert_event(state.conn, event)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    SearchEvents(reply_to:, query:, time_range_ms:, source:, limit:) -> {
+      let result =
+        do_search_events(state.conn, query, time_range_ms, source, limit)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -1407,6 +1467,148 @@ fn do_get_compaction_summaries(
   })
 }
 
+fn do_insert_event(
+  conn: sqlight.Connection,
+  e: event.AuraEvent,
+) -> Result(Bool, String) {
+  // INSERT OR IGNORE ... RETURNING id returns a row only when the insert
+  // actually happened. A duplicate (source, external_id) hits the UNIQUE
+  // constraint, is ignored, and yields an empty result set — which is how
+  // we detect the dedup without a separate SELECT.
+  let tags_json = event.tags_to_json(e.tags)
+  sqlight.query(
+    "INSERT OR IGNORE INTO events (id, source, type, subject, time_ms, tags_json, external_id, data_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+    on: conn,
+    with: [
+      sqlight.text(e.id),
+      sqlight.text(e.source),
+      sqlight.text(e.type_),
+      sqlight.text(e.subject),
+      sqlight.int(e.time_ms),
+      sqlight.text(tags_json),
+      sqlight.text(e.external_id),
+      sqlight.text(e.data),
+    ],
+    expecting: decode.at([0], decode.string),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to insert event: " <> string.inspect(err)
+  })
+  |> result.map(fn(rows) {
+    case rows {
+      [] -> False
+      _ -> True
+    }
+  })
+}
+
+fn do_search_events(
+  conn: sqlight.Connection,
+  query: String,
+  time_range_ms: Option(#(Int, Int)),
+  source_filter: Option(String),
+  limit: Int,
+) -> Result(List(event.AuraEvent), String) {
+  // Empty query short-circuits FTS and selects straight from events with the
+  // optional filters. FTS5 errors on an empty MATCH string, so this branch
+  // is required — not a convenience.
+  let #(sql, args) = case string.trim(query) {
+    "" -> build_events_plain_query(time_range_ms, source_filter, limit)
+    cleaned -> build_events_fts_query(cleaned, time_range_ms, source_filter, limit)
+  }
+
+  sqlight.query(sql, on: conn, with: args, expecting: event_row_decoder())
+  |> result.map_error(fn(err) {
+    "Failed to search events: " <> string.inspect(err)
+  })
+  |> result.try(fn(rows) {
+    // Parse each stored tags_json back to a Dict; a broken tag blob is a
+    // parse failure, not silent garbage.
+    list.try_map(rows, fn(row) {
+      let #(id, source, type_, subject, time_ms, tags_raw, external_id, data) =
+        row
+      case event.tags_from_json(tags_raw) {
+        Ok(tags) ->
+          Ok(event.AuraEvent(
+            id: id,
+            source: source,
+            type_: type_,
+            subject: subject,
+            time_ms: time_ms,
+            tags: tags,
+            external_id: external_id,
+            data: data,
+          ))
+        Error(err) -> Error("Failed to decode event tags: " <> err)
+      }
+    })
+  })
+}
+
+fn build_events_plain_query(
+  time_range_ms: Option(#(Int, Int)),
+  source_filter: Option(String),
+  limit: Int,
+) -> #(String, List(sqlight.Value)) {
+  let #(where_sql, args) =
+    build_events_filter_sql(time_range_ms, source_filter, [])
+  let where_clause = case where_sql {
+    "" -> ""
+    _ -> " WHERE " <> where_sql
+  }
+  let sql =
+    "SELECT id, source, type, subject, time_ms, tags_json, external_id, data_json FROM events"
+    <> where_clause
+    <> " ORDER BY time_ms DESC LIMIT ?"
+  #(sql, list.append(args, [sqlight.int(limit)]))
+}
+
+fn build_events_fts_query(
+  cleaned_query: String,
+  time_range_ms: Option(#(Int, Int)),
+  source_filter: Option(String),
+  limit: Int,
+) -> #(String, List(sqlight.Value)) {
+  // Quote the user's query as an FTS phrase so we don't need to sanitize
+  // every FTS operator. Embedded double quotes are stripped.
+  let safe = string.replace(cleaned_query, "\"", "")
+  let quoted = "\"" <> safe <> "\""
+  let base_args = [sqlight.text(quoted)]
+  let #(filter_sql, filter_args) =
+    build_events_filter_sql(time_range_ms, source_filter, base_args)
+  let and_clause = case filter_sql {
+    "" -> ""
+    _ -> " AND " <> filter_sql
+  }
+  let sql =
+    "SELECT events.id, events.source, events.type, events.subject, events.time_ms, events.tags_json, events.external_id, events.data_json FROM events_fts JOIN events ON events.rowid = events_fts.rowid WHERE events_fts MATCH ?"
+    <> and_clause
+    <> " ORDER BY events.time_ms DESC LIMIT ?"
+  #(sql, list.append(filter_args, [sqlight.int(limit)]))
+}
+
+fn build_events_filter_sql(
+  time_range_ms: Option(#(Int, Int)),
+  source_filter: Option(String),
+  seed_args: List(sqlight.Value),
+) -> #(String, List(sqlight.Value)) {
+  let #(parts, args) = case time_range_ms {
+    Some(#(lo, hi)) -> #(
+      ["events.time_ms BETWEEN ? AND ?"],
+      list.append(seed_args, [sqlight.int(lo), sqlight.int(hi)]),
+    )
+    None -> #([], seed_args)
+  }
+  let #(parts, args) = case source_filter {
+    Some(src) -> #(
+      list.append(parts, ["events.source = ?"]),
+      list.append(args, [sqlight.text(src)]),
+    )
+    None -> #(parts, args)
+  }
+  #(string.join(parts, " AND "), args)
+}
+
 // ---------------------------------------------------------------------------
 // Decoders
 // ---------------------------------------------------------------------------
@@ -1477,6 +1679,29 @@ fn memory_entry_decoder() -> decode.Decoder(MemoryEntry) {
     key: key,
     content: content,
     created_at_ms: created_at_ms,
+  ))
+}
+
+fn event_row_decoder() -> decode.Decoder(
+  #(String, String, String, String, Int, String, String, String),
+) {
+  use id <- decode.field(0, decode.string)
+  use source <- decode.field(1, decode.string)
+  use type_ <- decode.field(2, decode.string)
+  use subject <- decode.field(3, decode.string)
+  use time_ms <- decode.field(4, decode.int)
+  use tags_json <- decode.field(5, decode.string)
+  use external_id <- decode.field(6, decode.string)
+  use data_json <- decode.field(7, decode.string)
+  decode.success(#(
+    id,
+    source,
+    type_,
+    subject,
+    time_ms,
+    tags_json,
+    external_id,
+    data_json,
   ))
 }
 
