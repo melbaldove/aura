@@ -1570,8 +1570,12 @@ fn build_events_fts_query(
   limit: Int,
 ) -> #(String, List(sqlight.Value)) {
   // Quote the user's query as an FTS phrase so we don't need to sanitize
-  // every FTS operator. Embedded double quotes are stripped.
-  let safe = string.replace(cleaned_query, "\"", "")
+  // every FTS operator. Strip the same chars as `do_search` (`"` and `*`)
+  // so the two sites stay in lockstep.
+  let safe =
+    cleaned_query
+    |> string.replace("\"", "")
+    |> string.replace("*", "")
   let quoted = "\"" <> safe <> "\""
   let base_args = [sqlight.text(quoted)]
   let #(filter_sql, filter_args) =
