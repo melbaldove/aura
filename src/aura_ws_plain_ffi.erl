@@ -1,18 +1,19 @@
--module(aura_ws_ffi).
--export([connect/3]).
+-module(aura_ws_plain_ffi).
+-export([connect/4]).
 
-%% Connect to a Discord gateway WebSocket over TLS (wss://) and relay
-%% frames to a Gleam process. Socket-agnostic protocol logic
-%% (handshake validation, frame parse, masking) lives in
-%% aura_ws_protocol; this module owns the ssl: socket ops and the
-%% passive relay loop.
+%% Plain-TCP WebSocket client (ws://, not wss://). Mirrors aura_ws_ffi
+%% but uses gen_tcp instead of ssl so it can talk to VPN-local services
+%% that aren't TLS-fronted (like the Blather dev server on
+%% 10.0.0.2:18100). Socket-agnostic protocol logic (handshake, frame
+%% parse, masking) is shared via aura_ws_protocol.
 %%
+%% connect(Host, Port, Path, CallbackPid) -> Pid
 %% The relay process sends {ws_text, Binary} | ws_closed | {ws_error, Binary}
-%% messages to the CallbackPid.
-connect(Host, Path, CallbackPid) ->
+%% messages to CallbackPid, identical to the SSL FFI.
+connect(Host, Port, Path, CallbackPid) ->
     spawn(fun() ->
         try
-            ws_loop(Host, Path, CallbackPid)
+            ws_loop(Host, Port, Path, CallbackPid)
         catch
             Class:Reason:Stack ->
                 Msg = iolist_to_binary(io_lib:format("~p:~p ~p", [Class, Reason, Stack])),
@@ -20,24 +21,14 @@ connect(Host, Path, CallbackPid) ->
         end
     end).
 
-ws_loop(Host, Path, CallbackPid) ->
-    %% ssl:start() is idempotent in OTP — returns ok or {error, {already_started, ssl}}.
-    %% Called here to ensure availability regardless of startup order.
-    ssl:start(),
-    Port = 443,
+ws_loop(Host, Port, Path, CallbackPid) ->
     HostStr = binary_to_list(Host),
-    Opts = [{verify, verify_peer},
-            {cacerts, public_key:cacerts_get()},
-            {server_name_indication, HostStr},
-            {customize_hostname_check,
-                [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]},
-            binary, {active, false}],
+    Opts = [binary, {active, false}, {packet, raw}],
 
-    case ssl:connect(HostStr, Port, Opts, 10000) of
+    case gen_tcp:connect(HostStr, Port, Opts, 10000) of
         {ok, Socket} ->
             case do_handshake(Socket, Host, Path) of
                 {ok, Extra} ->
-                    %% Process any piggybacked frames from the upgrade response
                     case Extra of
                         <<>> -> ok;
                         _ ->
@@ -45,24 +36,22 @@ ws_loop(Host, Path, CallbackPid) ->
                                 process_frames(Extra, Socket, CallbackPid)
                             catch
                                 _:Reason ->
-                                    catch ssl:close(Socket),
+                                    catch gen_tcp:close(Socket),
                                     CallbackPid ! {ws_error, io_lib:format("~p", [Reason])},
                                     ok
                             end
                     end,
-                    %% Use passive recv loop — {active, true} unreliable on macOS SSL
                     relay_loop_recv(Socket, CallbackPid, <<>>);
                 {error, Reason} ->
                     CallbackPid ! {ws_error, Reason},
-                    catch ssl:close(Socket)
+                    catch gen_tcp:close(Socket)
             end;
         {error, Reason} ->
             Msg = iolist_to_binary(
-                io_lib:format("SSL connect failed: ~p", [Reason])),
+                io_lib:format("TCP connect failed: ~p", [Reason])),
             CallbackPid ! {ws_error, Msg}
     end.
 
-%% Perform the WebSocket upgrade handshake with Sec-WebSocket-Accept validation
 do_handshake(Socket, Host, Path) ->
     Key = base64:encode(crypto:strong_rand_bytes(16)),
     ExpectedAccept = aura_ws_protocol:compute_accept_key(Key),
@@ -74,9 +63,9 @@ do_handshake(Socket, Host, Path) ->
            <<"Sec-WebSocket-Key: ">>, Key, <<"\r\n">>,
            <<"Sec-WebSocket-Version: 13\r\n">>,
            <<"\r\n">>],
-    ssl:send(Socket, Req),
+    gen_tcp:send(Socket, Req),
 
-    case ssl:recv(Socket, 0, 10000) of
+    case gen_tcp:recv(Socket, 0, 10000) of
         {ok, RespData} ->
             case binary:match(RespData, <<"101">>) of
                 nomatch ->
@@ -98,25 +87,19 @@ do_handshake(Socket, Host, Path) ->
                 io_lib:format("Handshake recv failed: ~p", [Reason]))}
     end.
 
-%% Main relay loop — uses passive ssl:recv instead of active mode.
-%% Active mode is unreliable on macOS Erlang 28 SSL sockets.
-%% Uses a short recv timeout (100ms) so we can interleave with
-%% checking for outgoing ws_send messages.
 relay_loop_recv(Socket, CallbackPid, Buffer) ->
-    %% First check for any outgoing messages (non-blocking)
     receive
         {ws_send, Data} ->
             Frame = aura_ws_protocol:encode_text_frame(Data),
-            ssl:send(Socket, Frame),
+            gen_tcp:send(Socket, Frame),
             relay_loop_recv(Socket, CallbackPid, Buffer);
         ws_close ->
             CloseFrame = aura_ws_protocol:encode_control_frame(8, <<3:8, 232:8>>),
-            ssl:send(Socket, CloseFrame),
-            ssl:close(Socket),
+            gen_tcp:send(Socket, CloseFrame),
+            gen_tcp:close(Socket),
             CallbackPid ! ws_closed
     after 0 ->
-        %% No outgoing messages — try to receive data
-        case ssl:recv(Socket, 0, 500) of
+        case gen_tcp:recv(Socket, 0, 500) of
             {ok, Data} ->
                 NewBuffer = <<Buffer/binary, Data/binary>>,
                 case aura_ws_protocol:extract_frames(NewBuffer) of
@@ -127,36 +110,30 @@ relay_loop_recv(Socket, CallbackPid, Buffer) ->
                         relay_loop_recv(Socket, CallbackPid, Rest);
                     {error, frame_too_large} ->
                         CallbackPid ! {ws_error, <<"Frame exceeds maximum size">>},
-                        catch ssl:close(Socket)
+                        catch gen_tcp:close(Socket)
                 end;
             {error, timeout} ->
-                %% No data available — loop back to check for outgoing
                 relay_loop_recv(Socket, CallbackPid, Buffer);
             {error, closed} ->
                 CallbackPid ! ws_closed;
             {error, Reason} ->
                 CallbackPid ! {ws_error, iolist_to_binary(
-                    io_lib:format("SSL error: ~p", [Reason]))},
-                catch ssl:close(Socket)
+                    io_lib:format("TCP error: ~p", [Reason]))},
+                catch gen_tcp:close(Socket)
         end
     end.
 
-%% Handle different frame types. Text/binary → deliver; ping → pong;
-%% close → respond and signal; pong/unknown → ignore.
 handle_frame({text, Payload}, _Socket, CallbackPid) ->
     CallbackPid ! {ws_text, Payload};
 handle_frame({binary, Payload}, _Socket, CallbackPid) ->
-    %% Forward binary frames as text (Discord doesn't use binary, but handle it)
     CallbackPid ! {ws_text, Payload};
 handle_frame({close, _Payload}, Socket, CallbackPid) ->
-    %% Respond with close frame
     CloseFrame = <<1:1, 0:3, 8:4, 1:1, 0:7, 0:32>>,
-    ssl:send(Socket, CloseFrame),
+    gen_tcp:send(Socket, CloseFrame),
     CallbackPid ! ws_closed;
 handle_frame({ping, Payload}, Socket, _CallbackPid) ->
-    %% Respond with pong
     PongFrame = aura_ws_protocol:encode_control_frame(10, Payload),
-    ssl:send(Socket, PongFrame);
+    gen_tcp:send(Socket, PongFrame);
 handle_frame({pong, _Payload}, _Socket, _CallbackPid) ->
     ok;
 handle_frame({unknown, _Opcode, _Payload}, _Socket, _CallbackPid) ->
