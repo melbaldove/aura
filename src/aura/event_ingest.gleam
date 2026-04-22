@@ -10,8 +10,8 @@
 ////      resulting tags with any tags the caller explicitly set. Incoming
 ////      tags win on conflict.
 ////   3. Persist — call `db.insert_event`. Duplicates (by `(source,
-////      external_id)`) are silently dropped; errors are logged but never
-////      crash the actor.
+////      external_id)`) are logged at Info and dropped; errors are logged
+////      but never crash the actor.
 ////
 //// Ingestion is fire-and-forget: callers send an `Ingest(event)` message
 //// via `ingest/2` and continue immediately. There is no routing to flares
@@ -85,7 +85,14 @@ fn handle_message(
       let tagged = attach_tags(normalized)
       case db.insert_event(state.db_subject, tagged) {
         Ok(True) -> Nil
-        Ok(False) -> Nil
+        Ok(False) ->
+          logging.log(
+            logging.Info,
+            "[event_ingest] Event deduped: source="
+              <> tagged.source
+              <> " external_id="
+              <> tagged.external_id,
+          )
         Error(err) ->
           logging.log(
             logging.Error,
