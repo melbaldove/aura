@@ -11,6 +11,8 @@ import aura/ctl
 import aura/db
 import aura/db_migration
 import aura/discord/rest
+import aura/event_ingest
+import aura/mcp/pool as mcp_pool
 import aura/memory
 import aura/notification
 import aura/poller
@@ -77,6 +79,13 @@ pub fn start(
     Error(e) ->
       logging.log(logging.Error, "[supervisor] JSONL migration error: " <> e)
   }
+
+  // 3b. Start event_ingest actor (required — panics on failure).
+  // Starts after db (which it depends on) and before flare/brain so the
+  // supervisor log reads top-down in dependency order.
+  let assert Ok(event_ingest_started) = event_ingest.start(db_subject)
+  let event_ingest_subject = event_ingest_started.data
+  logging.log(logging.Info, "[supervisor] Event ingest started")
 
   // 4. Resolve Discord channel name → ID mapping
   let channel_map = case
@@ -312,12 +321,16 @@ pub fn start(
       logging.log(logging.Error, "[supervisor] Failed to start ctl: " <> e)
   }
 
-  // 9. Start OTP supervisor with gateway as supervised child
+  // 9. Start OTP supervisor with gateway + MCP pool as supervised children
   let discord_config = global_config.discord
   let result =
     static_supervisor.new(static_supervisor.OneForOne)
     |> static_supervisor.restart_tolerance(intensity: 10, period: 60)
     |> static_supervisor.add(poller.supervised(discord_config, brain_subject))
+    |> static_supervisor.add(mcp_pool.supervised(
+      global_config.mcp,
+      event_ingest_subject,
+    ))
     |> static_supervisor.start
 
   case result {
