@@ -5,6 +5,7 @@ import aura/oauth
 import gleam/dict
 import gleam/int
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import logging
@@ -13,6 +14,13 @@ import tom
 /// Discord connection settings (token, guild ID, and fallback channel ID).
 pub type DiscordConfig {
   DiscordConfig(token: String, guild: String, default_channel: String)
+}
+
+/// Blather connection settings. `url` is the base HTTP URL of the
+/// Blather server (e.g. `http://10.0.0.2:18100`); `api_key` is a
+/// `blather_<hex>` agent key. Both required if the section is present.
+pub type BlatherConfig {
+  BlatherConfig(url: String, api_key: String)
 }
 
 /// Model IDs used by each agent role (brain, domain, ACP, heartbeat, monitor, vision, dream).
@@ -94,6 +102,7 @@ pub type IntegrationsConfig {
 pub type GlobalConfig {
   GlobalConfig(
     discord: DiscordConfig,
+    blather: Option(BlatherConfig),
     models: ModelsConfig,
     notifications: NotificationsConfig,
     vision: VisionConfig,
@@ -136,6 +145,7 @@ pub type DomainConfig {
 pub fn default_global() -> GlobalConfig {
   GlobalConfig(
     discord: DiscordConfig(token: "", guild: "", default_channel: ""),
+    blather: None,
     models: ModelsConfig(
       brain: "",
       domain: "",
@@ -332,6 +342,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
 
   use mcp <- result.try(parse_mcp(doc))
   use integrations <- result.try(parse_integrations(doc))
+  use blather <- result.try(parse_blather(doc))
 
   Ok(GlobalConfig(
     discord: DiscordConfig(
@@ -339,6 +350,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
       guild: guild,
       default_channel: default_channel,
     ),
+    blather: blather,
     models: ModelsConfig(
       brain: brain,
       domain: models_domain,
@@ -370,6 +382,33 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     mcp: mcp,
     integrations: integrations,
   ))
+}
+
+/// Parse the optional `[blather]` section. Returns `None` if the section is
+/// absent; returns an error if the section is present but missing either
+/// field. Empty-string values are valid TOML but will fail at startup when
+/// the transport tries to connect — fail at parse time instead.
+fn parse_blather(
+  doc: dict.Dict(String, tom.Toml),
+) -> Result(Option(BlatherConfig), String) {
+  case tom.get_table(doc, ["blather"]) {
+    Error(_) -> Ok(None)
+    Ok(_) -> {
+      use url <- result.try(
+        tom.get_string(doc, ["blather", "url"])
+        |> result.map_error(fn(_) { "Missing blather.url" }),
+      )
+      use api_key <- result.try(
+        tom.get_string(doc, ["blather", "api_key"])
+        |> result.map_error(fn(_) { "Missing blather.api_key" }),
+      )
+      case url, api_key {
+        "", _ -> Error("blather.url must not be empty")
+        _, "" -> Error("blather.api_key must not be empty")
+        _, _ -> Ok(Some(BlatherConfig(url: url, api_key: api_key)))
+      }
+    }
+  }
 }
 
 /// Parse the `[mcp.servers.*]` section. Missing section is valid and yields

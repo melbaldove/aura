@@ -1,6 +1,7 @@
 import aura/config
 import aura/config_parser
 import gleam/list
+import gleam/option
 import gleam/result
 import gleam/string
 import gleeunit/should
@@ -338,6 +339,62 @@ token_path = \"/tmp/gmail-work.json\"
     Error(msg) -> {
       string.contains(msg, "oauth_client_id") |> should.be_true
     }
+  }
+}
+
+pub fn parse_without_blather_section_returns_none_test() {
+  let result = config.parse_global(base_global_toml())
+  result |> should.be_ok
+  let cfg = result |> result.unwrap(config.default_global())
+  cfg.blather |> should.equal(option.None)
+}
+
+pub fn parse_with_blather_section_returns_some_test() {
+  let toml =
+    base_global_toml()
+    <> "
+[blather]
+url = \"http://10.0.0.2:18100\"
+api_key = \"blather_abc123\"
+"
+  let result = config.parse_global(toml)
+  result |> should.be_ok
+  let cfg = result |> result.unwrap(config.default_global())
+  case cfg.blather {
+    option.Some(b) -> {
+      b.url |> should.equal("http://10.0.0.2:18100")
+      b.api_key |> should.equal("blather_abc123")
+    }
+    option.None -> should.fail()
+  }
+}
+
+pub fn parse_blather_section_missing_url_returns_error_test() {
+  let toml =
+    base_global_toml()
+    <> "
+[blather]
+api_key = \"blather_abc123\"
+"
+  let result = config.parse_global(toml)
+  case result {
+    Ok(_) -> should.fail()
+    Error(msg) -> string.contains(msg, "blather.url") |> should.be_true
+  }
+}
+
+pub fn parse_blather_section_empty_api_key_returns_error_test() {
+  let toml =
+    base_global_toml()
+    <> "
+[blather]
+url = \"http://10.0.0.2:18100\"
+api_key = \"\"
+"
+  let result = config.parse_global(toml)
+  case result {
+    Ok(_) -> should.fail()
+    Error(msg) -> string.contains(msg, "api_key") |> should.be_true
   }
 }
 

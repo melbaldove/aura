@@ -27,6 +27,7 @@ import aura/xdg
 import gleam/erlang/process
 import gleam/int
 import gleam/list
+import gleam/option
 import gleam/otp/static_supervisor
 import gleam/result
 import gleam/string
@@ -324,6 +325,16 @@ pub fn start(
 
   // 9. Start OTP supervisor with gateway + MCP pool as supervised children
   let discord_config = global_config.discord
+
+  case global_config.blather {
+    option.Some(b) ->
+      logging.log(
+        logging.Info,
+        "[supervisor] Blather configured: " <> b.url,
+      )
+    option.None -> Nil
+  }
+
   let result =
     static_supervisor.new(static_supervisor.OneForOne)
     |> static_supervisor.restart_tolerance(intensity: 10, period: 60)
