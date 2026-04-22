@@ -2,6 +2,7 @@ import aura/mcp/client
 import fakes/fake_mcp_server as fake
 import gleam/erlang/process.{type Subject}
 import gleam/json
+import gleam/option.{None}
 import gleam/string
 import gleeunit
 import gleeunit/should
@@ -44,7 +45,7 @@ fn make_config_with_deadline(
 /// test. We unlink immediately so the test can observe death via a
 /// monitor instead.
 fn start_unlinked(config: client.ClientConfig) -> Subject(client.ClientMessage) {
-  let assert Ok(started) = client.start(config)
+  let assert Ok(started) = client.start(config, None)
   case process.subject_owner(started.data) {
     Ok(pid) -> process.unlink(pid)
     Error(_) -> Nil

@@ -38,9 +38,10 @@ import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Name, type Subject}
 import gleam/int
 import gleam/json
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/string
@@ -146,10 +147,18 @@ pub fn new_config(
 ///
 /// Fails synchronously if the subprocess cannot be spawned or the initial
 /// `initialize` request cannot be written.
+///
+/// If `name` is `Some(n)`, the actor registers itself under that process
+/// name and its default subject is a named subject. Registration fails
+/// (actor fails to start) if the name is already taken — e.g. two servers
+/// in the pool configured with the same string name. The BEAM auto-
+/// unregisters the name when the process dies, so supervisor restarts
+/// transparently re-register.
 pub fn start(
   config: ClientConfig,
+  name: Option(Name(ClientMessage)),
 ) -> Result(actor.Started(Subject(ClientMessage)), String) {
-  let builder =
+  let base =
     actor.new_with_initialiser(5000, fn(self_subject) {
       let self_pid = process.self()
       case
@@ -205,6 +214,11 @@ pub fn start(
     })
     |> actor.on_message(handle_message)
 
+  let builder = case name {
+    Some(n) -> actor.named(base, n)
+    None -> base
+  }
+
   case actor.start(builder) {
     Ok(started) -> Ok(started)
     Error(err) -> Error("mcp client failed to start: " <> string.inspect(err))
@@ -212,12 +226,14 @@ pub fn start(
 }
 
 /// Build a supervised child spec so the MCP client can live under a
-/// supervisor. The pool supervisor (task 8) uses this.
+/// supervisor. The pool (aura/mcp/pool.gleam) uses this, passing a Name so
+/// each client registers itself and can be looked up via `pool.get_client`.
 pub fn supervised(
   config: ClientConfig,
+  name: Name(ClientMessage),
 ) -> supervision.ChildSpecification(Subject(ClientMessage)) {
   supervision.worker(fn() {
-    case start(config) {
+    case start(config, Some(name)) {
       Ok(started) -> Ok(started)
       Error(_) -> Error(actor.InitTimeout)
     }
