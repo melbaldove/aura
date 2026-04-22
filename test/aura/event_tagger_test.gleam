@@ -89,7 +89,7 @@ pub fn tag_unknown_source_returns_empty_test() {
 }
 
 pub fn tag_unknown_type_for_known_source_returns_empty_test() {
-  let data = "{\"from\":\"alice@example.com\",\"thread_id\":\"t-1\"}"
+  let data = "{\"stuff\":\"thing\"}"
 
   let tags = event_tagger.tag("gmail", "weird.event", data)
 
@@ -100,4 +100,29 @@ pub fn tag_malformed_json_returns_empty_test() {
   let tags = event_tagger.tag("gmail", "email.received", "{not-json")
 
   should.equal(tags, dict.new())
+}
+
+pub fn tag_gmail_with_resource_updated_type_still_extracts_from_test() {
+  // Regression test: pool.gleam emits type_ = "resource.updated" for all
+  // MCP notifications. Tagging must work for this type, not just the
+  // domain-specific types the MCP server labels events with.
+  let data =
+    "{\"from\":\"alice@example.com\",\"to\":\"bob@example.com\","
+    <> "\"thread_id\":\"thread-123\",\"subject\":\"Lunch tomorrow?\"}"
+
+  let tags = event_tagger.tag("gmail", "resource.updated", data)
+
+  should.equal(dict.get(tags, "from"), Ok("alice@example.com"))
+  should.equal(dict.get(tags, "thread_id"), Ok("thread-123"))
+}
+
+pub fn tag_linear_variant_source_test() {
+  let data =
+    "{\"issue\":{\"identifier\":\"ENG-42\"},"
+    <> "\"comment\":{\"user\":{\"email\":\"carol@example.com\"}}}"
+
+  let tags = event_tagger.tag("linear-work", "resource.updated", data)
+
+  should.equal(dict.get(tags, "ticket_id"), Ok("ENG-42"))
+  should.equal(dict.get(tags, "author"), Ok("carol@example.com"))
 }

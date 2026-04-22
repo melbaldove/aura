@@ -7,10 +7,18 @@ import gleam/string
 
 /// Extract tags from an event payload using source-specific rules.
 ///
-/// Returns an empty dict for unknown sources, unknown event types on a
-/// known source, and malformed JSON payloads. This is the rules-only
-/// ("cheap path") tagger that runs on every event at ingestion — LLM
-/// fuzzy tagging (entities, topics, priority) is a later phase.
+/// Returns an empty dict for unknown sources and malformed JSON payloads.
+/// This is the rules-only ("cheap path") tagger that runs on every event
+/// at ingestion — LLM fuzzy tagging (entities, topics, priority) is a
+/// later phase.
+///
+/// Dispatch is by `source` family alone. The `type_` parameter is kept
+/// in the public signature (reserved for future use) but currently
+/// unused: in production every MCP notification arrives as
+/// `type_ = "resource.updated"` (see `mcp/pool.gleam`), so keying on
+/// type would make every tagging arm dead code. Instead, for a known
+/// source family we attempt all known field extractions; missing fields
+/// simply don't tag (see `keep_ok`).
 ///
 /// The fail-soft semantics are deliberate: this runs in the ingest hot
 /// path and a misbehaving MCP server must not poison downstream work.
@@ -20,32 +28,19 @@ import gleam/string
 /// crashes the ingest actor.
 pub fn tag(
   source: String,
-  type_: String,
+  _type_: String,
   data: String,
 ) -> Dict(String, String) {
-  case parse(data) {
-    Ok(payload) -> tag_payload(source, type_, payload)
-    Error(_) -> dict.new()
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Dispatch
-// ---------------------------------------------------------------------------
-
-fn tag_payload(
-  source: String,
-  type_: String,
-  payload: Dynamic,
-) -> Dict(String, String) {
-  case source_family(source), type_ {
-    Gmail, "email.received" | Gmail, "email.sent" -> tag_gmail(payload)
-    Linear, "issue.commented" -> tag_linear_comment(payload)
-    Linear, "issue.updated" -> tag_linear_issue(payload)
-    Linear, "issue.created" -> tag_linear_issue(payload)
+  case source_family(source), parse(data) {
+    Gmail, Ok(payload) -> tag_gmail(payload)
+    Linear, Ok(payload) -> tag_linear(payload)
     _, _ -> dict.new()
   }
 }
+
+// ---------------------------------------------------------------------------
+// Source family
+// ---------------------------------------------------------------------------
 
 type SourceFamily {
   Gmail
@@ -58,9 +53,13 @@ fn source_family(source: String) -> SourceFamily {
     "gmail" -> Gmail
     "linear" -> Linear
     _ ->
-      case string.starts_with(source, "gmail-") {
-        True -> Gmail
-        False -> UnknownSource
+      case
+        string.starts_with(source, "gmail-"),
+        string.starts_with(source, "linear-")
+      {
+        True, _ -> Gmail
+        _, True -> Linear
+        _, _ -> UnknownSource
       }
   }
 }
@@ -103,27 +102,32 @@ fn extract_first_recipient(payload: Dynamic) -> Result(String, Nil) {
 // Linear rules
 // ---------------------------------------------------------------------------
 
-fn tag_linear_comment(payload: Dynamic) -> Dict(String, String) {
+/// Extract linear tags. Tries every known linear field path — missing
+/// fields simply don't tag. A "commented" event has `comment.user.email`
+/// (populates `author`) but no `issue.state.name`; an "updated" event
+/// has `issue.state.name` (populates `status`) and often
+/// `issue.assignee.email` (populates `author`). Each path is probed
+/// independently, so payload shape drives the output.
+fn tag_linear(payload: Dynamic) -> Dict(String, String) {
   let entries =
     [
       #("ticket_id", extract_string(payload, ["issue", "identifier"])),
-      #("author", extract_string(payload, ["comment", "user", "email"])),
+      #("author", extract_linear_author(payload)),
+      #("status", extract_string(payload, ["issue", "state", "name"])),
     ]
     |> list.filter_map(keep_ok)
 
   dict.from_list(entries)
 }
 
-fn tag_linear_issue(payload: Dynamic) -> Dict(String, String) {
-  let entries =
-    [
-      #("ticket_id", extract_string(payload, ["issue", "identifier"])),
-      #("author", extract_string(payload, ["issue", "assignee", "email"])),
-      #("status", extract_string(payload, ["issue", "state", "name"])),
-    ]
-    |> list.filter_map(keep_ok)
-
-  dict.from_list(entries)
+/// Prefer `comment.user.email` (comment events) and fall back to
+/// `issue.assignee.email` (issue lifecycle events). Either may be
+/// missing; a missing value produces `Error(Nil)` and no tag.
+fn extract_linear_author(payload: Dynamic) -> Result(String, Nil) {
+  case extract_string(payload, ["comment", "user", "email"]) {
+    Ok(value) -> Ok(value)
+    Error(_) -> extract_string(payload, ["issue", "assignee", "email"])
+  }
 }
 
 // ---------------------------------------------------------------------------
