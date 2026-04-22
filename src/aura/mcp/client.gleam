@@ -9,6 +9,23 @@
 //// to this actor's pid as `{mcp_line, Handle, RawLine}` and subprocess exit
 //// as `{mcp_exit, Handle, Status}` — translated to `ClientMessage` via
 //// `process.select_record`.
+////
+//// Design notes:
+////
+//// - Clean subprocess exit (status 0) in `Ready` is treated as a normal
+////   actor stop. Servers that shut down gracefully (OAuth refresh failure,
+////   SIGTERM from an operator) should not trigger supervisor restart loops.
+////   Non-zero exit in `Ready`, or any exit during `Handshaking`/`Subscribing`,
+////   stops the actor abnormally so the supervisor restarts it.
+////
+//// - Handshake has a deadline (`config.handshake_timeout_ms`, default 30s).
+////   If the server never completes initialize + subscribe within the window
+////   the actor stops abnormally with "handshake deadline exceeded".
+////
+//// - `config.on_notification` is invoked inline on the actor's message-
+////   handling thread. Callbacks should be fast / non-blocking; if a callback
+////   needs to do expensive work it should forward the payload to its own
+////   process.
 
 import aura/mcp/jsonrpc
 import aura/mcp/stdio_transport.{type Handle}
@@ -19,10 +36,12 @@ import gleam/erlang/atom
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/json
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/string
+import logging
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,6 +60,10 @@ pub type Phase {
   Ready
 }
 
+/// Default handshake deadline (30 seconds). Generous enough for slow OAuth
+/// refreshes but not indefinite.
+pub const default_handshake_timeout_ms: Int = 30_000
+
 /// Configuration for a single MCP client.
 pub type ClientConfig {
   ClientConfig(
@@ -53,15 +76,23 @@ pub type ClientConfig {
     /// Invoked on every incoming notification from the server with the raw
     /// `method` and `params`. The callback can filter for
     /// `notifications/resources/updated` or handle any method it cares about.
+    ///
+    /// Runs inline on the actor thread — do fast, non-blocking work only.
     on_notification: fn(String, json.Json) -> Nil,
+    /// Upper bound on how long the handshake (`initialize` + all
+    /// subscribe calls) may take before the actor stops abnormally.
+    /// 30s by default.
+    handshake_timeout_ms: Int,
   )
 }
 
 /// Messages the actor handles. `McpLine` and `McpExit` are translated from
-/// the raw tagged tuples delivered by the FFI.
+/// the raw tagged tuples delivered by the FFI. `HandshakeDeadline` is a
+/// self-sent timer message that trips if the handshake runs too long.
 pub type ClientMessage {
   McpLine(raw: String)
   McpExit(status: Int)
+  HandshakeDeadline
   Stop
 }
 
@@ -78,6 +109,28 @@ type State {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/// Build a `ClientConfig` with sensible defaults (`handshake_timeout_ms` =
+/// 30s). Prefer this over constructing `ClientConfig` directly so new fields
+/// gain reasonable defaults automatically.
+pub fn new_config(
+  name name: String,
+  command command: String,
+  args args: List(String),
+  env env: List(#(String, String)),
+  subscribe subscribe: List(String),
+  on_notification on_notification: fn(String, json.Json) -> Nil,
+) -> ClientConfig {
+  ClientConfig(
+    name: name,
+    command: command,
+    args: args,
+    env: env,
+    subscribe: subscribe,
+    on_notification: on_notification,
+    handshake_timeout_ms: default_handshake_timeout_ms,
+  )
+}
 
 /// Start a new MCP client actor. Spawns the subprocess synchronously; the
 /// initialize + subscribe handshake continues asynchronously — observers
@@ -110,6 +163,20 @@ pub fn start(
               Error("mcp initialize send failed: " <> err)
             }
             Ok(_) -> {
+              logging.log(
+                logging.Info,
+                log_prefix(config)
+                  <> " Handshaking with "
+                  <> config.command,
+              )
+              // Arm the handshake deadline. If we reach Ready before it
+              // fires, the message is ignored in `handle_message`.
+              let _ =
+                process.send_after(
+                  self_subject,
+                  config.handshake_timeout_ms,
+                  HandshakeDeadline,
+                )
               let state =
                 State(
                   handle: handle,
@@ -212,19 +279,64 @@ fn handle_message(
     }
 
     McpExit(status) ->
-      case state.phase {
-        Ready ->
-          actor.stop_abnormal(
-            "mcp subprocess exited (status "
-            <> int.to_string(status)
-            <> ")",
+      case state.phase, status {
+        Ready, 0 -> {
+          logging.log(
+            logging.Info,
+            log_prefix(state.config) <> " Subprocess exited cleanly",
           )
-        _ ->
-          actor.stop_abnormal(
+          actor.stop()
+        }
+        Ready, _ -> {
+          let reason =
+            "mcp subprocess exited (status " <> int.to_string(status) <> ")"
+          logging.log(
+            logging.Error,
+            log_prefix(state.config)
+              <> " Subprocess exited with status "
+              <> int.to_string(status)
+              <> " during Ready",
+          )
+          actor.stop_abnormal(reason)
+        }
+        _, _ -> {
+          let reason =
             "mcp subprocess exited during handshake (status "
             <> int.to_string(status)
-            <> ")",
+            <> ")"
+          logging.log(
+            logging.Error,
+            log_prefix(state.config)
+              <> " Subprocess exited with status "
+              <> int.to_string(status)
+              <> " during "
+              <> phase_name(state.phase),
           )
+          actor.stop_abnormal(reason)
+        }
+      }
+
+    HandshakeDeadline ->
+      case state.phase {
+        Ready ->
+          // Handshake finished before the deadline fired — ignore.
+          actor.continue(state)
+        Handshaking | Subscribing(_) -> {
+          let reason =
+            "handshake deadline exceeded ("
+            <> int.to_string(state.config.handshake_timeout_ms)
+            <> "ms)"
+          logging.log(
+            logging.Error,
+            log_prefix(state.config)
+              <> " Handshake deadline exceeded after "
+              <> int.to_string(state.config.handshake_timeout_ms)
+              <> "ms in "
+              <> phase_name(state.phase),
+          )
+          stdio_transport.close(state.handle)
+          actor.stop_abnormal(reason)
+        }
       }
 
     McpLine(raw) -> handle_line(state, raw)
@@ -240,13 +352,28 @@ fn handle_line(
       case state.phase {
         // During the handshake any malformed JSON from the server is fatal —
         // we can't know whether to send notifications/initialized or not.
-        Handshaking | Subscribing(_) ->
+        Handshaking | Subscribing(_) -> {
+          logging.log(
+            logging.Error,
+            log_prefix(state.config)
+              <> " Malformed JSON during handshake: "
+              <> err,
+          )
           actor.stop_abnormal(
             "mcp client failed: malformed JSON during handshake: " <> err,
           )
-        Ready ->
+        }
+        Ready -> {
           // After handshake, tolerate garbage — the client keeps running.
+          // But log it so the operator can see what's being dropped.
+          logging.log(
+            logging.Warning,
+            log_prefix(state.config)
+              <> " Discarding malformed JSON line: "
+              <> truncate(raw, 80),
+          )
           actor.continue(state)
+        }
       }
 
     Ok(jsonrpc.Notification(method, params)) -> {
@@ -282,7 +409,17 @@ fn handle_response(
           let new_pending = dict.delete(state.pending, n)
           let state_without = State(..state, pending: new_pending)
           case pending, body {
-            _, jsonrpc.Failure(code, message, _) ->
+            _, jsonrpc.Failure(code, message, _) -> {
+              logging.log(
+                logging.Error,
+                log_prefix(state.config)
+                  <> " JSON-RPC error for "
+                  <> describe_pending(pending)
+                  <> ": "
+                  <> int.to_string(code)
+                  <> " "
+                  <> message,
+              )
               actor.stop_abnormal(
                 "mcp client failed: "
                 <> describe_pending(pending)
@@ -291,10 +428,16 @@ fn handle_response(
                 <> ": "
                 <> message,
               )
+            }
             InitializePending, jsonrpc.Success(_) ->
               after_initialize(state_without)
-            SubscribePending(_), jsonrpc.Success(_) ->
+            SubscribePending(uri), jsonrpc.Success(_) -> {
+              logging.log(
+                logging.Info,
+                log_prefix(state.config) <> " Subscribed: " <> uri,
+              )
               advance_subscribe(state_without)
+            }
           }
         }
       }
@@ -320,17 +463,35 @@ fn after_initialize(state: State) -> actor.Next(State, ClientMessage) {
   case
     stdio_transport.send_line(
       state.handle,
-      jsonrpc.encode(jsonrpc.notification_no_params("notifications/initialized")),
+      jsonrpc.encode(jsonrpc.notification_no_params(
+        "notifications/initialized",
+      )),
     )
   {
-    Error(err) ->
+    Error(err) -> {
+      logging.log(
+        logging.Error,
+        log_prefix(state.config)
+          <> " Failed to send initialized notification: "
+          <> err,
+      )
       actor.stop_abnormal(
         "mcp client failed: initialized notification send: " <> err,
       )
-    Ok(_) ->
+    }
+    Ok(_) -> {
+      let count = list.length(state.config.subscribe)
+      logging.log(
+        logging.Info,
+        log_prefix(state.config)
+          <> " Initialized; subscribing to "
+          <> int.to_string(count)
+          <> " resources",
+      )
       advance_subscribe(
         State(..state, phase: Subscribing(state.config.subscribe)),
       )
+    }
   }
 }
 
@@ -339,7 +500,10 @@ fn after_initialize(state: State) -> actor.Next(State, ClientMessage) {
 /// list is empty we transition to Ready.
 fn advance_subscribe(state: State) -> actor.Next(State, ClientMessage) {
   case state.phase {
-    Subscribing([]) -> actor.continue(State(..state, phase: Ready))
+    Subscribing([]) -> {
+      logging.log(logging.Info, log_prefix(state.config) <> " Ready")
+      actor.continue(State(..state, phase: Ready))
+    }
     Subscribing([uri, ..rest]) -> {
       let id = state.next_id
       let msg =
@@ -347,10 +511,19 @@ fn advance_subscribe(state: State) -> actor.Next(State, ClientMessage) {
           #("uri", json.string(uri)),
         ]))
       case stdio_transport.send_line(state.handle, jsonrpc.encode(msg)) {
-        Error(err) ->
+        Error(err) -> {
+          logging.log(
+            logging.Error,
+            log_prefix(state.config)
+              <> " Failed to send subscribe("
+              <> uri
+              <> "): "
+              <> err,
+          )
           actor.stop_abnormal(
             "mcp client failed: subscribe send(" <> uri <> "): " <> err,
           )
+        }
         Ok(_) ->
           actor.continue(
             State(
@@ -384,3 +557,27 @@ fn send_initialize(handle: Handle, id: Int) -> Result(Nil, String) {
     jsonrpc.encode(jsonrpc.request(id, "initialize", params)),
   )
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn log_prefix(config: ClientConfig) -> String {
+  "[mcp:" <> config.name <> "]"
+}
+
+fn phase_name(phase: Phase) -> String {
+  case phase {
+    Handshaking -> "Handshaking"
+    Subscribing(_) -> "Subscribing"
+    Ready -> "Ready"
+  }
+}
+
+fn truncate(s: String, n: Int) -> String {
+  case string.length(s) > n {
+    True -> string.slice(s, 0, n) <> "..."
+    False -> s
+  }
+}
+

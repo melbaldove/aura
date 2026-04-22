@@ -33,6 +33,8 @@
 %%     — send a raw line (not JSON). For malformed-JSON tests.
 %%   EXIT
 %%     — exit 0 immediately.
+%%   EXIT_WITH_CODE <N>
+%%     — exit N immediately. For asserting the client's abnormal-stop path.
 %%
 %% On success (script exhausted), exits 0.
 %% On mismatch (wrong method, unexpected id, stdin EOF), writes to stderr and
@@ -94,6 +96,8 @@ loop([Step | Rest], LastId) ->
             loop(Rest, LastId);
         exit_now ->
             halt(0);
+        {exit_with_code, Code} ->
+            halt(Code);
         skip ->
             loop(Rest, LastId)
     end.
@@ -114,6 +118,8 @@ parse_step(<<"EMIT_RAW ", Rest/binary>>) ->
     {emit_raw, Rest};
 parse_step(<<"EXIT">>) ->
     exit_now;
+parse_step(<<"EXIT_WITH_CODE ", Rest/binary>>) ->
+    {exit_with_code, binary_to_integer(trim(Rest))};
 parse_step(Other) ->
     fail("unrecognised script step: " ++ to_list(Other)).
 

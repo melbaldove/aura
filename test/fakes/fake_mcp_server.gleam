@@ -51,6 +51,9 @@ pub type Step {
   /// Send a raw line verbatim, bypassing JSON validity. Used for the
   /// malformed-JSON test.
   EmitRaw(line: String)
+  /// Terminate the escript with the given exit code. Used by the crash-exit
+  /// test to exercise the abnormal-stop path.
+  ExitWithCode(code: Int)
 }
 
 pub opaque type FakeMcpServer {
@@ -89,22 +92,6 @@ pub fn command(server: FakeMcpServer) -> String {
 /// Command-line args. The escript reads its script file from `argv[1]`.
 pub fn args(server: FakeMcpServer) -> List(String) {
   [escript_path(), server.script_path]
-}
-
-/// Whether all steps have been consumed. Tested by reading the line count
-/// of the script file — if the escript ran to completion it deletes nothing
-/// (escript doesn't know about stop/1), so we track state in the caller.
-/// This helper is mostly for symmetry with other fakes; tests usually verify
-/// scripted behaviour directly.
-pub fn script_complete(server: FakeMcpServer) -> Bool {
-  // There isn't a clean way to know from the client side whether the escript
-  // finished every step — a hanging subprocess means the client didn't drive
-  // the full script. Return True if the script file still exists (i.e. we
-  // built it) and let the tests judge completion by the observed behaviour.
-  case simplifile.is_file(server.script_path) {
-    Ok(b) -> b
-    Error(_) -> False
-  }
 }
 
 /// Delete the temp script file. Does not kill the subprocess — the client
@@ -165,5 +152,6 @@ fn step_line(step: Step) -> String {
     EmitNotification(method, params_json) ->
       "EMIT_NOTIFICATION " <> method <> " " <> params_json
     EmitRaw(line) -> "EMIT_RAW " <> line
+    ExitWithCode(code) -> "EXIT_WITH_CODE " <> int.to_string(code)
   }
 }

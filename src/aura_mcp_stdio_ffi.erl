@@ -81,12 +81,17 @@ owner_init(CommandStr, ArgsList, EnvList, ReceiverPid, Caller) ->
                                         CommandStr])};
         {ok, Resolved} ->
             PortSpec = {spawn_executable, Resolved},
+            %% Do NOT include stderr_to_stdout: mixing stderr into stdout
+            %% would inject non-JSON lines into the JSON-RPC wire and either
+            %% kill the client during handshake or get silently dropped in
+            %% Ready. Without it, stderr is inherited from the parent BEAM,
+            %% so subprocess error output appears on the main Aura log —
+            %% which is what we want for operator visibility.
             PortOpts = [
                 binary,
                 {line, 65536},
                 use_stdio,
                 exit_status,
-                stderr_to_stdout,
                 {args, ArgsList}
                 | case EnvList of
                     [] -> [];

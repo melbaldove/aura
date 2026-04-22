@@ -31,7 +31,7 @@ fn make_config(
   subscribe: List(String),
   observer: Subject(Observation),
 ) -> client.ClientConfig {
-  client.ClientConfig(
+  client.new_config(
     name: name,
     command: fake.command(server),
     args: fake.args(server),
@@ -44,6 +44,19 @@ fn make_config(
       )
     },
   )
+}
+
+/// Same as `make_config` but with a custom handshake deadline — used by the
+/// deadline test so we don't hold the suite for 30s.
+fn make_config_with_deadline(
+  server: fake.FakeMcpServer,
+  name: String,
+  subscribe: List(String),
+  observer: Subject(Observation),
+  deadline_ms: Int,
+) -> client.ClientConfig {
+  let base = make_config(server, name, subscribe, observer)
+  client.ClientConfig(..base, handshake_timeout_ms: deadline_ms)
 }
 
 /// Start a client and unlink the actor from the test process. Required
@@ -77,6 +90,48 @@ fn await_down(monitor: process.Monitor, timeout_ms: Int) -> Bool {
   case result {
     Ok(_) -> True
     Error(_) -> False
+  }
+}
+
+/// Wait for the monitored process to exit and classify the down reason.
+/// Returns Ok(True) for a Normal exit, Ok(False) for an Abnormal/Killed
+/// exit, Error(Nil) on timeout.
+fn await_down_normal(
+  monitor: process.Monitor,
+  timeout_ms: Int,
+) -> Result(Bool, Nil) {
+  process.selector_receive(
+    process.new_selector()
+      |> process.select_specific_monitor(monitor, fn(down) {
+        case down {
+          process.ProcessDown(reason: process.Normal, ..) -> True
+          process.PortDown(reason: process.Normal, ..) -> True
+          _ -> False
+        }
+      }),
+    timeout_ms,
+  )
+}
+
+/// Wait for the monitored process and return the abnormal reason as a
+/// string (best-effort via `string.inspect`). Returns Error on timeout or
+/// on a non-abnormal stop.
+fn await_down_abnormal_reason(
+  monitor: process.Monitor,
+  timeout_ms: Int,
+) -> Result(String, Nil) {
+  let down =
+    process.selector_receive(
+      process.new_selector()
+        |> process.select_specific_monitor(monitor, fn(d) { d }),
+      timeout_ms,
+    )
+  case down {
+    Ok(process.ProcessDown(reason: process.Abnormal(reason), ..)) ->
+      Ok(string.inspect(reason))
+    Ok(process.PortDown(reason: process.Abnormal(reason), ..)) ->
+      Ok(string.inspect(reason))
+    _ -> Error(Nil)
   }
 }
 
@@ -174,7 +229,9 @@ pub fn client_fails_start_on_malformed_init_test() {
   fake.stop(server)
 }
 
-pub fn client_handles_subprocess_exit_test() {
+/// Server reaches Ready then exits 0 (script ends, escript halts 0).
+/// Client should treat this as a normal stop — no supervisor restart.
+pub fn client_handles_clean_exit_as_normal_stop_test() {
   let server =
     fake.start([
       fake.ExpectRequest("initialize"),
@@ -186,14 +243,46 @@ pub fn client_handles_subprocess_exit_test() {
         "notifications/resources/updated",
         "{\"uri\":\"gmail://inbox\"}",
       ),
-      // Script ends here — the escript exits 0 immediately after emitting,
-      // which drives the client's McpExit path.
+      // Script ends — escript exits 0. Clean exit from Ready ≠ crash.
     ])
   let observer = process.new_subject()
   let subject =
     start_unlinked(make_config(server, "inbox", ["gmail://inbox"], observer))
   let monitor = monitor_subject(subject)
-  await_down(monitor, 3000) |> should.be_true
+
+  let result = await_down_normal(monitor, 3000)
+  result |> should.equal(Ok(True))
+  fake.stop(server)
+}
+
+/// Server reaches Ready then exits with a non-zero code. Client should
+/// stop abnormally so the supervisor restarts it.
+pub fn client_handles_crash_exit_as_abnormal_test() {
+  let server =
+    fake.start([
+      fake.ExpectRequest("initialize"),
+      fake.RespondResult(fake.initialize_result_json()),
+      fake.ExpectNotification("notifications/initialized"),
+      fake.ExpectRequest("resources/subscribe"),
+      fake.RespondResult(fake.subscribe_ok_json()),
+      fake.EmitNotification(
+        "notifications/resources/updated",
+        "{\"uri\":\"gmail://inbox\"}",
+      ),
+      fake.ExitWithCode(42),
+    ])
+  let observer = process.new_subject()
+  let subject =
+    start_unlinked(make_config(server, "inbox", ["gmail://inbox"], observer))
+  let monitor = monitor_subject(subject)
+
+  let reason = await_down_abnormal_reason(monitor, 3000)
+  case reason {
+    Ok(s) ->
+      string.contains(s, "exit")
+      |> should.be_true
+    Error(_) -> should.fail()
+  }
   fake.stop(server)
 }
 
@@ -209,5 +298,38 @@ pub fn client_handles_initialize_error_response_test() {
     start_unlinked(make_config(server, "inbox", ["gmail://inbox"], observer))
   let monitor = monitor_subject(subject)
   await_down(monitor, 3000) |> should.be_true
+  fake.stop(server)
+}
+
+/// Server never responds to `initialize`. The client should trip its
+/// handshake deadline and stop abnormally. A short (100ms) deadline keeps
+/// the test fast.
+pub fn client_handshake_deadline_stops_actor_test() {
+  let server =
+    fake.start([
+      fake.ExpectRequest("initialize"),
+      // No RESPOND_RESULT. The escript then blocks on the next expected
+      // request, which will never come — the subprocess stays up but
+      // silent, tripping the client's handshake deadline.
+      fake.ExpectRequest("__never_sent__"),
+    ])
+  let observer = process.new_subject()
+  let subject =
+    start_unlinked(make_config_with_deadline(
+      server,
+      "inbox",
+      ["gmail://inbox"],
+      observer,
+      100,
+    ))
+  let monitor = monitor_subject(subject)
+
+  let reason = await_down_abnormal_reason(monitor, 3000)
+  case reason {
+    Ok(s) ->
+      string.contains(s, "handshake deadline")
+      |> should.be_true
+    Error(_) -> should.fail()
+  }
   fake.stop(server)
 }
