@@ -5,6 +5,12 @@
 //// escript as `client_test.gleam`, but exercise the supervisor
 //// boundary: multiple servers in one pool, failure isolation, and
 //// the empty-config case.
+////
+//// ADR 026 retired the ambient-subscription path — this pool no longer
+//// forwards notifications to event_ingest. Task 3 will repurpose it as
+//// the action registry for the `mcp_call` tool; for now the suite only
+//// asserts lifecycle properties (supervisor stays alive under healthy
+//// children, isolates crashing siblings, empty config is OK).
 
 import aura/config
 import aura/db
@@ -12,12 +18,9 @@ import aura/event_ingest
 import aura/mcp/pool
 import fakes/fake_mcp_server as fake
 import gleam/erlang/process
-import gleam/list
-import gleam/option
 import gleam/otp/static_supervisor
 import gleeunit
 import gleeunit/should
-import poll
 
 pub fn main() {
   gleeunit.main()
@@ -77,7 +80,6 @@ fn stop_pool(pid: process.Pid) -> Nil {
 fn server_config(
   name: String,
   steps: List(fake.Step),
-  subscribe: List(String),
 ) -> #(config.McpServerConfig, fake.FakeMcpServer) {
   let server = fake.start(steps)
   let cfg =
@@ -87,72 +89,42 @@ fn server_config(
       command: fake.command(server),
       args: fake.args(server),
       env: [],
-      subscribe: subscribe,
+      subscribe: [],
     )
   #(cfg, server)
 }
 
-fn healthy_script(uri: String) -> List(fake.Step) {
+fn healthy_script() -> List(fake.Step) {
   [
     fake.ExpectRequest("initialize"),
     fake.RespondResult(fake.initialize_result_json()),
     fake.ExpectNotification("notifications/initialized"),
-    fake.ExpectRequest("resources/subscribe"),
-    fake.RespondResult(fake.subscribe_ok_json()),
-    fake.EmitNotification(
-      "notifications/resources/updated",
-      "{\"uri\":\"" <> uri <> "\"}",
-    ),
     // Block forever so the subprocess stays alive until the test kills the
     // pool supervisor.
     fake.ExpectRequest("__never_sent__"),
   ]
 }
 
-fn wait_for_event_source(sys: System, source: String) -> Bool {
-  poll.poll_until(
-    fn() {
-      case
-        db.search_events(
-          sys.db_subject,
-          "",
-          option.None,
-          option.Some(source),
-          50,
-        )
-      {
-        Ok(events) -> list.length(events) >= 1
-        Error(_) -> False
-      }
-    },
-    3000,
-  )
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-/// Pool spawns one client per configured server. Both clients should
-/// reach Ready and emit their scripted resource-updated notification,
-/// which we observe via events landing in the DB.
+/// Pool spawns one client per configured server. Both handshakes should
+/// complete and the supervisor stays alive.
 pub fn pool_starts_one_client_per_server_test() {
   let sys = fresh_system()
 
-  let #(cfg_a, server_a) =
-    server_config("inbox-a", healthy_script("gmail://a/inbox"), [
-      "gmail://a/inbox",
-    ])
-  let #(cfg_b, server_b) =
-    server_config("inbox-b", healthy_script("gmail://b/inbox"), [
-      "gmail://b/inbox",
-    ])
+  let #(cfg_a, server_a) = server_config("inbox-a", healthy_script())
+  let #(cfg_b, server_b) = server_config("inbox-b", healthy_script())
 
   let mcp_config = config.McpConfig(servers: [cfg_a, cfg_b])
   let pid = start_pool(sys, mcp_config)
 
-  wait_for_event_source(sys, "inbox-a") |> should.be_true
-  wait_for_event_source(sys, "inbox-b") |> should.be_true
+  // Give both workers time to complete their handshakes.
+  process.sleep(300)
+
+  // Supervisor still alive — no restart loop, both children healthy.
+  process.is_alive(pid) |> should.be_true
 
   stop_pool(pid)
   fake.stop(server_a)
@@ -160,46 +132,9 @@ pub fn pool_starts_one_client_per_server_test() {
   teardown(sys)
 }
 
-/// A server-emitted resource-updated notification should flow through
-/// the pool's on_notification callback into event_ingest, land in the
-/// DB as an AuraEvent with source = server name, and carry the URI as
-/// the event subject + the full params as data.
-pub fn pool_forwards_notifications_to_event_ingest_test() {
-  let sys = fresh_system()
-
-  let #(cfg, server) =
-    server_config("gmail-work", healthy_script("gmail://work/inbox/42"), [
-      "gmail://work/inbox",
-    ])
-
-  let pid = start_pool(sys, config.McpConfig(servers: [cfg]))
-
-  wait_for_event_source(sys, "gmail-work") |> should.be_true
-
-  let assert Ok(events) =
-    db.search_events(
-      sys.db_subject,
-      "",
-      option.None,
-      option.Some("gmail-work"),
-      50,
-    )
-  let assert [stored, ..] = events
-  stored.source |> should.equal("gmail-work")
-  stored.type_ |> should.equal("resource.updated")
-  stored.subject |> should.equal("gmail://work/inbox/42")
-  // Full params were serialised as data.
-  { stored.data != "" } |> should.be_true
-
-  stop_pool(pid)
-  fake.stop(server)
-  teardown(sys)
-}
-
 /// One server handshake fails; the other reaches Ready normally. The
-/// healthy client's notification still lands in the DB. The pool
-/// supervisor stays alive throughout — a sibling's crash does not kill
-/// the healthy client.
+/// pool supervisor stays alive throughout — a sibling's crash does not
+/// kill healthy children (OneForOne).
 pub fn pool_one_client_crash_does_not_kill_others_test() {
   let sys = fresh_system()
 
@@ -207,28 +142,20 @@ pub fn pool_one_client_crash_does_not_kill_others_test() {
   // Handshaking. The client stops abnormally; the supervisor will try
   // to restart. Each restart repeats the same failure — but with
   // intensity 10 / 60s we have enough budget for the healthy server to
-  // reach Ready and emit its notification before the bad server burns
-  // through the budget.
+  // stay up.
   let #(bad_cfg, bad_server) =
-    server_config(
-      "bad",
-      [
-        fake.ExpectRequest("initialize"),
-        fake.EmitRaw("not-json"),
-        fake.ExpectRequest("__unreachable__"),
-      ],
-      ["gmail://bad"],
-    )
-
-  let #(good_cfg, good_server) =
-    server_config("good", healthy_script("gmail://good/inbox"), [
-      "gmail://good/inbox",
+    server_config("bad", [
+      fake.ExpectRequest("initialize"),
+      fake.EmitRaw("not-json"),
+      fake.ExpectRequest("__unreachable__"),
     ])
+
+  let #(good_cfg, good_server) = server_config("good", healthy_script())
 
   let sup_pid = start_pool(sys, config.McpConfig(servers: [bad_cfg, good_cfg]))
 
-  // Healthy sibling keeps working.
-  wait_for_event_source(sys, "good") |> should.be_true
+  // Give the supervisor a moment to absorb the bad restart storm.
+  process.sleep(300)
 
   // Pool supervisor itself is still alive — OneForOne isolated the failure.
   process.is_alive(sup_pid) |> should.be_true

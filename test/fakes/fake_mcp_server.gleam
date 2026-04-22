@@ -125,12 +125,6 @@ pub fn initialize_result_json() -> String {
   |> json.to_string
 }
 
-/// A canonical empty `resources/subscribe` response. Servers return `{}` on
-/// success per the MCP spec — no meaningful payload.
-pub fn subscribe_ok_json() -> String {
-  "{}"
-}
-
 // ---------------------------------------------------------------------------
 // Script serialisation
 // ---------------------------------------------------------------------------

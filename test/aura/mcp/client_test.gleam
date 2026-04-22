@@ -1,11 +1,9 @@
 import aura/mcp/client
 import fakes/fake_mcp_server as fake
 import gleam/erlang/process.{type Subject}
-import gleam/json
 import gleam/string
 import gleeunit
 import gleeunit/should
-import poll
 
 pub fn main() {
   gleeunit.main()
@@ -15,34 +13,16 @@ pub fn main() {
 // Test helpers
 // ---------------------------------------------------------------------------
 
-/// Message sent by a test callback so the test process can observe what
-/// the client forwarded.
-type Observation {
-  NotifSeen(method: String, params_json: String)
-}
-
-/// Build a config and an observer subject. The `on_notification` callback
-/// serialises the params back to a JSON string and sends `NotifSeen` to the
-/// subject so the test can assert on the payload without juggling `json.Json`
-/// directly.
+/// Build a default client config pointing at the given fake server.
 fn make_config(
   server: fake.FakeMcpServer,
   name: String,
-  subscribe: List(String),
-  observer: Subject(Observation),
 ) -> client.ClientConfig {
   client.new_config(
     name: name,
     command: fake.command(server),
     args: fake.args(server),
     env: [],
-    subscribe: subscribe,
-    on_notification: fn(method, params) {
-      process.send(
-        observer,
-        NotifSeen(method: method, params_json: json.to_string(params)),
-      )
-    },
   )
 }
 
@@ -51,11 +31,9 @@ fn make_config(
 fn make_config_with_deadline(
   server: fake.FakeMcpServer,
   name: String,
-  subscribe: List(String),
-  observer: Subject(Observation),
   deadline_ms: Int,
 ) -> client.ClientConfig {
-  let base = make_config(server, name, subscribe, observer)
+  let base = make_config(server, name)
   client.ClientConfig(..base, handshake_timeout_ms: deadline_ms)
 }
 
@@ -139,74 +117,28 @@ fn await_down_abnormal_reason(
 // Tests
 // ---------------------------------------------------------------------------
 
-pub fn client_handshakes_and_subscribes_test() {
+/// Scripted handshake: initialize → response → notifications/initialized.
+/// Client must reach Ready without crashing on the simplified state machine
+/// (no subscribe phase). We observe liveness at ~200ms.
+pub fn client_reaches_ready_after_handshake_test() {
   let server =
     fake.start([
       fake.ExpectRequest("initialize"),
       fake.RespondResult(fake.initialize_result_json()),
       fake.ExpectNotification("notifications/initialized"),
-      fake.ExpectRequest("resources/subscribe"),
-      fake.RespondResult(fake.subscribe_ok_json()),
-      // Emit a notification so the test can observe we've reached Ready.
-      fake.EmitNotification(
-        "notifications/resources/updated",
-        "{\"uri\":\"gmail://inbox\"}",
-      ),
+      // Block forever so the subprocess stays alive while we check liveness.
       fake.ExpectRequest("__never__"),
     ])
-  let observer = process.new_subject()
   let subject =
-    start_unlinked(make_config(server, "inbox", ["gmail://inbox"], observer))
-
-  // Wait for the Ready transition — observable through the notification.
-  let saw_it =
-    poll.poll_until(
-      fn() {
-        case process.receive(observer, 10) {
-          Ok(NotifSeen(method: "notifications/resources/updated", params_json: _)) ->
-            True
-          _ -> False
-        }
-      },
-      3000,
+    start_unlinked(
+      client.ClientConfig(..make_config(server, "inbox"), handshake_timeout_ms: 1000),
     )
-  saw_it |> should.be_true
 
-  client.stop(subject)
-  fake.stop(server)
-}
+  // Give the handshake a moment to complete.
+  process.sleep(200)
 
-pub fn client_forwards_resource_updated_notification_test() {
-  let server =
-    fake.start([
-      fake.ExpectRequest("initialize"),
-      fake.RespondResult(fake.initialize_result_json()),
-      fake.ExpectNotification("notifications/initialized"),
-      fake.ExpectRequest("resources/subscribe"),
-      fake.RespondResult(fake.subscribe_ok_json()),
-      fake.EmitNotification(
-        "notifications/resources/updated",
-        "{\"uri\":\"gmail://inbox\",\"title\":\"new message\"}",
-      ),
-      fake.ExpectRequest("__never__"),
-    ])
-  let observer = process.new_subject()
-  let subject =
-    start_unlinked(make_config(server, "inbox", ["gmail://inbox"], observer))
-
-  let got =
-    poll.poll_until(
-      fn() {
-        case process.receive(observer, 10) {
-          Ok(NotifSeen(method: "notifications/resources/updated", params_json: p)) ->
-            string.contains(p, "gmail://inbox")
-            && string.contains(p, "new message")
-          _ -> False
-        }
-      },
-      3000,
-    )
-  got |> should.be_true
+  let assert Ok(pid) = process.subject_owner(subject)
+  process.is_alive(pid) |> should.be_true
 
   client.stop(subject)
   fake.stop(server)
@@ -221,9 +153,7 @@ pub fn client_fails_start_on_malformed_init_test() {
       // and for the client to abort the handshake.
       fake.ExpectRequest("__unreachable__"),
     ])
-  let observer = process.new_subject()
-  let subject =
-    start_unlinked(make_config(server, "inbox", ["gmail://inbox"], observer))
+  let subject = start_unlinked(make_config(server, "inbox"))
   let monitor = monitor_subject(subject)
   await_down(monitor, 3000) |> should.be_true
   fake.stop(server)
@@ -237,17 +167,9 @@ pub fn client_handles_clean_exit_as_normal_stop_test() {
       fake.ExpectRequest("initialize"),
       fake.RespondResult(fake.initialize_result_json()),
       fake.ExpectNotification("notifications/initialized"),
-      fake.ExpectRequest("resources/subscribe"),
-      fake.RespondResult(fake.subscribe_ok_json()),
-      fake.EmitNotification(
-        "notifications/resources/updated",
-        "{\"uri\":\"gmail://inbox\"}",
-      ),
       // Script ends — escript exits 0. Clean exit from Ready ≠ crash.
     ])
-  let observer = process.new_subject()
-  let subject =
-    start_unlinked(make_config(server, "inbox", ["gmail://inbox"], observer))
+  let subject = start_unlinked(make_config(server, "inbox"))
   let monitor = monitor_subject(subject)
 
   let result = await_down_normal(monitor, 3000)
@@ -263,17 +185,9 @@ pub fn client_handles_crash_exit_as_abnormal_test() {
       fake.ExpectRequest("initialize"),
       fake.RespondResult(fake.initialize_result_json()),
       fake.ExpectNotification("notifications/initialized"),
-      fake.ExpectRequest("resources/subscribe"),
-      fake.RespondResult(fake.subscribe_ok_json()),
-      fake.EmitNotification(
-        "notifications/resources/updated",
-        "{\"uri\":\"gmail://inbox\"}",
-      ),
       fake.ExitWithCode(42),
     ])
-  let observer = process.new_subject()
-  let subject =
-    start_unlinked(make_config(server, "inbox", ["gmail://inbox"], observer))
+  let subject = start_unlinked(make_config(server, "inbox"))
   let monitor = monitor_subject(subject)
 
   let reason = await_down_abnormal_reason(monitor, 3000)
@@ -293,9 +207,7 @@ pub fn client_handles_initialize_error_response_test() {
       fake.RespondError(-32_603, "server boom"),
       fake.ExpectRequest("__unreachable__"),
     ])
-  let observer = process.new_subject()
-  let subject =
-    start_unlinked(make_config(server, "inbox", ["gmail://inbox"], observer))
+  let subject = start_unlinked(make_config(server, "inbox"))
   let monitor = monitor_subject(subject)
   await_down(monitor, 3000) |> should.be_true
   fake.stop(server)
@@ -313,15 +225,8 @@ pub fn client_handshake_deadline_stops_actor_test() {
       // silent, tripping the client's handshake deadline.
       fake.ExpectRequest("__never_sent__"),
     ])
-  let observer = process.new_subject()
   let subject =
-    start_unlinked(make_config_with_deadline(
-      server,
-      "inbox",
-      ["gmail://inbox"],
-      observer,
-      100,
-    ))
+    start_unlinked(make_config_with_deadline(server, "inbox", 100))
   let monitor = monitor_subject(subject)
 
   let reason = await_down_abnormal_reason(monitor, 3000)

@@ -1,9 +1,10 @@
 //// MCP stdio client actor.
 ////
 //// Spawns a subprocess per configured MCP server, speaks JSON-RPC 2.0 over
-//// NDJSON on stdio, runs the MCP handshake (`initialize` → response →
-//// `notifications/initialized`), subscribes to the configured resource URIs,
-//// and forwards incoming notifications to the caller via `on_notification`.
+//// NDJSON on stdio, and runs the MCP handshake (`initialize` → response →
+//// `notifications/initialized`). Once the handshake completes the actor is
+//// `Ready`; future work (see ADR 026, Task 2) adds a `call_tool` surface on
+//// top of this.
 ////
 //// The Erlang port is owned by `aura_mcp_stdio_ffi`. Raw lines are delivered
 //// to this actor's pid as `{mcp_line, Handle, RawLine}` and subprocess exit
@@ -15,29 +16,26 @@
 //// - Clean subprocess exit (status 0) in `Ready` is treated as a normal
 ////   actor stop. Servers that shut down gracefully (OAuth refresh failure,
 ////   SIGTERM from an operator) should not trigger supervisor restart loops.
-////   Non-zero exit in `Ready`, or any exit during `Handshaking`/`Subscribing`,
-////   stops the actor abnormally so the supervisor restarts it.
+////   Non-zero exit in `Ready`, or any exit during `Handshaking`, stops the
+////   actor abnormally so the supervisor restarts it.
 ////
 //// - Handshake has a deadline (`config.handshake_timeout_ms`, default 30s).
-////   If the server never completes initialize + subscribe within the window
-////   the actor stops abnormally with "handshake deadline exceeded".
+////   If the server never completes initialize within the window the actor
+////   stops abnormally with "handshake deadline exceeded".
 ////
-//// - `config.on_notification` is invoked inline on the actor's message-
-////   handling thread. Callbacks should be fast / non-blocking; if a callback
-////   needs to do expensive work it should forward the payload to its own
-////   process.
+//// - Incoming notifications from the server on a Ready client are logged at
+////   Info and dropped. ADR 026 retired the ambient-subscription path; the
+////   action surface added by Task 2 does not consume notifications.
 
 import aura/mcp/jsonrpc
 import aura/mcp/stdio_transport.{type Handle}
-import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/json
-import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/string
@@ -47,16 +45,9 @@ import logging
 // Types
 // ---------------------------------------------------------------------------
 
-/// Purpose of a pending request, so responses can be correlated and routed.
-pub type Pending {
-  InitializePending
-  SubscribePending(uri: String)
-}
-
 /// Handshake / lifecycle phase.
 pub type Phase {
   Handshaking
-  Subscribing(remaining: List(String))
   Ready
 }
 
@@ -71,17 +62,9 @@ pub type ClientConfig {
     command: String,
     args: List(String),
     env: List(#(String, String)),
-    /// Resource URI patterns to subscribe to after the handshake completes.
-    subscribe: List(String),
-    /// Invoked on every incoming notification from the server with the raw
-    /// `method` and `params`. The callback can filter for
-    /// `notifications/resources/updated` or handle any method it cares about.
-    ///
-    /// Runs inline on the actor thread — do fast, non-blocking work only.
-    on_notification: fn(String, json.Json) -> Nil,
-    /// Upper bound on how long the handshake (`initialize` + all
-    /// subscribe calls) may take before the actor stops abnormally.
-    /// 30s by default.
+    /// Upper bound on how long the handshake (`initialize` + `initialized`
+    /// notification) may take before the actor stops abnormally. 30s by
+    /// default.
     handshake_timeout_ms: Int,
   )
 }
@@ -100,7 +83,9 @@ type State {
   State(
     handle: Handle,
     config: ClientConfig,
-    pending: Dict(Int, Pending),
+    /// Outstanding `initialize` request id, if any. `None` after the
+    /// initialize response arrives.
+    pending_init_id: Option(Int),
     next_id: Int,
     phase: Phase,
   )
@@ -118,24 +103,20 @@ pub fn new_config(
   command command: String,
   args args: List(String),
   env env: List(#(String, String)),
-  subscribe subscribe: List(String),
-  on_notification on_notification: fn(String, json.Json) -> Nil,
 ) -> ClientConfig {
   ClientConfig(
     name: name,
     command: command,
     args: args,
     env: env,
-    subscribe: subscribe,
-    on_notification: on_notification,
     handshake_timeout_ms: default_handshake_timeout_ms,
   )
 }
 
 /// Start a new MCP client actor. Spawns the subprocess synchronously; the
-/// initialize + subscribe handshake continues asynchronously — observers
-/// see progress through `config.on_notification` once the client reaches
-/// `Ready` and the server emits notifications.
+/// initialize handshake continues asynchronously — once the server replies
+/// and the client sends `notifications/initialized` the actor transitions
+/// to `Ready`.
 ///
 /// Fails synchronously if the subprocess cannot be spawned or the initial
 /// `initialize` request cannot be written.
@@ -181,7 +162,7 @@ pub fn start(
                 State(
                   handle: handle,
                   config: config,
-                  pending: dict.from_list([#(id, InitializePending)]),
+                  pending_init_id: Some(id),
                   next_id: id + 1,
                   phase: Handshaking,
                 )
@@ -321,7 +302,7 @@ fn handle_message(
         Ready ->
           // Handshake finished before the deadline fired — ignore.
           actor.continue(state)
-        Handshaking | Subscribing(_) -> {
+        Handshaking -> {
           let reason =
             "handshake deadline exceeded ("
             <> int.to_string(state.config.handshake_timeout_ms)
@@ -352,7 +333,7 @@ fn handle_line(
       case state.phase {
         // During the handshake any malformed JSON from the server is fatal —
         // we can't know whether to send notifications/initialized or not.
-        Handshaking | Subscribing(_) -> {
+        Handshaking -> {
           logging.log(
             logging.Error,
             log_prefix(state.config)
@@ -376,12 +357,14 @@ fn handle_line(
         }
       }
 
-    Ok(jsonrpc.Notification(method, params)) -> {
-      let params_json = case params {
-        Some(p) -> p
-        None -> json.object([])
-      }
-      state.config.on_notification(method, params_json)
+    Ok(jsonrpc.Notification(method, _params)) -> {
+      // ADR 026 removed the ambient-subscription path; notifications are not
+      // consumed by the client. Log + drop so operators can see what the
+      // server emits.
+      logging.log(
+        logging.Info,
+        log_prefix(state.config) <> " Unhandled notification: " <> method,
+      )
       actor.continue(state)
     }
 
@@ -401,45 +384,32 @@ fn handle_response(
 ) -> actor.Next(State, ClientMessage) {
   case id {
     jsonrpc.IntId(n) ->
-      case dict.get(state.pending, n) {
-        Error(_) ->
-          // Response for a request we don't remember. Ignore.
-          actor.continue(state)
-        Ok(pending) -> {
-          let new_pending = dict.delete(state.pending, n)
-          let state_without = State(..state, pending: new_pending)
-          case pending, body {
-            _, jsonrpc.Failure(code, message, _) -> {
+      case state.pending_init_id {
+        Some(init_id) if init_id == n -> {
+          let state_without = State(..state, pending_init_id: None)
+          case body {
+            jsonrpc.Failure(code, message, _) -> {
               logging.log(
                 logging.Error,
                 log_prefix(state.config)
-                  <> " JSON-RPC error for "
-                  <> describe_pending(pending)
-                  <> ": "
+                  <> " JSON-RPC error for initialize: "
                   <> int.to_string(code)
                   <> " "
                   <> message,
               )
               actor.stop_abnormal(
-                "mcp client failed: "
-                <> describe_pending(pending)
-                <> " returned error "
+                "mcp client failed: initialize returned error "
                 <> int.to_string(code)
                 <> ": "
                 <> message,
               )
             }
-            InitializePending, jsonrpc.Success(_) ->
-              after_initialize(state_without)
-            SubscribePending(uri), jsonrpc.Success(_) -> {
-              logging.log(
-                logging.Info,
-                log_prefix(state.config) <> " Subscribed: " <> uri,
-              )
-              advance_subscribe(state_without)
-            }
+            jsonrpc.Success(_) -> after_initialize(state_without)
           }
         }
+        _ ->
+          // Response for a request we don't remember. Ignore.
+          actor.continue(state)
       }
     jsonrpc.StringId(_) ->
       // We always send int ids; a string-id response is a server bug.
@@ -447,19 +417,13 @@ fn handle_response(
   }
 }
 
-fn describe_pending(pending: Pending) -> String {
-  case pending {
-    InitializePending -> "initialize"
-    SubscribePending(uri) -> "resources/subscribe(" <> uri <> ")"
-  }
-}
-
 // ---------------------------------------------------------------------------
-// Handshake + subscribe progression
+// Handshake progression
 // ---------------------------------------------------------------------------
 
 fn after_initialize(state: State) -> actor.Next(State, ClientMessage) {
-  // Send the `notifications/initialized` notification (no response expected).
+  // Send the `notifications/initialized` notification (no response expected)
+  // and transition straight to Ready.
   case
     stdio_transport.send_line(
       state.handle,
@@ -480,62 +444,9 @@ fn after_initialize(state: State) -> actor.Next(State, ClientMessage) {
       )
     }
     Ok(_) -> {
-      let count = list.length(state.config.subscribe)
-      logging.log(
-        logging.Info,
-        log_prefix(state.config)
-          <> " Initialized; subscribing to "
-          <> int.to_string(count)
-          <> " resources",
-      )
-      advance_subscribe(
-        State(..state, phase: Subscribing(state.config.subscribe)),
-      )
-    }
-  }
-}
-
-/// Walk the list of remaining subscribe URIs. Send the first, stop there;
-/// when the response comes in `handle_response` calls us again. When the
-/// list is empty we transition to Ready.
-fn advance_subscribe(state: State) -> actor.Next(State, ClientMessage) {
-  case state.phase {
-    Subscribing([]) -> {
       logging.log(logging.Info, log_prefix(state.config) <> " Ready")
       actor.continue(State(..state, phase: Ready))
     }
-    Subscribing([uri, ..rest]) -> {
-      let id = state.next_id
-      let msg =
-        jsonrpc.request(id, "resources/subscribe", json.object([
-          #("uri", json.string(uri)),
-        ]))
-      case stdio_transport.send_line(state.handle, jsonrpc.encode(msg)) {
-        Error(err) -> {
-          logging.log(
-            logging.Error,
-            log_prefix(state.config)
-              <> " Failed to send subscribe("
-              <> uri
-              <> "): "
-              <> err,
-          )
-          actor.stop_abnormal(
-            "mcp client failed: subscribe send(" <> uri <> "): " <> err,
-          )
-        }
-        Ok(_) ->
-          actor.continue(
-            State(
-              ..state,
-              pending: dict.insert(state.pending, id, SubscribePending(uri)),
-              next_id: id + 1,
-              phase: Subscribing(rest),
-            ),
-          )
-      }
-    }
-    _ -> actor.continue(state)
   }
 }
 
@@ -569,7 +480,6 @@ fn log_prefix(config: ClientConfig) -> String {
 fn phase_name(phase: Phase) -> String {
   case phase {
     Handshaking -> "Handshaking"
-    Subscribing(_) -> "Subscribing"
     Ready -> "Ready"
   }
 }
@@ -580,4 +490,3 @@ fn truncate(s: String, n: Int) -> String {
     False -> s
   }
 }
-
