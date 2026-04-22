@@ -105,6 +105,58 @@ pub fn refresh(
   }
 }
 
+/// Exchange an authorization code for a new TokenSet (access + refresh).
+/// Used by the one-time setup flow (CLI command); production runtime
+/// uses `refresh` / `ensure_fresh` against the stored TokenSet.
+pub fn exchange_authorization_code(
+  config: OAuthConfig,
+  code: String,
+  redirect_uri: String,
+  now_ms now_ms: Int,
+) -> Result(TokenSet, String) {
+  let body =
+    form_encode([
+      #("grant_type", "authorization_code"),
+      #("code", code),
+      #("client_id", config.client_id),
+      #("client_secret", config.client_secret),
+      #("redirect_uri", redirect_uri),
+    ])
+  use parsed_uri <- result.try(
+    uri.parse(config.token_endpoint)
+    |> result.map_error(fn(_) {
+      "Failed to parse token endpoint: " <> config.token_endpoint
+    }),
+  )
+  use req <- result.try(
+    request.from_uri(parsed_uri)
+    |> result.map_error(fn(_) {
+      "Failed to build request for token endpoint: " <> config.token_endpoint
+    }),
+  )
+  let req =
+    req
+    |> request.set_method(http.Post)
+    |> request.set_header("content-type", "application/x-www-form-urlencoded")
+    |> request.set_body(body)
+  use resp <- result.try(
+    httpc.send(req)
+    |> result.map_error(fn(e) {
+      "oauth exchange failed: HTTP request failed: " <> string.inspect(e)
+    }),
+  )
+  case resp.status {
+    200 -> parse_exchange_response(resp.body, now_ms)
+    status ->
+      Error(
+        "oauth exchange failed: status "
+        <> int.to_string(status)
+        <> " body "
+        <> resp.body,
+      )
+  }
+}
+
 /// Return `tokens` unchanged when still fresh; otherwise exchange the
 /// refresh token for a new access token.
 pub fn ensure_fresh(
@@ -170,6 +222,26 @@ fn parse_refresh_response(
   json.parse(body, decoder)
   |> result.map_error(fn(err) {
     "oauth refresh failed: malformed response: " <> string.inspect(err)
+  })
+}
+
+fn parse_exchange_response(
+  body: String,
+  now_ms: Int,
+) -> Result(TokenSet, String) {
+  let decoder = {
+    use access_token <- decode.field("access_token", decode.string)
+    use expires_in <- decode.field("expires_in", decode.int)
+    use refresh_token <- decode.field("refresh_token", decode.string)
+    decode.success(TokenSet(
+      access_token: access_token,
+      refresh_token: refresh_token,
+      expires_at_ms: now_ms + expires_in * 1000,
+    ))
+  }
+  json.parse(body, decoder)
+  |> result.map_error(fn(err) {
+    "oauth exchange failed: malformed response: " <> string.inspect(err)
   })
 }
 

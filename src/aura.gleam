@@ -4,6 +4,7 @@ import aura/ctl
 import aura/doctor
 import aura/dotenv
 import aura/init
+import aura/oauth_cli
 import aura/supervisor
 import aura/xdg
 import gleam/io
@@ -30,6 +31,19 @@ pub fn main() {
     ["ping"] -> {
       run_ctl("ping")
       halt(0)
+    }
+    ["oauth", "gmail", email] -> {
+      logging.configure()
+      case oauth_cli.run_gmail(email) {
+        Ok(path) -> {
+          io.println("Tokens saved to " <> path)
+          halt(0)
+        }
+        Error(msg) -> {
+          io.println("oauth gmail failed: " <> msg)
+          halt(1)
+        }
+      }
     }
     _ -> run_start()
   }
