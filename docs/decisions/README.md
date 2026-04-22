@@ -53,11 +53,12 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [022](022-browser-tool-agent-browser.md) | Browser tool via agent-browser CLI | Accepted |
 | [023](023-client-dependency-injection.md) | Client dependency injection for external boundaries | Accepted |
 | [024](024-dual-framework-testing.md) | Dual-framework testing (gleeunit + dream_test) | Accepted |
-| [025](025-ambient-awareness-via-mcp.md) | Ambient awareness via MCP and generalized flares | Accepted |
+| [025](025-ambient-awareness-via-mcp.md) | Ambient awareness via MCP and generalized flares | Superseded by ADR-026 |
+| [026](026-native-integrations-no-public-endpoint.md) | Native integrations — no public endpoint, no MCP subscribe | Accepted |
 
 ## Adding a new ADR
 
 1. Copy the template above
-2. Number sequentially (next is 026)
+2. Number sequentially (next is 027)
 3. Add to the index in this README
 4. Commit with the code change it relates to

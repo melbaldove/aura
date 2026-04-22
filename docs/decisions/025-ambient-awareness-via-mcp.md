@@ -1,8 +1,9 @@
 # ADR 025: Ambient Awareness via MCP and Generalized Flares
 
-**Status:** Accepted
+**Status:** Superseded by ADR 026
 **Date:** 2026-04-22
 **Extends:** ADR 018 (Flare Architecture), ADR 020 (Memory Dreaming)
+**Superseded:** Two load-bearing assumptions failed on contact with reality — MCP `resources/subscribe` is not adopted in the ecosystem (optional in spec, implemented almost nowhere), and webhooks require a public HTTPS endpoint incompatible with A.U.R.A.'s home-laptop deployment stance. See ADR 026 for the revised approach.
 
 ## Context
 
