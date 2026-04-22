@@ -1,10 +1,10 @@
-import aura/discord/rest
 import aura/llm
 import aura/memory
 import aura/models
 import aura/skill
 import aura/structured_memory
 import aura/time
+import aura/transport.{type Transport}
 import aura/xdg
 import gleam/dict.{type Dict}
 import gleam/dynamic/decode
@@ -35,7 +35,7 @@ pub fn maybe_spawn_review(
   notify_on_review: Bool,
   domain_name: String,
   channel_id: String,
-  discord_token: String,
+  transport: Transport,
   conversation_history: List(llm.Message),
   turn_count: Int,
   paths: xdg.Paths,
@@ -72,7 +72,7 @@ pub fn maybe_spawn_review(
                   domain_name,
                   log_dir,
                   channel_id,
-                  discord_token,
+                  transport,
                   notify_on_review,
                   paths,
                 )
@@ -88,7 +88,7 @@ pub fn maybe_spawn_review(
                   domain_name,
                   log_dir,
                   channel_id,
-                  discord_token,
+                  transport,
                   notify_on_review,
                   paths,
                 )
@@ -322,7 +322,7 @@ pub fn maybe_spawn_skill_review(
   skill_review_interval: Int,
   domain_name: String,
   channel_id: String,
-  discord_token: String,
+  transport: Transport,
   conversation_history: List(llm.Message),
   iteration_count: Int,
   new_iterations: Int,
@@ -352,7 +352,7 @@ pub fn maybe_spawn_skill_review(
                   conversation_history,
                   domain_name,
                   channel_id,
-                  discord_token,
+                  transport,
                   skills_dir,
                   paths,
                 )
@@ -393,7 +393,7 @@ fn run_review(
   domain_name: String,
   log_dir: String,
   channel_id: String,
-  discord_token: String,
+  transport: Transport,
   notify: Bool,
   paths: xdg.Paths,
 ) -> Nil {
@@ -431,7 +431,7 @@ fn run_review(
         domain_name,
         review_type,
         written,
-        discord_token,
+        transport,
         channel_id,
         notify,
       )
@@ -576,7 +576,7 @@ fn run_skill_review(
   conversation_history: List(llm.Message),
   domain_name: String,
   channel_id: String,
-  discord_token: String,
+  transport: Transport,
   skills_dir: String,
   paths: xdg.Paths,
 ) -> Nil {
@@ -606,7 +606,7 @@ fn run_skill_review(
         domain_name,
         "skill",
         written,
-        discord_token,
+        transport,
         channel_id,
         True,
       )
@@ -661,7 +661,7 @@ fn log_and_notify(
   domain_name: String,
   review_type: String,
   written: List(#(String, String)),
-  discord_token: String,
+  transport: Transport,
   channel_id: String,
   notify: Bool,
 ) -> Nil {
@@ -703,7 +703,7 @@ fn log_and_notify(
         _ -> "Memory saved"
       }
       let msg = "\u{1F4BE} " <> icon <> ":\n" <> entries_text
-      case rest.send_message(discord_token, channel_id, msg, []) {
+      case transport.send_message(channel_id, msg) {
         Ok(_) -> Nil
         Error(e) ->
           logging.log(

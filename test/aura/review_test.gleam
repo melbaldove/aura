@@ -1,9 +1,28 @@
 import aura/llm
 import aura/review
+import aura/transport.{type Transport, Transport}
 import aura/xdg
 import gleam/list
 import gleam/string
 import gleeunit/should
+
+/// Transport stub for review tests that don't exercise the notify path.
+/// If any function is invoked, the test fails loudly rather than silently
+/// succeed on a non-call.
+fn unused_transport() -> Transport {
+  Transport(
+    send_message: fn(_, _) { Error("unused_transport.send_message") },
+    edit_message: fn(_, _, _) { Error("unused_transport.edit_message") },
+    trigger_typing: fn(_) { Error("unused_transport.trigger_typing") },
+    get_channel_parent: fn(_) { Error("unused_transport.get_channel_parent") },
+    send_message_with_attachment: fn(_, _, _) {
+      Error("unused_transport.send_message_with_attachment")
+    },
+    create_thread_from_message: fn(_, _, _) {
+      Error("unused_transport.create_thread_from_message")
+    },
+  )
+}
 
 pub fn build_state_review_prompt_test() {
   let prompt =
@@ -39,7 +58,7 @@ pub fn maybe_spawn_review_disabled_test() {
       False,
       "test",
       "chan",
-      "token",
+      unused_transport(),
       [],
       5,
       xdg.resolve_with_home("/tmp/aura-review-test"),
@@ -56,7 +75,7 @@ pub fn maybe_spawn_review_not_yet_test() {
       False,
       "test",
       "chan",
-      "token",
+      unused_transport(),
       [],
       3,
       xdg.resolve_with_home("/tmp/aura-review-test"),
@@ -123,7 +142,7 @@ pub fn maybe_spawn_skill_review_disabled_test() {
       0,
       "test",
       "chan",
-      "token",
+      unused_transport(),
       [],
       5,
       10,
@@ -140,7 +159,7 @@ pub fn maybe_spawn_skill_review_not_yet_test() {
       30,
       "test",
       "chan",
-      "token",
+      unused_transport(),
       [],
       10,
       5,

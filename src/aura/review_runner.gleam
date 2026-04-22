@@ -1,5 +1,6 @@
 import aura/llm
 import aura/review
+import aura/transport.{type Transport}
 import aura/xdg
 
 /// Dependency-injected wrapper around `review.maybe_spawn_review` and
@@ -13,7 +14,7 @@ pub type ReviewRunner {
       Bool,
       String,
       String,
-      String,
+      Transport,
       List(llm.Message),
       Int,
       xdg.Paths,
@@ -24,7 +25,7 @@ pub type ReviewRunner {
       Int,
       String,
       String,
-      String,
+      Transport,
       List(llm.Message),
       Int,
       Int,

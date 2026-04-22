@@ -12,6 +12,7 @@
 
 import aura/llm
 import aura/review_runner.{type ReviewRunner, ReviewRunner}
+import aura/transport
 import aura/xdg
 import gleam/erlang/process
 import gleam/list
@@ -28,7 +29,6 @@ pub type Call {
     notify_on_review: Bool,
     domain_name: String,
     channel_id: String,
-    discord_token: String,
     turn_count: Int,
     monitor_model: String,
   )
@@ -40,7 +40,6 @@ pub type SkillCall {
     skill_review_interval: Int,
     domain_name: String,
     channel_id: String,
-    discord_token: String,
     iteration_count: Int,
     new_iterations: Int,
     monitor_model: String,
@@ -158,7 +157,7 @@ pub fn as_runner(fake: FakeReview) -> ReviewRunner {
       notify_on_review: Bool,
       domain_name: String,
       channel_id: String,
-      discord_token: String,
+      _transport: transport.Transport,
       _history: List(llm.Message),
       turn_count: Int,
       _paths: xdg.Paths,
@@ -178,7 +177,6 @@ pub fn as_runner(fake: FakeReview) -> ReviewRunner {
                     notify_on_review: notify_on_review,
                     domain_name: domain_name,
                     channel_id: channel_id,
-                    discord_token: discord_token,
                     turn_count: turn_count,
                     monitor_model: monitor_model,
                   ),
@@ -193,7 +191,7 @@ pub fn as_runner(fake: FakeReview) -> ReviewRunner {
       skill_review_interval: Int,
       domain_name: String,
       channel_id: String,
-      discord_token: String,
+      _transport: transport.Transport,
       _history: List(llm.Message),
       iteration_count: Int,
       new_iterations: Int,
@@ -214,7 +212,6 @@ pub fn as_runner(fake: FakeReview) -> ReviewRunner {
                     skill_review_interval: skill_review_interval,
                     domain_name: domain_name,
                     channel_id: channel_id,
-                    discord_token: discord_token,
                     iteration_count: iteration_count,
                     new_iterations: new_iterations,
                     monitor_model: monitor_model,

@@ -341,6 +341,7 @@ fn execute_tool_dispatch(
       }
     }
     "list_threads" -> {
+      // Discord-specific: guild-level active-thread enumeration.
       case rest.get_active_threads(ctx.discord_token, ctx.guild_id) {
         Ok(threads) -> {
           case threads {
@@ -363,6 +364,8 @@ fn execute_tool_dispatch(
         Ok(n) -> n
         Error(_) -> 20
       }
+      // Currently Discord-only; when Blather domains need history reads,
+      // lift to Transport.fetch_history or similar.
       case rest.get_channel_messages(ctx.discord_token, thread_id, limit) {
         Ok(messages) -> {
           case messages {
