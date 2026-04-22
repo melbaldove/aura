@@ -60,10 +60,10 @@ fn teardown(sys: System) -> Nil {
 /// cleanly at end of test. Production wiring goes through `pool.supervised`
 /// mounted under the root supervisor.
 fn start_pool(
-  sys: System,
+  _sys: System,
   mcp_config: config.McpConfig,
 ) -> process.Pid {
-  let b = pool.builder(mcp_config, sys.ingest_subject)
+  let b = pool.builder(mcp_config)
   let assert Ok(started) = static_supervisor.start(b)
   // Unlink so a supervisor restart storm doesn't kill the test process.
   process.unlink(started.pid)
@@ -89,7 +89,6 @@ fn server_config(
       command: fake.command(server),
       args: fake.args(server),
       env: [],
-      subscribe: [],
     )
   #(cfg, server)
 }

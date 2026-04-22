@@ -83,8 +83,7 @@ pub fn start(
   // 3b. Start event_ingest actor (required — panics on failure).
   // Starts after db (which it depends on) and before flare/brain so the
   // supervisor log reads top-down in dependency order.
-  let assert Ok(event_ingest_started) = event_ingest.start(db_subject)
-  let event_ingest_subject = event_ingest_started.data
+  let assert Ok(_event_ingest_started) = event_ingest.start(db_subject)
   logging.log(logging.Info, "[supervisor] Event ingest started")
 
   // 4. Resolve Discord channel name → ID mapping
@@ -327,10 +326,7 @@ pub fn start(
     static_supervisor.new(static_supervisor.OneForOne)
     |> static_supervisor.restart_tolerance(intensity: 10, period: 60)
     |> static_supervisor.add(poller.supervised(discord_config, brain_subject))
-    |> static_supervisor.add(mcp_pool.supervised(
-      global_config.mcp,
-      event_ingest_subject,
-    ))
+    |> static_supervisor.add(mcp_pool.supervised(global_config.mcp))
     |> static_supervisor.start
 
   case result {

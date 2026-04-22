@@ -57,7 +57,6 @@ pub fn parse_single_stdio_server_test() {
 transport = \"stdio\"
 command = \"gmail-mcp\"
 args = [\"--accept-insecure\"]
-subscribe = [\"mail://inbox/*\"]
 "
   let result = config.parse_global(toml)
   result |> should.be_ok
@@ -68,7 +67,6 @@ subscribe = [\"mail://inbox/*\"]
   server.transport |> should.equal(config.StdioTransport)
   server.command |> should.equal("gmail-mcp")
   server.args |> should.equal(["--accept-insecure"])
-  server.subscribe |> should.equal(["mail://inbox/*"])
 }
 
 pub fn parse_multiple_servers_test() {
@@ -78,12 +76,10 @@ pub fn parse_multiple_servers_test() {
 [mcp.servers.gmail]
 transport = \"stdio\"
 command = \"gmail-mcp\"
-subscribe = [\"mail://inbox/*\"]
 
 [mcp.servers.linear]
 transport = \"stdio\"
 command = \"linear-mcp\"
-subscribe = [\"linear://issue/*\"]
 "
   let result = config.parse_global(toml)
   result |> should.be_ok
@@ -104,7 +100,6 @@ pub fn parse_server_with_env_expansion_test() {
 [mcp.servers.gmail]
 transport = \"stdio\"
 command = \"gmail-mcp\"
-subscribe = [\"mail://inbox/*\"]
 
 [mcp.servers.gmail.env]
 GMAIL_TOKEN = \"${TEST_GMAIL_TOKEN}\"
@@ -122,7 +117,6 @@ pub fn parse_server_without_transport_defaults_to_stdio_test() {
     <> "
 [mcp.servers.gmail]
 command = \"gmail-mcp\"
-subscribe = [\"mail://inbox/*\"]
 "
   let result = config.parse_global(toml)
   result |> should.be_ok
@@ -138,7 +132,6 @@ pub fn parse_server_with_unsupported_transport_returns_error_test() {
 [mcp.servers.gmail]
 transport = \"sse\"
 command = \"gmail-mcp\"
-subscribe = [\"mail://inbox/*\"]
 "
   let result = config.parse_global(toml)
   case result {
@@ -156,7 +149,6 @@ pub fn parse_server_missing_command_returns_error_test() {
     <> "
 [mcp.servers.gmail]
 transport = \"stdio\"
-subscribe = [\"mail://inbox/*\"]
 "
   let result = config.parse_global(toml)
   case result {
@@ -164,41 +156,6 @@ subscribe = [\"mail://inbox/*\"]
     Error(msg) -> {
       string.contains(msg, "command") |> should.be_true
       string.contains(msg, "gmail") |> should.be_true
-    }
-  }
-}
-
-pub fn parse_server_missing_subscribe_returns_error_test() {
-  let toml =
-    base_global_toml()
-    <> "
-[mcp.servers.gmail]
-transport = \"stdio\"
-command = \"gmail-mcp\"
-"
-  let result = config.parse_global(toml)
-  case result {
-    Ok(_) -> should.fail()
-    Error(msg) -> {
-      string.contains(msg, "subscribe") |> should.be_true
-    }
-  }
-}
-
-pub fn parse_server_empty_subscribe_returns_error_test() {
-  let toml =
-    base_global_toml()
-    <> "
-[mcp.servers.gmail]
-transport = \"stdio\"
-command = \"gmail-mcp\"
-subscribe = []
-"
-  let result = config.parse_global(toml)
-  case result {
-    Ok(_) -> should.fail()
-    Error(msg) -> {
-      string.contains(msg, "subscribe") |> should.be_true
     }
   }
 }

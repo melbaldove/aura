@@ -14,9 +14,7 @@
 //// Empty config is valid: the supervisor starts with zero children.
 
 import aura/config
-import aura/event_ingest
 import aura/mcp/client
-import gleam/erlang/process
 import gleam/list
 import gleam/otp/static_supervisor
 import gleam/otp/supervision
@@ -31,27 +29,19 @@ import gleam/otp/supervision
 ///
 /// Empty `mcp_config.servers` is a valid configuration: the supervisor
 /// starts with no children.
-///
-/// `event_ingest_subject` is currently unused (ADR 026 retired the
-/// ambient-ingest path) but retained in the signature so Task 3 can
-/// repurpose the pool as the action registry without another surface
-/// change.
 pub fn supervised(
   mcp_config: config.McpConfig,
-  event_ingest_subject: process.Subject(event_ingest.IngestMessage),
 ) -> supervision.ChildSpecification(Nil) {
-  static_supervisor.supervised(builder(mcp_config, event_ingest_subject))
+  static_supervisor.supervised(builder(mcp_config))
   |> supervision.map_data(fn(_) { Nil })
 }
 
 /// Build the pool's internal supervisor builder. Exposed so tests can
 /// start the supervisor directly and observe its Pid; production code
-/// should use `supervised/2` and mount it under the root supervisor.
+/// should use `supervised/1` and mount it under the root supervisor.
 pub fn builder(
   mcp_config: config.McpConfig,
-  event_ingest_subject: process.Subject(event_ingest.IngestMessage),
 ) -> static_supervisor.Builder {
-  let _ = event_ingest_subject
   list.fold(
     mcp_config.servers,
     static_supervisor.new(static_supervisor.OneForOne)

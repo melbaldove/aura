@@ -66,7 +66,6 @@ pub type McpServerConfig {
     command: String,
     args: List(String),
     env: List(#(String, String)),
-    subscribe: List(String),
   )
 }
 
@@ -403,24 +402,13 @@ fn parse_mcp_server(
     allow_missing: True,
   ))
   use env_list <- result.try(parse_mcp_env(fields, prefix))
-  use subscribe <- result.try(parse_mcp_string_list(
-    fields,
-    "subscribe",
-    prefix <> " subscribe",
-    allow_missing: False,
+  Ok(McpServerConfig(
+    name: name,
+    transport: transport,
+    command: command,
+    args: args,
+    env: env_list,
   ))
-  case subscribe {
-    [] -> Error(prefix <> " subscribe must be a non-empty list")
-    _ ->
-      Ok(McpServerConfig(
-        name: name,
-        transport: transport,
-        command: command,
-        args: args,
-        env: env_list,
-        subscribe: subscribe,
-      ))
-  }
 }
 
 fn parse_mcp_transport(
