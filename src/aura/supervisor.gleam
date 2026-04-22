@@ -12,6 +12,7 @@ import aura/db
 import aura/db_migration
 import aura/discord/rest
 import aura/event_ingest
+import aura/integrations/supervisor as integrations_supervisor
 import aura/mcp/pool as mcp_pool
 import aura/memory
 import aura/notification
@@ -83,7 +84,8 @@ pub fn start(
   // 3b. Start event_ingest actor (required — panics on failure).
   // Starts after db (which it depends on) and before flare/brain so the
   // supervisor log reads top-down in dependency order.
-  let assert Ok(_event_ingest_started) = event_ingest.start(db_subject)
+  let assert Ok(event_ingest_started) = event_ingest.start(db_subject)
+  let event_ingest_subject = event_ingest_started.data
   logging.log(logging.Info, "[supervisor] Event ingest started")
 
   // 4. Resolve Discord channel name → ID mapping
@@ -327,6 +329,10 @@ pub fn start(
     |> static_supervisor.restart_tolerance(intensity: 10, period: 60)
     |> static_supervisor.add(poller.supervised(discord_config, brain_subject))
     |> static_supervisor.add(mcp_pool.supervised(global_config.mcp))
+    |> static_supervisor.add(integrations_supervisor.supervised(
+      global_config.integrations,
+      event_ingest_subject,
+    ))
     |> static_supervisor.start
 
   case result {
