@@ -8,6 +8,7 @@ import aura/clients/llm_client.{type LLMClient}
 import aura/clients/skill_runner.{type SkillRunner}
 import aura/db
 import aura/discord/rest
+import aura/event
 import aura/discord/types as discord_types
 import aura/llm
 import aura/memory
@@ -475,6 +476,7 @@ fn execute_tool_dispatch(
         Error(e) -> TextResult("Error: " <> e)
       }
     }
+    "search_events" -> execute_search_events(ctx, args)
     "web_search" -> {
       case require_arg(args, "query") {
         Error(e) -> TextResult(e)
@@ -1330,6 +1332,167 @@ fn parse_timeout_ms(
 }
 
 // ---------------------------------------------------------------------------
+// search_events executor
+// ---------------------------------------------------------------------------
+
+fn execute_search_events(
+  ctx: ToolContext,
+  args: List(#(String, String)),
+) -> ToolResult {
+  let query = get_arg(args, "query")
+  let source = case get_arg(args, "source") {
+    "" -> None
+    s -> Some(s)
+  }
+  let since_raw = get_arg(args, "since_ms")
+  let until_raw = get_arg(args, "until_ms")
+  let time_range = case int.parse(since_raw), int.parse(until_raw) {
+    Ok(lo), Ok(hi) -> Some(#(lo, hi))
+    Error(_), Error(_) -> None
+    _, _ -> {
+      logging.log(
+        logging.Warning,
+        "[brain] search_events: incomplete time range (since_ms='"
+          <> since_raw
+          <> "', until_ms='"
+          <> until_raw
+          <> "'); ignoring",
+      )
+      None
+    }
+  }
+  let limit = case int.parse(get_arg(args, "limit")) {
+    Ok(n) -> int.clamp(n, min: 1, max: 100)
+    Error(_) -> 20
+  }
+
+  case db.search_events(ctx.db_subject, query, time_range, source, limit) {
+    Ok([]) ->
+      case query {
+        "" -> TextResult("No events found.")
+        q -> TextResult("No events matching \"" <> q <> "\".")
+      }
+    Ok(events) -> TextResult(format_events(query, events))
+    Error(msg) -> TextResult("search_events failed: " <> msg)
+  }
+}
+
+fn format_events(query: String, events: List(event.AuraEvent)) -> String {
+  let count = list.length(events)
+  let header = case query {
+    "" -> "Found " <> int.to_string(count) <> " recent events:"
+    q ->
+      "Found "
+      <> int.to_string(count)
+      <> " events matching \""
+      <> q
+      <> "\":"
+  }
+  let body =
+    list.index_map(events, fn(e, i) { format_event(i + 1, e) })
+    |> string.join("\n\n")
+  header <> "\n\n" <> body
+}
+
+fn format_event(index: Int, e: event.AuraEvent) -> String {
+  let date = time.format_ms_utc(e.time_ms)
+  let head =
+    int.to_string(index)
+    <> ". ["
+    <> e.source
+    <> "] "
+    <> date
+    <> " — "
+    <> e.subject
+  case source_detail(e) {
+    "" -> head
+    detail -> head <> "\n   " <> detail
+  }
+}
+
+/// Per-source detail line, pulled from event tags. Sources Aura ingests
+/// today are email (gmail-*) and Linear-style tickets; unknown sources get
+/// a generic tag dump so the LLM still sees something useful.
+fn source_detail(e: event.AuraEvent) -> String {
+  case is_email_source(e.source) {
+    True -> email_detail(e)
+    False ->
+      case is_linear_source(e.source) {
+        True -> linear_detail(e)
+        False -> generic_detail(e)
+      }
+  }
+}
+
+fn is_email_source(source: String) -> Bool {
+  source == "gmail"
+  || string.starts_with(source, "gmail-")
+  || source == "email"
+  || string.starts_with(source, "email-")
+}
+
+fn is_linear_source(source: String) -> Bool {
+  source == "linear" || string.starts_with(source, "linear-")
+}
+
+fn email_detail(e: event.AuraEvent) -> String {
+  let from = tag_or_empty(e.tags, "from")
+  let thread = tag_or_empty(e.tags, "thread")
+  let parts =
+    [
+      case from {
+        "" -> ""
+        v -> "From " <> v
+      },
+      case thread {
+        "" -> ""
+        v -> "thread " <> v
+      },
+    ]
+    |> list.filter(fn(s) { s != "" })
+  case parts {
+    [] -> generic_detail(e)
+    _ -> string.join(parts, ", ")
+  }
+}
+
+fn linear_detail(e: event.AuraEvent) -> String {
+  let author = tag_or_empty(e.tags, "author")
+  let status = tag_or_empty(e.tags, "status")
+  let parts =
+    [
+      case author {
+        "" -> ""
+        v -> "Author " <> v
+      },
+      case status {
+        "" -> ""
+        v -> "status " <> v
+      },
+    ]
+    |> list.filter(fn(s) { s != "" })
+  case parts {
+    [] -> generic_detail(e)
+    _ -> string.join(parts, ", ")
+  }
+}
+
+fn generic_detail(e: event.AuraEvent) -> String {
+  // Fall back to showing any tags the event carries so the LLM sees
+  // source-specific context even for integrations we don't pre-format.
+  dict.to_list(e.tags)
+  |> list.map(fn(pair) { pair.0 <> "=" <> pair.1 })
+  |> string.join(", ")
+}
+
+fn tag_or_empty(tags: dict.Dict(String, String), key: String) -> String {
+  case dict.get(tags, key) {
+    Ok(v) -> v
+    Error(_) -> ""
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
 
@@ -1564,6 +1727,42 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "limit",
           param_type: "string",
           description: "Max results (default 10)",
+          required: False,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
+      name: "search_events",
+      description: "Search events ingested from external sources (email, Linear tickets, etc.). Use this when the user asks about external activity that isn't part of a conversation — e.g. 'any new emails from alice today?' or 'what happened on the login bug ticket?'. Returns matched events with their source, subject, and a short snippet.",
+      parameters: [
+        llm.ToolParam(
+          name: "query",
+          param_type: "string",
+          description: "Full-text query against event subject, tags, and data. Use keyword search, not natural language. Pass an empty string to list the most recent events.",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "source",
+          param_type: "string",
+          description: "Optional: restrict to one source (e.g. 'gmail-work', 'linear').",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "since_ms",
+          param_type: "string",
+          description: "Optional: only events after this epoch ms. Must be paired with until_ms to take effect — an incomplete range is ignored.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "until_ms",
+          param_type: "string",
+          description: "Optional: only events before this epoch ms. Must be paired with since_ms to take effect — an incomplete range is ignored.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "limit",
+          param_type: "string",
+          description: "Max results (default 20, clamped to [1, 100]).",
           required: False,
         ),
       ],

@@ -1,7 +1,13 @@
 import aura/brain_tools
+import aura/db
+import aura/event
 import aura/llm
+import gleam/dict
+import gleam/erlang/process
 import gleam/list
+import gleam/string
 import gleeunit/should
+import test_harness
 
 pub fn parse_tool_args_valid_json_test() {
   let args =
@@ -234,4 +240,181 @@ pub fn expand_tool_calls_preserves_non_concat_test() {
     }
     _ -> should.fail()
   }
+}
+
+// ---------------------------------------------------------------------------
+// search_events tool tests
+// ---------------------------------------------------------------------------
+
+fn search_events_ctx(
+  db_subject: process.Subject(db.DbMessage),
+) -> brain_tools.ToolContext {
+  let stub = test_harness.standalone_tool_context()
+  brain_tools.ToolContext(..stub, db_subject: db_subject)
+}
+
+fn gmail_event(
+  id: String,
+  subject: String,
+  from: String,
+  thread: String,
+  time_ms: Int,
+) -> event.AuraEvent {
+  event.AuraEvent(
+    id: id,
+    source: "gmail-work",
+    type_: "message",
+    subject: subject,
+    time_ms: time_ms,
+    tags: dict.from_list([#("from", from), #("thread", thread)]),
+    external_id: id,
+    data: "{}",
+  )
+}
+
+fn linear_event(
+  id: String,
+  subject: String,
+  author: String,
+  status: String,
+  time_ms: Int,
+) -> event.AuraEvent {
+  event.AuraEvent(
+    id: id,
+    source: "linear",
+    type_: "ticket",
+    subject: subject,
+    time_ms: time_ms,
+    tags: dict.from_list([#("author", author), #("status", status)]),
+    external_id: id,
+    data: "{}",
+  )
+}
+
+fn run_search_events_tool(
+  ctx: brain_tools.ToolContext,
+  args_json: String,
+) -> String {
+  let call =
+    llm.ToolCall(id: "1", name: "search_events", arguments: args_json)
+  let #(result, _) = brain_tools.execute_tool(ctx, call)
+  case result {
+    brain_tools.TextResult(s) -> s
+  }
+}
+
+pub fn search_events_tool_returns_matching_events_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let ctx = search_events_ctx(db_subject)
+
+  let g =
+    gmail_event(
+      "g1",
+      "Re: Q4 terms with alice",
+      "alice@acme.com",
+      "t-abc-123",
+      1_700_000_000_000,
+    )
+  let l =
+    linear_event(
+      "l1",
+      "ENG-42: alice found auth timeout",
+      "alice@acme.com",
+      "In Progress",
+      1_700_100_000_000,
+    )
+  let assert Ok(True) = db.insert_event(db_subject, g)
+  let assert Ok(True) = db.insert_event(db_subject, l)
+
+  let out = run_search_events_tool(ctx, "{\"query\":\"alice\"}")
+  string.contains(out, "gmail-work") |> should.be_true
+  string.contains(out, "linear") |> should.be_true
+  string.contains(out, "alice@acme.com") |> should.be_true
+  string.contains(out, "t-abc-123") |> should.be_true
+  string.contains(out, "In Progress") |> should.be_true
+
+  process.send(db_subject, db.Shutdown)
+}
+
+pub fn search_events_tool_empty_query_returns_recent_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let ctx = search_events_ctx(db_subject)
+
+  let e1 = gmail_event("g1", "first", "a@x.com", "t1", 1000)
+  let e2 = gmail_event("g2", "second", "a@x.com", "t2", 2000)
+  let e3 = gmail_event("g3", "third", "a@x.com", "t3", 3000)
+  let assert Ok(True) = db.insert_event(db_subject, e1)
+  let assert Ok(True) = db.insert_event(db_subject, e2)
+  let assert Ok(True) = db.insert_event(db_subject, e3)
+
+  let out = run_search_events_tool(ctx, "{\"query\":\"\"}")
+  // All three subjects present
+  string.contains(out, "first") |> should.be_true
+  string.contains(out, "second") |> should.be_true
+  string.contains(out, "third") |> should.be_true
+  // Empty-query header uses the "recent" variant, not quoted query
+  string.contains(out, "recent events") |> should.be_true
+
+  process.send(db_subject, db.Shutdown)
+}
+
+pub fn search_events_tool_source_filter_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let ctx = search_events_ctx(db_subject)
+
+  let g =
+    gmail_event("g1", "ship the feature", "a@x.com", "t1", 1_700_000_000_000)
+  let l =
+    linear_event(
+      "l1",
+      "ship the feature",
+      "a@x.com",
+      "In Progress",
+      1_700_100_000_000,
+    )
+  let assert Ok(True) = db.insert_event(db_subject, g)
+  let assert Ok(True) = db.insert_event(db_subject, l)
+
+  let out =
+    run_search_events_tool(
+      ctx,
+      "{\"query\":\"ship\",\"source\":\"gmail-work\"}",
+    )
+  string.contains(out, "gmail-work") |> should.be_true
+  string.contains(out, "linear") |> should.be_false
+  string.contains(out, "In Progress") |> should.be_false
+
+  process.send(db_subject, db.Shutdown)
+}
+
+pub fn search_events_tool_no_matches_returns_empty_message_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let ctx = search_events_ctx(db_subject)
+
+  let g =
+    gmail_event(
+      "g1",
+      "completely unrelated",
+      "b@x.com",
+      "t1",
+      1_700_000_000_000,
+    )
+  let assert Ok(True) = db.insert_event(db_subject, g)
+
+  let out = run_search_events_tool(ctx, "{\"query\":\"nonexistent\"}")
+  out |> should.equal("No events matching \"nonexistent\".")
+
+  process.send(db_subject, db.Shutdown)
+}
+
+pub fn search_events_tool_is_registered_test() {
+  let tools = brain_tools.make_built_in_tools()
+  let has =
+    list.any(tools, fn(t) {
+      case t {
+        llm.ToolDefinition(name: "search_events", ..) -> True
+        _ -> False
+      }
+    })
+  has |> should.be_true
 }
