@@ -21,6 +21,7 @@ pub fn encode_request_roundtrip_test() {
     ])
   let msg = jsonrpc.request(1, "initialize", params)
   let wire = jsonrpc.encode(msg)
+  // Round-trip through the codec.
   let decoded = jsonrpc.decode(wire) |> should.be_ok
   case decoded {
     jsonrpc.Request(id, method, params_opt) -> {
@@ -33,6 +34,61 @@ pub fn encode_request_roundtrip_test() {
     }
     _ -> should.fail()
   }
+  // Independent wire parsing — the wire must have the right field names
+  // and a present "params" key (not omitted, not null).
+  let decoder = {
+    use jsonrpc_ver <- decode.field("jsonrpc", decode.string)
+    use id <- decode.field("id", decode.int)
+    use method <- decode.field("method", decode.string)
+    use has_params <- decode.optional_field("params", False, decode.success(True))
+    decode.success(#(jsonrpc_ver, id, method, has_params))
+  }
+  let parsed = json.parse(wire, decoder) |> should.be_ok
+  parsed.0 |> should.equal("2.0")
+  parsed.1 |> should.equal(1)
+  parsed.2 |> should.equal("initialize")
+  parsed.3 |> should.equal(True)
+}
+
+pub fn encode_notification_with_params_wire_test() {
+  let params = json.object([#("uri", json.string("gmail://inbox"))])
+  let msg = jsonrpc.notification("notifications/resources/updated", params)
+  let wire = jsonrpc.encode(msg)
+  // Independent wire parsing — params key must be present with the expected uri.
+  let params_decoder = {
+    use uri <- decode.field("uri", decode.string)
+    decode.success(uri)
+  }
+  let decoder = {
+    use jsonrpc_ver <- decode.field("jsonrpc", decode.string)
+    use method <- decode.field("method", decode.string)
+    use uri <- decode.field("params", params_decoder)
+    use has_id <- decode.optional_field("id", False, decode.success(True))
+    decode.success(#(jsonrpc_ver, method, uri, has_id))
+  }
+  let parsed = json.parse(wire, decoder) |> should.be_ok
+  parsed.0 |> should.equal("2.0")
+  parsed.1 |> should.equal("notifications/resources/updated")
+  parsed.2 |> should.equal("gmail://inbox")
+  parsed.3 |> should.equal(False)
+}
+
+pub fn encode_request_no_params_wire_test() {
+  let msg = jsonrpc.request_no_params(3, "tools/list")
+  let wire = jsonrpc.encode(msg)
+  // Independent wire parsing — params key must be ABSENT (not null).
+  let decoder = {
+    use jsonrpc_ver <- decode.field("jsonrpc", decode.string)
+    use id <- decode.field("id", decode.int)
+    use method <- decode.field("method", decode.string)
+    use has_params <- decode.optional_field("params", False, decode.success(True))
+    decode.success(#(jsonrpc_ver, id, method, has_params))
+  }
+  let parsed = json.parse(wire, decoder) |> should.be_ok
+  parsed.0 |> should.equal("2.0")
+  parsed.1 |> should.equal(3)
+  parsed.2 |> should.equal("tools/list")
+  parsed.3 |> should.equal(False)
 }
 
 pub fn encode_notification_no_params_test() {
@@ -136,6 +192,18 @@ pub fn decode_notification_test() {
   }
 }
 
+pub fn decode_notification_without_params_test() {
+  let wire = "{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}"
+  let msg = jsonrpc.decode(wire) |> should.be_ok
+  case msg {
+    jsonrpc.Notification(method, params) -> {
+      method |> should.equal("ping")
+      params |> should.equal(None)
+    }
+    _ -> should.fail()
+  }
+}
+
 pub fn decode_success_response_test() {
   let wire =
     "{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"ok\":true}}"
@@ -169,10 +237,23 @@ pub fn decode_wrong_jsonrpc_version_returns_error_test() {
 }
 
 pub fn decode_invalid_shape_returns_error_test() {
-  // {} has no method, no result, no error — unknown shape.
-  jsonrpc.decode("{}") |> should.be_error
-  // Totally malformed.
+  // Valid jsonrpc version, has an id, but no method, no result, no error —
+  // structurally ambiguous, so the shape discriminator must reject it.
+  jsonrpc.decode("{\"jsonrpc\":\"2.0\",\"id\":1}") |> should.be_error
+  // Totally malformed input — not JSON at all.
   jsonrpc.decode("not json at all") |> should.be_error
+}
+
+pub fn decode_wrong_typed_method_returns_error_test() {
+  let wire = "{\"jsonrpc\":\"2.0\",\"method\":42,\"id\":1}"
+  jsonrpc.decode(wire)
+  |> should.equal(Error("method must be a string"))
+}
+
+pub fn decode_wrong_typed_id_returns_error_test() {
+  let wire = "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":true}"
+  jsonrpc.decode(wire)
+  |> should.equal(Error("id must be int or string"))
 }
 
 pub fn decode_string_id_test() {

@@ -173,8 +173,8 @@ pub fn decode(raw: String) -> Result(Message, String) {
 
 fn decode_fields(fields: Dict(String, Dynamic)) -> Result(Message, String) {
   use _ <- result.try(check_version(fields))
-  let method = optional_string(fields, "method")
-  let id = optional_id(fields, "id")
+  use method <- result.try(optional_string(fields, "method"))
+  use id <- result.try(optional_id(fields, "id"))
   let has_result = dict.has_key(fields, "result")
   let has_error = dict.has_key(fields, "error")
   case method, id, has_result, has_error {
@@ -203,7 +203,31 @@ fn decode_fields(fields: Dict(String, Dynamic)) -> Result(Message, String) {
       use err_body <- result.try(decode_error_body(fields))
       Ok(Response(id: id_val, body: err_body))
     }
-    _, _, _, _ -> Error("unrecognised JSON-RPC message shape")
+    _, _, _, _ ->
+      Error(
+        "unrecognised JSON-RPC message shape: method="
+        <> shape_flag(method)
+        <> ", id="
+        <> shape_flag(id)
+        <> ", result="
+        <> bool_flag(has_result)
+        <> ", error="
+        <> bool_flag(has_error),
+      )
+  }
+}
+
+fn shape_flag(opt: Option(a)) -> String {
+  case opt {
+    Some(_) -> "present"
+    None -> "absent"
+  }
+}
+
+fn bool_flag(b: Bool) -> String {
+  case b {
+    True -> "true"
+    False -> "false"
   }
 }
 
@@ -219,28 +243,34 @@ fn check_version(fields: Dict(String, Dynamic)) -> Result(Nil, String) {
   }
 }
 
-fn optional_string(fields: Dict(String, Dynamic), key: String) -> Option(String) {
+fn optional_string(
+  fields: Dict(String, Dynamic),
+  key: String,
+) -> Result(Option(String), String) {
   case dict.get(fields, key) {
-    Error(_) -> None
+    Error(_) -> Ok(None)
     Ok(value) ->
       case decode.run(value, decode.string) {
-        Ok(s) -> Some(s)
-        Error(_) -> None
+        Ok(s) -> Ok(Some(s))
+        Error(_) -> Error(key <> " must be a string")
       }
   }
 }
 
-fn optional_id(fields: Dict(String, Dynamic), key: String) -> Option(Id) {
+fn optional_id(
+  fields: Dict(String, Dynamic),
+  key: String,
+) -> Result(Option(Id), String) {
   case dict.get(fields, key) {
-    Error(_) -> None
+    Error(_) -> Ok(None)
     Ok(value) -> {
       let id_decoder =
         decode.one_of(decode.map(decode.int, IntId), or: [
           decode.map(decode.string, StringId),
         ])
       case decode.run(value, id_decoder) {
-        Ok(id) -> Some(id)
-        Error(_) -> None
+        Ok(id) -> Ok(Some(id))
+        Error(_) -> Error(key <> " must be int or string")
       }
     }
   }
