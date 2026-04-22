@@ -90,6 +90,9 @@ type Pending {
 /// the raw tagged tuples delivered by the FFI. `HandshakeDeadline` is a
 /// self-sent timer message that trips if the handshake runs too long.
 /// `CallTool` is the entry point for the public `call_tool/4` surface.
+/// `CancelPendingToolCall` is sent by `call_tool/4` when its
+/// `process.receive` times out, so the actor can drop the stale entry
+/// from `pending` rather than leaking it if the server never responds.
 pub type ClientMessage {
   McpLine(raw: String)
   McpExit(status: Int)
@@ -99,6 +102,7 @@ pub type ClientMessage {
     tool: String,
     args: json.Json,
   )
+  CancelPendingToolCall(reply_to: Subject(ToolCallResult))
   Stop
 }
 
@@ -233,7 +237,9 @@ pub fn stop(subject: Subject(ClientMessage)) -> Nil {
 /// - `"mcp client not ready"` if the handshake hasn't completed.
 /// - `"mcp tool error: <code> <message>"` if the server returned JSON-RPC
 ///   error.
-/// - `"mcp tool call timed out"` if no response arrives within `timeout_ms`.
+/// - `"mcp tool call timed out [<tool>]"` if no response arrives within
+///   `timeout_ms`. On timeout the actor's pending entry is also cleared
+///   so stale waiters don't leak.
 ///
 /// Callers handle "not ready" by retrying later; the client never queues
 /// requests across the handshake boundary.
@@ -248,7 +254,13 @@ pub fn call_tool(
   case process.receive(reply_to, timeout_ms) {
     Ok(ToolCallOk(result)) -> Ok(result)
     Ok(ToolCallErr(msg)) -> Error(msg)
-    Error(_) -> Error("mcp tool call timed out")
+    Error(_) -> {
+      // Timed out waiting for a response. Tell the actor to drop the
+      // pending entry so it doesn't leak across the lifetime of the
+      // client — the server may never reply.
+      process.send(subject, CancelPendingToolCall(reply_to: reply_to))
+      Error("mcp tool call timed out [" <> tool <> "]")
+    }
   }
 }
 
@@ -371,8 +383,29 @@ fn handle_message(
 
     CallTool(reply_to, tool, args) -> handle_call_tool(state, reply_to, tool, args)
 
+    CancelPendingToolCall(reply_to) ->
+      handle_cancel_pending(state, reply_to)
+
     McpLine(raw) -> handle_line(state, raw)
   }
+}
+
+/// Remove any `PendingToolCall` entries whose reply subject matches
+/// `reply_to`. Called after `call_tool/4` times out, so the actor's
+/// pending dict stays bounded by genuinely in-flight calls rather than
+/// accumulating entries whose waiters have already given up.
+fn handle_cancel_pending(
+  state: State,
+  reply_to: Subject(ToolCallResult),
+) -> actor.Next(State, ClientMessage) {
+  let pending =
+    dict.filter(state.pending, fn(_id, entry) {
+      case entry {
+        PendingToolCall(reply_to: existing, ..) -> existing != reply_to
+        PendingInit -> True
+      }
+    })
+  actor.continue(State(..state, pending: pending))
 }
 
 fn handle_call_tool(

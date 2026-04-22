@@ -324,6 +324,75 @@ pub fn client_call_tool_surfaces_server_error_test() {
   fake.stop(server)
 }
 
+/// If `call_tool` times out waiting for a response, the actor must drop
+/// the stale pending entry so it doesn't leak if the server never
+/// replies. We can't introspect the pending dict directly, so the
+/// strongest available proxy is: after a timeout, does a follow-up
+/// `call_tool` work end-to-end? If the actor were wedged by the
+/// abandoned pending entry, the second call would never complete.
+///
+/// Script: handshake → first `tools/call` is observed but never
+/// answered (the fake blocks on its next expected step) → second
+/// `tools/call` is answered normally. The first call hits its 200ms
+/// timeout (and the error surfaces the tool name per L2 of the quality
+/// review); the second call returns the server's result.
+pub fn client_call_tool_timeout_cleans_up_pending_test() {
+  let tool_result_json =
+    json.object([
+      #(
+        "content",
+        json.preprocessed_array([
+          json.object([
+            #("type", json.string("text")),
+            #("text", json.string("ok")),
+          ]),
+        ]),
+      ),
+    ])
+    |> json.to_string
+  let server =
+    fake.start([
+      fake.ExpectRequest("initialize"),
+      fake.RespondResult(fake.initialize_result_json()),
+      fake.ExpectNotification("notifications/initialized"),
+      // First tools/call: observed, never answered. The fake then
+      // advances to waiting for the second tools/call; until we send
+      // it the subprocess sits silent, which is what triggers the
+      // client's receive timeout.
+      fake.ExpectRequest("tools/call"),
+      // Second tools/call: answered successfully.
+      fake.ExpectRequest("tools/call"),
+      fake.RespondResult(tool_result_json),
+      fake.ExpectRequest("__never__"),
+    ])
+  let subject = start_unlinked(make_config(server, "inbox"))
+
+  process.sleep(500)
+
+  // First call times out. Error message must name the tool.
+  let first =
+    client.call_tool(subject, "slow_tool", json.object([]), 200)
+  case first {
+    Error(msg) -> {
+      string.contains(msg, "timed out") |> should.be_true
+      string.contains(msg, "slow_tool") |> should.be_true
+    }
+    Ok(_) -> should.fail()
+  }
+
+  // Let the CancelPendingToolCall land before the second call.
+  process.sleep(50)
+
+  // Second call must succeed end-to-end — the actor isn't wedged and
+  // the abandoned pending entry didn't swallow the new correlation id.
+  let second =
+    client.call_tool(subject, "fast_tool", json.object([]), 5000)
+  second |> should.be_ok
+
+  client.stop(subject)
+  fake.stop(server)
+}
+
 /// If `call_tool` is invoked before the handshake completes, the actor
 /// replies immediately with `"mcp client not ready"` rather than queuing
 /// the request. The server stalls on `initialize` so the client stays in
