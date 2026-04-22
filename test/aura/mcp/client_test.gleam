@@ -1,6 +1,7 @@
 import aura/mcp/client
 import fakes/fake_mcp_server as fake
 import gleam/erlang/process.{type Subject}
+import gleam/json
 import gleam/string
 import gleeunit
 import gleeunit/should
@@ -236,5 +237,121 @@ pub fn client_handshake_deadline_stops_actor_test() {
       |> should.be_true
     Error(_) -> should.fail()
   }
+  fake.stop(server)
+}
+
+// ---------------------------------------------------------------------------
+// call_tool tests
+// ---------------------------------------------------------------------------
+
+/// Happy path: after the handshake completes, `call_tool` sends a
+/// `tools/call` request, the server replies with a `result`, and the caller
+/// receives the parsed JSON back.
+pub fn client_call_tool_returns_server_result_test() {
+  let tool_result_json =
+    json.object([
+      #(
+        "content",
+        json.preprocessed_array([
+          json.object([
+            #("type", json.string("text")),
+            #("text", json.string("hello from tool")),
+          ]),
+        ]),
+      ),
+    ])
+    |> json.to_string
+  let server =
+    fake.start([
+      fake.ExpectRequest("initialize"),
+      fake.RespondResult(fake.initialize_result_json()),
+      fake.ExpectNotification("notifications/initialized"),
+      fake.ExpectRequest("tools/call"),
+      fake.RespondResult(tool_result_json),
+      // Keep the subprocess alive for the duration of the test.
+      fake.ExpectRequest("__never__"),
+    ])
+  let subject = start_unlinked(make_config(server, "inbox"))
+
+  // Give the handshake a moment to complete before calling the tool.
+  process.sleep(500)
+
+  let result =
+    client.call_tool(
+      subject,
+      "echo",
+      json.object([#("text", json.string("hello"))]),
+      5000,
+    )
+  result |> should.be_ok
+
+  client.stop(subject)
+  fake.stop(server)
+}
+
+/// If the server returns a JSON-RPC error for `tools/call`, `call_tool`
+/// surfaces it as `Error("mcp tool error: <code> <message>")`.
+pub fn client_call_tool_surfaces_server_error_test() {
+  let server =
+    fake.start([
+      fake.ExpectRequest("initialize"),
+      fake.RespondResult(fake.initialize_result_json()),
+      fake.ExpectNotification("notifications/initialized"),
+      fake.ExpectRequest("tools/call"),
+      fake.RespondError(-32_603, "tool not found"),
+      fake.ExpectRequest("__never__"),
+    ])
+  let subject = start_unlinked(make_config(server, "inbox"))
+
+  process.sleep(500)
+
+  let result =
+    client.call_tool(
+      subject,
+      "missing",
+      json.object([]),
+      5000,
+    )
+  case result {
+    Error(msg) -> {
+      string.contains(msg, "mcp tool error") |> should.be_true
+      string.contains(msg, "tool not found") |> should.be_true
+    }
+    Ok(_) -> should.fail()
+  }
+
+  client.stop(subject)
+  fake.stop(server)
+}
+
+/// If `call_tool` is invoked before the handshake completes, the actor
+/// replies immediately with `"mcp client not ready"` rather than queuing
+/// the request. The server stalls on `initialize` so the client stays in
+/// `Handshaking` for the duration of the call.
+pub fn client_call_tool_before_ready_returns_error_test() {
+  let server =
+    fake.start([
+      fake.ExpectRequest("initialize"),
+      // No RESPOND_RESULT — the subprocess waits for the next request
+      // that will never come, so the client stays Handshaking.
+      fake.ExpectRequest("__never_sent__"),
+    ])
+  // Long handshake deadline so the actor doesn't trip during the test.
+  let subject =
+    start_unlinked(make_config_with_deadline(server, "inbox", 10_000))
+
+  let result =
+    client.call_tool(
+      subject,
+      "echo",
+      json.object([]),
+      1000,
+    )
+  case result {
+    Error(msg) -> msg |> should.equal("mcp client not ready")
+    Ok(_) -> should.fail()
+  }
+
+  client.stop(subject)
   fake.stop(server)
 }

@@ -3,8 +3,8 @@
 //// Spawns a subprocess per configured MCP server, speaks JSON-RPC 2.0 over
 //// NDJSON on stdio, and runs the MCP handshake (`initialize` → response →
 //// `notifications/initialized`). Once the handshake completes the actor is
-//// `Ready`; future work (see ADR 026, Task 2) adds a `call_tool` surface on
-//// top of this.
+//// `Ready`, and `call_tool/4` exposes a synchronous surface on top of the
+//// async request/response stream for the brain's action surface.
 ////
 //// The Erlang port is owned by `aura_mcp_stdio_ffi`. Raw lines are delivered
 //// to this actor's pid as `{mcp_line, Handle, RawLine}` and subprocess exit
@@ -25,17 +25,22 @@
 ////
 //// - Incoming notifications from the server on a Ready client are logged at
 ////   Info and dropped. ADR 026 retired the ambient-subscription path; the
-////   action surface added by Task 2 does not consume notifications.
+////   action surface does not consume notifications.
+////
+//// - `call_tool` correlates requests and responses via a `pending` dict
+////   keyed by JSON-RPC id. Each entry carries either `PendingInit` (the one
+////   outstanding initialize id) or `PendingToolCall(reply_to)` (a waiter we
+////   must deliver `ToolCallOk` / `ToolCallErr` to).
 
 import aura/mcp/jsonrpc
 import aura/mcp/stdio_transport.{type Handle}
+import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/json
-import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/string
@@ -69,13 +74,31 @@ pub type ClientConfig {
   )
 }
 
+/// Result delivered back to a `call_tool/4` waiter.
+pub type ToolCallResult {
+  ToolCallOk(result: json.Json)
+  ToolCallErr(message: String)
+}
+
+/// One outstanding JSON-RPC request the actor is waiting to correlate.
+type Pending {
+  PendingInit
+  PendingToolCall(reply_to: Subject(ToolCallResult), tool: String)
+}
+
 /// Messages the actor handles. `McpLine` and `McpExit` are translated from
 /// the raw tagged tuples delivered by the FFI. `HandshakeDeadline` is a
 /// self-sent timer message that trips if the handshake runs too long.
+/// `CallTool` is the entry point for the public `call_tool/4` surface.
 pub type ClientMessage {
   McpLine(raw: String)
   McpExit(status: Int)
   HandshakeDeadline
+  CallTool(
+    reply_to: Subject(ToolCallResult),
+    tool: String,
+    args: json.Json,
+  )
   Stop
 }
 
@@ -83,9 +106,8 @@ type State {
   State(
     handle: Handle,
     config: ClientConfig,
-    /// Outstanding `initialize` request id, if any. `None` after the
-    /// initialize response arrives.
-    pending_init_id: Option(Int),
+    /// Outstanding JSON-RPC requests, keyed by id.
+    pending: Dict(Int, Pending),
     next_id: Int,
     phase: Phase,
   )
@@ -162,7 +184,7 @@ pub fn start(
                 State(
                   handle: handle,
                   config: config,
-                  pending_init_id: Some(id),
+                  pending: dict.from_list([#(id, PendingInit)]),
                   next_id: id + 1,
                   phase: Handshaking,
                 )
@@ -201,6 +223,33 @@ pub fn supervised(
 /// Ask the actor to shut down and close the subprocess.
 pub fn stop(subject: Subject(ClientMessage)) -> Nil {
   process.send(subject, Stop)
+}
+
+/// Call an MCP tool synchronously. Sends a `tools/call` JSON-RPC request and
+/// blocks up to `timeout_ms` for the response.
+///
+/// Returns the raw `result` JSON on success (typically
+/// `{"content": [...]}` per the MCP spec), or a string error:
+/// - `"mcp client not ready"` if the handshake hasn't completed.
+/// - `"mcp tool error: <code> <message>"` if the server returned JSON-RPC
+///   error.
+/// - `"mcp tool call timed out"` if no response arrives within `timeout_ms`.
+///
+/// Callers handle "not ready" by retrying later; the client never queues
+/// requests across the handshake boundary.
+pub fn call_tool(
+  subject: Subject(ClientMessage),
+  tool: String,
+  args: json.Json,
+  timeout_ms: Int,
+) -> Result(json.Json, String) {
+  let reply_to = process.new_subject()
+  process.send(subject, CallTool(reply_to: reply_to, tool: tool, args: args))
+  case process.receive(reply_to, timeout_ms) {
+    Ok(ToolCallOk(result)) -> Ok(result)
+    Ok(ToolCallErr(msg)) -> Error(msg)
+    Error(_) -> Error("mcp tool call timed out")
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -320,7 +369,50 @@ fn handle_message(
         }
       }
 
+    CallTool(reply_to, tool, args) -> handle_call_tool(state, reply_to, tool, args)
+
     McpLine(raw) -> handle_line(state, raw)
+  }
+}
+
+fn handle_call_tool(
+  state: State,
+  reply_to: Subject(ToolCallResult),
+  tool: String,
+  args: json.Json,
+) -> actor.Next(State, ClientMessage) {
+  case state.phase {
+    Handshaking -> {
+      process.send(reply_to, ToolCallErr("mcp client not ready"))
+      actor.continue(state)
+    }
+    Ready -> {
+      let id = state.next_id
+      let params =
+        json.object([
+          #("name", json.string(tool)),
+          #("arguments", args),
+        ])
+      let line = jsonrpc.encode(jsonrpc.request(id, "tools/call", params))
+      case stdio_transport.send_line(state.handle, line) {
+        Error(err) -> {
+          process.send(
+            reply_to,
+            ToolCallErr("mcp tool call send failed: " <> err),
+          )
+          actor.continue(state)
+        }
+        Ok(_) -> {
+          let pending =
+            dict.insert(
+              state.pending,
+              id,
+              PendingToolCall(reply_to: reply_to, tool: tool),
+            )
+          actor.continue(State(..state, pending: pending, next_id: id + 1))
+        }
+      }
+    }
   }
 }
 
@@ -384,9 +476,10 @@ fn handle_response(
 ) -> actor.Next(State, ClientMessage) {
   case id {
     jsonrpc.IntId(n) ->
-      case state.pending_init_id {
-        Some(init_id) if init_id == n -> {
-          let state_without = State(..state, pending_init_id: None)
+      case dict.get(state.pending, n) {
+        Ok(PendingInit) -> {
+          let pending = dict.delete(state.pending, n)
+          let state_without = State(..state, pending: pending)
           case body {
             jsonrpc.Failure(code, message, _) -> {
               logging.log(
@@ -407,7 +500,38 @@ fn handle_response(
             jsonrpc.Success(_) -> after_initialize(state_without)
           }
         }
-        _ ->
+        Ok(PendingToolCall(reply_to, tool)) -> {
+          let pending = dict.delete(state.pending, n)
+          case body {
+            jsonrpc.Success(result) -> {
+              process.send(reply_to, ToolCallOk(result))
+              actor.continue(State(..state, pending: pending))
+            }
+            jsonrpc.Failure(code, message, _) -> {
+              logging.log(
+                logging.Warning,
+                log_prefix(state.config)
+                  <> " Tool "
+                  <> tool
+                  <> " returned error "
+                  <> int.to_string(code)
+                  <> ": "
+                  <> message,
+              )
+              process.send(
+                reply_to,
+                ToolCallErr(
+                  "mcp tool error: "
+                  <> int.to_string(code)
+                  <> " "
+                  <> message,
+                ),
+              )
+              actor.continue(State(..state, pending: pending))
+            }
+          }
+        }
+        Error(_) ->
           // Response for a request we don't remember. Ignore.
           actor.continue(state)
       }
@@ -490,3 +614,4 @@ fn truncate(s: String, n: Int) -> String {
     False -> s
   }
 }
+

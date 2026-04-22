@@ -75,12 +75,23 @@ pub fn escript_path() -> String {
 /// live under `/tmp/aura-fake-mcp-<ts>.script` and are cleaned up by
 /// `stop/1`.
 pub fn start(steps: List(Step)) -> FakeMcpServer {
+  // Include a monotonically-increasing unique integer alongside the ms
+  // timestamp so tests that run in the same millisecond don't share a
+  // script path and race on delete-vs-exec.
   let ts = int.to_string(time.now_ms())
-  let path = "/tmp/aura-fake-mcp-" <> ts <> ".script"
+  let uniq = int.to_string(unique_integer())
+  let path = "/tmp/aura-fake-mcp-" <> ts <> "-" <> uniq <> ".script"
   let content = serialize(steps)
   let assert Ok(_) = simplifile.write(path, content)
   FakeMcpServer(script_path: path, steps: steps)
 }
+
+fn unique_integer() -> Int {
+  int.absolute_value(erlang_unique_integer())
+}
+
+@external(erlang, "erlang", "unique_integer")
+fn erlang_unique_integer() -> Int
 
 /// The command to spawn this fake. Always `escript`, since we use a
 /// pre-existing Erlang binary.
