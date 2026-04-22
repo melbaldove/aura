@@ -59,9 +59,8 @@ const base_backoff_ms = 5000
 
 const max_backoff_ms = 300_000
 
+/// 28 min — leaves a 1-minute margin below Gmail's 29-minute IDLE ceiling.
 const idle_timeout_ms = 1_680_000
-
-// 28 min
 
 const connect_timeout_ms = 10_000
 
@@ -171,13 +170,10 @@ fn run_cycle(state: State, attempt: Int) -> Nil {
         }
         Ok(fresh) -> {
           persist_if_changed(state.config.token_path, tokens, fresh)
-          case run_session(state, fresh) {
-            Ok(_) -> schedule_next(state, 0)
-            Error(reason) -> {
-              log_error(name, "session ended: " <> reason)
-              schedule_next(state, attempt + 1)
-            }
-          }
+          // run_session's idle_loop is infinite — only Error exits.
+          let assert Error(reason) = run_session(state, fresh)
+          log_error(name, "session ended: " <> reason)
+          schedule_next(state, attempt + 1)
         }
       }
     }
@@ -261,16 +257,14 @@ fn process_events(
   events: List(imap.IdleEvent),
   baseline: Int,
 ) -> Int {
+  // Known Phase 1.5 limitations: fetch uses sequence numbers (not UIDs), so
+  // a mid-batch expunge can race envelope fetches; UIDVALIDITY checkpointing
+  // would close the gap. Acceptable for Phase 1.5 "best-effort" ingest.
   list.fold(events, baseline, fn(b, e) {
     case e {
       imap.Exists(count) -> {
-        case count > b {
-          True -> {
-            fetch_and_ingest(state, conn, b, count)
-            count
-          }
-          False -> count
-        }
+        fetch_and_ingest(state, conn, b, count)
+        int.max(count, b)
       }
       imap.Expunge(_) -> int.max(b - 1, 0)
       imap.Timeout -> b
@@ -284,7 +278,7 @@ fn fetch_and_ingest(
   from_exclusive: Int,
   to_inclusive: Int,
 ) -> Nil {
-  build_range(from_exclusive + 1, to_inclusive, [])
+  list.range(from_exclusive + 1, to_inclusive)
   |> list.each(fn(seq) {
     case imap.fetch_envelope(conn, seq) {
       Ok(env) -> {
@@ -310,13 +304,6 @@ fn fetch_and_ingest(
       }
     }
   })
-}
-
-fn build_range(from: Int, to: Int, acc: List(Int)) -> List(Int) {
-  case from > to {
-    True -> list.reverse(acc)
-    False -> build_range(from + 1, to, [from, ..acc])
-  }
 }
 
 // ---------------------------------------------------------------------------
