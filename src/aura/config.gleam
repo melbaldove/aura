@@ -1,5 +1,7 @@
 import aura/cron
 import aura/env
+import aura/integrations/gmail
+import aura/oauth
 import gleam/dict
 import gleam/int
 import gleam/list
@@ -75,6 +77,19 @@ pub type McpConfig {
   McpConfig(servers: List(McpServerConfig))
 }
 
+/// A single `[[integrations]]` entry, dispatched by its `type` field.
+/// Each variant carries the runtime config type from the corresponding
+/// integration module so the supervisor can call `<module>.supervised(config, ingest)`
+/// without redoing the parse.
+pub type IntegrationConfig {
+  GmailIntegration(config: gmail.GmailConfig)
+}
+
+/// Aggregate of all parsed `[[integrations]]` blocks.
+pub type IntegrationsConfig {
+  IntegrationsConfig(integrations: List(IntegrationConfig))
+}
+
 /// Top-level configuration loaded from the global `config.toml`.
 pub type GlobalConfig {
   GlobalConfig(
@@ -92,6 +107,7 @@ pub type GlobalConfig {
     dreaming_cron: String,
     dreaming_budget_percent: Int,
     mcp: McpConfig,
+    integrations: IntegrationsConfig,
   )
 }
 
@@ -149,6 +165,7 @@ pub fn default_global() -> GlobalConfig {
     dreaming_cron: "0 4 * * *",
     dreaming_budget_percent: 10,
     mcp: McpConfig(servers: []),
+    integrations: IntegrationsConfig(integrations: []),
   )
 }
 
@@ -314,6 +331,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
   }
 
   use mcp <- result.try(parse_mcp(doc))
+  use integrations <- result.try(parse_integrations(doc))
 
   Ok(GlobalConfig(
     discord: DiscordConfig(
@@ -350,6 +368,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     dreaming_cron: dreaming_cron,
     dreaming_budget_percent: dreaming_budget_percent,
     mcp: mcp,
+    integrations: integrations,
   ))
 }
 
@@ -501,6 +520,109 @@ fn expand_env(value: String, context: String) -> Result(String, String) {
         }
       }
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// [[integrations]] parsing
+// ---------------------------------------------------------------------------
+
+/// Parse the `[[integrations]]` array-of-tables. Missing section is valid
+/// and yields an empty list. Each entry is dispatched by its `type` field
+/// to a per-integration parser.
+fn parse_integrations(
+  doc: dict.Dict(String, tom.Toml),
+) -> Result(IntegrationsConfig, String) {
+  case tom.get_array(doc, ["integrations"]) {
+    Error(_) -> Ok(IntegrationsConfig(integrations: []))
+    Ok(entries) -> {
+      use integrations <- result.try(
+        list.try_map(entries, fn(entry) {
+          case entry {
+            tom.Table(fields) -> parse_integration(fields)
+            tom.InlineTable(fields) -> parse_integration(fields)
+            _ -> Error("[[integrations]] entry must be a table")
+          }
+        }),
+      )
+      Ok(IntegrationsConfig(integrations: integrations))
+    }
+  }
+}
+
+fn parse_integration(
+  fields: dict.Dict(String, tom.Toml),
+) -> Result(IntegrationConfig, String) {
+  use type_ <- result.try(case tom.get_string(fields, ["type"]) {
+    Ok(t) -> Ok(t)
+    Error(_) -> Error("[[integrations]] missing type")
+  })
+  case type_ {
+    "gmail" -> parse_gmail_integration(fields)
+    other ->
+      Error(
+        "[[integrations]] unsupported type: "
+        <> other
+        <> " (phase 1.5 supports only gmail)",
+      )
+  }
+}
+
+fn parse_gmail_integration(
+  fields: dict.Dict(String, tom.Toml),
+) -> Result(IntegrationConfig, String) {
+  let prefix = "[[integrations]] type=gmail"
+
+  use name <- result.try(required_string(fields, "name", prefix))
+  use user_email <- result.try(required_string(fields, "user_email", prefix))
+  use token_path <- result.try(required_string(fields, "token_path", prefix))
+
+  use client_id_raw <- result.try(required_string(
+    fields,
+    "oauth_client_id",
+    prefix,
+  ))
+  use client_id <- result.try(expand_env(
+    client_id_raw,
+    prefix <> " oauth_client_id",
+  ))
+  use client_secret_raw <- result.try(required_string(
+    fields,
+    "oauth_client_secret",
+    prefix,
+  ))
+  use client_secret <- result.try(expand_env(
+    client_secret_raw,
+    prefix <> " oauth_client_secret",
+  ))
+  let token_endpoint = case tom.get_string(fields, ["oauth_token_endpoint"]) {
+    Ok(ep) -> ep
+    Error(_) -> "https://oauth2.googleapis.com/token"
+  }
+
+  Ok(
+    GmailIntegration(config: gmail.GmailConfig(
+      name: name,
+      user_email: user_email,
+      oauth: oauth.OAuthConfig(
+        client_id: client_id,
+        client_secret: client_secret,
+        token_endpoint: token_endpoint,
+      ),
+      token_path: token_path,
+    )),
+  )
+}
+
+fn required_string(
+  fields: dict.Dict(String, tom.Toml),
+  key: String,
+  prefix: String,
+) -> Result(String, String) {
+  case tom.get_string(fields, [key]) {
+    Ok("") -> Error(prefix <> " missing " <> key)
+    Ok(s) -> Ok(s)
+    Error(_) -> Error(prefix <> " missing " <> key)
   }
 }
 
