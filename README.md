@@ -2,24 +2,20 @@
 
 **Autonomous Unified Runtime Agent**
 
-Managing work across multiple projects is fragmented. You context-switch between tools, your AI assistant forgets everything between sessions, and your coding agent can fix a bug but can't connect it to the ticket you're behind on.
+A.U.R.A. is an always-on personal AI. It lives on your laptop, talks to you on Discord, and runs in the background for as long as the BEAM is up. It partitions your work into domains (job, project, personal), tracks state across all of them, dispatches coding agents when there's code to write, and consolidates what it learned while you sleep.
 
-A.U.R.A. is an executive assistant and orchestrator. Each area of your life gets an isolated domain with its own instructions, memory, and state — but A.U.R.A. sees across all of them. When there's work to do, it dispatches coding agents via ACP, monitors progress, and persists what it learns. Think Jarvis, not Copilot.
+Built on the BEAM. Supervised OTP actors crash and recover independently. Every Discord channel is its own actor — conversations across domains run in parallel, and one stuck turn can't block another.
 
-Built on the BEAM. Supervised OTP actors crash and recover independently. Gateways, providers, and skills are all pluggable.
-
-> *Inspired by [Hermes Agent](https://github.com/nousresearch/hermes-agent) and [OpenClaw](https://github.com/openclaw/openclaw). A.U.R.A. is the orchestrator layer above the coding agent, not the agent itself.*
+> *Inspired by [Hermes Agent](https://github.com/nousresearch/hermes-agent) (learning loops) and [OpenClaw](https://github.com/openclaw/openclaw) (autonomous coding). Hermes learns skills inside a single workflow; OpenClaw ships coding agents. A.U.R.A. is the always-on layer above them — the assistant that knows you, owns your domains, and dispatches those agents as one capability among many.*
 
 ## What It Does
 
-- **Domains** — isolated knowledge partitions per project/responsibility, with cross-domain awareness
-- **ACP** — dispatch coding agents (provider-agnostic) into isolated worktrees, monitor in real-time, get structured reports
-- **Active memory** — automatic post-response review persists state and knowledge. Domain-aware compression preserves what matters.
-- **Skills** — language-agnostic CLI tools. Drop a script in a directory, it becomes a capability. A.U.R.A. auto-creates skills from learned workflows.
-- `browser` — headless browser automation (navigate/snapshot/click/type) via agent-browser
-- **Schedules** — config-driven cron + interval tasks that monitor Linear, calendar, PRs, and Slack
-- **Self-configuration** — create domains, update config, manage identity — all through conversation with propose/approve flow
-- **Pluggable gateways** — Discord ships first. Multi-platform conversation schema from day one.
+- **Domains** — isolated knowledge partitions, one per area of your life. Each has its own instructions, memory, state, and Discord channel. The brain sees across all of them.
+- **Flares** — long-running coding-agent sessions dispatched via ACP. Active / parked / failed lifecycle with SQLite persistence, recovery on restart, and rekindle on schedule.
+- **Memory** — active review persists state and knowledge every N turns; nightly dreaming consolidates the archive offline, promotes durable facts, and enforces a token budget.
+- **Skills** — language-agnostic CLI tools. Drop a script in a directory, it becomes a capability the LLM can call.
+- **Self-diagnosis** — ships with man pages. The brain reads them via the shell tool when it needs to understand its own behavior.
+- **Pluggable gateways and ACP transports** — Discord first; multi-platform conversation schema from day one.
 
 ## Requirements
 
@@ -49,12 +45,15 @@ gleam run -- start
 
 ```
 supervisor (OneForOne)
-├── db            SQLite actor — serializes all DB reads/writes
-├── poller        Gateway WebSocket (Discord first, pluggable)
-├── acp_manager   ACP session lifecycle — dispatch, monitor, persist
-├── brain         Routes messages, LLM tool loop, streaming, memory review
-└── scheduler     Config-driven cron + interval schedules
+├── db                   SQLite actor — serializes all DB reads/writes
+├── poller               Gateway WebSocket (Discord first, pluggable)
+├── flare_manager        Flare lifecycle — roster, dispatch, monitor, persist
+├── channel_supervisor   Hosts one actor per Discord channel
+├── brain                Routes messages to channel actors; global concerns
+└── scheduler            Cron + interval schedules + nightly dreaming
 ```
+
+Each `channel_actor` owns the LLM tool loop, streaming, typing, and compression for its channel — work across channels runs in parallel.
 
 ## Directory Structure
 
@@ -96,6 +95,8 @@ default_channel = "aura"
 brain = "zai/glm-5.1"
 domain = "zai/glm-5.1"
 acp = "claude/opus"
+vision = "zai/glm-5v-turbo"
+dream = "zai/glm-5.1"
 heartbeat = "zai/glm-5-turbo"
 monitor = "zai/glm-5-turbo"
 
@@ -105,6 +106,10 @@ global_max_concurrent = 4
 [memory]
 review_interval = 10
 notify_on_review = true
+
+[dreaming]
+cron = "0 4 * * *"
+budget_percent = 10
 ```
 
 ### Domain (`~/.config/aura/domains/<name>/config.toml`)
@@ -119,22 +124,23 @@ tools = ["linear", "google"]
 channel = "my-project"
 ```
 
-## ACP ([Agent Communication Protocol](https://agentcommunicationprotocol.dev))
+## Flares ([Agent Communication Protocol](https://agentcommunicationprotocol.dev))
 
-A.U.R.A. is an ACP client. It dispatches coding agents via the open standard, monitors progress through SSE event streams, and reports structured updates. Any ACP-compatible agent works — Claude Code, Codex, Gemini CLI.
+A flare is a long-running agent session. A.U.R.A. is an ACP client — it dispatches flares via the open standard, subscribes to their SSE event stream, and reports structured progress updates. Any ACP-compatible agent works (Claude Code, Codex, Gemini CLI), and multiple transports are pluggable (stdio, tmux).
 
-You can interact with the same session from multiple interfaces:
+Flares persist across restarts: the roster is written to SQLite and recovered on boot. Parked flares can be rekindled on a schedule.
+
+You can interact with the same flare from multiple interfaces:
 - **Discord** — structured progress updates via A.U.R.A.
 - **Zed** — direct editor integration
 - **`acpx`** — terminal CLI access
-- **tmux** — legacy fallback when no ACP server is configured
 
 ```
 You (in #my-project): investigate and fix the login timeout bug PROJ-123
-A.U.R.A.: ACP dispatched.
+A.U.R.A.: Flare dispatched.
 
          📋 **Investigate login timeout PROJ-123** · 8m elapsed
-         `acp-my-project-t1775618752766`
+         `f-1775618752766`
 
          **Status:** Working
          **Done:** Found root cause in `AuthService.swift:142`
