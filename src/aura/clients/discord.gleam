@@ -1,24 +1,13 @@
-//// Dependency-injected Discord REST client. Production code routes all
-//// Discord calls through this; tests inject fakes.
+//// Discord implementation of the platform-neutral `Transport`.
+//// Production code builds a `Transport` here and injects it into
+//// actors; tests build a fake in `test/fakes/fake_discord.gleam`.
 
 import aura/discord/rest
 import aura/path_utils
+import aura/transport.{type Transport, Transport}
 
-pub type DiscordClient {
-  DiscordClient(
-    send_message: fn(String, String) -> Result(String, String),
-    edit_message: fn(String, String, String) -> Result(Nil, String),
-    trigger_typing: fn(String) -> Result(Nil, String),
-    get_channel_parent: fn(String) -> Result(String, String),
-    send_message_with_attachment: fn(String, String, String) ->
-      Result(String, String),
-    create_thread_from_message: fn(String, String, String) ->
-      Result(String, String),
-  )
-}
-
-pub fn production(token: String) -> DiscordClient {
-  DiscordClient(
+pub fn production(token: String) -> Transport {
+  Transport(
     send_message: fn(channel_id, content) {
       rest.send_message(token, channel_id, content, [])
     },

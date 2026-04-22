@@ -3,8 +3,8 @@ import aura/brain
 import aura/channel_actor
 import aura/conversation
 import aura/db
-import aura/discord
-import aura/discord/types as discord_types
+import aura/message
+
 import aura/llm
 import aura/time
 import aura/vision
@@ -23,7 +23,11 @@ import test_harness
 
 pub fn channel_actor_starts_and_accepts_messages_test() {
   let deps =
-    channel_actor.TestDeps(channel_id: "test-channel", discord_token: "fake")
+    channel_actor.TestDeps(
+      platform: "discord",
+      channel_id: "test-channel",
+      discord_token: "fake",
+    )
   let subject = channel_actor.start_for_test(deps) |> should.be_ok
 
   // Sending messages should not crash the actor
@@ -34,8 +38,9 @@ pub fn channel_actor_starts_and_accepts_messages_test() {
   process.send(subject, channel_actor.Cancel)
 }
 
-fn fake_incoming(channel_id: String, id: String) -> discord.IncomingMessage {
-  discord.IncomingMessage(
+fn fake_incoming(channel_id: String, id: String) -> message.IncomingMessage {
+  message.IncomingMessage(
+    platform: "discord",
     message_id: id,
     channel_id: channel_id,
     channel_name: option.None,
@@ -222,7 +227,8 @@ pub fn finalize_turn_appends_to_state_conversation_test() {
 /// because it lost the question.
 pub fn user_message_persisted_through_finalize_test() {
   let incoming =
-    discord.IncomingMessage(
+    message.IncomingMessage(
+      platform: "discord",
       message_id: "m1",
       channel_id: "ch1",
       channel_name: option.None,
@@ -411,8 +417,7 @@ pub fn turn_deadline_fails_turn_test() {
 pub fn worker_down_stream_translates_to_stream_error_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let ref = channel_actor.fake_monitor_ref()
-  let with_monitor =
-    channel_actor.with_fake_stream_turn_monitored(state, ref)
+  let with_monitor = channel_actor.with_fake_stream_turn_monitored(state, ref)
   let #(new_state, effects) =
     channel_actor.transition(
       with_monitor,
@@ -455,7 +460,8 @@ pub fn cold_actor_loads_history_from_db_test() {
 
   // Send a new message to the same channel — this will start a fresh channel_actor
   let msg =
-    discord.IncomingMessage(
+    message.IncomingMessage(
+      platform: "discord",
       message_id: "new-msg",
       channel_id: "cold-channel",
       channel_name: option.None,
@@ -1106,10 +1112,7 @@ pub fn retry_stream_message_spawns_stream_worker_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
   let #(_, effects) =
-    channel_actor.transition(
-      with_stream,
-      channel_actor.RetryStream,
-    )
+    channel_actor.transition(with_stream, channel_actor.RetryStream)
   list.any(effects, fn(e) {
     case e {
       channel_actor.SpawnStreamWorker(_) -> True
@@ -1123,10 +1126,7 @@ pub fn retry_stream_message_spawns_stream_worker_test() {
 pub fn retry_stream_when_idle_is_noop_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let #(new_state, effects) =
-    channel_actor.transition(
-      state,
-      channel_actor.RetryStream,
-    )
+    channel_actor.transition(state, channel_actor.RetryStream)
   effects |> should.equal([])
   new_state.turn |> should.equal(option.None)
 }
@@ -1160,8 +1160,7 @@ pub fn worker_down_stale_ref_is_ignored_test() {
 pub fn worker_down_matching_ref_dispatches_stream_error_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let ref = channel_actor.fake_monitor_ref()
-  let with_stream =
-    channel_actor.with_fake_stream_turn_monitored(state, ref)
+  let with_stream = channel_actor.with_fake_stream_turn_monitored(state, ref)
   let #(new_state, effects) =
     channel_actor.transition(
       with_stream,
@@ -1287,7 +1286,8 @@ pub fn compression_worker_normal_exit_clears_monitor_test() {
 pub fn finalize_turn_preserves_author_name_test() {
   let state = channel_actor.initial_state_for_test("ch-author")
   let incoming =
-    discord.IncomingMessage(
+    message.IncomingMessage(
+      platform: "discord",
       message_id: "m-alice",
       channel_id: "ch-author",
       channel_name: option.None,
@@ -1413,7 +1413,8 @@ pub fn vision_spawn_uses_configured_prompt_test() {
       ),
     )
   let msg =
-    discord.IncomingMessage(
+    message.IncomingMessage(
+      platform: "discord",
       message_id: "m-img",
       channel_id: "ch-vision-prompt",
       channel_name: option.None,
@@ -1423,7 +1424,7 @@ pub fn vision_spawn_uses_configured_prompt_test() {
       content: "check this chart",
       is_bot: False,
       attachments: [
-        discord_types.Attachment(
+        message.Attachment(
           url: "https://example.com/chart.png",
           filename: "chart.png",
           content_type: "image/png",
@@ -1457,7 +1458,8 @@ pub fn vision_spawn_uses_configured_prompt_test() {
 pub fn finalize_turn_stop_typing_before_discord_edit_test() {
   let state = channel_actor.initial_state_for_test("ch-typing")
   let incoming =
-    discord.IncomingMessage(
+    message.IncomingMessage(
+      platform: "discord",
       message_id: "m-typing",
       channel_id: "ch-typing",
       channel_name: option.None,
@@ -1514,7 +1516,8 @@ pub fn finalize_turn_stop_typing_before_discord_edit_test() {
 pub fn stream_error_retry_resets_accumulated_content_test() {
   let state = channel_actor.initial_state_for_test("ch-retry")
   let incoming =
-    discord.IncomingMessage(
+    message.IncomingMessage(
+      platform: "discord",
       message_id: "m-retry",
       channel_id: "ch-retry",
       channel_name: option.None,

@@ -3,14 +3,14 @@ import aura/acp/provider
 import aura/acp/types as acp_types
 import aura/browser
 import aura/clients/browser_runner.{type BrowserRunner}
-import aura/clients/discord_client.{type DiscordClient}
+import aura/clients/discord as discord_client
 import aura/clients/llm_client.{type LLMClient}
 import aura/clients/skill_runner.{type SkillRunner}
 import aura/db
 import aura/discord/rest
+import aura/discord/types as discord_types
 import aura/env
 import aura/event
-import aura/discord/types as discord_types
 import aura/integrations/gmail as gmail_integration
 import aura/integrations/supervisor as integrations_supervisor
 import aura/llm
@@ -25,6 +25,7 @@ import aura/structured_memory
 import aura/tier
 import aura/time
 import aura/tools
+import aura/transport.{type Transport}
 import aura/validator
 import aura/web
 import aura/xdg
@@ -110,7 +111,7 @@ pub type ToolContext {
     shell_patterns: shell.CompiledPatterns,
     on_shell_approve: fn(PendingShellApproval) -> Nil,
     vision_fn: fn(String, String) -> Result(String, String),
-    discord: DiscordClient,
+    discord: Transport,
     llm_client: LLMClient,
     skill_runner: SkillRunner,
     browser_runner: BrowserRunner,
@@ -1768,12 +1769,7 @@ fn format_events(query: String, events: List(event.AuraEvent)) -> String {
   let count = list.length(events)
   let header = case query {
     "" -> "Found " <> int.to_string(count) <> " recent events:"
-    q ->
-      "Found "
-      <> int.to_string(count)
-      <> " events matching \""
-      <> q
-      <> "\":"
+    q -> "Found " <> int.to_string(count) <> " events matching \"" <> q <> "\":"
   }
   let body =
     list.index_map(events, fn(e, i) { format_event(i + 1, e) })

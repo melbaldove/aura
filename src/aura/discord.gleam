@@ -1,8 +1,14 @@
 import aura/discord/rest
 import aura/discord/types as discord_types
+import aura/message
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
+
+/// Canonical platform name for Discord-sourced messages. Use this in
+/// place of the string literal when threading platform through the
+/// system (conversation keys, channel actor deps, etc.).
+pub const platform_name: String = "discord"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -13,31 +19,18 @@ pub type BriefingSection {
   BriefingSection(domain: String, summary: String)
 }
 
-/// Normalized incoming message for Aura's internal use
-pub type IncomingMessage {
-  IncomingMessage(
-    message_id: String,
-    channel_id: String,
-    channel_name: Option(String),
-    guild_id: String,
-    author_id: String,
-    author_name: String,
-    content: String,
-    is_bot: Bool,
-    attachments: List(discord_types.Attachment),
-  )
-}
-
 // ---------------------------------------------------------------------------
 // Functions
 // ---------------------------------------------------------------------------
 
-/// Convert a received Discord message to internal type
+/// Convert a received Discord message to the platform-neutral
+/// `message.IncomingMessage` that the brain processes.
 pub fn from_received(
   msg: discord_types.ReceivedMessage,
   channel_name: Option(String),
-) -> IncomingMessage {
-  IncomingMessage(
+) -> message.IncomingMessage {
+  message.IncomingMessage(
+    platform: platform_name,
     message_id: msg.id,
     channel_id: msg.channel_id,
     channel_name: channel_name,
@@ -46,7 +39,15 @@ pub fn from_received(
     author_name: msg.author.username,
     content: msg.content,
     is_bot: msg.author.bot,
-    attachments: msg.attachments,
+    attachments: list.map(msg.attachments, attachment_from_discord),
+  )
+}
+
+fn attachment_from_discord(a: discord_types.Attachment) -> message.Attachment {
+  message.Attachment(
+    url: a.url,
+    content_type: a.content_type,
+    filename: a.filename,
   )
 }
 

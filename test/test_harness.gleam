@@ -26,12 +26,13 @@ import aura/brain
 import aura/brain_tools
 import aura/channel_supervisor
 import aura/clients/browser_runner
-import aura/clients/discord_client
+import aura/clients/discord as discord_client
 import aura/clients/llm_client
 import aura/clients/skill_runner
 import aura/config
 import aura/db
 import aura/discord
+import aura/message
 import aura/shell
 import aura/skill
 import aura/xdg
@@ -323,8 +324,9 @@ pub fn fresh_system_with_domain(
 
 /// Build a minimal `IncomingMessage` for use in tests.
 /// Mirrors the private `build_incoming` in `common_steps.gleam`.
-pub fn incoming(channel_id: String, content: String) -> discord.IncomingMessage {
-  discord.IncomingMessage(
+pub fn incoming(channel_id: String, content: String) -> message.IncomingMessage {
+  message.IncomingMessage(
+    platform: "discord",
     message_id: "fake-" <> content,
     channel_id: channel_id,
     channel_name: None,

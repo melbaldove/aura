@@ -5,7 +5,7 @@ import aura/attachment
 import aura/brain_tools
 import aura/browser
 import aura/clients/browser_runner
-import aura/clients/discord_client
+import aura/clients/discord as discord_client
 import aura/clients/llm_client
 import aura/clients/skill_runner
 import aura/compressor
@@ -15,6 +15,7 @@ import aura/discord
 import aura/discord/message as discord_message
 import aura/domain
 import aura/llm
+import aura/message
 import aura/models
 import aura/review
 import aura/review_runner.{type ReviewRunner}
@@ -25,6 +26,7 @@ import aura/structured_memory
 import aura/system_prompt
 import aura/time
 import aura/tools
+import aura/transport
 import aura/validator
 import aura/vision
 import aura/xdg
@@ -72,7 +74,7 @@ pub type VisionWorkerSpawn =
     Pid
 
 pub type ChannelMessage {
-  HandleIncoming(discord.IncomingMessage)
+  HandleIncoming(message.IncomingMessage)
   HandleHandback(flare_id: String, session_name: String, result: String)
   Cancel
 
@@ -147,12 +149,13 @@ pub type TurnState {
 }
 
 pub type PendingWork {
-  PendingUserMessage(discord.IncomingMessage)
+  PendingUserMessage(message.IncomingMessage)
   PendingHandback(flare_id: String, session_name: String, result: String)
 }
 
 pub type ChannelState {
   ChannelState(
+    platform: String,
     channel_id: String,
     domain: Option(String),
     conversation: List(llm.Message),
@@ -193,12 +196,15 @@ pub type ChannelState {
 /// Full dependencies for production channel actor construction.
 pub type Deps {
   Deps(
+    platform: String,
     channel_id: String,
     discord_token: String,
     guild_id: String,
     db_subject: process.Subject(db.DbMessage),
     acp_subject: process.Subject(flare_manager.FlareMsg),
-    scheduler_subject: option.Option(process.Subject(scheduler.SchedulerMessage)),
+    scheduler_subject: option.Option(
+      process.Subject(scheduler.SchedulerMessage),
+    ),
     paths: xdg.Paths,
     domain: option.Option(String),
     review_interval: Int,
@@ -206,7 +212,7 @@ pub type Deps {
     notify_on_review: Bool,
     monitor_model: String,
     review_runner: ReviewRunner,
-    discord: discord_client.DiscordClient,
+    discord: transport.Transport,
     llm_client: llm_client.LLMClient,
     skill_runner: skill_runner.SkillRunner,
     browser_runner: browser_runner.BrowserRunner,
@@ -303,11 +309,12 @@ fn build_initial_state(
   let #(history, comp_state) =
     conversation.load_channel_bootstrap(
       deps.db_subject,
-      platform,
+      deps.platform,
       deps.channel_id,
       time.now_ms(),
     )
   ChannelState(
+    platform: deps.platform,
     channel_id: deps.channel_id,
     domain: deps.domain,
     conversation: history,
@@ -347,7 +354,7 @@ fn build_initial_state(
 
 /// Minimal deps for test-only actor construction.
 pub type TestDeps {
-  TestDeps(channel_id: String, discord_token: String)
+  TestDeps(platform: String, channel_id: String, discord_token: String)
 }
 
 /// Build a `Deps` record suitable for tests, using stub subjects and real
@@ -360,6 +367,7 @@ pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
   let assert Ok(db_subject) = db.start(":memory:")
   let acp_subject = process.new_subject()
   Deps(
+    platform: "discord",
     channel_id: channel_id,
     discord_token: discord_token,
     guild_id: "",
@@ -497,6 +505,7 @@ fn build_initial_state_for_test(
       browser_runner: browser_runner.production(),
     )
   ChannelState(
+    platform: deps.platform,
     channel_id: deps.channel_id,
     domain: None,
     conversation: [],
@@ -611,7 +620,7 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       case
         db.resolve_conversation(
           state.tool_ctx.db_subject,
-          platform,
+          state.platform,
           state.channel_id,
           now,
         )
@@ -813,7 +822,7 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       let comp_state = state.compressor_state
       let brain_context = state.brain_context
       let monitor_model = state.monitor_model
-      let cache_key = platform <> ":" <> state.channel_id
+      let cache_key = state.platform <> ":" <> state.channel_id
       logging.log(
         logging.Info,
         "[channel_actor] Full compression triggered for " <> cache_key,
@@ -834,7 +843,8 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
             Error(e) ->
               logging.log(
                 logging.Info,
-                "[channel_actor] Flush skipped — monitor LLM config failed: " <> e,
+                "[channel_actor] Flush skipped — monitor LLM config failed: "
+                  <> e,
               )
           }
           let #(new_history, new_comp_state) =
@@ -892,13 +902,15 @@ fn resolve_approval(
         "approve" -> {
           let #(result, body) = on_approve()
           process.send(reply_to, result)
-          let _ = state.tool_ctx.discord.edit_message(channel_id, message_id, body)
+          let _ =
+            state.tool_ctx.discord.edit_message(channel_id, message_id, body)
           state
         }
         _ -> {
           let body = on_reject()
           process.send(reply_to, brain_tools.Rejected)
-          let _ = state.tool_ctx.discord.edit_message(channel_id, message_id, body)
+          let _ =
+            state.tool_ctx.discord.edit_message(channel_id, message_id, body)
           state
         }
       }
@@ -979,11 +991,12 @@ fn execute_spawn_vision_worker(
   // Resolve LlmConfig from resolved_vision_config at call time. Falls back to
   // a blank config (which will produce a VisionError) if the model spec is
   // unresolvable — same graceful-degradation policy as the vision_fn closure.
-  let vision_llm_config =
-    case models.build_llm_config(state.resolved_vision_config.model_spec) {
-      Ok(cfg) -> cfg
-      Error(_) -> llm.LlmConfig(base_url: "", api_key: "", model: "")
-    }
+  let vision_llm_config = case
+    models.build_llm_config(state.resolved_vision_config.model_spec)
+  {
+    Ok(cfg) -> cfg
+    Error(_) -> llm.LlmConfig(base_url: "", api_key: "", model: "")
+  }
   let pid =
     state.vision_spawn(
       state.tool_ctx.llm_client.chat_text,
@@ -1069,7 +1082,7 @@ fn start_typing_loop(state: ChannelState) -> Pid {
   process.spawn_unlinked(fn() { typing_loop(discord, channel_id) })
 }
 
-fn typing_loop(discord: discord_client.DiscordClient, channel_id: String) -> Nil {
+fn typing_loop(discord: transport.Transport, channel_id: String) -> Nil {
   let _ = discord.trigger_typing(channel_id)
   process.sleep(8000)
   typing_loop(discord, channel_id)
@@ -1145,7 +1158,11 @@ pub fn transition(
           description,
         )
       let enriched_new =
-        enrich_messages_with_description(turn.new_messages, filename, description)
+        enrich_messages_with_description(
+          turn.new_messages,
+          filename,
+          description,
+        )
       let new_turn =
         TurnState(
           ..turn,
@@ -1461,10 +1478,7 @@ pub fn transition(
       case state.compression_monitor == Some(ref) {
         True -> {
           case reason {
-            "normal" -> #(
-              ChannelState(..state, compression_monitor: None),
-              [],
-            )
+            "normal" -> #(ChannelState(..state, compression_monitor: None), [])
             _ -> {
               logging.log(
                 logging.Error,
@@ -1497,7 +1511,10 @@ pub fn transition(
                 _ ->
                   case turn.worker_kind {
                     StreamWorker ->
-                      transition(state, StreamError("worker crashed: " <> reason))
+                      transition(
+                        state,
+                        StreamError("worker crashed: " <> reason),
+                      )
                     ToolWorker(_, call_id) ->
                       transition(
                         state,
@@ -1520,10 +1537,7 @@ pub fn transition(
       case state.compression_monitor == Some(ref) {
         True -> {
           case reason {
-            "normal" -> #(
-              ChannelState(..state, compression_monitor: None),
-              [],
-            )
+            "normal" -> #(ChannelState(..state, compression_monitor: None), [])
             _ -> {
               logging.log(
                 logging.Error,
@@ -1764,10 +1778,7 @@ fn start_turn(
           // Prefer the local copy as a data URL to avoid Discord CDN HMAC
           // rejection. attachment.preprocess has already downloaded the file.
           let #(path, question, filename) =
-            first_image_and_question(
-              msg,
-              state.resolved_vision_config.prompt,
-            )
+            first_image_and_question(msg, state.resolved_vision_config.prompt)
           #(state_with_pending_vision(state, messages, new_messages, msg), [
             SpawnVisionWorker(path, question, filename),
             StartTyping,
@@ -1948,12 +1959,12 @@ pub fn assemble_system_prompt(
   base <> fs_section <> flare_context
 }
 
-fn has_image_attachment(msg: discord.IncomingMessage) -> Bool {
+fn has_image_attachment(msg: message.IncomingMessage) -> Bool {
   list.any(msg.attachments, vision.is_image_attachment)
 }
 
 fn first_image_and_question(
-  msg: discord.IncomingMessage,
+  msg: message.IncomingMessage,
   prompt: String,
 ) -> #(String, String, String) {
   let first_att =
@@ -2015,7 +2026,7 @@ fn state_with_pending_vision(
   state: ChannelState,
   messages: List(llm.Message),
   new_messages: List(llm.Message),
-  msg: discord.IncomingMessage,
+  msg: message.IncomingMessage,
 ) -> ChannelState {
   let kind =
     UserTurn(
@@ -2031,7 +2042,7 @@ fn state_with_pending_stream(
   state: ChannelState,
   messages: List(llm.Message),
   new_messages: List(llm.Message),
-  msg: discord.IncomingMessage,
+  msg: message.IncomingMessage,
 ) -> ChannelState {
   let kind =
     UserTurn(
@@ -2049,11 +2060,7 @@ const approval_expiry_ms: Int = 900_000
 /// Default domain name when a channel has no domain resolved (e.g. #aura).
 const default_domain: String = "aura"
 
-/// Platform identifier used for conversation keys and DB rows. Only "discord"
-/// is supported today; Telegram/Slack would add more.
-const platform: String = "discord"
-
-/// Progressive-edit threshold: re-render the Discord message every N chars
+/// Progressive-edit threshold: re-render the outbound message every N chars
 /// of accumulated content.
 const progressive_edit_chars: Int = 150
 
@@ -2070,8 +2077,7 @@ pub fn enrich_messages_with_description(
   let reversed = list.reverse(messages)
   case replace_last_user_message(reversed, prefix, []) {
     Ok(enriched) -> enriched
-    Error(_) ->
-      list.append(messages, [llm.UserMessage(content: prefix)])
+    Error(_) -> list.append(messages, [llm.UserMessage(content: prefix)])
   }
 }
 
@@ -2220,7 +2226,8 @@ fn finalize_turn(
 /// Construct a fresh `ChannelState` for tests without spinning up an actor.
 /// Uses the same wiring as `start_for_test` but returns the state directly.
 pub fn initial_state_for_test(channel_id: String) -> ChannelState {
-  let deps = TestDeps(channel_id: channel_id, discord_token: "")
+  let deps =
+    TestDeps(platform: "discord", channel_id: channel_id, discord_token: "")
   build_initial_state_for_test(deps, process.new_subject())
 }
 

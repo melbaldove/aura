@@ -5,7 +5,7 @@ import aura/brain_tools
 import aura/channel_actor
 import aura/channel_supervisor
 import aura/clients/browser_runner.{type BrowserRunner}
-import aura/clients/discord_client.{type DiscordClient}
+import aura/clients/discord as discord_client
 import aura/clients/llm_client.{type LLMClient}
 import aura/clients/skill_runner.{type SkillRunner}
 import aura/config
@@ -15,6 +15,7 @@ import aura/discord/message as discord_message
 import aura/discord/rest
 import aura/llm
 import aura/memory
+import aura/message
 import aura/models
 import aura/notification
 import aura/review_runner
@@ -25,6 +26,7 @@ import aura/stream_worker
 import aura/structured_memory
 import aura/time
 import aura/tool_worker
+import aura/transport.{type Transport}
 import aura/validator
 import aura/vision
 import aura/vision_worker
@@ -62,7 +64,7 @@ pub type RouteDecision {
 
 /// Messages the brain actor accepts from other processes and the supervisor.
 pub type BrainMessage {
-  HandleMessage(discord.IncomingMessage)
+  HandleMessage(message.IncomingMessage)
   UpdateDomains(List(DomainInfo))
   HeartbeatFinding(notification.Finding)
   DeliverDigest
@@ -90,7 +92,7 @@ pub type BrainConfig {
     validation_rules: List(validator.Rule),
     db_subject: process.Subject(db.DbMessage),
     acp_subject: process.Subject(flare_manager.FlareMsg),
-    discord: DiscordClient,
+    discord: Transport,
     llm: LLMClient,
     skill_runner: SkillRunner,
     browser_runner: BrowserRunner,
@@ -126,7 +128,7 @@ pub type BrainState {
     shell_patterns: shell.CompiledPatterns,
     acp_progress_msgs: dict.Dict(String, #(String, String)),
     // session_name -> #(channel_id, message_id)
-    discord: DiscordClient,
+    discord: Transport,
     llm_client: LLMClient,
     skill_runner: SkillRunner,
     browser_runner: BrowserRunner,
@@ -331,9 +333,14 @@ fn handle_message(
       }
       logging.log(logging.Info, "[brain] Routing msg to " <> routed_channel_id)
       let routed_msg =
-        discord.IncomingMessage(..msg, channel_id: routed_channel_id)
+        message.IncomingMessage(..msg, channel_id: routed_channel_id)
       let deps =
-        build_channel_actor_deps(new_state, routed_channel_id, domain_name)
+        build_channel_actor_deps(
+          new_state,
+          msg.platform,
+          routed_channel_id,
+          domain_name,
+        )
       let subject =
         channel_supervisor.get_or_start(
           new_state.channel_supervisor,
@@ -449,7 +456,14 @@ fn handle_message(
             Ok(d) -> Some(d)
             Error(_) -> None
           }
-          let deps = build_channel_actor_deps(state, ch, domain_name)
+          // Discord interactions are platform-native; no cross-platform channel here.
+          let deps =
+            build_channel_actor_deps(
+              state,
+              discord.platform_name,
+              ch,
+              domain_name,
+            )
           let subject =
             channel_supervisor.get_or_start(state.channel_supervisor, ch, deps)
           process.send(
@@ -793,6 +807,7 @@ fn persist_flare_result(
 /// experimental channel_actor path.
 fn build_channel_actor_deps(
   state: BrainState,
+  platform: String,
   channel_id: String,
   domain_name: Option(String),
 ) -> channel_actor.Deps {
@@ -824,24 +839,26 @@ fn build_channel_actor_deps(
     vision.resolve_vision_config(state.global_config, domain_cfg_opt)
 
   // Resolve ACP fields from domain config.
-  let #(acp_provider, acp_binary, acp_worktree, acp_server_url, acp_agent_name) =
-    case domain_name {
-      Some(name) ->
-        case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
-          Ok(#(_, cfg)) -> #(
-            cfg.acp_provider,
-            cfg.acp_binary,
-            cfg.acp_worktree,
-            cfg.acp_server_url,
-            cfg.acp_agent_name,
-          )
-          Error(_) -> #("claude-code", "", True, "", "")
-        }
-      None -> #("claude-code", "", True, "", "")
-    }
+  let #(acp_provider, acp_binary, acp_worktree, acp_server_url, acp_agent_name) = case
+    domain_name
+  {
+    Some(name) ->
+      case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
+        Ok(#(_, cfg)) -> #(
+          cfg.acp_provider,
+          cfg.acp_binary,
+          cfg.acp_worktree,
+          cfg.acp_server_url,
+          cfg.acp_agent_name,
+        )
+        Error(_) -> #("claude-code", "", True, "", "")
+      }
+    None -> #("claude-code", "", True, "", "")
+  }
 
   let domain_names = list.map(state.domains, fn(d) { d.name })
   channel_actor.Deps(
+    platform: platform,
     channel_id: channel_id,
     discord_token: state.discord_token,
     guild_id: state.guild_id,
@@ -922,7 +939,14 @@ fn route_handback_to_channel_actor(
         Ok(_) -> Some(flare.domain)
         Error(_) -> None
       }
-      let deps = build_channel_actor_deps(state, flare.thread_id, domain_name)
+      // Flares are dispatched from Discord threads; handback goes to the same platform.
+      let deps =
+        build_channel_actor_deps(
+          state,
+          discord.platform_name,
+          flare.thread_id,
+          domain_name,
+        )
       let subject =
         channel_supervisor.get_or_start(
           state.channel_supervisor,
@@ -950,7 +974,7 @@ fn resolve_finding_channel(
 }
 
 fn send_discord_response(
-  discord: DiscordClient,
+  discord: Transport,
   channel_id: String,
   content: String,
 ) -> Nil {

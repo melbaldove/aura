@@ -1,8 +1,7 @@
 import aura/attachment
 import aura/channel_actor
-import aura/discord
-import aura/discord/types as discord_types
 import aura/llm
+import aura/message
 import aura/time
 import gleam/int
 import gleam/list
@@ -36,7 +35,8 @@ pub fn local_path_prevents_path_traversal_test() {
 /// With no attachments, preprocess returns the original content unchanged.
 pub fn preprocess_no_attachments_returns_content_test() {
   let msg =
-    discord.IncomingMessage(
+    message.IncomingMessage(
+      platform: "discord",
       message_id: "m1",
       channel_id: "c1",
       channel_name: option.None,
@@ -59,13 +59,14 @@ pub fn preprocess_no_attachments_returns_content_test() {
 /// is returned (no crash, no empty result).
 pub fn preprocess_text_attachment_unreachable_url_returns_content_test() {
   let att =
-    discord_types.Attachment(
+    message.Attachment(
       url: "http://localhost:1/does-not-exist.txt",
       content_type: "text/plain",
       filename: "notes.txt",
     )
   let msg =
-    discord.IncomingMessage(
+    message.IncomingMessage(
+      platform: "discord",
       message_id: "m-attach-test-" <> int.to_string(time.now_ms()),
       channel_id: "c1",
       channel_name: option.None,
@@ -97,13 +98,14 @@ pub fn attachment_max_bytes_is_50mb_test() {
 pub fn oversized_attachment_does_not_write_file_test() {
   let msg_id = "m-oversize-" <> int.to_string(time.now_ms())
   let att =
-    discord_types.Attachment(
+    message.Attachment(
       url: "http://localhost:1/large.bin",
       content_type: "application/octet-stream",
       filename: "large.bin",
     )
   let msg =
-    discord.IncomingMessage(
+    message.IncomingMessage(
+      platform: "discord",
       message_id: msg_id,
       channel_id: "c1",
       channel_name: option.None,
@@ -137,7 +139,8 @@ pub fn sixty_mb_exceeds_cap_test() {
 pub fn start_turn_user_message_content_from_preprocess_test() {
   let state = channel_actor.initial_state_for_test("ch-att-test")
   let msg =
-    discord.IncomingMessage(
+    message.IncomingMessage(
+      platform: "discord",
       message_id: "att-m1-" <> int.to_string(time.now_ms()),
       channel_id: "ch-att-test",
       channel_name: option.None,

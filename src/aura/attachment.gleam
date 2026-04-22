@@ -7,8 +7,7 @@
 //// the vision path can prefer a local `data:` URL over the Discord CDN URL
 //// (CDN URLs with HMAC query strings get rejected by some vision endpoints).
 
-import aura/discord
-import aura/discord/types as discord_types
+import aura/message
 import aura/web
 import gleam/bit_array
 import gleam/int
@@ -31,12 +30,11 @@ pub const attachment_max_bytes = 50_000_000
 ///  3. Inline text file content as `[File: name]\n```\ncontent\n```\n`
 ///
 /// Returns the enriched content string. Gracefully degrades on failures.
-pub fn preprocess(msg: discord.IncomingMessage) -> String {
+pub fn preprocess(msg: message.IncomingMessage) -> String {
   case msg.attachments {
     [] -> msg.content
     attachments -> {
-      let path_lines =
-        download_attachments_to_tmp(attachments, msg.message_id)
+      let path_lines = download_attachments_to_tmp(attachments, msg.message_id)
       let text_content = fetch_text_attachments(attachments, msg.message_id)
       let with_paths = case path_lines {
         "" -> msg.content
@@ -77,7 +75,7 @@ fn safe_filename(name: String) -> String {
 /// one line per attachment formatted as `[attachment: /path] filename`.
 /// Best-effort: failures are logged but don't block the message.
 fn download_attachments_to_tmp(
-  attachments: List(discord_types.Attachment),
+  attachments: List(message.Attachment),
   msg_id: String,
 ) -> String {
   let dir = attachment_dir(msg_id)
@@ -100,10 +98,7 @@ fn download_attachments_to_tmp(
             Error(e) -> {
               logging.log(
                 logging.Error,
-                "[attachment] Download failed for "
-                  <> att.filename
-                  <> ": "
-                  <> e,
+                "[attachment] Download failed for " <> att.filename <> ": " <> e,
               )
               Error(Nil)
             }
@@ -136,10 +131,7 @@ fn download_attachments_to_tmp(
                       Error(Nil)
                     }
                     Ok(_) -> {
-                      logging.log(
-                        logging.Info,
-                        "[attachment] Saved: " <> path,
-                      )
+                      logging.log(logging.Info, "[attachment] Saved: " <> path)
                       Ok("[attachment: " <> path <> "] " <> att.filename)
                     }
                   }
@@ -156,7 +148,7 @@ fn download_attachments_to_tmp(
 /// Prefers the local copy at /tmp/aura-attachments/<msg_id>/; falls back to
 /// CDN fetch when the download hook left no file on disk.
 fn fetch_text_attachments(
-  attachments: List(discord_types.Attachment),
+  attachments: List(message.Attachment),
   msg_id: String,
 ) -> String {
   let dir = attachment_dir(msg_id)
@@ -180,13 +172,7 @@ fn fetch_text_attachments(
                   <> int.to_string(string.length(content))
                   <> " chars)",
               )
-              Ok(
-                "[File: "
-                <> att.filename
-                <> "]\n```\n"
-                <> content
-                <> "\n```",
-              )
+              Ok("[File: " <> att.filename <> "]\n```\n" <> content <> "\n```")
             }
             Error(e) -> {
               logging.log(
@@ -202,7 +188,7 @@ fn fetch_text_attachments(
   string.join(text_parts, "\n\n")
 }
 
-fn is_text_attachment(att: discord_types.Attachment) -> Bool {
+fn is_text_attachment(att: message.Attachment) -> Bool {
   let ct = string.lowercase(att.content_type)
   let fn_lower = string.lowercase(att.filename)
   string.starts_with(ct, "text/")

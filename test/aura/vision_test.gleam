@@ -1,7 +1,7 @@
 import aura/clients/llm_client
 import aura/config
-import aura/discord/types
 import aura/llm
+import aura/message
 import aura/vision
 import gleam/list
 import gleam/option.{None, Some}
@@ -87,17 +87,17 @@ pub fn resolve_vision_config_no_config_test() {
 
 pub fn extract_image_urls_test() {
   let attachments = [
-    types.Attachment(
+    message.Attachment(
       url: "https://cdn.discordapp.com/a.png",
       content_type: "image/png",
       filename: "a.png",
     ),
-    types.Attachment(
+    message.Attachment(
       url: "https://cdn.discordapp.com/b.txt",
       content_type: "text/plain",
       filename: "b.txt",
     ),
-    types.Attachment(
+    message.Attachment(
       url: "https://cdn.discordapp.com/c.jpg",
       content_type: "image/jpeg",
       filename: "c.jpg",
@@ -109,12 +109,12 @@ pub fn extract_image_urls_test() {
 
 pub fn extract_image_urls_empty_content_type_test() {
   let attachments = [
-    types.Attachment(
+    message.Attachment(
       url: "https://cdn.discordapp.com/photo.png",
       content_type: "",
       filename: "photo.png",
     ),
-    types.Attachment(
+    message.Attachment(
       url: "https://cdn.discordapp.com/doc.pdf",
       content_type: "",
       filename: "doc.pdf",

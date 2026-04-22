@@ -3,7 +3,7 @@ import aura/acp/transport
 import aura/brain
 import aura/channel_supervisor
 import aura/clients/browser_runner
-import aura/clients/discord_client
+import aura/clients/discord as discord_client
 import aura/clients/llm_client
 import aura/clients/skill_runner
 import aura/config

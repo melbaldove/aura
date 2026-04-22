@@ -1,6 +1,5 @@
 import aura/brain
-import aura/discord
-import aura/discord/types as discord_types
+import aura/message
 import dream_test/gherkin/steps.{
   type StepContext, type StepRegistry, get_int, get_string, get_word,
 }
@@ -242,8 +241,9 @@ fn edit_count(fake: fake_discord.FakeDiscord) -> Int {
 fn build_incoming(
   channel_id: String,
   content: String,
-) -> discord.IncomingMessage {
-  discord.IncomingMessage(
+) -> message.IncomingMessage {
+  message.IncomingMessage(
+    platform: "discord",
     message_id: "fake-" <> content,
     channel_id: channel_id,
     channel_name: None,
@@ -264,8 +264,9 @@ fn build_incoming(
 fn build_incoming_with_image(
   channel_id: String,
   content: String,
-) -> discord.IncomingMessage {
-  discord.IncomingMessage(
+) -> message.IncomingMessage {
+  message.IncomingMessage(
+    platform: "discord",
     message_id: "fake-img-" <> content,
     channel_id: channel_id,
     channel_name: None,
@@ -275,7 +276,7 @@ fn build_incoming_with_image(
     content: content,
     is_bot: False,
     attachments: [
-      discord_types.Attachment(
+      message.Attachment(
         url: "fake://test-image/not-a-real-url",
         content_type: "image/jpeg",
         filename: "test.jpg",

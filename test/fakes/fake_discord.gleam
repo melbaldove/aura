@@ -1,4 +1,4 @@
-import aura/clients/discord_client.{type DiscordClient, DiscordClient}
+import aura/transport.{type Transport, Transport}
 import gleam/dict.{type Dict}
 import gleam/erlang/process
 import gleam/int
@@ -204,10 +204,10 @@ fn unwrap_or(r: Result(a, b), default: a) -> a {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Create a new fake Discord client. Returns a `#(FakeDiscord, DiscordClient)`
-/// pair — use `FakeDiscord` for assertions, inject `DiscordClient` into code
+/// Create a new fake Discord client. Returns a `#(FakeDiscord, Transport)`
+/// pair — use `FakeDiscord` for assertions, inject `Transport` into code
 /// under test.
-pub fn new() -> #(FakeDiscord, DiscordClient) {
+pub fn new() -> #(FakeDiscord, Transport) {
   let builder =
     actor.new_with_initialiser(5000, fn(subject) {
       let state =
@@ -221,7 +221,7 @@ pub fn new() -> #(FakeDiscord, DiscordClient) {
   let fake = FakeDiscord(subject: subj)
 
   let client =
-    DiscordClient(
+    Transport(
       send_message: fn(channel_id, content) {
         process.call(subj, 1000, fn(reply) {
           RecordSent(channel_id:, content:, reply:)

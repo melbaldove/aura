@@ -1,7 +1,7 @@
 import aura/clients/llm_client
 import aura/config
-import aura/discord/types
 import aura/llm
+import aura/message
 import aura/models
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -63,7 +63,7 @@ pub fn is_enabled(config: ResolvedVisionConfig) -> Bool {
 }
 
 /// Extract image URLs from Discord attachments.
-pub fn extract_image_urls(attachments: List(types.Attachment)) -> List(String) {
+pub fn extract_image_urls(attachments: List(message.Attachment)) -> List(String) {
   list.filter_map(attachments, fn(att) {
     case is_image_attachment(att) {
       True -> Ok(att.url)
@@ -72,7 +72,7 @@ pub fn extract_image_urls(attachments: List(types.Attachment)) -> List(String) {
   })
 }
 
-pub fn is_image_attachment(att: types.Attachment) -> Bool {
+pub fn is_image_attachment(att: message.Attachment) -> Bool {
   case string.starts_with(att.content_type, "image/") {
     True -> True
     False -> {

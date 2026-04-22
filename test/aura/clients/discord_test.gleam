@@ -1,4 +1,4 @@
-import aura/clients/discord_client
+import aura/clients/discord as discord_client
 import gleam/string
 import gleeunit/should
 
