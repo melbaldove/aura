@@ -2,13 +2,17 @@ import aura/conversation
 import aura/db
 import aura/event
 import aura/llm
+import aura/time
 import gleam/dict
 import gleam/erlang/process
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import gleeunit
 import gleeunit/should
+import simplifile
+import sqlight
 
 pub fn main() {
   gleeunit.main()
@@ -1174,4 +1178,39 @@ pub fn search_events_respects_limit_test() {
   list.length(results) |> should.equal(2)
 
   process.send(subject, db.Shutdown)
+}
+
+pub fn search_events_surfaces_malformed_tags_json_test() {
+  // Regression guard for the fail-noisily path: if `tags_json` is stored as
+  // non-JSON (schema corruption, bad migration, direct write), `search_events`
+  // must surface a decode error instead of silently returning a broken row.
+  let ts = int.to_string(time.now_ms())
+  let path = "/tmp/aura-db-corrupt-tags-" <> ts <> ".db"
+  let _ = simplifile.delete(path)
+
+  let assert Ok(subject) = db.start(path)
+  let assert Ok(True) =
+    db.insert_event(
+      subject,
+      sample_event("bad", "gmail", "m-bad", "hello world", 1000),
+    )
+
+  // Bypass `tags_to_json` by writing the corrupt blob through a second
+  // connection to the same file-backed DB. WAL mode makes this safe.
+  let assert Ok(conn) = sqlight.open(path)
+  let assert Ok(_) =
+    sqlight.exec(
+      "UPDATE events SET tags_json = 'not-a-json' WHERE id = 'bad'",
+      on: conn,
+    )
+
+  let result = db.search_events(subject, "", None, None, 10)
+  case result {
+    Error(msg) ->
+      should.be_true(string.starts_with(msg, "Failed to decode event tags"))
+    Ok(_) -> panic as "expected decode failure on corrupt tags_json"
+  }
+
+  process.send(subject, db.Shutdown)
+  let _ = simplifile.delete(path)
 }
