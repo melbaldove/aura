@@ -46,9 +46,25 @@ Applies to: runtime architecture, actors, state, fault tolerance.
 
 **State encapsulation.** Actor state is private. Public functions send messages and wait for replies. The internal representation can change without breaking callers.
 
+### Metacognitive philosophy
+
+Applies to: user experience, observability, policy, learning surfaces.
+
+**Know what you don't know.** Aura treats its own ignorance as a first-class event. When a gap in heuristics, preferences, context, or state is encountered, surface it — don't silently default. Absence of configured behavior is a signal, not a non-event.
+
+**Introspect before defaulting.** Before falling through to a default, check: do I know what to do here? If not, capture the gap and ask. The answer becomes durable policy.
+
+**Conversation is configuration.** User preferences, routing rules, classification thresholds — learned through natural-language exchange, not config files. The user never has to learn the schema.
+
+**Proactive disclosure over silent correctness.** Better to say "I noticed X and wasn't sure what to do" than to guess right 80% of the time and wrong the other 20%. Visibility over cleverness.
+
+**The gap is the event.** Every site where Aura could silently default deserves a gap-detection hook. Design reviews ask "what does Aura do when this state is missing, stale, or ambiguous?" before asking "what does it do when valid?"
+
+**When not to apply.** Don't surface truly ambiguous signals conversation can't resolve (delete-vs-archive spam). Batch high-frequency gaps to avoid noise. Safety-critical defaults should act first and disclose, not ask.
+
 ## Principles
 
-What Unix and OTP don't cover — Aura-specific constraints and process.
+What Unix, OTP, and metacognition don't cover — Aura-specific constraints and process.
 
 1. **One Aura.** There is one agent with domain knowledge partitions. Every channel gets the same capabilities. Architectural decisions that create first-class and second-class contexts are wrong.
 
