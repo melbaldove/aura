@@ -331,6 +331,7 @@ pub fn start(
     |> static_supervisor.add(mcp_pool.supervised(global_config.mcp))
     |> static_supervisor.add(integrations_supervisor.supervised(
       event_ingest_subject,
+      db_subject,
     ))
     |> static_supervisor.start
 

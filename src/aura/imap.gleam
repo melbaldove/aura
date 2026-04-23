@@ -177,6 +177,41 @@ pub fn idle(
   }
 }
 
+/// Fetch envelopes for a UID range. `from_uid` is inclusive; the range
+/// is `<from_uid>:*` — every UID from `from_uid` to the highest-numbered
+/// message currently in the mailbox. Used on reconnect to catch up on
+/// messages that arrived while disconnected. Returns one `Envelope` per
+/// FETCH response line. Messages that fail to parse are logged via the
+/// caller and skipped; this function only errors on total command
+/// failure.
+pub fn fetch_envelopes_by_uid(
+  conn: Connection,
+  from_uid: Int,
+) -> Result(List(Envelope), String) {
+  let tag = format_tag(ffi_unique_tag())
+  let cmd =
+    tag
+    <> " UID FETCH "
+    <> int.to_string(from_uid)
+    <> ":* (ENVELOPE UID)\r\n"
+  use _ <- result.try(send_raw(conn, cmd))
+  use #(untagged, tagged) <- result.try(read_until_tagged(
+    conn,
+    tag,
+    default_cmd_timeout,
+    False,
+  ))
+  case tagged {
+    Tagged(_, StatusOk, _) -> Ok(parse_envelope_lines(untagged))
+    Tagged(_, _, text) -> Error("UID FETCH failed: " <> text)
+    _ -> Error("UID FETCH: unexpected non-tagged terminator")
+  }
+}
+
+fn parse_envelope_lines(lines: List(String)) -> List(Envelope) {
+  list.filter_map(lines, parse_envelope_fetch)
+}
+
 /// Fetch envelope + UID for one sequence number.
 pub fn fetch_envelope(conn: Connection, seq: Int) -> Result(Envelope, String) {
   let tag = format_tag(ffi_unique_tag())

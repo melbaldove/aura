@@ -1214,3 +1214,62 @@ pub fn search_events_surfaces_malformed_tags_json_test() {
   process.send(subject, db.Shutdown)
   let _ = simplifile.delete(path)
 }
+
+pub fn integration_checkpoint_missing_returns_none_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  db.get_integration_checkpoint(subject, "gmail-x")
+  |> should.be_ok
+  |> should.equal(None)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn integration_checkpoint_save_and_load_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(_) =
+    db.save_integration_checkpoint(subject, "gmail-x", 12_345, 4427, 1_000_000)
+
+  db.get_integration_checkpoint(subject, "gmail-x")
+  |> should.be_ok
+  |> should.equal(Some(#(12_345, 4427)))
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn integration_checkpoint_upsert_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(_) =
+    db.save_integration_checkpoint(subject, "gmail-x", 100, 1, 1_000)
+  let assert Ok(_) =
+    db.save_integration_checkpoint(subject, "gmail-x", 100, 2, 2_000)
+  let assert Ok(_) =
+    db.save_integration_checkpoint(subject, "gmail-x", 100, 3, 3_000)
+
+  db.get_integration_checkpoint(subject, "gmail-x")
+  |> should.be_ok
+  |> should.equal(Some(#(100, 3)))
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn integration_checkpoint_separate_names_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(_) =
+    db.save_integration_checkpoint(subject, "gmail-a", 100, 5, 1_000)
+  let assert Ok(_) =
+    db.save_integration_checkpoint(subject, "gmail-b", 200, 7, 1_000)
+
+  db.get_integration_checkpoint(subject, "gmail-a")
+  |> should.be_ok
+  |> should.equal(Some(#(100, 5)))
+
+  db.get_integration_checkpoint(subject, "gmail-b")
+  |> should.be_ok
+  |> should.equal(Some(#(200, 7)))
+
+  process.send(subject, db.Shutdown)
+}

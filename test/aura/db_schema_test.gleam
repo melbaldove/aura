@@ -66,7 +66,7 @@ pub fn schema_version_is_set_test() {
 
   db_schema.get_version(conn)
   |> should.be_ok
-  |> should.equal(5)
+  |> should.equal(6)
 }
 
 pub fn schema_v5_creates_events_table_test() {
@@ -201,5 +201,20 @@ pub fn schema_v4_alter_table_idempotent_test() {
   // Verify version is migrated forward to the current version
   db_schema.get_version(conn)
   |> should.be_ok
-  |> should.equal(5)
+  |> should.equal(6)
+}
+
+pub fn schema_v6_creates_integration_checkpoints_test() {
+  use conn <- sqlight.with_connection(":memory:")
+  let assert Ok(_) = db_schema.initialize(conn)
+
+  sqlight.query(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='integration_checkpoints'",
+    on: conn,
+    with: [],
+    expecting: decode.at([0], decode.string),
+  )
+  |> result.map(list.length)
+  |> should.be_ok
+  |> should.equal(1)
 }

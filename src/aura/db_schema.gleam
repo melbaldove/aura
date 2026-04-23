@@ -3,7 +3,7 @@ import gleam/result
 import gleam/string
 import sqlight
 
-const current_version = 5
+const current_version = 6
 
 /// Create all tables, indexes, FTS5 virtual table, and triggers if they do not
 /// already exist, then run any pending schema migrations.
@@ -263,6 +263,18 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
   ",
   ))
 
+  use _ <- result.try(exec(
+    conn,
+    "
+    CREATE TABLE IF NOT EXISTS integration_checkpoints (
+      name TEXT PRIMARY KEY,
+      uidvalidity INTEGER NOT NULL,
+      last_seen_uid INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    )
+  ",
+  ))
+
   // Set or migrate schema version
   migrate_version(conn)
 }
@@ -489,6 +501,21 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
           ",
           )
         }
+        False -> Ok(Nil)
+      })
+      use _ <- result.try(case v < 6 {
+        True ->
+          exec(
+            conn,
+            "
+            CREATE TABLE IF NOT EXISTS integration_checkpoints (
+              name TEXT PRIMARY KEY,
+              uidvalidity INTEGER NOT NULL,
+              last_seen_uid INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            )
+          ",
+          )
         False -> Ok(Nil)
       })
       exec(

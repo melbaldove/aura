@@ -10,11 +10,16 @@
 //// any error the session closes and reconnect is scheduled with exponential
 //// backoff via `process.send_after`.
 ////
-//// Only the initial `exists` count at SELECT time is used as the baseline;
-//// pre-existing messages are NOT backfilled. Flag changes, expunges, and
-//// non-Gmail notifications are logged and otherwise ignored.
+//// Catch-up on reconnect is UID-based: each integration persists its
+//// `(UIDVALIDITY, last_seen_uid)` in `integration_checkpoints`. On
+//// reconnect, if the mailbox's UIDVALIDITY matches the stored one, the
+//// actor issues `UID FETCH <last_seen+1>:*` to ingest any messages that
+//// arrived during downtime. On first run, or on UIDVALIDITY mismatch,
+//// the checkpoint is seeded from `UIDNEXT - 1` — no historical backfill.
+//// Flag changes and non-Gmail notifications are logged and ignored.
 
 import aura/backoff
+import aura/db
 import aura/event
 import aura/event_ingest
 import aura/imap
@@ -25,6 +30,7 @@ import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/json
 import gleam/list
+import gleam/option
 import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/result
@@ -51,6 +57,7 @@ type State {
   State(
     config: GmailConfig,
     event_ingest: Subject(event_ingest.IngestMessage),
+    db: Subject(db.DbMessage),
     self_subject: Subject(Message),
   )
 }
@@ -75,12 +82,14 @@ const connect_timeout_ms = 10_000
 pub fn start(
   config: GmailConfig,
   event_ingest_subject: Subject(event_ingest.IngestMessage),
+  db_subject: Subject(db.DbMessage),
 ) -> Result(actor.Started(Subject(Message)), actor.StartError) {
   actor.new_with_initialiser(5000, fn(self_subject) {
     let state =
       State(
         config: config,
         event_ingest: event_ingest_subject,
+        db: db_subject,
         self_subject: self_subject,
       )
     // Kick off the first reconnect cycle immediately.
@@ -95,8 +104,11 @@ pub fn start(
 pub fn supervised(
   config: GmailConfig,
   event_ingest_subject: Subject(event_ingest.IngestMessage),
+  db_subject: Subject(db.DbMessage),
 ) -> supervision.ChildSpecification(Subject(Message)) {
-  supervision.worker(fn() { start(config, event_ingest_subject) })
+  supervision.worker(fn() {
+    start(config, event_ingest_subject, db_subject)
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -236,22 +248,103 @@ fn run_session(state: State, tokens: oauth.TokenSet) -> Result(Nil, String) {
     use mailbox <- result.try(imap.select(conn, "INBOX"))
     log_info(
       name,
-      "SELECT INBOX → " <> int.to_string(mailbox.exists) <> " exists",
+      "SELECT INBOX → "
+        <> int.to_string(mailbox.exists)
+        <> " exists, UIDVALIDITY="
+        <> int.to_string(mailbox.uidvalidity)
+        <> ", UIDNEXT="
+        <> int.to_string(mailbox.uidnext),
     )
-    idle_loop(state, conn, mailbox.exists)
+    catch_up_and_idle(state, conn, mailbox)
   }
   imap.close(conn)
   final_result
+}
+
+/// Reconcile stored checkpoint with current mailbox state, fetch any
+/// messages that arrived during downtime, then enter the IDLE loop.
+fn catch_up_and_idle(
+  state: State,
+  conn: imap.Connection,
+  mailbox: imap.MailboxState,
+) -> Result(Nil, String) {
+  let checkpoint = case db.get_integration_checkpoint(state.db, state.config.name) {
+    Ok(cp) -> cp
+    Error(err) -> {
+      log_warning(
+        state.config.name,
+        "checkpoint read failed, treating as fresh install: " <> err,
+      )
+      option.None
+    }
+  }
+  case checkpoint {
+    option.Some(#(stored_uidvalidity, last_seen_uid))
+      if stored_uidvalidity == mailbox.uidvalidity
+    -> {
+      // Same UIDVALIDITY — catch up on anything past last_seen_uid.
+      case last_seen_uid + 1 < mailbox.uidnext {
+        True ->
+          ingest_uid_range(state, conn, last_seen_uid + 1, mailbox.uidvalidity)
+        False -> Nil
+      }
+      idle_loop(state, conn, mailbox.exists, mailbox.uidvalidity)
+    }
+    option.Some(#(stored_uidvalidity, _)) -> {
+      log_warning(
+        state.config.name,
+        "UIDVALIDITY changed ("
+          <> int.to_string(stored_uidvalidity)
+          <> " → "
+          <> int.to_string(mailbox.uidvalidity)
+          <> "), resetting checkpoint without backfill",
+      )
+      save_checkpoint(state, mailbox.uidvalidity, mailbox.uidnext - 1)
+      idle_loop(state, conn, mailbox.exists, mailbox.uidvalidity)
+    }
+    option.None -> {
+      // Fresh install — start from now, don't backfill historical mail.
+      save_checkpoint(state, mailbox.uidvalidity, mailbox.uidnext - 1)
+      idle_loop(state, conn, mailbox.exists, mailbox.uidvalidity)
+    }
+  }
+}
+
+fn ingest_uid_range(
+  state: State,
+  conn: imap.Connection,
+  from_uid: Int,
+  uidvalidity: Int,
+) -> Nil {
+  case imap.fetch_envelopes_by_uid(conn, from_uid) {
+    Ok(envelopes) -> {
+      log_info(
+        state.config.name,
+        "catch-up UID FETCH "
+          <> int.to_string(from_uid)
+          <> ":* returned "
+          <> int.to_string(list.length(envelopes))
+          <> " envelope(s)",
+      )
+      list.each(envelopes, fn(env) { ingest_envelope(state, env, uidvalidity) })
+    }
+    Error(err) ->
+      log_warning(
+        state.config.name,
+        "catch-up UID FETCH failed: " <> err,
+      )
+  }
 }
 
 fn idle_loop(
   state: State,
   conn: imap.Connection,
   baseline: Int,
+  uidvalidity: Int,
 ) -> Result(Nil, String) {
   use events <- result.try(imap.idle(conn, idle_timeout_ms))
-  let new_baseline = process_events(state, conn, events, baseline)
-  idle_loop(state, conn, new_baseline)
+  let new_baseline = process_events(state, conn, events, baseline, uidvalidity)
+  idle_loop(state, conn, new_baseline, uidvalidity)
 }
 
 fn process_events(
@@ -259,14 +352,12 @@ fn process_events(
   conn: imap.Connection,
   events: List(imap.IdleEvent),
   baseline: Int,
+  uidvalidity: Int,
 ) -> Int {
-  // Known Phase 1.5 limitations: fetch uses sequence numbers (not UIDs), so
-  // a mid-batch expunge can race envelope fetches; UIDVALIDITY checkpointing
-  // would close the gap. Acceptable for Phase 1.5 "best-effort" ingest.
   list.fold(events, baseline, fn(b, e) {
     case e {
       imap.Exists(count) -> {
-        fetch_and_ingest(state, conn, b, count)
+        fetch_and_ingest(state, conn, b, count, uidvalidity)
         int.max(count, b)
       }
       imap.Expunge(_) -> int.max(b - 1, 0)
@@ -280,33 +371,50 @@ fn fetch_and_ingest(
   conn: imap.Connection,
   from_exclusive: Int,
   to_inclusive: Int,
+  uidvalidity: Int,
 ) -> Nil {
   list.range(from_exclusive + 1, to_inclusive)
   |> list.each(fn(seq) {
     case imap.fetch_envelope(conn, seq) {
-      Ok(env) -> {
-        let now = time.now_ms()
-        let ae = envelope_to_event(state.config, env, now)
-        event_ingest.ingest(state.event_ingest, ae)
-        log_info(
+      Ok(env) -> ingest_envelope(state, env, uidvalidity)
+      Error(err) ->
+        log_warning(
           state.config.name,
-          "ingested email from " <> env.from <> " subject=" <> env.subject,
+          "fetch seq=" <> int.to_string(seq) <> ": " <> err,
         )
-      }
-      Error(err) -> {
-        logging.log(
-          logging.Warning,
-          "[gmail:"
-            <> state.config.name
-            <> "] fetch seq="
-            <> int.to_string(seq)
-            <> ": "
-            <> err,
-        )
-        Nil
-      }
     }
   })
+}
+
+fn ingest_envelope(
+  state: State,
+  env: imap.Envelope,
+  uidvalidity: Int,
+) -> Nil {
+  let now = time.now_ms()
+  let ae = envelope_to_event(state.config, env, now)
+  event_ingest.ingest(state.event_ingest, ae)
+  log_info(
+    state.config.name,
+    "ingested email from " <> env.from <> " subject=" <> env.subject,
+  )
+  save_checkpoint(state, uidvalidity, env.uid)
+}
+
+fn save_checkpoint(state: State, uidvalidity: Int, last_seen_uid: Int) -> Nil {
+  case
+    db.save_integration_checkpoint(
+      state.db,
+      state.config.name,
+      uidvalidity,
+      last_seen_uid,
+      time.now_ms(),
+    )
+  {
+    Ok(_) -> Nil
+    Error(err) ->
+      log_warning(state.config.name, "checkpoint save failed: " <> err)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +423,10 @@ fn fetch_and_ingest(
 
 fn log_info(name: String, msg: String) -> Nil {
   logging.log(logging.Info, "[gmail:" <> name <> "] " <> msg)
+}
+
+fn log_warning(name: String, msg: String) -> Nil {
+  logging.log(logging.Warning, "[gmail:" <> name <> "] " <> msg)
 }
 
 fn log_error(name: String, msg: String) -> Nil {

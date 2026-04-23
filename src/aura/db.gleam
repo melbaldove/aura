@@ -228,6 +228,17 @@ pub type DbMessage {
     source: Option(String),
     limit: Int,
   )
+  GetIntegrationCheckpoint(
+    reply_to: process.Subject(Result(Option(#(Int, Int)), String)),
+    name: String,
+  )
+  SaveIntegrationCheckpoint(
+    reply_to: process.Subject(Result(Nil, String)),
+    name: String,
+    uidvalidity: Int,
+    last_seen_uid: Int,
+    now_ms: Int,
+  )
 }
 
 type DbState {
@@ -644,6 +655,39 @@ pub fn search_events(
   })
 }
 
+/// Load a per-integration IMAP checkpoint. Returns `Ok(None)` when no
+/// checkpoint has been saved yet, `Ok(Some(#(uidvalidity, last_seen_uid)))`
+/// otherwise. Used by integrations that need to resume cleanly after a
+/// restart without missing messages that arrived during downtime.
+pub fn get_integration_checkpoint(
+  subject: process.Subject(DbMessage),
+  name: String,
+) -> Result(Option(#(Int, Int)), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetIntegrationCheckpoint(reply_to: reply_to, name: name)
+  })
+}
+
+/// Upsert a per-integration IMAP checkpoint. Call after every successful
+/// ingest so a crash or deploy doesn't re-ingest already-seen messages.
+pub fn save_integration_checkpoint(
+  subject: process.Subject(DbMessage),
+  name: String,
+  uidvalidity: Int,
+  last_seen_uid: Int,
+  now_ms: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    SaveIntegrationCheckpoint(
+      reply_to: reply_to,
+      name: name,
+      uidvalidity: uidvalidity,
+      last_seen_uid: last_seen_uid,
+      now_ms: now_ms,
+    )
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
@@ -906,6 +950,31 @@ fn handle_message(
     SearchEvents(reply_to:, query:, time_range_ms:, source:, limit:) -> {
       let result =
         do_search_events(state.conn, query, time_range_ms, source, limit)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetIntegrationCheckpoint(reply_to:, name:) -> {
+      let result = do_get_integration_checkpoint(state.conn, name)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    SaveIntegrationCheckpoint(
+      reply_to:,
+      name:,
+      uidvalidity:,
+      last_seen_uid:,
+      now_ms:,
+    ) -> {
+      let result =
+        do_save_integration_checkpoint(
+          state.conn,
+          name,
+          uidvalidity,
+          last_seen_uid,
+          now_ms,
+        )
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -1738,4 +1807,53 @@ fn flare_decoder() -> decode.Decoder(StoredFlare) {
     created_at_ms: created_at_ms,
     updated_at_ms: updated_at_ms,
   ))
+}
+
+fn do_get_integration_checkpoint(
+  conn: sqlight.Connection,
+  name: String,
+) -> Result(Option(#(Int, Int)), String) {
+  sqlight.query(
+    "SELECT uidvalidity, last_seen_uid FROM integration_checkpoints WHERE name = ? LIMIT 1",
+    on: conn,
+    with: [sqlight.text(name)],
+    expecting: {
+      use uidvalidity <- decode.field(0, decode.int)
+      use last_seen_uid <- decode.field(1, decode.int)
+      decode.success(#(uidvalidity, last_seen_uid))
+    },
+  )
+  |> result.map_error(fn(err) {
+    "Failed to read integration checkpoint: " <> string.inspect(err)
+  })
+  |> result.map(fn(rows) {
+    case rows {
+      [] -> option.None
+      [row, ..] -> option.Some(row)
+    }
+  })
+}
+
+fn do_save_integration_checkpoint(
+  conn: sqlight.Connection,
+  name: String,
+  uidvalidity: Int,
+  last_seen_uid: Int,
+  now_ms: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "INSERT INTO integration_checkpoints (name, uidvalidity, last_seen_uid, updated_at_ms) VALUES (?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET uidvalidity = excluded.uidvalidity, last_seen_uid = excluded.last_seen_uid, updated_at_ms = excluded.updated_at_ms",
+    on: conn,
+    with: [
+      sqlight.text(name),
+      sqlight.int(uidvalidity),
+      sqlight.int(last_seen_uid),
+      sqlight.int(now_ms),
+    ],
+    expecting: decode.success(Nil),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to save integration checkpoint: " <> string.inspect(err)
+  })
+  |> result.map(fn(_) { Nil })
 }

@@ -12,6 +12,7 @@
 //// declared in config.toml are bootstrapped after the root supervisor starts.
 
 import aura/config
+import aura/db
 import aura/event_ingest
 import aura/integrations/gmail
 import gleam/erlang/process.{type Name, type Subject}
@@ -32,17 +33,18 @@ pub fn supervisor_name() -> Name(SupervisorMessage)
 /// start_child later will invoke the template closure, which dispatches on
 /// the IntegrationConfig variant to the right per-integration start fn.
 ///
-/// The `event_ingest_subject` is captured in the template's closure and
-/// shared by every integration the supervisor spawns.
+/// `event_ingest_subject` and `db_subject` are captured in the template's
+/// closure and shared by every integration the supervisor spawns.
 pub fn supervised(
   event_ingest_subject: Subject(event_ingest.IngestMessage),
+  db_subject: Subject(db.DbMessage),
 ) -> supervision.ChildSpecification(
   factory_supervisor.Supervisor(config.IntegrationConfig, Nil),
 ) {
   factory_supervisor.worker_child(fn(integration: config.IntegrationConfig) {
     case integration {
       config.GmailIntegration(config: cfg) ->
-        case gmail.start(cfg, event_ingest_subject) {
+        case gmail.start(cfg, event_ingest_subject, db_subject) {
           Ok(started) -> Ok(actor.Started(pid: started.pid, data: Nil))
           Error(err) -> Error(err)
         }
