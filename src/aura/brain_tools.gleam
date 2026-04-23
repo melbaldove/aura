@@ -8,10 +8,13 @@ import aura/clients/llm_client.{type LLMClient}
 import aura/clients/skill_runner.{type SkillRunner}
 import aura/db
 import aura/discord/rest
+import aura/env
 import aura/event
 import aura/discord/types as discord_types
 import aura/llm
 import aura/memory
+import aura/oauth
+import aura/oauth_cli
 import aura/path_utils
 import aura/scheduler
 import aura/shell
@@ -477,6 +480,8 @@ fn execute_tool_dispatch(
       }
     }
     "search_events" -> execute_search_events(ctx, args)
+    "connect_gmail_start" -> execute_connect_gmail_start(args)
+    "connect_gmail_complete" -> execute_connect_gmail_complete(args)
     "web_search" -> {
       case require_arg(args, "query") {
         Error(e) -> TextResult(e)
@@ -1332,6 +1337,161 @@ fn parse_timeout_ms(
 }
 
 // ---------------------------------------------------------------------------
+// connect_gmail executors — in-chat OAuth flow
+// ---------------------------------------------------------------------------
+
+fn execute_connect_gmail_start(
+  args: List(#(String, String)),
+) -> ToolResult {
+  case require_arg(args, "user_email") {
+    Error(e) -> TextResult(e)
+    Ok(email) -> {
+      case env.get_env("GMAIL_OAUTH_CLIENT_ID"), env.get_env("GMAIL_OAUTH_CLIENT_SECRET") {
+        Ok(client_id), Ok(_secret) ->
+          case client_id {
+            "" -> TextResult(missing_oauth_app_instructions())
+            _ -> {
+              let url = oauth_cli.build_auth_url(client_id)
+              TextResult(
+                "To connect **"
+                <> email
+                <> "** I need Gmail access. One-time setup:\n\n"
+                <> "1. Open this URL in your browser:\n\n"
+                <> url
+                <> "\n\n2. Approve access on the Google consent screen.\n\n"
+                <> "3. Your browser will redirect to `http://localhost/?code=…` "
+                <> "and show **\"can't connect\"** — that's expected.\n\n"
+                <> "4. Copy the **full URL** from the browser's address bar "
+                <> "(starts with `http://localhost/`) and paste it back here. "
+                <> "I'll finish the setup.",
+              )
+            }
+          }
+        _, _ -> TextResult(missing_oauth_app_instructions())
+      }
+    }
+  }
+}
+
+fn execute_connect_gmail_complete(
+  args: List(#(String, String)),
+) -> ToolResult {
+  case require_arg(args, "user_email"), require_arg(args, "redirect_url") {
+    Error(e), _ -> TextResult(e)
+    _, Error(e) -> TextResult(e)
+    Ok(email), Ok(url) -> {
+      case oauth_cli.extract_code(url) {
+        Error(err) ->
+          TextResult(
+            "Couldn't find the authorization code in that URL: "
+            <> err
+            <> ". Make sure it's the full redirect URL (starts with http://localhost/?code=…).",
+          )
+        Ok(code) -> finish_gmail_setup(email, code)
+      }
+    }
+  }
+}
+
+fn finish_gmail_setup(email: String, code: String) -> ToolResult {
+  case env.get_env("GMAIL_OAUTH_CLIENT_ID"), env.get_env("GMAIL_OAUTH_CLIENT_SECRET") {
+    Ok(cid), Ok(secret) if cid != "" && secret != "" -> {
+      let cfg =
+        oauth.OAuthConfig(
+          client_id: cid,
+          client_secret: secret,
+          token_endpoint: "https://oauth2.googleapis.com/token",
+        )
+      let now = time.now_ms()
+      case oauth.exchange_authorization_code(
+        cfg,
+        code,
+        "http://localhost/",
+        now_ms: now,
+      ) {
+        Error(err) ->
+          TextResult(
+            "OAuth token exchange failed: "
+            <> err
+            <> "\n\nThe authorization code may have already been used or expired. "
+            <> "Ask me to connect Gmail again and I'll generate a fresh URL.",
+          )
+        Ok(tokens) -> save_and_guide(email, tokens)
+      }
+    }
+    _, _ -> TextResult(missing_oauth_app_instructions())
+  }
+}
+
+fn save_and_guide(email: String, tokens: oauth.TokenSet) -> ToolResult {
+  let paths = xdg.resolve()
+  let token_path = oauth_cli.token_path_for(paths, email)
+  case oauth.save_token_set(token_path, tokens) {
+    Error(err) ->
+      TextResult(
+        "Failed to save tokens to "
+        <> token_path
+        <> ": "
+        <> err
+        <> ". Check that "
+        <> paths.config
+        <> "/tokens exists and is writable.",
+      )
+    Ok(_) -> {
+      let local = email_local_part(email)
+      TextResult(
+        "**Gmail connected ✓** Tokens saved to `"
+        <> token_path
+        <> "`.\n\nOne more step — add this block to `"
+        <> paths.config
+        <> "/config.toml`:\n\n```toml\n"
+        <> "[[integrations]]\n"
+        <> "type = \"gmail\"\n"
+        <> "name = \"gmail-"
+        <> local
+        <> "\"\n"
+        <> "user_email = \""
+        <> email
+        <> "\"\n"
+        <> "token_path = \""
+        <> token_path
+        <> "\"\n"
+        <> "oauth_client_id = \"${GMAIL_OAUTH_CLIENT_ID}\"\n"
+        <> "oauth_client_secret = \"${GMAIL_OAUTH_CLIENT_SECRET}\"\n"
+        <> "```\n\nThen restart AURA. On next boot the gmail-"
+        <> local
+        <> " integration actor will start, authenticate via XOAUTH2, and begin watching your inbox.",
+      )
+    }
+  }
+}
+
+fn missing_oauth_app_instructions() -> String {
+  "Gmail OAuth app credentials (`GMAIL_OAUTH_CLIENT_ID` / `GMAIL_OAUTH_CLIENT_SECRET`) "
+  <> "aren't set. One-time app registration:\n\n"
+  <> "1. Go to https://console.cloud.google.com and create (or reuse) a project.\n"
+  <> "2. **APIs & Services → Library** → enable the **Gmail API**.\n"
+  <> "3. **APIs & Services → Credentials** → **Create Credentials → OAuth client ID**.\n"
+  <> "4. Application type: **Desktop app**. Any name.\n"
+  <> "5. On the client's details page, add `http://localhost/` under **Authorized redirect URIs**.\n"
+  <> "6. Copy the **client ID** and **client secret**.\n"
+  <> "7. On the machine running AURA, export:\n\n"
+  <> "   ```\n"
+  <> "   export GMAIL_OAUTH_CLIENT_ID=\"<client_id>\"\n"
+  <> "   export GMAIL_OAUTH_CLIENT_SECRET=\"<client_secret>\"\n"
+  <> "   ```\n\n"
+  <> "8. Restart AURA so the env vars take effect.\n\n"
+  <> "Ask me to connect Gmail again once that's done."
+}
+
+fn email_local_part(email: String) -> String {
+  case string.split_once(email, on: "@") {
+    Ok(#(local, _)) -> local
+    Error(_) -> email
+  }
+}
+
+// ---------------------------------------------------------------------------
 // search_events executor
 // ---------------------------------------------------------------------------
 
@@ -1764,6 +1924,36 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           param_type: "string",
           description: "Max results (default 20, clamped to [1, 100]).",
           required: False,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
+      name: "connect_gmail_start",
+      description: "Start the in-chat Gmail connection flow for a user's email account. Call this when the user asks to connect Gmail, watch their inbox, or set up email awareness. Returns a Google authorization URL the user must approve in their browser. After approval the user pastes the redirect URL back — then call connect_gmail_complete.",
+      parameters: [
+        llm.ToolParam(
+          name: "user_email",
+          param_type: "string",
+          description: "The Gmail address the user wants to connect (e.g. 'alice@example.com').",
+          required: True,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
+      name: "connect_gmail_complete",
+      description: "Finish the Gmail connection flow after the user pastes the redirected URL from their browser. Extracts the authorization code, exchanges it for OAuth tokens, and saves them to disk. Call this in the turn following connect_gmail_start when the user's message contains a `http://localhost/?code=...` URL.",
+      parameters: [
+        llm.ToolParam(
+          name: "user_email",
+          param_type: "string",
+          description: "Same email address passed to connect_gmail_start.",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "redirect_url",
+          param_type: "string",
+          description: "The full URL the user pasted back (starts with http://localhost/ and includes a `code` query parameter).",
+          required: True,
         ),
       ],
     ),
