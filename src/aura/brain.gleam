@@ -93,6 +93,7 @@ pub type BrainConfig {
     db_subject: process.Subject(db.DbMessage),
     acp_subject: process.Subject(flare_manager.FlareMsg),
     discord: Transport,
+    transports: dict.Dict(String, Transport),
     llm: LLMClient,
     skill_runner: SkillRunner,
     browser_runner: BrowserRunner,
@@ -129,6 +130,7 @@ pub type BrainState {
     acp_progress_msgs: dict.Dict(String, #(String, String)),
     // session_name -> #(channel_id, message_id)
     discord: Transport,
+    transports: dict.Dict(String, Transport),
     llm_client: LLMClient,
     skill_runner: SkillRunner,
     browser_runner: BrowserRunner,
@@ -202,6 +204,7 @@ pub fn start(
       shell_patterns: shell.compile_patterns(),
       acp_progress_msgs: dict.new(),
       discord: brain_config.discord,
+      transports: brain_config.transports,
       llm_client: brain_config.llm,
       skill_runner: brain_config.skill_runner,
       browser_runner: brain_config.browser_runner,
@@ -857,6 +860,9 @@ fn build_channel_actor_deps(
   }
 
   let domain_names = list.map(state.domains, fn(d) { d.name })
+  let transport =
+    dict.get(state.transports, platform)
+    |> result.unwrap(state.discord)
   channel_actor.Deps(
     platform: platform,
     channel_id: channel_id,
@@ -872,7 +878,7 @@ fn build_channel_actor_deps(
     notify_on_review: state.global_config.memory.notify_on_review,
     monitor_model: state.global_config.models.monitor,
     review_runner: state.review_runner,
-    discord: state.discord,
+    discord: transport,
     llm_client: state.llm_client,
     skill_runner: state.skill_runner,
     browser_runner: state.browser_runner,

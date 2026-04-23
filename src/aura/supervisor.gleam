@@ -1,7 +1,10 @@
 import aura/acp/flare_manager
 import aura/acp/transport
+import aura/blather/poller as blather_poller
+import aura/blather/types as blather_types
 import aura/brain
 import aura/channel_supervisor
+import aura/clients/blather as blather_client
 import aura/clients/browser_runner
 import aura/clients/discord as discord_client
 import aura/clients/llm_client
@@ -10,6 +13,7 @@ import aura/config
 import aura/ctl
 import aura/db
 import aura/db_migration
+import aura/discord
 import aura/discord/rest
 import aura/event_ingest
 import aura/integrations/supervisor as integrations_supervisor
@@ -24,6 +28,7 @@ import aura/skill
 import aura/time
 import aura/validator
 import aura/xdg
+import gleam/dict
 import gleam/erlang/process
 import gleam/int
 import gleam/list
@@ -230,6 +235,18 @@ pub fn start(
   let llm_client_val = llm_client.production()
   let skill_runner_val = skill_runner.production()
   let browser_runner_val = browser_runner.production()
+
+  // Platform-keyed transport registry. Discord is always present;
+  // Blather joins when the optional `[blather]` config block is set.
+  let transports = case global_config.blather {
+    option.Some(b) ->
+      dict.from_list([
+        #(discord.platform_name, discord_client_val),
+        #(blather_types.platform_name, blather_client.production(b)),
+      ])
+    option.None ->
+      dict.from_list([#(discord.platform_name, discord_client_val)])
+  }
   use brain_subject <- result.try(
     brain.start(brain.BrainConfig(
       global: global_config,
@@ -242,6 +259,7 @@ pub fn start(
       db_subject: db_subject,
       acp_subject: flare_subject,
       discord: discord_client_val,
+      transports: transports,
       llm: llm_client_val,
       skill_runner: skill_runner_val,
       browser_runner: browser_runner_val,
@@ -326,16 +344,7 @@ pub fn start(
   // 9. Start OTP supervisor with gateway + MCP pool as supervised children
   let discord_config = global_config.discord
 
-  case global_config.blather {
-    option.Some(b) ->
-      logging.log(
-        logging.Info,
-        "[supervisor] Blather configured: " <> b.url,
-      )
-    option.None -> Nil
-  }
-
-  let result =
+  let base_tree =
     static_supervisor.new(static_supervisor.OneForOne)
     |> static_supervisor.restart_tolerance(intensity: 10, period: 60)
     |> static_supervisor.add(poller.supervised(discord_config, brain_subject))
@@ -344,7 +353,22 @@ pub fn start(
       event_ingest_subject,
       db_subject,
     ))
-    |> static_supervisor.start
+
+  let with_blather = case global_config.blather {
+    option.Some(b) -> {
+      logging.log(
+        logging.Info,
+        "[supervisor] Starting Blather poller: " <> b.url,
+      )
+      static_supervisor.add(
+        base_tree,
+        blather_poller.supervised(b, brain_subject),
+      )
+    }
+    option.None -> base_tree
+  }
+
+  let result = static_supervisor.start(with_blather)
 
   case result {
     Ok(started) -> {

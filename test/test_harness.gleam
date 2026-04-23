@@ -40,6 +40,7 @@ import fakes/fake_discord.{type FakeDiscord}
 import fakes/fake_llm.{type FakeLLM}
 import fakes/fake_review.{type FakeReview}
 import fakes/fake_skill_runner.{type FakeSkillRunner}
+import gleam/dict
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/option.{None}
@@ -175,6 +176,7 @@ pub fn fresh_system() -> TestSystem {
       db_subject: db_subject,
       acp_subject: flare_subject,
       discord: discord_client,
+      transports: dict.from_list([#("discord", discord_client)]),
       llm: llm_client,
       skill_runner: skill_runner_client,
       browser_runner: browser_runner.production(),
@@ -300,6 +302,7 @@ pub fn fresh_system_with_domain(
       db_subject: db_subject,
       acp_subject: flare_subject,
       discord: discord_client,
+      transports: dict.from_list([#("discord", discord_client)]),
       llm: llm_client,
       skill_runner: skill_runner_client,
       browser_runner: browser_runner.production(),
@@ -423,6 +426,7 @@ pub fn fresh_system_with_review_interval(review_interval: Int) -> TestSystem {
       db_subject: db_subject,
       acp_subject: flare_subject,
       discord: discord_client,
+      transports: dict.from_list([#("discord", discord_client)]),
       llm: llm_client,
       skill_runner: skill_runner_client,
       browser_runner: browser_runner.production(),
@@ -530,6 +534,7 @@ pub fn fresh_system_with_skill_review_interval(
       db_subject: db_subject,
       acp_subject: flare_subject,
       discord: discord_client,
+      transports: dict.from_list([#("discord", discord_client)]),
       llm: llm_client,
       skill_runner: skill_runner_client,
       browser_runner: browser_runner.production(),
