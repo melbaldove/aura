@@ -59,8 +59,11 @@ const base_backoff_ms = 5000
 
 const max_backoff_ms = 300_000
 
-/// 28 min — leaves a 1-minute margin below Gmail's 29-minute IDLE ceiling.
-const idle_timeout_ms = 1_680_000
+/// 5 min — caps worst-case staleness when Gmail silently stops pushing
+/// EXISTS over a still-ESTABLISHED socket (observed in practice). Shorter
+/// than the 29-minute server ceiling, so every cycle ends with a clean
+/// DONE + re-IDLE rather than a server-driven disconnect.
+const idle_timeout_ms = 300_000
 
 const connect_timeout_ms = 10_000
 
