@@ -110,10 +110,10 @@ pub fn envelope_to_event(
   now_ms: Int,
 ) -> event.AuraEvent {
   event.AuraEvent(
-    id: "",
+    id: env.message_id,
     source: config.name,
     type_: "email.received",
-    subject: env.message_id,
+    subject: env.subject,
     time_ms: now_ms,
     tags: dict.new(),
     external_id: env.message_id,

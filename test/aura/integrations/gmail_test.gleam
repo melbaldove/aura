@@ -44,7 +44,14 @@ pub fn envelope_to_event_uses_message_id_as_dedup_key_test() {
   let env = sample_envelope()
   let ae = gmail.envelope_to_event(config, env, 1_776_880_000_000)
   ae.external_id |> should.equal("<msg-xyz@acme.com>")
-  ae.subject |> should.equal("<msg-xyz@acme.com>")
+  ae.id |> should.equal("<msg-xyz@acme.com>")
+}
+
+pub fn envelope_to_event_subject_is_email_subject_test() {
+  let config = sample_config()
+  let env = sample_envelope()
+  let ae = gmail.envelope_to_event(config, env, 1_776_880_000_000)
+  ae.subject |> should.equal("Re: Q4 terms")
 }
 
 pub fn envelope_to_event_passes_now_ms_through_test() {
