@@ -2158,7 +2158,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "set_gmail_oauth_credentials",
-      description: "Save the user's Gmail OAuth app credentials (from Google Cloud Console) into ~/.config/aura/config.toml under [oauth.gmail]. Call this when the user gives you a client_id and client_secret — typically after they've followed the walkthrough from connect_gmail_start. Idempotent: replaces any existing [oauth.gmail] section.",
+      description: "Save the user's Gmail OAuth app credentials (client_id and client_secret from Google Cloud Console). USE THIS TOOL — do NOT use write_file to edit config.toml for OAuth credentials. Call when the user gives you a client_id and client_secret for Gmail/Google, or says anything like 'set my gmail oauth creds', 'here are my google credentials', 'save my gmail client id'. Idempotent: safe to re-run.",
       parameters: [
         llm.ToolParam(
           name: "client_id",
@@ -2176,7 +2176,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "connect_gmail_start",
-      description: "Start the in-chat Gmail connection flow for a user's email account. Call this when the user asks to connect Gmail, watch their inbox, or set up email awareness. Returns a Google authorization URL the user must approve in their browser. After approval the user pastes the redirect URL back — then call connect_gmail_complete.",
+      description: "Begin the Gmail OAuth flow for a user's email account. USE THIS TOOL — do NOT use write_file, shell, or any generic tool. Call when the user says anything like 'connect my gmail', 'watch my inbox', 'set up gmail', 'add my email <addr>', or provides a Gmail address to link. Returns a Google authorization URL; user approves in browser and pastes the redirect URL, then you call connect_gmail_complete. Requires [oauth.gmail] to be set already (via set_gmail_oauth_credentials).",
       parameters: [
         llm.ToolParam(
           name: "user_email",
@@ -2188,7 +2188,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "connect_gmail_complete",
-      description: "Finish the Gmail connection flow after the user pastes the redirected URL from their browser. Extracts the authorization code, exchanges it for OAuth tokens, and saves them to disk. Call this in the turn following connect_gmail_start when the user's message contains a `http://localhost/?code=...` URL.",
+      description: "Finish the Gmail OAuth flow after the user pastes back the redirect URL. USE THIS TOOL — do NOT shell curl or write_file. Call the moment the user's message contains `http://localhost/?code=...` (or `?iss=...&code=...`) following a prior connect_gmail_start in the same flow. Exchanges the code for OAuth tokens, persists them, and starts watching the inbox live — no restart needed. Each invocation uses the code once; a stale URL from earlier turns must not be reused.",
       parameters: [
         llm.ToolParam(
           name: "user_email",

@@ -57,6 +57,7 @@ pub fn build_system_prompt(
   <> "\n- When asked to triage, investigate, plan, or work on a ticket — ignite a flare. Do NOT try to do the work inline in chat."
   <> "\n- Flare prompts must NEVER instruct the agent to write to MEMORY.md, STATE.md, or USER.md. Flares report their findings back to you. YOU decide what to persist to memory after reviewing the results."
   <> "\n- For domain creation, use the propose tool to request approval."
+  <> "\n- For Gmail setup: ALWAYS use set_gmail_oauth_credentials, connect_gmail_start, connect_gmail_complete. NEVER use write_file or shell to edit config.toml, write [oauth.gmail], [[integrations]], or token files. A redirect URL from a prior turn is stale — only act on one in the current user message."
   <> "\n\nMemory guidance:"
   <> "\nYou have three types of persistent memory, all keyed by topic:"
   <> "\n- **state** — current domain status. What's in flight right now: active tickets, PRs, blockers. Upsert by key (e.g. key='PROJ-101', key='pr-42')."
