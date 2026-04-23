@@ -35,6 +35,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import logging
+import simplifile
 
 // ---------------------------------------------------------------------------
 // Types
@@ -480,8 +481,10 @@ fn execute_tool_dispatch(
       }
     }
     "search_events" -> execute_search_events(ctx, args)
-    "connect_gmail_start" -> execute_connect_gmail_start(args)
-    "connect_gmail_complete" -> execute_connect_gmail_complete(args)
+    "connect_gmail_start" -> execute_connect_gmail_start(ctx, args)
+    "connect_gmail_complete" -> execute_connect_gmail_complete(ctx, args)
+    "set_gmail_oauth_credentials" ->
+      execute_set_gmail_oauth_credentials(ctx, args)
     "web_search" -> {
       case require_arg(args, "query") {
         Error(e) -> TextResult(e)
@@ -1341,45 +1344,42 @@ fn parse_timeout_ms(
 // ---------------------------------------------------------------------------
 
 fn execute_connect_gmail_start(
+  ctx: ToolContext,
   args: List(#(String, String)),
 ) -> ToolResult {
   case require_arg(args, "user_email") {
     Error(e) -> TextResult(e)
-    Ok(email) -> {
-      case env.get_env("GMAIL_OAUTH_CLIENT_ID"), env.get_env("GMAIL_OAUTH_CLIENT_SECRET") {
-        Ok(client_id), Ok(_secret) ->
-          case client_id {
-            "" -> TextResult(missing_oauth_app_instructions())
-            _ -> {
-              let url = oauth_cli.build_auth_url(client_id)
-              TextResult(
-                "To connect **"
-                <> email
-                <> "** I need Gmail access. One-time setup:\n\n"
-                <> "1. Open this URL in your browser:\n\n"
-                <> url
-                <> "\n\n2. Approve access on the Google consent screen.\n\n"
-                <> "3. Your browser will redirect to `http://localhost/?code=…` "
-                <> "and show **\"can't connect\"** — that's expected.\n\n"
-                <> "4. Copy the **full URL** from the browser's address bar "
-                <> "(starts with `http://localhost/`) and paste it back here. "
-                <> "I'll finish the setup.",
-              )
-            }
-          }
-        _, _ -> TextResult(missing_oauth_app_instructions())
+    Ok(email) ->
+      case resolve_gmail_oauth_credentials(ctx) {
+        Error(_) -> TextResult(missing_oauth_app_instructions())
+        Ok(#(client_id, _secret)) -> {
+          let url = oauth_cli.build_auth_url(client_id)
+          TextResult(
+            "To connect **"
+            <> email
+            <> "** I need Gmail access. One-time setup:\n\n"
+            <> "1. Open this URL in your browser:\n\n"
+            <> url
+            <> "\n\n2. Approve access on the Google consent screen.\n\n"
+            <> "3. Your browser will redirect to `http://localhost/?code=…` "
+            <> "and show **\"can't connect\"** — that's expected.\n\n"
+            <> "4. Copy the **full URL** from the browser's address bar "
+            <> "(starts with `http://localhost/`) and paste it back here. "
+            <> "I'll finish the setup.",
+          )
+        }
       }
-    }
   }
 }
 
 fn execute_connect_gmail_complete(
+  ctx: ToolContext,
   args: List(#(String, String)),
 ) -> ToolResult {
   case require_arg(args, "user_email"), require_arg(args, "redirect_url") {
     Error(e), _ -> TextResult(e)
     _, Error(e) -> TextResult(e)
-    Ok(email), Ok(url) -> {
+    Ok(email), Ok(url) ->
       case oauth_cli.extract_code(url) {
         Error(err) ->
           TextResult(
@@ -1387,15 +1387,19 @@ fn execute_connect_gmail_complete(
             <> err
             <> ". Make sure it's the full redirect URL (starts with http://localhost/?code=…).",
           )
-        Ok(code) -> finish_gmail_setup(email, code)
+        Ok(code) -> finish_gmail_setup(ctx, email, code)
       }
-    }
   }
 }
 
-fn finish_gmail_setup(email: String, code: String) -> ToolResult {
-  case env.get_env("GMAIL_OAUTH_CLIENT_ID"), env.get_env("GMAIL_OAUTH_CLIENT_SECRET") {
-    Ok(cid), Ok(secret) if cid != "" && secret != "" -> {
+fn finish_gmail_setup(
+  ctx: ToolContext,
+  email: String,
+  code: String,
+) -> ToolResult {
+  case resolve_gmail_oauth_credentials(ctx) {
+    Error(_) -> TextResult(missing_oauth_app_instructions())
+    Ok(#(cid, secret)) -> {
       let cfg =
         oauth.OAuthConfig(
           client_id: cid,
@@ -1419,7 +1423,144 @@ fn finish_gmail_setup(email: String, code: String) -> ToolResult {
         Ok(tokens) -> save_and_guide(email, tokens)
       }
     }
-    _, _ -> TextResult(missing_oauth_app_instructions())
+  }
+}
+
+/// Look up Gmail OAuth app credentials. Env vars take precedence (for
+/// operators who prefer that pattern); falls back to `[oauth.gmail]` in
+/// the global config.toml set via `set_gmail_oauth_credentials`.
+fn resolve_gmail_oauth_credentials(
+  ctx: ToolContext,
+) -> Result(#(String, String), Nil) {
+  case env.get_env("GMAIL_OAUTH_CLIENT_ID"), env.get_env("GMAIL_OAUTH_CLIENT_SECRET") {
+    Ok(cid), Ok(secret) if cid != "" && secret != "" -> Ok(#(cid, secret))
+    _, _ -> read_gmail_oauth_from_config(ctx)
+  }
+}
+
+fn read_gmail_oauth_from_config(
+  ctx: ToolContext,
+) -> Result(#(String, String), Nil) {
+  let path = ctx.paths.config <> "/config.toml"
+  case simplifile.read(path) {
+    Error(_) -> Error(Nil)
+    Ok(contents) -> {
+      let cid = extract_toml_string(contents, "oauth.gmail", "client_id")
+      let secret = extract_toml_string(contents, "oauth.gmail", "client_secret")
+      case cid, secret {
+        Some(c), Some(s) if c != "" && s != "" -> Ok(#(c, s))
+        _, _ -> Error(Nil)
+      }
+    }
+  }
+}
+
+/// Minimal TOML string extractor for a `[<section>] <key> = "..."` pattern.
+/// Avoids pulling tom into this module; only used for the narrow oauth
+/// lookup where full parsing would be overkill.
+fn extract_toml_string(
+  contents: String,
+  section: String,
+  key: String,
+) -> Option(String) {
+  let marker = "[" <> section <> "]"
+  case string.split_once(contents, on: marker) {
+    Error(_) -> None
+    Ok(#(_, after)) -> {
+      let section_body = case string.split_once(after, on: "\n[") {
+        Ok(#(body, _)) -> body
+        Error(_) -> after
+      }
+      let key_prefix = key <> " = \""
+      case string.split_once(section_body, on: key_prefix) {
+        Error(_) -> None
+        Ok(#(_, after_prefix)) ->
+          case string.split_once(after_prefix, on: "\"") {
+            Ok(#(value, _)) -> Some(value)
+            Error(_) -> None
+          }
+      }
+    }
+  }
+}
+
+fn execute_set_gmail_oauth_credentials(
+  ctx: ToolContext,
+  args: List(#(String, String)),
+) -> ToolResult {
+  case require_arg(args, "client_id"), require_arg(args, "client_secret") {
+    Error(e), _ -> TextResult(e)
+    _, Error(e) -> TextResult(e)
+    Ok(cid), Ok(secret) -> {
+      let trimmed_cid = string.trim(cid)
+      let trimmed_secret = string.trim(secret)
+      case trimmed_cid, trimmed_secret {
+        "", _ -> TextResult("client_id is empty")
+        _, "" -> TextResult("client_secret is empty")
+        _, _ -> write_oauth_gmail_section(ctx, trimmed_cid, trimmed_secret)
+      }
+    }
+  }
+}
+
+fn write_oauth_gmail_section(
+  ctx: ToolContext,
+  cid: String,
+  secret: String,
+) -> ToolResult {
+  let path = ctx.paths.config <> "/config.toml"
+  let existing = case simplifile.read(path) {
+    Ok(c) -> c
+    Error(_) -> ""
+  }
+  let stripped = strip_oauth_gmail_section(existing)
+  let separator = case string.ends_with(stripped, "\n") || stripped == "" {
+    True -> ""
+    False -> "\n"
+  }
+  let section =
+    "\n[oauth.gmail]\n"
+    <> "client_id = \""
+    <> cid
+    <> "\"\n"
+    <> "client_secret = \""
+    <> secret
+    <> "\"\n"
+  let new_contents = stripped <> separator <> section
+  case simplifile.write(path, new_contents) {
+    Error(err) ->
+      TextResult(
+        "Failed to write "
+        <> path
+        <> ": "
+        <> string.inspect(err),
+      )
+    Ok(_) ->
+      TextResult(
+        "Gmail OAuth app credentials saved to `"
+        <> path
+        <> "` under `[oauth.gmail]`. You can now say 'connect my gmail <email>' and I'll kick off the authorization flow.",
+      )
+  }
+}
+
+/// Remove any existing [oauth.gmail] section from config text so a fresh
+/// one can be appended idempotently.
+fn strip_oauth_gmail_section(contents: String) -> String {
+  let marker = "[oauth.gmail]"
+  case string.split_once(contents, on: marker) {
+    Error(_) -> contents
+    Ok(#(before, after)) -> {
+      let tail = case string.split_once(after, on: "\n[") {
+        Ok(#(_, rest)) -> "[" <> rest
+        Error(_) -> ""
+      }
+      let before_trimmed = case string.ends_with(before, "\n\n") {
+        True -> string.drop_end(before, 1)
+        False -> before
+      }
+      before_trimmed <> tail
+    }
   }
 }
 
@@ -1467,21 +1608,20 @@ fn save_and_guide(email: String, tokens: oauth.TokenSet) -> ToolResult {
 }
 
 fn missing_oauth_app_instructions() -> String {
-  "Gmail OAuth app credentials (`GMAIL_OAUTH_CLIENT_ID` / `GMAIL_OAUTH_CLIENT_SECRET`) "
-  <> "aren't set. One-time app registration:\n\n"
+  "I need Gmail OAuth app credentials before I can connect any Gmail account. "
+  <> "One-time registration in Google Cloud Console:\n\n"
   <> "1. Go to https://console.cloud.google.com and create (or reuse) a project.\n"
   <> "2. **APIs & Services → Library** → enable the **Gmail API**.\n"
   <> "3. **APIs & Services → Credentials** → **Create Credentials → OAuth client ID**.\n"
   <> "4. Application type: **Desktop app**. Any name.\n"
   <> "5. On the client's details page, add `http://localhost/` under **Authorized redirect URIs**.\n"
-  <> "6. Copy the **client ID** and **client secret**.\n"
-  <> "7. On the machine running AURA, export:\n\n"
-  <> "   ```\n"
-  <> "   export GMAIL_OAUTH_CLIENT_ID=\"<client_id>\"\n"
-  <> "   export GMAIL_OAUTH_CLIENT_SECRET=\"<client_secret>\"\n"
-  <> "   ```\n\n"
-  <> "8. Restart AURA so the env vars take effect.\n\n"
-  <> "Ask me to connect Gmail again once that's done."
+  <> "6. Copy the **Client ID** and **Client Secret**.\n"
+  <> "7. Paste them back here and tell me to save them — e.g. "
+  <> "\"my gmail oauth client id is <id> and secret is <secret>\". "
+  <> "I'll write them to `~/.config/aura/config.toml` under `[oauth.gmail]`.\n\n"
+  <> "(Alternatively: operators running multiple AURA instances can set "
+  <> "`GMAIL_OAUTH_CLIENT_ID` and `GMAIL_OAUTH_CLIENT_SECRET` as env vars — "
+  <> "env vars take precedence over config when both are set.)"
 }
 
 fn email_local_part(email: String) -> String {
@@ -1924,6 +2064,24 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           param_type: "string",
           description: "Max results (default 20, clamped to [1, 100]).",
           required: False,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
+      name: "set_gmail_oauth_credentials",
+      description: "Save the user's Gmail OAuth app credentials (from Google Cloud Console) into ~/.config/aura/config.toml under [oauth.gmail]. Call this when the user gives you a client_id and client_secret — typically after they've followed the walkthrough from connect_gmail_start. Idempotent: replaces any existing [oauth.gmail] section.",
+      parameters: [
+        llm.ToolParam(
+          name: "client_id",
+          param_type: "string",
+          description: "OAuth 2.0 Client ID from the user's Google Cloud Console Desktop app client.",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "client_secret",
+          param_type: "string",
+          description: "OAuth 2.0 Client Secret paired with the client_id.",
+          required: True,
         ),
       ],
     ),
