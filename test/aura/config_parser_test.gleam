@@ -273,6 +273,74 @@ oauth_client_secret = \"secret\"
   }
 }
 
+pub fn parse_gmail_uses_oauth_gmail_section_as_fallback_test() {
+  // Regression: [[integrations]] block without oauth_client_id/secret
+  // should fall back to the top-level [oauth.gmail] section. Previous
+  // behavior required the per-integration keys and left env-var
+  // placeholders resolving to empty strings when the vars weren't set,
+  // which caused Google to return 400 "Could not determine client ID".
+  let toml =
+    base_global_toml()
+    <> "
+[oauth.gmail]
+client_id = \"top-level-cid\"
+client_secret = \"top-level-secret\"
+
+[[integrations]]
+type = \"gmail\"
+name = \"gmail-work\"
+user_email = \"alice@example.com\"
+token_path = \"/tmp/gmail-work.json\"
+"
+  let assert Ok(cfg) = config.parse_global(toml)
+  let config.IntegrationsConfig(integrations) = cfg.integrations
+  let assert [config.GmailIntegration(config: gmail_cfg)] = integrations
+  gmail_cfg.oauth.client_id |> should.equal("top-level-cid")
+  gmail_cfg.oauth.client_secret |> should.equal("top-level-secret")
+}
+
+pub fn parse_gmail_per_integration_overrides_oauth_gmail_test() {
+  let toml =
+    base_global_toml()
+    <> "
+[oauth.gmail]
+client_id = \"top-level-cid\"
+client_secret = \"top-level-secret\"
+
+[[integrations]]
+type = \"gmail\"
+name = \"gmail-work\"
+user_email = \"alice@example.com\"
+token_path = \"/tmp/gmail-work.json\"
+oauth_client_id = \"override-cid\"
+oauth_client_secret = \"override-secret\"
+"
+  let assert Ok(cfg) = config.parse_global(toml)
+  let config.IntegrationsConfig(integrations) = cfg.integrations
+  let assert [config.GmailIntegration(config: gmail_cfg)] = integrations
+  gmail_cfg.oauth.client_id |> should.equal("override-cid")
+  gmail_cfg.oauth.client_secret |> should.equal("override-secret")
+}
+
+pub fn parse_gmail_missing_oauth_anywhere_returns_error_test() {
+  let toml =
+    base_global_toml()
+    <> "
+[[integrations]]
+type = \"gmail\"
+name = \"gmail-work\"
+user_email = \"alice@example.com\"
+token_path = \"/tmp/gmail-work.json\"
+"
+  let result = config.parse_global(toml)
+  case result {
+    Ok(_) -> should.fail()
+    Error(msg) -> {
+      string.contains(msg, "oauth_client_id") |> should.be_true
+    }
+  }
+}
+
 fn set_env(key: String, value: String) -> Nil {
   set_env_ffi(key, value)
   Nil

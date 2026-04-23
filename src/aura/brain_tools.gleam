@@ -1692,8 +1692,6 @@ fn integration_toml_block(email: String, token_path: String) -> String {
   <> "token_path = \""
   <> token_path
   <> "\"\n"
-  <> "oauth_client_id = \"${GMAIL_OAUTH_CLIENT_ID}\"\n"
-  <> "oauth_client_secret = \"${GMAIL_OAUTH_CLIENT_SECRET}\"\n"
 }
 
 fn missing_oauth_app_instructions() -> String {

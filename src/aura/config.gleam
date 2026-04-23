@@ -533,14 +533,21 @@ fn expand_env(value: String, context: String) -> Result(String, String) {
 fn parse_integrations(
   doc: dict.Dict(String, tom.Toml),
 ) -> Result(IntegrationsConfig, String) {
+  // OAuth app credentials are shared by all Gmail integrations on this
+  // machine — one `[oauth.gmail]` section, many per-account blocks. The
+  // per-account block can still override via its own `oauth_client_id` /
+  // `oauth_client_secret` keys if ever needed, but normally doesn't.
+  let gmail_oauth_defaults = parse_gmail_oauth_defaults(doc)
   case tom.get_array(doc, ["integrations"]) {
     Error(_) -> Ok(IntegrationsConfig(integrations: []))
     Ok(entries) -> {
       use integrations <- result.try(
         list.try_map(entries, fn(entry) {
           case entry {
-            tom.Table(fields) -> parse_integration(fields)
-            tom.InlineTable(fields) -> parse_integration(fields)
+            tom.Table(fields) ->
+              parse_integration(fields, gmail_oauth_defaults)
+            tom.InlineTable(fields) ->
+              parse_integration(fields, gmail_oauth_defaults)
             _ -> Error("[[integrations]] entry must be a table")
           }
         }),
@@ -550,15 +557,30 @@ fn parse_integrations(
   }
 }
 
+fn parse_gmail_oauth_defaults(
+  doc: dict.Dict(String, tom.Toml),
+) -> #(String, String) {
+  let cid = case tom.get_string(doc, ["oauth", "gmail", "client_id"]) {
+    Ok(c) -> c
+    Error(_) -> ""
+  }
+  let secret = case tom.get_string(doc, ["oauth", "gmail", "client_secret"]) {
+    Ok(s) -> s
+    Error(_) -> ""
+  }
+  #(cid, secret)
+}
+
 fn parse_integration(
   fields: dict.Dict(String, tom.Toml),
+  gmail_oauth_defaults: #(String, String),
 ) -> Result(IntegrationConfig, String) {
   use type_ <- result.try(case tom.get_string(fields, ["type"]) {
     Ok(t) -> Ok(t)
     Error(_) -> Error("[[integrations]] missing type")
   })
   case type_ {
-    "gmail" -> parse_gmail_integration(fields)
+    "gmail" -> parse_gmail_integration(fields, gmail_oauth_defaults)
     other ->
       Error(
         "[[integrations]] unsupported type: "
@@ -570,30 +592,26 @@ fn parse_integration(
 
 fn parse_gmail_integration(
   fields: dict.Dict(String, tom.Toml),
+  gmail_oauth_defaults: #(String, String),
 ) -> Result(IntegrationConfig, String) {
   let prefix = "[[integrations]] type=gmail"
+  let #(default_cid, default_secret) = gmail_oauth_defaults
 
   use name <- result.try(required_string(fields, "name", prefix))
   use user_email <- result.try(required_string(fields, "user_email", prefix))
   use token_path <- result.try(required_string(fields, "token_path", prefix))
 
-  use client_id_raw <- result.try(required_string(
+  use client_id <- result.try(resolve_oauth_field(
     fields,
     "oauth_client_id",
+    default_cid,
     prefix,
   ))
-  use client_id <- result.try(expand_env(
-    client_id_raw,
-    prefix <> " oauth_client_id",
-  ))
-  use client_secret_raw <- result.try(required_string(
+  use client_secret <- result.try(resolve_oauth_field(
     fields,
     "oauth_client_secret",
+    default_secret,
     prefix,
-  ))
-  use client_secret <- result.try(expand_env(
-    client_secret_raw,
-    prefix <> " oauth_client_secret",
   ))
   let token_endpoint = case tom.get_string(fields, ["oauth_token_endpoint"]) {
     Ok(ep) -> ep
@@ -612,6 +630,38 @@ fn parse_gmail_integration(
       token_path: token_path,
     )),
   )
+}
+
+/// Resolve an OAuth field: prefer per-integration value (with env-var
+/// expansion), fall back to the top-level `[oauth.gmail]` default.
+/// Returns Error only when both sources yield an empty string — matching
+/// the old "required_string" behavior without the dead-end when env vars
+/// aren't set but the user has `[oauth.gmail]` configured.
+fn resolve_oauth_field(
+  fields: dict.Dict(String, tom.Toml),
+  key: String,
+  fallback: String,
+  prefix: String,
+) -> Result(String, String) {
+  let from_block = case tom.get_string(fields, [key]) {
+    Ok(raw) ->
+      case expand_env(raw, prefix <> " " <> key) {
+        Ok(v) -> v
+        Error(_) -> ""
+      }
+    Error(_) -> ""
+  }
+  case from_block, fallback {
+    "", "" ->
+      Error(
+        prefix
+        <> ": "
+        <> key
+        <> " is empty and no [oauth.gmail] fallback is configured",
+      )
+    "", fb -> Ok(fb)
+    v, _ -> Ok(v)
+  }
 }
 
 fn required_string(
