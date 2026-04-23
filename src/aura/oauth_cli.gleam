@@ -22,7 +22,6 @@ import gleam/list
 import gleam/result
 import gleam/string
 import gleam/uri
-import simplifile
 
 const gmail_scope = "https://mail.google.com/"
 
@@ -71,7 +70,6 @@ pub fn run_gmail(email: String) -> Result(String, String) {
 
   let paths = xdg.resolve()
   let token_path = token_path_for(paths, email)
-  use _ <- result.try(ensure_parent_dir(token_path))
   use _ <- result.try(oauth.save_token_set(token_path, tokens))
 
   Ok(token_path)
@@ -161,20 +159,3 @@ fn read_line() -> Result(String, String) {
   }
 }
 
-fn ensure_parent_dir(path: String) -> Result(Nil, String) {
-  // Strip final /<filename>, create the parent.
-  case string.split_once(reverse_path(path), on: "/") {
-    Ok(#(_, rest)) -> {
-      let parent = reverse_path(rest)
-      simplifile.create_directory_all(parent)
-      |> result.map_error(fn(e) {
-        "failed to create " <> parent <> ": " <> string.inspect(e)
-      })
-    }
-    Error(_) -> Ok(Nil)
-  }
-}
-
-fn reverse_path(s: String) -> String {
-  s |> string.to_graphemes |> list.reverse |> string.join("")
-}

@@ -159,3 +159,17 @@ pub fn parse_envelope_malformed_test() {
   imap.parse_envelope_fetch("* 42 FETCH (garbage)")
   |> should.be_error
 }
+
+pub fn parse_envelope_uid_first_test() {
+  // RFC 3501 §7.4.2: server may return FETCH attrs in any order. Gmail
+  // in practice returns UID before ENVELOPE even when the client requests
+  // (ENVELOPE UID).
+  let raw =
+    "* 42 FETCH (UID 100 ENVELOPE (\"Wed, 22 Apr 2026 14:30:00 +0000\" \"Re: Q4 terms\" ((\"Alice\" NIL \"alice\" \"acme.com\")) ((\"Alice\" NIL \"alice\" \"acme.com\")) ((\"Alice\" NIL \"alice\" \"acme.com\")) ((\"Bob\" NIL \"bob\" \"x.com\")) NIL NIL NIL \"<msg-xyz@acme.com>\"))"
+  let env = imap.parse_envelope_fetch(raw)
+  env |> should.be_ok
+  let assert Ok(e) = env
+  e.uid |> should.equal(100)
+  e.subject |> should.equal("Re: Q4 terms")
+  e.from |> should.equal("alice@acme.com")
+}

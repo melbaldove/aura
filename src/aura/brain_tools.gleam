@@ -1517,19 +1517,15 @@ fn write_oauth_gmail_section(
     Error(_) -> ""
   }
   let stripped = strip_oauth_gmail_section(existing)
-  let separator = case string.ends_with(stripped, "\n") || stripped == "" {
-    True -> ""
-    False -> "\n"
-  }
   let section =
-    "\n[oauth.gmail]\n"
+    "[oauth.gmail]\n"
     <> "client_id = \""
     <> cid
     <> "\"\n"
     <> "client_secret = \""
     <> secret
     <> "\"\n"
-  let new_contents = stripped <> separator <> section
+  let new_contents = append_config_block(stripped, section)
   case simplifile.write(path, new_contents) {
     Error(err) ->
       TextResult(
@@ -1660,16 +1656,27 @@ fn persist_integration_block(
   case string.contains(existing, marker) {
     True -> Ok(Nil)
     False -> {
-      let separator = case string.ends_with(existing, "\n") || existing == "" {
-        True -> ""
-        False -> "\n"
-      }
       let new_contents =
-        existing <> separator <> "\n" <> integration_toml_block(email, token_path)
+        append_config_block(existing, integration_toml_block(email, token_path))
       simplifile.write(path, new_contents)
       |> result.map_error(fn(e) { simplifile.describe_error(e) })
     }
   }
+}
+
+/// Append `block` to `base` with a blank-line separator. Used when
+/// adding a new top-level section to a config.toml.
+fn append_config_block(base: String, block: String) -> String {
+  let separator = case base == "", string.ends_with(base, "\n\n") {
+    True, _ -> ""
+    _, True -> ""
+    _, False ->
+      case string.ends_with(base, "\n") {
+        True -> "\n"
+        False -> "\n\n"
+      }
+  }
+  base <> separator <> block
 }
 
 fn integration_toml_block(email: String, token_path: String) -> String {

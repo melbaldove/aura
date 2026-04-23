@@ -670,32 +670,35 @@ fn read_atom_loop(input: String, acc: String) -> #(String, String) {
   }
 }
 
-/// Parse envelope body:
-/// ENVELOPE ( date subject from sender reply-to to cc bcc in-reply-to msg-id ) UID <n>
-/// Each address list is `NIL` or `( ( name adl mailbox host ) ... )`.
+/// Parse envelope body. Per RFC 3501 §7.4.2 the server may return FETCH
+/// attributes in any order, so both `ENVELOPE (...) UID n` and
+/// `UID n ENVELOPE (...)` must parse. Gmail in practice uses the latter.
 fn parse_envelope_body(tokens: List(Token)) -> Result(Envelope, String) {
-  // We expect: TAtom("ENVELOPE") TOpen ... TClose TAtom("UID") TInt(n) TClose
   case tokens {
     [TAtom("ENVELOPE"), TOpen, ..rest] -> {
       use #(env_fields, after_env) <- result.try(take_until_close(rest, 1, []))
-      use #(date, subject, from_list, _sender, _reply_to, to_list, _cc, _bcc,
-        _in_reply_to, message_id) <- result.try(extract_envelope_fields(
-        env_fields,
-      ))
       use uid <- result.try(find_uid(after_env))
-      let from_str = first_address(from_list)
-      let to_str = first_address(to_list)
-      Ok(Envelope(
-        uid: uid,
-        message_id: message_id,
-        from: from_str,
-        to: to_str,
-        subject: subject,
-        date: date,
-      ))
+      build_envelope(env_fields, uid)
+    }
+    [TAtom("UID"), TInt(uid), TAtom("ENVELOPE"), TOpen, ..rest] -> {
+      use #(env_fields, _after_env) <- result.try(take_until_close(rest, 1, []))
+      build_envelope(env_fields, uid)
     }
     _ -> Error("FETCH body missing ENVELOPE marker")
   }
+}
+
+fn build_envelope(env_fields: List(Token), uid: Int) -> Result(Envelope, String) {
+  use #(date, subject, from_list, _sender, _reply_to, to_list, _cc, _bcc,
+    _in_reply_to, message_id) <- result.try(extract_envelope_fields(env_fields))
+  Ok(Envelope(
+    uid: uid,
+    message_id: message_id,
+    from: first_address(from_list),
+    to: first_address(to_list),
+    subject: subject,
+    date: date,
+  ))
 }
 
 /// Consume tokens up to the matching TClose at depth 0, returning the
