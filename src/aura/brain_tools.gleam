@@ -11,6 +11,8 @@ import aura/discord/rest
 import aura/env
 import aura/event
 import aura/discord/types as discord_types
+import aura/integrations/gmail as gmail_integration
+import aura/integrations/supervisor as integrations_supervisor
 import aura/llm
 import aura/memory
 import aura/oauth
@@ -33,6 +35,7 @@ import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import logging
 import simplifile
@@ -1420,7 +1423,7 @@ fn finish_gmail_setup(
             <> "\n\nThe authorization code may have already been used or expired. "
             <> "Ask me to connect Gmail again and I'll generate a fresh URL.",
           )
-        Ok(tokens) -> save_and_guide(email, tokens)
+        Ok(tokens) -> save_and_guide(ctx, email, tokens)
       }
     }
   }
@@ -1564,7 +1567,11 @@ fn strip_oauth_gmail_section(contents: String) -> String {
   }
 }
 
-fn save_and_guide(email: String, tokens: oauth.TokenSet) -> ToolResult {
+fn save_and_guide(
+  ctx: ToolContext,
+  email: String,
+  tokens: oauth.TokenSet,
+) -> ToolResult {
   let paths = xdg.resolve()
   let token_path = oauth_cli.token_path_for(paths, email)
   case oauth.save_token_set(token_path, tokens) {
@@ -1578,33 +1585,108 @@ fn save_and_guide(email: String, tokens: oauth.TokenSet) -> ToolResult {
         <> paths.config
         <> "/tokens exists and is writable.",
       )
-    Ok(_) -> {
+    Ok(_) -> start_gmail_and_persist(ctx, email, token_path)
+  }
+}
+
+fn start_gmail_and_persist(
+  ctx: ToolContext,
+  email: String,
+  token_path: String,
+) -> ToolResult {
+  case resolve_gmail_oauth_credentials(ctx) {
+    Error(_) -> TextResult(missing_oauth_app_instructions())
+    Ok(#(cid, secret)) -> {
       let local = email_local_part(email)
-      TextResult(
-        "**Gmail connected ✓** Tokens saved to `"
-        <> token_path
-        <> "`.\n\nOne more step — add this block to `"
-        <> paths.config
-        <> "/config.toml`:\n\n```toml\n"
-        <> "[[integrations]]\n"
-        <> "type = \"gmail\"\n"
-        <> "name = \"gmail-"
-        <> local
-        <> "\"\n"
-        <> "user_email = \""
-        <> email
-        <> "\"\n"
-        <> "token_path = \""
-        <> token_path
-        <> "\"\n"
-        <> "oauth_client_id = \"${GMAIL_OAUTH_CLIENT_ID}\"\n"
-        <> "oauth_client_secret = \"${GMAIL_OAUTH_CLIENT_SECRET}\"\n"
-        <> "```\n\nThen restart AURA. On next boot the gmail-"
-        <> local
-        <> " integration actor will start, authenticate via XOAUTH2, and begin watching your inbox.",
-      )
+      let name = "gmail-" <> local
+      let gmail_cfg =
+        gmail_integration.GmailConfig(
+          name: name,
+          user_email: email,
+          oauth: oauth.OAuthConfig(
+            client_id: cid,
+            client_secret: secret,
+            token_endpoint: "https://oauth2.googleapis.com/token",
+          ),
+          token_path: token_path,
+        )
+      let persist_result = persist_integration_block(ctx, email, token_path)
+      case integrations_supervisor.start_gmail(gmail_cfg) {
+        Ok(_) -> {
+          let persist_note = case persist_result {
+            Ok(_) -> ""
+            Error(err) ->
+              "\n\n_Note: failed to persist to config.toml — "
+              <> err
+              <> ". Integration is running for this session; add the [[integrations]] block manually to survive restarts._"
+          }
+          TextResult(
+            "**Gmail connected ✓** Tokens saved to `"
+            <> token_path
+            <> "`. The `"
+            <> name
+            <> "` integration is **now watching your inbox** — no restart needed."
+            <> persist_note,
+          )
+        }
+        Error(err) -> {
+          TextResult(
+            "Tokens saved to `"
+            <> token_path
+            <> "`, but failed to start the integration: "
+            <> err
+            <> "\n\nAdd this to `"
+            <> ctx.paths.config
+            <> "/config.toml` and restart AURA:\n\n"
+            <> integration_toml_block(email, token_path),
+          )
+        }
+      }
     }
   }
+}
+
+fn persist_integration_block(
+  ctx: ToolContext,
+  email: String,
+  token_path: String,
+) -> Result(Nil, String) {
+  let path = ctx.paths.config <> "/config.toml"
+  let existing = case simplifile.read(path) {
+    Ok(c) -> c
+    Error(_) -> ""
+  }
+  let marker = "name = \"gmail-" <> email_local_part(email) <> "\""
+  case string.contains(existing, marker) {
+    True -> Ok(Nil)
+    False -> {
+      let separator = case string.ends_with(existing, "\n") || existing == "" {
+        True -> ""
+        False -> "\n"
+      }
+      let new_contents =
+        existing <> separator <> "\n" <> integration_toml_block(email, token_path)
+      simplifile.write(path, new_contents)
+      |> result.map_error(fn(e) { simplifile.describe_error(e) })
+    }
+  }
+}
+
+fn integration_toml_block(email: String, token_path: String) -> String {
+  let local = email_local_part(email)
+  "[[integrations]]\n"
+  <> "type = \"gmail\"\n"
+  <> "name = \"gmail-"
+  <> local
+  <> "\"\n"
+  <> "user_email = \""
+  <> email
+  <> "\"\n"
+  <> "token_path = \""
+  <> token_path
+  <> "\"\n"
+  <> "oauth_client_id = \"${GMAIL_OAUTH_CLIENT_ID}\"\n"
+  <> "oauth_client_secret = \"${GMAIL_OAUTH_CLIENT_SECRET}\"\n"
 }
 
 fn missing_oauth_app_instructions() -> String {

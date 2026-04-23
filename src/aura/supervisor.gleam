@@ -330,7 +330,6 @@ pub fn start(
     |> static_supervisor.add(poller.supervised(discord_config, brain_subject))
     |> static_supervisor.add(mcp_pool.supervised(global_config.mcp))
     |> static_supervisor.add(integrations_supervisor.supervised(
-      global_config.integrations,
       event_ingest_subject,
     ))
     |> static_supervisor.start
@@ -338,6 +337,9 @@ pub fn start(
   case result {
     Ok(started) -> {
       logging.log(logging.Info, "Aura supervisor started")
+      // Bootstrap initial integrations from config (runs after the
+      // factory_supervisor is registered and ready for start_child).
+      integrations_supervisor.bootstrap(global_config.integrations)
       Ok(started.pid)
     }
     Error(e) -> Error("Failed to start supervisor: " <> string.inspect(e))

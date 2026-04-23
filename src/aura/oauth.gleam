@@ -39,7 +39,9 @@ pub fn load_token_set(path: String) -> Result(TokenSet, String) {
 }
 
 /// Save a `TokenSet` to a JSON file, overwriting any existing content.
+/// Creates parent directories if they don't already exist.
 pub fn save_token_set(path: String, tokens: TokenSet) -> Result(Nil, String) {
+  use _ <- result.try(ensure_parent_dir(path))
   simplifile.write(path, token_set_to_json(tokens))
   |> result.map_error(fn(e) {
     "Failed to write token file "
@@ -47,6 +49,26 @@ pub fn save_token_set(path: String, tokens: TokenSet) -> Result(Nil, String) {
     <> ": "
     <> simplifile.describe_error(e)
   })
+}
+
+fn ensure_parent_dir(path: String) -> Result(Nil, String) {
+  case string.split_once(reverse_string(path), on: "/") {
+    Ok(#(_, rest)) -> {
+      let parent = reverse_string(rest)
+      simplifile.create_directory_all(parent)
+      |> result.map_error(fn(e) {
+        "Failed to create "
+        <> parent
+        <> ": "
+        <> simplifile.describe_error(e)
+      })
+    }
+    Error(_) -> Ok(Nil)
+  }
+}
+
+fn reverse_string(s: String) -> String {
+  s |> string.to_graphemes |> list.reverse |> string.join(with: "")
 }
 
 /// `True` when `access_token` is already expired or will expire within the
