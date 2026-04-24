@@ -85,7 +85,7 @@ pub fn start(
 
   // 3b. Start cognitive worker and event_ingest actor (required — panics on failure).
   // event_ingest remains fire-and-forget; the cognitive worker observes only
-  // successfully persisted event IDs and never mutates state in this slice.
+  // successfully persisted event IDs and builds evidence context only.
   let assert Ok(cognitive_started) = cognitive_worker.start(db_subject)
   let cognitive_subject = cognitive_started.data
   logging.log(logging.Info, "[supervisor] Cognitive worker started")

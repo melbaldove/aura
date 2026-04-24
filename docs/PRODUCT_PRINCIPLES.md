@@ -50,10 +50,10 @@ they connect to an existing concern, thesis, watch, or explicit request.
 project, ticket, branch, release, trip, commitment, topic, relationship, or
 learning frontier. Events matter when they affect a concern.
 
-**Active state is derived from concerns.** Aura has one canonical model of what
-is alive: active concerns and their linked observations, claims, gaps,
-judgments, work, and authority state. Prompt-visible current state is a rendered
-view, not a separate source of truth.
+**Active state is concern-centered.** Aura has one canonical representation of
+what is alive: concern files plus their linked observations, decisions, gaps,
+work, and authority history. Start with ordinary text; promote structure only
+when replay shows text and model judgment are insufficient.
 
 **Attention judgments spend user capacity.** Aura must decide whether a change
 should be suppressed, recorded, digested, surfaced now, clarified now, or
@@ -73,10 +73,10 @@ Early timelines may produce many observed preference gaps, but Aura should
 interrupt only for gaps that are urgent or reusable enough; the rest should be
 batched into a learning digest.
 
-**Learned preferences have provenance.** A learned preference must carry its
-scope, examples, last-used explanation, confidence, precedence, review or expiry
-condition, and edit/disable/revert path. Otherwise it becomes invisible
-automation debt.
+**Learned preferences have provenance.** A learned preference must be visible in
+ordinary policy text or a decision log with scope, examples, last-used
+explanation, confidence, review or expiry condition, and edit/disable/revert
+path. Otherwise it becomes invisible automation debt.
 
 **Model interprets; code validates.** Aura should use model intelligence for
 concern-relative interpretation of non-trivial events, while deterministic code
@@ -104,16 +104,16 @@ logs outcomes.
 10. Aura's ambient world awareness is concern-indexed. It watches broadly enough
     to notice relevant change, but spends attention only when that change
     affects a concern, thesis, commitment, relationship, risk, or opportunity.
-11. Current state is a generated view over active concerns. Aura must not keep a
-    parallel prose state store that can drift from the manager engine's
-    structured model.
+11. Current state is concern-centered and text-first. Aura must not keep a
+    hidden structured policy engine that can drift from the concern and policy
+    files the user and model can inspect.
 12. Aura must not hard-code user preference where it can learn. Early user
     timelines should produce many observed preference gap events, and those
     gaps should become thoughtful decision prompts or batched learning digests
     rather than raw configuration.
-13. Model outputs are proposals until validated. Every interpretation must cite
-    evidence, obey authority boundaries, and survive deterministic validation
-    before it mutates concern state or spends user attention.
+13. Model outputs are proposals until validated. Every decision must cite
+    evidence and policy/concern context, obey authority boundaries, and survive
+    deterministic validation before it mutates files or spends user attention.
 14. Aura must not activate durable concerns from ambient world-state events
     unless they have lineage to an existing concern, thesis, watch, or explicit
     user ratification.

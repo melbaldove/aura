@@ -64,7 +64,7 @@ gleam run -- start
 supervisor (OneForOne)
 ├── db                   SQLite actor — serializes all DB reads/writes
 ├── event_ingest         Normalizes, tags, and persists integration events
-├── cognitive_worker     Async log-only interpretation of persisted events
+├── cognitive_worker     Async evidence/context build for persisted events
 ├── poller               Gateway WebSocket (Discord first, pluggable)
 ├── flare_manager        Flare lifecycle — roster, dispatch, monitor, persist
 ├── channel_supervisor   Hosts one actor per Discord channel

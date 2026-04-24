@@ -131,7 +131,7 @@ fn notify_cognitive(
   event_id: String,
 ) -> Nil {
   case cognitive_subject {
-    Some(subject) -> cognitive_worker.interpret_event(subject, event_id)
+    Some(subject) -> cognitive_worker.build_context(subject, event_id)
     None -> Nil
   }
 }

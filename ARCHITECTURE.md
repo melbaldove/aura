@@ -8,7 +8,7 @@ Aura is an OTP application where every component is a supervised actor. Actors c
 supervisor (OneForOne, 3 restarts / 5s)
 ├── db              SQLite actor — single writer, serialized via mailbox
 ├── event_ingest    Normalizes, tags, dedupes, and persists integration events
-├── cognitive_worker Async log-only interpretation of persisted events
+├── cognitive_worker Async evidence/context build for persisted events
 ├── poller          Discord WebSocket — reconnects with exponential backoff
 ├── brain           Routes messages, runs LLM tool loop with streaming
 ├── workstream_sup  Factory — one actor per configured workstream
@@ -52,16 +52,15 @@ Integration actor
 -> event_ingest
 -> db.events
 -> cognitive_worker
--> [cognitive] log summary
+-> [cognitive] context-ready log summary
 ```
 
 `event_ingest` remains fire-and-forget for producers. It normalizes, tags, and
 persists `AuraEvent`s; only successfully inserted events notify the
-`cognitive_worker`, so duplicate `(source, external_id)` events are not
-interpreted twice. The cognitive worker loads the persisted event by ID,
-extracts citable evidence, runs the log-only interpretation contract, validates
-the result, and logs a compact summary. It does not mutate concerns, memory,
-`STATE.md`, or flares.
+`cognitive_worker`, so duplicate `(source, external_id)` events are not handled
+twice. The cognitive worker loads the persisted event by ID, extracts citable
+evidence, and logs a compact context-ready summary. It does not decide
+attention, work, authority, concerns, memory, `STATE.md`, or flares.
 
 ## Data model
 
