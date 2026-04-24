@@ -3,6 +3,7 @@
 /// state is correctly managed in the channel actor, not in brain.
 import aura/brain_tools
 import aura/channel_actor
+import aura/db
 import aura/time
 import gleam/erlang/process
 import gleam/list
@@ -49,6 +50,21 @@ fn make_shell_approval(
   )
 }
 
+fn stored_shell_approval(
+  approval: brain_tools.PendingShellApproval,
+) -> db.StoredShellApproval {
+  db.StoredShellApproval(
+    id: approval.id,
+    channel_id: approval.channel_id,
+    message_id: approval.message_id,
+    command: approval.command,
+    reason: approval.reason,
+    status: "pending",
+    requested_at_ms: approval.requested_at_ms,
+    updated_at_ms: approval.requested_at_ms,
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Test 1: RegisterProposal stores in state (pure transition test)
 // ---------------------------------------------------------------------------
@@ -82,6 +98,16 @@ pub fn register_shell_approval_stored_in_channel_actor_test() {
 
   new_state.pending_shell_approvals
   |> should.equal([approval])
+}
+
+pub fn cancel_restarted_shell_approvals_emits_cancel_effect_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+
+  let #(new_state, effects) =
+    channel_actor.transition(state, channel_actor.CancelRestartedShellApprovals)
+
+  new_state.pending_shell_approvals |> should.equal([])
+  effects |> should.equal([channel_actor.CancelPendingShellApprovals])
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +156,38 @@ pub fn register_proposal_supersedes_existing_test() {
   has_edit |> should.be_true
 }
 
+pub fn register_shell_approval_supersedes_existing_and_persists_status_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let old_reply = process.new_subject()
+  let old_approval = make_shell_approval("s-old", "ch1", "m-old", old_reply)
+  let #(state_after_first, _) =
+    channel_actor.transition(
+      state,
+      channel_actor.RegisterShellApproval(old_approval),
+    )
+
+  let new_reply = process.new_subject()
+  let new_approval = make_shell_approval("s-new", "ch1", "m-new", new_reply)
+  let #(state_after_second, effects) =
+    channel_actor.transition(
+      state_after_first,
+      channel_actor.RegisterShellApproval(new_approval),
+    )
+
+  let assert Ok(result) = process.receive(old_reply, 1000)
+  result |> should.equal(brain_tools.Expired)
+  state_after_second.pending_shell_approvals |> should.equal([new_approval])
+
+  effects
+  |> list.any(fn(e) {
+    case e {
+      channel_actor.PersistShellApprovalStatus("s-old", "superseded") -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
 // ---------------------------------------------------------------------------
 // Test 4: HandleInteractionResolve "reject" on proposal sends Rejected
 // (uses handle_message so the effect interpreter runs and sends to reply_to)
@@ -162,8 +220,19 @@ pub fn handle_interaction_resolve_reject_proposal_sends_rejected_test() {
 
 pub fn handle_interaction_resolve_reject_shell_approval_sends_rejected_test() {
   let state = channel_actor.initial_state_for_test("ch1")
+  let assert Ok(db_subject) = db.start(":memory:")
+  let state =
+    channel_actor.ChannelState(
+      ..state,
+      tool_ctx: brain_tools.ToolContext(
+        ..state.tool_ctx,
+        db_subject: db_subject,
+      ),
+    )
   let reply_to = process.new_subject()
   let approval = make_shell_approval("s1", "ch1", "m1", reply_to)
+  let assert Ok(_) =
+    db.save_shell_approval(db_subject, stored_shell_approval(approval))
 
   let state_with_approval =
     channel_actor.ChannelState(..state, pending_shell_approvals: [approval])
@@ -176,6 +245,10 @@ pub fn handle_interaction_resolve_reject_shell_approval_sends_rejected_test() {
 
   let assert Ok(result) = process.receive(reply_to, 1000)
   result |> should.equal(brain_tools.Rejected)
+  db.load_pending_shell_approvals_for_channel(db_subject, "ch1")
+  |> should.be_ok
+  |> should.equal([])
+  process.send(db_subject, db.Shutdown)
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +257,48 @@ pub fn handle_interaction_resolve_reject_shell_approval_sends_rejected_test() {
 
 pub fn handle_interaction_resolve_approve_shell_approval_sends_approved_test() {
   let state = channel_actor.initial_state_for_test("ch1")
+  let assert Ok(db_subject) = db.start(":memory:")
+  let state =
+    channel_actor.ChannelState(
+      ..state,
+      tool_ctx: brain_tools.ToolContext(
+        ..state.tool_ctx,
+        db_subject: db_subject,
+      ),
+    )
+  let reply_to = process.new_subject()
+  let approval = make_shell_approval("s1", "ch1", "m1", reply_to)
+  let assert Ok(_) =
+    db.save_shell_approval(db_subject, stored_shell_approval(approval))
+
+  let state_with_approval =
+    channel_actor.ChannelState(..state, pending_shell_approvals: [approval])
+
+  let _next =
+    channel_actor.handle_message(
+      state_with_approval,
+      channel_actor.HandleInteractionResolve("approve", "s1"),
+    )
+
+  let assert Ok(result) = process.receive(reply_to, 1000)
+  result |> should.equal(brain_tools.Approved)
+  db.load_pending_shell_approvals_for_channel(db_subject, "ch1")
+  |> should.be_ok
+  |> should.equal([])
+  process.send(db_subject, db.Shutdown)
+}
+
+pub fn handle_interaction_approve_without_pending_db_row_rejects_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let assert Ok(db_subject) = db.start(":memory:")
+  let state =
+    channel_actor.ChannelState(
+      ..state,
+      tool_ctx: brain_tools.ToolContext(
+        ..state.tool_ctx,
+        db_subject: db_subject,
+      ),
+    )
   let reply_to = process.new_subject()
   let approval = make_shell_approval("s1", "ch1", "m1", reply_to)
 
@@ -197,7 +312,8 @@ pub fn handle_interaction_resolve_approve_shell_approval_sends_approved_test() {
     )
 
   let assert Ok(result) = process.receive(reply_to, 1000)
-  result |> should.equal(brain_tools.Approved)
+  result |> should.equal(brain_tools.Rejected)
+  process.send(db_subject, db.Shutdown)
 }
 
 // ---------------------------------------------------------------------------

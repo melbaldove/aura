@@ -75,6 +75,7 @@ pub type ChannelMessage {
   HandleIncoming(discord.IncomingMessage)
   HandleHandback(flare_id: String, session_name: String, result: String)
   Cancel
+  CancelRestartedShellApprovals
 
   VisionComplete(filename: String, description: String)
   VisionError(reason: String)
@@ -198,7 +199,9 @@ pub type Deps {
     guild_id: String,
     db_subject: process.Subject(db.DbMessage),
     acp_subject: process.Subject(flare_manager.FlareMsg),
-    scheduler_subject: option.Option(process.Subject(scheduler.SchedulerMessage)),
+    scheduler_subject: option.Option(
+      process.Subject(scheduler.SchedulerMessage),
+    ),
     paths: xdg.Paths,
     domain: option.Option(String),
     review_interval: Int,
@@ -237,6 +240,7 @@ pub type Deps {
 pub fn start(deps: Deps) -> Result(Subject(ChannelMessage), actor.StartError) {
   actor.new_with_initialiser(5000, fn(self_subject) {
     let state = build_initial_state(deps, self_subject)
+    process.send(self_subject, CancelRestartedShellApprovals)
     Ok(actor.initialised(state) |> actor.returning(self_subject))
   })
   |> actor.on_message(handle_message)
@@ -723,6 +727,9 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
         )
       ChannelState(..state, review_counts: #(new_count, state.review_counts.1))
     }
+    CancelPendingShellApprovals -> cancel_pending_shell_approvals(state)
+    PersistShellApprovalStatus(id, status) ->
+      persist_shell_approval_status(state, id, status, time.now_ms())
     ResolveProposal(proposal, action) ->
       resolve_approval(
         state,
@@ -752,22 +759,7 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
         fn() { "**Rejected**" },
       )
     ResolveShellApproval(approval, action) ->
-      resolve_approval(
-        state,
-        approval.requested_at_ms,
-        approval.channel_id,
-        approval.message_id,
-        approval.reply_to,
-        action,
-        "**Expired** -- approval timed out after 15 minutes.",
-        fn() {
-          #(
-            brain_tools.Approved,
-            ":white_check_mark: **Approved** -- `" <> approval.command <> "`",
-          )
-        },
-        fn() { ":x: **Rejected**" },
-      )
+      resolve_shell_approval(state, approval, action)
     UpdateCompressorTokens(prompt_tokens) -> {
       case prompt_tokens > 0 {
         True -> {
@@ -834,7 +826,8 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
             Error(e) ->
               logging.log(
                 logging.Info,
-                "[channel_actor] Flush skipped — monitor LLM config failed: " <> e,
+                "[channel_actor] Flush skipped — monitor LLM config failed: "
+                  <> e,
               )
           }
           let #(new_history, new_comp_state) =
@@ -864,9 +857,144 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
   }
 }
 
-/// Resolve a pending approval (proposal or shell). Handles the 15-minute
-/// expiry check, dispatches to the caller's approve/reject callbacks, and
-/// emits the appropriate Discord edit. Returns an updated ChannelState.
+/// Cancel shell approvals left pending by a previous channel actor instance.
+/// The waiting tool continuation cannot survive the actor crash, so the
+/// durable Discord button is explicitly invalidated instead of being resumed.
+fn cancel_pending_shell_approvals(state: ChannelState) -> ChannelState {
+  let now = time.now_ms()
+  case
+    db.load_pending_shell_approvals_for_channel(
+      state.tool_ctx.db_subject,
+      state.channel_id,
+    )
+  {
+    Ok(approvals) -> {
+      list.each(approvals, fn(approval) {
+        case
+          state.tool_ctx.discord.edit_message(
+            approval.channel_id,
+            approval.message_id,
+            "**Cancelled** -- Aura restarted before this shell approval was resolved. Rerun the command if it is still needed.",
+          )
+        {
+          Ok(_) ->
+            persist_shell_approval_status(
+              state,
+              approval.id,
+              "restart_cancelled",
+              now,
+            )
+          Error(e) -> {
+            logging.log(
+              logging.Error,
+              "[channel_actor] Failed to edit restarted shell approval "
+                <> approval.id
+                <> ": "
+                <> e,
+            )
+            state
+          }
+        }
+      })
+      state
+    }
+    Error(e) -> {
+      logging.log(
+        logging.Error,
+        "[channel_actor] Failed to cancel restarted shell approvals for "
+          <> state.channel_id
+          <> ": "
+          <> e,
+      )
+      state
+    }
+  }
+}
+
+fn persist_shell_approval_status(
+  state: ChannelState,
+  id: String,
+  status: String,
+  now: Int,
+) -> ChannelState {
+  case persist_shell_approval_status_result(state, id, status, now) {
+    Ok(Nil) -> state
+    Error(e) -> {
+      logging.log(
+        logging.Error,
+        "[channel_actor] Failed to mark shell approval "
+          <> id
+          <> " "
+          <> status
+          <> ": "
+          <> e,
+      )
+      state
+    }
+  }
+}
+
+fn persist_shell_approval_status_result(
+  state: ChannelState,
+  id: String,
+  status: String,
+  now: Int,
+) -> Result(Nil, String) {
+  db.update_shell_approval_status(state.tool_ctx.db_subject, id, status, now)
+}
+
+fn resolve_shell_approval(
+  state: ChannelState,
+  approval: brain_tools.PendingShellApproval,
+  action: String,
+) -> ChannelState {
+  let now = time.now_ms()
+  let expired = now - approval.requested_at_ms > approval_expiry_ms
+  let #(result, status, body) = case expired {
+    True -> #(
+      brain_tools.Expired,
+      "expired",
+      "**Expired** -- approval timed out after 15 minutes.",
+    )
+    False ->
+      case action {
+        "approve" -> #(
+          brain_tools.Approved,
+          "approved",
+          ":white_check_mark: **Approved** -- `" <> approval.command <> "`",
+        )
+        _ -> #(brain_tools.Rejected, "rejected", ":x: **Rejected**")
+      }
+  }
+
+  case persist_shell_approval_status_result(state, approval.id, status, now) {
+    Ok(Nil) -> {
+      process.send(approval.reply_to, result)
+      let _ =
+        state.tool_ctx.discord.edit_message(
+          approval.channel_id,
+          approval.message_id,
+          body,
+        )
+      state
+    }
+    Error(e) -> {
+      process.send(approval.reply_to, brain_tools.Rejected)
+      let _ =
+        state.tool_ctx.discord.edit_message(
+          approval.channel_id,
+          approval.message_id,
+          "**Failed** -- approval could not be recorded, so the command was not run: "
+            <> e,
+        )
+      state
+    }
+  }
+}
+
+/// Resolve a pending write proposal. Handles the 15-minute expiry check,
+/// dispatches to the caller's approve/reject callbacks, and emits the
+/// appropriate Discord edit. Returns an updated ChannelState.
 fn resolve_approval(
   state: ChannelState,
   requested_at_ms: Int,
@@ -892,13 +1020,15 @@ fn resolve_approval(
         "approve" -> {
           let #(result, body) = on_approve()
           process.send(reply_to, result)
-          let _ = state.tool_ctx.discord.edit_message(channel_id, message_id, body)
+          let _ =
+            state.tool_ctx.discord.edit_message(channel_id, message_id, body)
           state
         }
         _ -> {
           let body = on_reject()
           process.send(reply_to, brain_tools.Rejected)
-          let _ = state.tool_ctx.discord.edit_message(channel_id, message_id, body)
+          let _ =
+            state.tool_ctx.discord.edit_message(channel_id, message_id, body)
           state
         }
       }
@@ -979,11 +1109,12 @@ fn execute_spawn_vision_worker(
   // Resolve LlmConfig from resolved_vision_config at call time. Falls back to
   // a blank config (which will produce a VisionError) if the model spec is
   // unresolvable — same graceful-degradation policy as the vision_fn closure.
-  let vision_llm_config =
-    case models.build_llm_config(state.resolved_vision_config.model_spec) {
-      Ok(cfg) -> cfg
-      Error(_) -> llm.LlmConfig(base_url: "", api_key: "", model: "")
-    }
+  let vision_llm_config = case
+    models.build_llm_config(state.resolved_vision_config.model_spec)
+  {
+    Ok(cfg) -> cfg
+    Error(_) -> llm.LlmConfig(base_url: "", api_key: "", model: "")
+  }
   let pid =
     state.vision_spawn(
       state.tool_ctx.llm_client.chat_text,
@@ -1107,6 +1238,8 @@ pub type Effect {
     current_count: Int,
   )
   SpawnMemoryReview(history: List(llm.Message))
+  CancelPendingShellApprovals
+  PersistShellApprovalStatus(id: String, status: String)
   ResolveProposal(proposal: brain_tools.PendingProposal, action: String)
   ResolveShellApproval(
     approval: brain_tools.PendingShellApproval,
@@ -1130,6 +1263,8 @@ pub fn transition(
   message: ChannelMessage,
 ) -> #(ChannelState, List(Effect)) {
   case message, state.turn {
+    CancelRestartedShellApprovals, _ -> #(state, [CancelPendingShellApprovals])
+
     HandleIncoming(msg), None -> start_turn(state, PendingUserMessage(msg))
     HandleIncoming(msg), Some(_) -> {
       let new_queue = list.append(state.queue, [PendingUserMessage(msg)])
@@ -1145,7 +1280,11 @@ pub fn transition(
           description,
         )
       let enriched_new =
-        enrich_messages_with_description(turn.new_messages, filename, description)
+        enrich_messages_with_description(
+          turn.new_messages,
+          filename,
+          description,
+        )
       let new_turn =
         TurnState(
           ..turn,
@@ -1461,10 +1600,7 @@ pub fn transition(
       case state.compression_monitor == Some(ref) {
         True -> {
           case reason {
-            "normal" -> #(
-              ChannelState(..state, compression_monitor: None),
-              [],
-            )
+            "normal" -> #(ChannelState(..state, compression_monitor: None), [])
             _ -> {
               logging.log(
                 logging.Error,
@@ -1497,7 +1633,10 @@ pub fn transition(
                 _ ->
                   case turn.worker_kind {
                     StreamWorker ->
-                      transition(state, StreamError("worker crashed: " <> reason))
+                      transition(
+                        state,
+                        StreamError("worker crashed: " <> reason),
+                      )
                     ToolWorker(_, call_id) ->
                       transition(
                         state,
@@ -1520,10 +1659,7 @@ pub fn transition(
       case state.compression_monitor == Some(ref) {
         True -> {
           case reason {
-            "normal" -> #(
-              ChannelState(..state, compression_monitor: None),
-              [],
-            )
+            "normal" -> #(ChannelState(..state, compression_monitor: None), [])
             _ -> {
               logging.log(
                 logging.Error,
@@ -1592,7 +1728,10 @@ pub fn transition(
       {
         Ok(old) -> {
           process.send(old.reply_to, brain_tools.Expired)
-          let effects = [DiscordEdit(old.message_id, "~~Superseded~~")]
+          let effects = [
+            DiscordEdit(old.message_id, "~~Superseded~~"),
+            PersistShellApprovalStatus(old.id, "superseded"),
+          ]
           let pruned =
             list.filter(state.pending_shell_approvals, fn(a) { a.id != old.id })
           #(pruned, effects)
@@ -1764,10 +1903,7 @@ fn start_turn(
           // Prefer the local copy as a data URL to avoid Discord CDN HMAC
           // rejection. attachment.preprocess has already downloaded the file.
           let #(path, question, filename) =
-            first_image_and_question(
-              msg,
-              state.resolved_vision_config.prompt,
-            )
+            first_image_and_question(msg, state.resolved_vision_config.prompt)
           #(state_with_pending_vision(state, messages, new_messages, msg), [
             SpawnVisionWorker(path, question, filename),
             StartTyping,
@@ -2070,8 +2206,7 @@ pub fn enrich_messages_with_description(
   let reversed = list.reverse(messages)
   case replace_last_user_message(reversed, prefix, []) {
     Ok(enriched) -> enriched
-    Error(_) ->
-      list.append(messages, [llm.UserMessage(content: prefix)])
+    Error(_) -> list.append(messages, [llm.UserMessage(content: prefix)])
   }
 }
 

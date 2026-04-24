@@ -74,6 +74,16 @@ messages
 messages_fts (FTS5 virtual table)
 └── content                      -- auto-synced via triggers
     tokenize='porter unicode61'
+
+shell_approvals
+├── id TEXT PRIMARY KEY          -- Discord button approval id
+├── channel_id TEXT              -- Discord channel containing the request
+├── message_id TEXT              -- approval message to edit
+├── command TEXT                 -- command awaiting approval
+├── reason TEXT                  -- shell scanner rationale
+├── status TEXT                  -- pending/approved/rejected/expired/superseded/restart_cancelled
+├── requested_at_ms INTEGER
+└── updated_at_ms INTEGER
 ```
 
 ### In-memory (hot cache)

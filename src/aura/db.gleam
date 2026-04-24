@@ -64,6 +64,23 @@ pub type StoredFlare {
   )
 }
 
+/// A shell approval request posted to Discord.
+///
+/// `status` is one of: pending, approved, rejected, expired, superseded, or
+/// restart_cancelled. Only `pending` rows may transition.
+pub type StoredShellApproval {
+  StoredShellApproval(
+    id: String,
+    channel_id: String,
+    message_id: String,
+    command: String,
+    reason: String,
+    status: String,
+    requested_at_ms: Int,
+    updated_at_ms: Int,
+  )
+}
+
 /// A memory entry row from the memory_entries table.
 /// Represents a keyed piece of knowledge with optional supersession chain.
 pub type MemoryEntry {
@@ -238,6 +255,20 @@ pub type DbMessage {
     uidvalidity: Int,
     last_seen_uid: Int,
     now_ms: Int,
+  )
+  SaveShellApproval(
+    reply_to: process.Subject(Result(Nil, String)),
+    approval: StoredShellApproval,
+  )
+  UpdateShellApprovalStatus(
+    reply_to: process.Subject(Result(Nil, String)),
+    id: String,
+    status: String,
+    updated_at_ms: Int,
+  )
+  LoadPendingShellApprovalsForChannel(
+    reply_to: process.Subject(Result(List(StoredShellApproval), String)),
+    channel_id: String,
   )
 }
 
@@ -688,6 +719,49 @@ pub fn save_integration_checkpoint(
   })
 }
 
+/// Persist a pending shell approval request before waiting for a Discord click.
+pub fn save_shell_approval(
+  subject: process.Subject(DbMessage),
+  approval: StoredShellApproval,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    SaveShellApproval(reply_to: reply_to, approval: approval)
+  })
+}
+
+/// Transition a shell approval out of `pending`.
+///
+/// This is intentionally pending-only so a worker timeout cannot overwrite a
+/// restart cancellation or a superseded approval.
+pub fn update_shell_approval_status(
+  subject: process.Subject(DbMessage),
+  id: String,
+  status: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    UpdateShellApprovalStatus(
+      reply_to: reply_to,
+      id: id,
+      status: status,
+      updated_at_ms: updated_at_ms,
+    )
+  })
+}
+
+/// Load all still-pending shell approvals for a channel.
+pub fn load_pending_shell_approvals_for_channel(
+  subject: process.Subject(DbMessage),
+  channel_id: String,
+) -> Result(List(StoredShellApproval), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    LoadPendingShellApprovalsForChannel(
+      reply_to: reply_to,
+      channel_id: channel_id,
+    )
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
@@ -975,6 +1049,26 @@ fn handle_message(
           last_seen_uid,
           now_ms,
         )
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    SaveShellApproval(reply_to:, approval:) -> {
+      let result = do_save_shell_approval(state.conn, approval)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    UpdateShellApprovalStatus(reply_to:, id:, status:, updated_at_ms:) -> {
+      let result =
+        do_update_shell_approval_status(state.conn, id, status, updated_at_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    LoadPendingShellApprovalsForChannel(reply_to:, channel_id:) -> {
+      let result =
+        do_load_pending_shell_approvals_for_channel(state.conn, channel_id)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -1583,7 +1677,8 @@ fn do_search_events(
   // is required — not a convenience.
   let #(sql, args) = case string.trim(query) {
     "" -> build_events_plain_query(time_range_ms, source_filter, limit)
-    cleaned -> build_events_fts_query(cleaned, time_range_ms, source_filter, limit)
+    cleaned ->
+      build_events_fts_query(cleaned, time_range_ms, source_filter, limit)
   }
 
   sqlight.query(sql, on: conn, with: args, expecting: event_row_decoder())
@@ -1809,6 +1904,27 @@ fn flare_decoder() -> decode.Decoder(StoredFlare) {
   ))
 }
 
+fn shell_approval_decoder() -> decode.Decoder(StoredShellApproval) {
+  use id <- decode.field(0, decode.string)
+  use channel_id <- decode.field(1, decode.string)
+  use message_id <- decode.field(2, decode.string)
+  use command <- decode.field(3, decode.string)
+  use reason <- decode.field(4, decode.string)
+  use status <- decode.field(5, decode.string)
+  use requested_at_ms <- decode.field(6, decode.int)
+  use updated_at_ms <- decode.field(7, decode.int)
+  decode.success(StoredShellApproval(
+    id: id,
+    channel_id: channel_id,
+    message_id: message_id,
+    command: command,
+    reason: reason,
+    status: status,
+    requested_at_ms: requested_at_ms,
+    updated_at_ms: updated_at_ms,
+  ))
+}
+
 fn do_get_integration_checkpoint(
   conn: sqlight.Connection,
   name: String,
@@ -1856,4 +1972,68 @@ fn do_save_integration_checkpoint(
     "Failed to save integration checkpoint: " <> string.inspect(err)
   })
   |> result.map(fn(_) { Nil })
+}
+
+fn do_save_shell_approval(
+  conn: sqlight.Connection,
+  approval: StoredShellApproval,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "INSERT INTO shell_approvals (id, channel_id, message_id, command, reason, status, requested_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET channel_id = excluded.channel_id, message_id = excluded.message_id, command = excluded.command, reason = excluded.reason, status = excluded.status, requested_at_ms = excluded.requested_at_ms, updated_at_ms = excluded.updated_at_ms",
+    on: conn,
+    with: [
+      sqlight.text(approval.id),
+      sqlight.text(approval.channel_id),
+      sqlight.text(approval.message_id),
+      sqlight.text(approval.command),
+      sqlight.text(approval.reason),
+      sqlight.text(approval.status),
+      sqlight.int(approval.requested_at_ms),
+      sqlight.int(approval.updated_at_ms),
+    ],
+    expecting: decode.success(Nil),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to save shell approval: " <> string.inspect(err)
+  })
+  |> result.map(fn(_) { Nil })
+}
+
+fn do_update_shell_approval_status(
+  conn: sqlight.Connection,
+  id: String,
+  status: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "UPDATE shell_approvals SET status = ?, updated_at_ms = ? WHERE id = ? AND status = 'pending' RETURNING id",
+    on: conn,
+    with: [sqlight.text(status), sqlight.int(updated_at_ms), sqlight.text(id)],
+    expecting: decode.at([0], decode.string),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to update shell approval status: " <> string.inspect(err)
+  })
+  |> result.try(fn(rows) {
+    case rows {
+      [_] -> Ok(Nil)
+      [] -> Error("Shell approval is not pending: " <> id)
+      _ -> Error("Unexpected shell approval update result for: " <> id)
+    }
+  })
+}
+
+fn do_load_pending_shell_approvals_for_channel(
+  conn: sqlight.Connection,
+  channel_id: String,
+) -> Result(List(StoredShellApproval), String) {
+  sqlight.query(
+    "SELECT id, channel_id, message_id, command, reason, status, requested_at_ms, updated_at_ms FROM shell_approvals WHERE channel_id = ? AND status = 'pending' ORDER BY requested_at_ms ASC",
+    on: conn,
+    with: [sqlight.text(channel_id)],
+    expecting: shell_approval_decoder(),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to load pending shell approvals: " <> string.inspect(err)
+  })
 }

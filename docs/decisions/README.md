@@ -55,10 +55,11 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [024](024-dual-framework-testing.md) | Dual-framework testing (gleeunit + dream_test) | Accepted |
 | [025](025-ambient-awareness-via-mcp.md) | Ambient awareness via MCP and generalized flares | Superseded by ADR-026 |
 | [026](026-native-integrations-no-public-endpoint.md) | Native integrations — no public endpoint, no MCP subscribe | Accepted |
+| [027](027-shell-approval-restart-cancellation.md) | Restart-cancel shell approvals | Accepted |
 
 ## Adding a new ADR
 
 1. Copy the template above
-2. Number sequentially (next is 027)
+2. Number sequentially (next is 028)
 3. Add to the index in this README
 4. Commit with the code change it relates to

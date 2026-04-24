@@ -1,5 +1,10 @@
 # Engineering Practice
 
+This document describes how we build Aura. Product-level constraints on what
+Aura is for live in [`PRODUCT_PRINCIPLES.md`](PRODUCT_PRINCIPLES.md). Current
+architecture models live under `docs/architecture/` until they are accepted as
+ADRs.
+
 ## Philosophy
 
 Aura's design draws from two battle-tested traditions. **Unix philosophy** governs interfaces — how Aura touches the world, presents information, and composes capabilities. **OTP philosophy** governs the runtime — how Aura stays alive, manages state, and recovers from failure.
@@ -60,6 +65,13 @@ Applies to: user experience, observability, policy, learning surfaces.
 
 **The gap is the event.** Every site where Aura could silently default deserves a gap-detection hook. Design reviews ask "what does Aura do when this state is missing, stale, or ambiguous?" before asking "what does it do when valid?"
 
+**Precise help over generic failure.** When Aura cannot responsibly proceed, it
+should say what is missing, what it already tried, what the impact is, and what
+the next useful options are. "I failed" is not enough. Tool gaps, permission
+gaps, credential gaps, context gaps, preference gaps, verification gaps,
+authority gaps, and confidence gaps are different states with different
+resolution paths.
+
 **When not to apply.** Don't surface truly ambiguous signals conversation can't resolve (delete-vs-archive spam). Batch high-frequency gaps to avoid noise. Safety-critical defaults should act first and disclose, not ask.
 
 ## Principles
@@ -103,6 +115,7 @@ Properties that must hold at all times. Violations are bugs.
 5. **A session that stops is always accounted for.** If a tmux session disappears, the monitor detects it and reports why — completed with report, failed without report. No silent disappearances.
 6. **Active flare ↔ active monitor.** A dispatch creates exactly one session and one monitor actor. The monitor lives as long as the flare is active — it never stops itself. The monitor is stopped explicitly when the flare is killed, parked, or archived via the session handle. On rekindle, a fresh monitor is created with the new session. No orphaned monitors, no zombie sessions.
 7. **Handback is never silent.** When an ACP session completes with `end_turn`, the brain always processes the result through the tool loop. If the tool loop fails, the raw result is posted to Discord as a fallback. No completion goes unacknowledged.
+8. **Gaps are explicit.** Missing tools, access, credentials, context, specs, preferences, verification paths, authority, or confidence must be represented as visible gap states with a resolution path. Aura must not continue low-value motion when the next responsible action is to ask, defer, delegate verification, or stop.
 
 ## Domain model
 

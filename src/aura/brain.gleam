@@ -334,13 +334,30 @@ fn handle_message(
         discord.IncomingMessage(..msg, channel_id: routed_channel_id)
       let deps =
         build_channel_actor_deps(new_state, routed_channel_id, domain_name)
-      let subject =
+      case
         channel_supervisor.get_or_start(
           new_state.channel_supervisor,
           routed_channel_id,
           deps,
         )
-      process.send(subject, channel_actor.HandleIncoming(routed_msg))
+      {
+        Ok(subject) ->
+          process.send(subject, channel_actor.HandleIncoming(routed_msg))
+        Error(e) -> {
+          logging.log(
+            logging.Error,
+            "[brain] Failed to route channel message: " <> e,
+          )
+          process.spawn_unlinked(fn() {
+            send_discord_response(
+              new_state.discord,
+              routed_channel_id,
+              "Internal error: could not start this channel worker. Check Aura logs.",
+            )
+          })
+          Nil
+        }
+      }
       actor.continue(new_state)
     }
     UpdateDomains(domains) -> {
@@ -450,12 +467,29 @@ fn handle_message(
             Error(_) -> None
           }
           let deps = build_channel_actor_deps(state, ch, domain_name)
-          let subject =
+          case
             channel_supervisor.get_or_start(state.channel_supervisor, ch, deps)
-          process.send(
-            subject,
-            channel_actor.HandleInteractionResolve(action, approval_id),
-          )
+          {
+            Ok(subject) ->
+              process.send(
+                subject,
+                channel_actor.HandleInteractionResolve(action, approval_id),
+              )
+            Error(e) -> {
+              logging.log(
+                logging.Error,
+                "[brain] Failed to route interaction: " <> e,
+              )
+              process.spawn_unlinked(fn() {
+                send_discord_response(
+                  state.discord,
+                  ch,
+                  "Internal error: could not process that approval. Check Aura logs.",
+                )
+              })
+              Nil
+            }
+          }
           actor.continue(state)
         }
         _ -> {
@@ -824,21 +858,22 @@ fn build_channel_actor_deps(
     vision.resolve_vision_config(state.global_config, domain_cfg_opt)
 
   // Resolve ACP fields from domain config.
-  let #(acp_provider, acp_binary, acp_worktree, acp_server_url, acp_agent_name) =
-    case domain_name {
-      Some(name) ->
-        case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
-          Ok(#(_, cfg)) -> #(
-            cfg.acp_provider,
-            cfg.acp_binary,
-            cfg.acp_worktree,
-            cfg.acp_server_url,
-            cfg.acp_agent_name,
-          )
-          Error(_) -> #("claude-code", "", True, "", "")
-        }
-      None -> #("claude-code", "", True, "", "")
-    }
+  let #(acp_provider, acp_binary, acp_worktree, acp_server_url, acp_agent_name) = case
+    domain_name
+  {
+    Some(name) ->
+      case list.find(state.domain_configs, fn(dc) { dc.0 == name }) {
+        Ok(#(_, cfg)) -> #(
+          cfg.acp_provider,
+          cfg.acp_binary,
+          cfg.acp_worktree,
+          cfg.acp_server_url,
+          cfg.acp_agent_name,
+        )
+        Error(_) -> #("claude-code", "", True, "", "")
+      }
+    None -> #("claude-code", "", True, "", "")
+  }
 
   let domain_names = list.map(state.domains, fn(d) { d.name })
   channel_actor.Deps(
@@ -923,16 +958,31 @@ fn route_handback_to_channel_actor(
         Error(_) -> None
       }
       let deps = build_channel_actor_deps(state, flare.thread_id, domain_name)
-      let subject =
+      case
         channel_supervisor.get_or_start(
           state.channel_supervisor,
           flare.thread_id,
           deps,
         )
-      process.send(
-        subject,
-        channel_actor.HandleHandback(flare.id, flare.session_name, text),
-      )
+      {
+        Ok(subject) ->
+          process.send(
+            subject,
+            channel_actor.HandleHandback(flare.id, flare.session_name, text),
+          )
+        Error(e) -> {
+          logging.log(logging.Error, "[brain] Failed to route handback: " <> e)
+          process.spawn_unlinked(fn() {
+            send_discord_response(
+              state.discord,
+              flare.thread_id,
+              "**ACP handback could not be routed through the channel worker. Raw result:**\n\n"
+                <> text,
+            )
+          })
+          Nil
+        }
+      }
     }
     Error(_) ->
       logging.log(

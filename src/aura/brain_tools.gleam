@@ -8,9 +8,9 @@ import aura/clients/llm_client.{type LLMClient}
 import aura/clients/skill_runner.{type SkillRunner}
 import aura/db
 import aura/discord/rest
+import aura/discord/types as discord_types
 import aura/env
 import aura/event
-import aura/discord/types as discord_types
 import aura/integrations/gmail as gmail_integration
 import aura/integrations/supervisor as integrations_supervisor
 import aura/llm
@@ -578,7 +578,6 @@ fn execute_tool_dispatch(
               case require_arg(args, "repo") {
                 Error(e) -> TextResult(e)
                 Ok(repo) -> {
-                  let task_id = "t" <> int.to_string(time.now_ms())
                   let cwd = ctx.domain_cwd <> "/" <> repo
                   let timeout_ms = case
                     int.parse(get_arg(args, "timeout_minutes"))
@@ -596,7 +595,15 @@ fn execute_tool_dispatch(
                       ctx.domain_name,
                       thread_id,
                       prompt,
-                      "{}",
+                      flare_manager.execution_to_json(
+                        flare_manager.FlareExecution(
+                          provider: ctx.acp_provider,
+                          binary: ctx.acp_binary,
+                          worktree: ctx.acp_worktree,
+                          timeout_ms: timeout_ms,
+                          transport: flare_manager.LegacyTransport,
+                        ),
+                      ),
                       "{}",
                       "{}",
                       cwd,
@@ -605,7 +612,7 @@ fn execute_tool_dispatch(
                     Ok(flare_id) -> {
                       let task_spec =
                         acp_types.TaskSpec(
-                          id: task_id,
+                          id: flare_id,
                           domain: ctx.domain_name,
                           prompt: prompt,
                           cwd: cwd,
@@ -1016,7 +1023,9 @@ fn request_shell_approval(
   timeout_ms: Int,
   cwd: String,
 ) -> ToolResult {
-  let approval_id = "sh" <> int.to_string(time.now_ms())
+  let requested_at_ms = time.now_ms()
+  let approval_id =
+    "sh" <> ctx.channel_id <> "-" <> int.to_string(requested_at_ms)
   let msg_content =
     ":warning: **Shell command flagged:** `"
     <> command
@@ -1041,20 +1050,67 @@ fn request_shell_approval(
           reason: description,
           channel_id: ctx.channel_id,
           message_id: message_id,
-          requested_at_ms: time.now_ms(),
+          requested_at_ms: requested_at_ms,
           reply_to: reply_subject,
         )
-      ctx.on_shell_approve(approval)
-      // Block until user clicks approve/reject (15 min timeout)
-      case process.receive(reply_subject, 900_000) {
-        Ok(Approved) -> execute_shell(command, timeout_ms, cwd)
-        Ok(Rejected) -> TextResult("Command rejected by user.")
-        Ok(Expired) -> TextResult("Approval expired.")
-        Error(_) -> TextResult("Approval timed out.")
+      case persist_shell_approval(ctx, approval) {
+        Ok(Nil) -> {
+          ctx.on_shell_approve(approval)
+          // Block until user clicks approve/reject (15 min timeout)
+          case process.receive(reply_subject, 900_000) {
+            Ok(Approved) -> execute_shell(command, timeout_ms, cwd)
+            Ok(Rejected) -> TextResult("Command rejected by user.")
+            Ok(Expired) -> TextResult("Approval expired.")
+            Error(_) -> {
+              let _ =
+                db.update_shell_approval_status(
+                  ctx.db_subject,
+                  approval_id,
+                  "expired",
+                  time.now_ms(),
+                )
+              let _ =
+                ctx.discord.edit_message(
+                  ctx.channel_id,
+                  message_id,
+                  "**Expired** -- approval timed out after 15 minutes.",
+                )
+              TextResult("Approval timed out.")
+            }
+          }
+        }
+        Error(e) -> {
+          let _ =
+            ctx.discord.edit_message(
+              ctx.channel_id,
+              message_id,
+              "**Failed** -- could not record shell approval: " <> e,
+            )
+          TextResult("Error recording approval request: " <> e)
+        }
       }
     }
     Error(e) -> TextResult("Error posting approval request: " <> e)
   }
+}
+
+fn persist_shell_approval(
+  ctx: ToolContext,
+  approval: PendingShellApproval,
+) -> Result(Nil, String) {
+  db.save_shell_approval(
+    ctx.db_subject,
+    db.StoredShellApproval(
+      id: approval.id,
+      channel_id: approval.channel_id,
+      message_id: approval.message_id,
+      command: approval.command,
+      reason: approval.reason,
+      status: "pending",
+      requested_at_ms: approval.requested_at_ms,
+      updated_at_ms: approval.requested_at_ms,
+    ),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -1410,12 +1466,14 @@ fn finish_gmail_setup(
           token_endpoint: "https://oauth2.googleapis.com/token",
         )
       let now = time.now_ms()
-      case oauth.exchange_authorization_code(
-        cfg,
-        code,
-        "http://localhost/",
-        now_ms: now,
-      ) {
+      case
+        oauth.exchange_authorization_code(
+          cfg,
+          code,
+          "http://localhost/",
+          now_ms: now,
+        )
+      {
         Error(err) ->
           TextResult(
             "OAuth token exchange failed: "
@@ -1435,7 +1493,10 @@ fn finish_gmail_setup(
 fn resolve_gmail_oauth_credentials(
   ctx: ToolContext,
 ) -> Result(#(String, String), Nil) {
-  case env.get_env("GMAIL_OAUTH_CLIENT_ID"), env.get_env("GMAIL_OAUTH_CLIENT_SECRET") {
+  case
+    env.get_env("GMAIL_OAUTH_CLIENT_ID"),
+    env.get_env("GMAIL_OAUTH_CLIENT_SECRET")
+  {
     Ok(cid), Ok(secret) if cid != "" && secret != "" -> Ok(#(cid, secret))
     _, _ -> read_gmail_oauth_from_config(ctx)
   }
@@ -1528,12 +1589,7 @@ fn write_oauth_gmail_section(
   let new_contents = append_config_block(stripped, section)
   case simplifile.write(path, new_contents) {
     Error(err) ->
-      TextResult(
-        "Failed to write "
-        <> path
-        <> ": "
-        <> string.inspect(err),
-      )
+      TextResult("Failed to write " <> path <> ": " <> string.inspect(err))
     Ok(_) ->
       TextResult(
         "Gmail OAuth app credentials saved to `"
@@ -1768,12 +1824,7 @@ fn format_events(query: String, events: List(event.AuraEvent)) -> String {
   let count = list.length(events)
   let header = case query {
     "" -> "Found " <> int.to_string(count) <> " recent events:"
-    q ->
-      "Found "
-      <> int.to_string(count)
-      <> " events matching \""
-      <> q
-      <> "\":"
+    q -> "Found " <> int.to_string(count) <> " events matching \"" <> q <> "\":"
   }
   let body =
     list.index_map(events, fn(e, i) { format_event(i + 1, e) })

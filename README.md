@@ -15,6 +15,7 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Every 
 - **Memory** — active review persists state and knowledge every N turns; nightly dreaming consolidates the archive offline, promotes durable facts, and enforces a token budget.
 - **Skills** — language-agnostic CLI tools. Drop a script in a directory, it becomes a capability the LLM can call.
 - **Self-diagnosis** — ships with man pages. The brain reads them via the shell tool when it needs to understand its own behavior.
+- **Shell approvals** — dangerous shell commands require Discord button approval; unresolved approvals are invalidated visibly after actor restart.
 - **Pluggable gateways and ACP transports** — Discord first; multi-platform conversation schema from day one.
 
 ## Requirements
@@ -25,6 +26,22 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Every 
 - A Discord bot token ([create one here](https://discord.com/developers/applications))
 - An LLM API key (ZAI/GLM or Anthropic/Claude)
 - agent-browser (npm) for the browser tool: `npm install -g agent-browser && agent-browser install`
+
+### Nix Dev Shell
+
+Aura includes a flake for a reproducible contributor toolchain:
+
+```bash
+nix develop
+gleam test
+```
+
+The shell provides Gleam, Erlang/OTP 27, rebar3, a C toolchain, tmux, SQLite,
+and Node.js. If `esqlite` reports `corrupt atom table` after `gleam clean`, run:
+
+```bash
+aura-fix-esqlite-nif
+```
 
 ## Quick Start
 
