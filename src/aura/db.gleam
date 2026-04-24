@@ -238,6 +238,10 @@ pub type DbMessage {
     reply_to: process.Subject(Result(Bool, String)),
     event: event.AuraEvent,
   )
+  GetEvent(
+    reply_to: process.Subject(Result(Option(event.AuraEvent), String)),
+    id: String,
+  )
   SearchEvents(
     reply_to: process.Subject(Result(List(event.AuraEvent), String)),
     query: String,
@@ -665,6 +669,16 @@ pub fn insert_event(
   })
 }
 
+/// Load one ambient event by its primary event ID.
+pub fn get_event(
+  subject: process.Subject(DbMessage),
+  id: String,
+) -> Result(Option(event.AuraEvent), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetEvent(reply_to: reply_to, id: id)
+  })
+}
+
 /// Search ambient events. An empty `query` skips the FTS MATCH and returns
 /// rows ordered by `time_ms DESC`, subject to the optional filters. A
 /// non-empty `query` matches against `events_fts` (source/type/subject/tags/data).
@@ -1017,6 +1031,12 @@ fn handle_message(
 
     InsertEvent(reply_to:, event:) -> {
       let result = do_insert_event(state.conn, event)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetEvent(reply_to:, id:) -> {
+      let result = do_get_event(state.conn, id)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -1665,6 +1685,29 @@ fn do_insert_event(
   })
 }
 
+fn do_get_event(
+  conn: sqlight.Connection,
+  id: String,
+) -> Result(Option(event.AuraEvent), String) {
+  sqlight.query(
+    "SELECT id, source, type, subject, time_ms, tags_json, external_id, data_json FROM events WHERE id = ? LIMIT 1",
+    on: conn,
+    with: [sqlight.text(id)],
+    expecting: event_row_decoder(),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to load event: " <> string.inspect(err)
+  })
+  |> result.try(fn(rows) {
+    case rows {
+      [] -> Ok(None)
+      [row, ..] ->
+        event_from_row(row)
+        |> result.map(fn(e) { Some(e) })
+    }
+  })
+}
+
 fn do_search_events(
   conn: sqlight.Connection,
   query: String,
@@ -1688,25 +1731,28 @@ fn do_search_events(
   |> result.try(fn(rows) {
     // Parse each stored tags_json back to a Dict; a broken tag blob is a
     // parse failure, not silent garbage.
-    list.try_map(rows, fn(row) {
-      let #(id, source, type_, subject, time_ms, tags_raw, external_id, data) =
-        row
-      case event.tags_from_json(tags_raw) {
-        Ok(tags) ->
-          Ok(event.AuraEvent(
-            id: id,
-            source: source,
-            type_: type_,
-            subject: subject,
-            time_ms: time_ms,
-            tags: tags,
-            external_id: external_id,
-            data: data,
-          ))
-        Error(err) -> Error("Failed to decode event tags: " <> err)
-      }
-    })
+    list.try_map(rows, event_from_row)
   })
+}
+
+fn event_from_row(
+  row: #(String, String, String, String, Int, String, String, String),
+) -> Result(event.AuraEvent, String) {
+  let #(id, source, type_, subject, time_ms, tags_raw, external_id, data) = row
+  case event.tags_from_json(tags_raw) {
+    Ok(tags) ->
+      Ok(event.AuraEvent(
+        id: id,
+        source: source,
+        type_: type_,
+        subject: subject,
+        time_ms: time_ms,
+        tags: tags,
+        external_id: external_id,
+        data: data,
+      ))
+    Error(err) -> Error("Failed to decode event tags: " <> err)
+  }
 }
 
 fn build_events_plain_query(

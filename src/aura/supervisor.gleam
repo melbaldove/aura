@@ -6,6 +6,7 @@ import aura/clients/browser_runner
 import aura/clients/discord_client
 import aura/clients/llm_client
 import aura/clients/skill_runner
+import aura/cognitive_worker
 import aura/config
 import aura/ctl
 import aura/db
@@ -27,6 +28,7 @@ import aura/xdg
 import gleam/erlang/process
 import gleam/int
 import gleam/list
+import gleam/option.{Some}
 import gleam/otp/static_supervisor
 import gleam/result
 import gleam/string
@@ -81,10 +83,15 @@ pub fn start(
       logging.log(logging.Error, "[supervisor] JSONL migration error: " <> e)
   }
 
-  // 3b. Start event_ingest actor (required — panics on failure).
-  // Starts after db (which it depends on) and before flare/brain so the
-  // supervisor log reads top-down in dependency order.
-  let assert Ok(event_ingest_started) = event_ingest.start(db_subject)
+  // 3b. Start cognitive worker and event_ingest actor (required — panics on failure).
+  // event_ingest remains fire-and-forget; the cognitive worker observes only
+  // successfully persisted event IDs and never mutates state in this slice.
+  let assert Ok(cognitive_started) = cognitive_worker.start(db_subject)
+  let cognitive_subject = cognitive_started.data
+  logging.log(logging.Info, "[supervisor] Cognitive worker started")
+
+  let assert Ok(event_ingest_started) =
+    event_ingest.start_with_cognitive(db_subject, Some(cognitive_subject))
   let event_ingest_subject = event_ingest_started.data
   logging.log(logging.Info, "[supervisor] Event ingest started")
 

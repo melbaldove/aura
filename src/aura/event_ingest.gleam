@@ -14,9 +14,11 @@
 ////      but never crash the actor.
 ////
 //// Ingestion is fire-and-forget: callers send an `Ingest(event)` message
-//// via `ingest/2` and continue immediately. There is no routing to flares
-//// from here — that comes in a later phase.
+//// via `ingest/2` and continue immediately. A successfully inserted event may
+//// be observed by the async cognitive worker, but there is no routing to flares
+//// from here.
 
+import aura/cognitive_worker
 import aura/db
 import aura/event
 import aura/event_tagger
@@ -24,6 +26,7 @@ import aura/time
 import gleam/dict
 import gleam/erlang/process.{type Subject}
 import gleam/int
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision
 import logging
@@ -37,7 +40,10 @@ pub type IngestMessage {
 }
 
 type State {
-  State(db_subject: Subject(db.DbMessage))
+  State(
+    db_subject: Subject(db.DbMessage),
+    cognitive_subject: Option(Subject(cognitive_worker.Message)),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -49,8 +55,19 @@ type State {
 pub fn start(
   db_subject: Subject(db.DbMessage),
 ) -> Result(actor.Started(Subject(IngestMessage)), actor.StartError) {
+  start_with_cognitive(db_subject, None)
+}
+
+/// Start event ingestion with an optional cognitive worker observer.
+/// Existing callers should use `start/1`; production wiring passes the
+/// cognitive worker after it has been started.
+pub fn start_with_cognitive(
+  db_subject: Subject(db.DbMessage),
+  cognitive_subject: Option(Subject(cognitive_worker.Message)),
+) -> Result(actor.Started(Subject(IngestMessage)), actor.StartError) {
   actor.new_with_initialiser(5000, fn(self_subject) {
-    let state = State(db_subject: db_subject)
+    let state =
+      State(db_subject: db_subject, cognitive_subject: cognitive_subject)
     Ok(actor.initialised(state) |> actor.returning(self_subject))
   })
   |> actor.on_message(handle_message)
@@ -84,7 +101,7 @@ fn handle_message(
       let normalized = normalize(e)
       let tagged = attach_tags(normalized)
       case db.insert_event(state.db_subject, tagged) {
-        Ok(True) -> Nil
+        Ok(True) -> notify_cognitive(state.cognitive_subject, tagged.id)
         Ok(False) ->
           logging.log(
             logging.Info,
@@ -106,6 +123,16 @@ fn handle_message(
       }
       actor.continue(state)
     }
+  }
+}
+
+fn notify_cognitive(
+  cognitive_subject: Option(Subject(cognitive_worker.Message)),
+  event_id: String,
+) -> Nil {
+  case cognitive_subject {
+    Some(subject) -> cognitive_worker.interpret_event(subject, event_id)
+    None -> Nil
   }
 }
 

@@ -7,6 +7,8 @@ Aura is an OTP application where every component is a supervised actor. Actors c
 ```
 supervisor (OneForOne, 3 restarts / 5s)
 ├── db              SQLite actor — single writer, serialized via mailbox
+├── event_ingest    Normalizes, tags, dedupes, and persists integration events
+├── cognitive_worker Async log-only interpretation of persisted events
 ├── poller          Discord WebSocket — reconnects with exponential backoff
 ├── brain           Routes messages, runs LLM tool loop with streaming
 ├── workstream_sup  Factory — one actor per configured workstream
@@ -42,6 +44,24 @@ supervisor (OneForOne, 3 restarts / 5s)
 ### Routing
 
 Brain routes by `channel_id`. Each workstream has a dedicated Discord channel. Messages in a workstream's channel go directly to that workstream actor — no LLM classification needed. Messages in unmatched channels (like #aura) are handled by the brain directly.
+
+### Ambient Event Flow
+
+```
+Integration actor
+-> event_ingest
+-> db.events
+-> cognitive_worker
+-> [cognitive] log summary
+```
+
+`event_ingest` remains fire-and-forget for producers. It normalizes, tags, and
+persists `AuraEvent`s; only successfully inserted events notify the
+`cognitive_worker`, so duplicate `(source, external_id)` events are not
+interpreted twice. The cognitive worker loads the persisted event by ID,
+extracts citable evidence, runs the log-only interpretation contract, validates
+the result, and logs a compact summary. It does not mutate concerns, memory,
+`STATE.md`, or flares.
 
 ## Data model
 
@@ -84,6 +104,16 @@ shell_approvals
 ├── status TEXT                  -- pending/approved/rejected/expired/superseded/restart_cancelled
 ├── requested_at_ms INTEGER
 └── updated_at_ms INTEGER
+
+events
+├── id TEXT PRIMARY KEY
+├── source TEXT                  -- gmail, linear, calendar, github, etc.
+├── type TEXT                    -- source event type
+├── subject TEXT                 -- human-readable summary
+├── time_ms INTEGER
+├── tags_json TEXT
+├── external_id TEXT
+└── data_json TEXT               -- raw source payload
 ```
 
 ### In-memory (hot cache)

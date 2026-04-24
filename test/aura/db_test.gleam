@@ -1084,6 +1084,22 @@ pub fn insert_event_duplicate_returns_false_test() {
   process.send(subject, db.Shutdown)
 }
 
+pub fn get_event_returns_inserted_event_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let e = sample_event("e1", "gmail", "msg-1", "hello world", 1000)
+  let assert Ok(True) = db.insert_event(subject, e)
+
+  let assert Ok(Some(stored)) = db.get_event(subject, "e1")
+  stored.id |> should.equal("e1")
+  stored.source |> should.equal("gmail")
+  stored.external_id |> should.equal("msg-1")
+
+  let assert Ok(None) = db.get_event(subject, "missing")
+
+  process.send(subject, db.Shutdown)
+}
+
 pub fn search_events_finds_by_subject_fts_test() {
   let assert Ok(subject) = db.start(":memory:")
 
