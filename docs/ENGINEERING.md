@@ -104,6 +104,8 @@ What Unix, OTP, and metacognition don't cover — Aura-specific constraints and 
 
 10. **Verification is non-negotiable. Every feature ships with a behavior test.** Code is cheap to write; parallelize test authoring via subagents when the surface is wide. A feature without a test is an untested assumption, not a feature. The bar: there is a test that *fails without your change and passes with it*. "It compiled" and "I tried it once in Discord" are not verification. Without this rule, coverage always loses to velocity, and velocity compounds into regression debt that eventually stops the system from being changeable at all. Tautological or empty tests (asserting literals, no assertions, mocks asserting their own return values) are the same as no test — the trivial-test hook exists to catch them.
 
+11. **Respect the Bitter Lesson.** Rich Sutton's [Bitter Lesson](http://www.incompleteideas.net/IncIdeas/BitterLesson.html) applies to agent architecture: general methods that leverage computation, search, learning, and replay beat hand-built theories of how intelligence should work. Do not encode a human-designed cognitive ontology in code unless replayed examples prove the structure is necessary. Prefer a minimal harness that captures events, builds context, calls models, validates safety/provenance, records outcomes, and evaluates behavior over time. Put policy and state in ordinary text files first; promote structure only when evaluation shows text and model judgment are not enough.
+
 ## System invariants
 
 Properties that must hold at all times. Violations are bugs.
