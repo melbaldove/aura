@@ -12,7 +12,8 @@ managing the boundary between outside-world changes, agent work, and the user's
 attention.
 
 This note translates the product principles in
-`docs/PRODUCT_PRINCIPLES.md` into a source-neutral architecture model.
+`docs/PRODUCT_PRINCIPLES.md` into a source-neutral architecture model. Related
+research is tracked in `docs/research/cognitive-capacity-literature.md`.
 
 ## First Principles
 
@@ -20,20 +21,69 @@ This note translates the product principles in
 responsiveness.
 
 **Events are evidence.** A Gmail message, Jira comment, branch push, CI failure,
-calendar update, or Linear transition is not inherently important. It is an
-observation that may support claims about a concern.
+calendar update, founder launch, or regulation change is not inherently
+important. It is an observation that may support an interpretation about a
+concern.
+
+**World state is concern-indexed.** Aura should be ambiently aware of relevant
+outside-world change, but relevance is defined by concerns, theses,
+relationships, commitments, risks, and opportunities. It should not become an
+undifferentiated news monitor.
 
 **Concerns are the center.** Humans do not primarily manage events. They manage
 ongoing cares: projects, people, tickets, releases, commitments, trips,
 relationships, risks, opportunities, and learning frontiers.
 
-**Planning and verification are managed work.** Aura should use agents and tools
-to reduce planning and verification load before asking the user to decide.
+**Concern matching is the hard part.** The core question is not "which rule
+matches this event?" It is "what does this change mean relative to what this
+user currently cares about?" A model should be involved for every non-trivial
+event interpretation.
+
+**Model interprets; code validates.** The model may connect evidence to
+concerns, claims, attention, work, authority, and gaps. Deterministic code owns
+normalization, evidence extraction, schema validation, authority enforcement,
+state rendering, and logging.
 
 **Metacognition is operational.** When Aura cannot responsibly continue, it
 should emit a precise gap with attempted self-help and a resolution path.
 
-## Core Objects
+## Architecture
+
+```text
+Source Adapter
+-> Observation
+-> EvidenceBundle
+-> CognitiveInterpreter
+-> Validator
+-> Concern Store
+-> Generated STATE.md
+-> Attention Surface / Digest / Work Dispatch
+```
+
+The design keeps deterministic code boring and lets the model do the integrated
+concern-relative interpretation.
+
+Runtime boundary: source ingestion should persist observations and return. Model
+interpretation, validation, concern mutation, generated-state rendering, and
+attention decisions belong in a cognitive worker fed by persisted observation
+IDs, not inside the ingestion actor.
+
+## Components
+
+### Source Adapter
+
+Each integration normalizes source payloads into observations and preserves raw
+provenance. Adapters may extract source-direct evidence, but they do not decide
+whether the user should care.
+
+Examples:
+
+- Gmail: messages and threads
+- Linear/Jira: issues, assignments, comments, status transitions
+- Calendar: meetings, attendees, time/location changes
+- Git/CI: branches, commits, PRs, check runs
+- World-state watches: companies, founders, papers, repositories, regulations,
+  markets, competitors
 
 ### Observation
 
@@ -52,25 +102,57 @@ actors
 text
 state_before
 state_after
-relations
 raw_ref
 raw_data
 ```
 
+An observation answers "what changed?" It does not answer what the change means.
+
+### EvidenceBundle
+
+The deterministic, citable fact set extracted from an observation.
+
+Candidate fields:
+
+```text
+observation_id
+atoms
+resource_refs
+raw_refs
+```
+
+Evidence atoms:
+
+```text
+id
+kind
+value
+source_path
+text_span
+confidence
+provenance
+```
+
 Examples:
 
-- Gmail message received: resource is a thread, actors are sender and
-  recipients, text is subject plus snippet.
-- Jira ticket transitioned: resource is an issue, state changed from one status
-  to another, actors include assignee and changer.
-- Branch pushed: resource is a branch or PR, relations include repository,
-  commit, CI run, and linked ticket.
+```text
+ActorEmail("bob@company.com", source_path="data.from")
+ResourceId(ticket, "REL-42", text_span=63..69)
+RelativeTimeExpression("tomorrow", text_span=36..44)
+MachineResult("failed", source_path="data.conclusion")
+Url("https://github.com/org/repo/pull/17", text_span=...)
+```
 
-Integrations produce observations. They do not decide attention policy.
+Evidence is not interpretation. It is what the model and validator can cite.
+
+`EvidenceShape` may exist later as derived metadata for optimization or
+metrics, but it is not a core v1 abstraction. The stronger invariant is that
+every model interpretation cites `EvidenceAtom`s.
 
 ### Concern
 
-A durable unit of user care or work.
+A durable unit of user care or work. Concerns may represent personal work,
+relationships, world-state objects, or evaluative theses.
 
 Candidate fields:
 
@@ -81,41 +163,115 @@ kind
 summary
 actors
 resources
+theses
 status
-stakes
-active_window
-preference_refs
-history_refs
+active_claims
+open_gaps
+attention_history
+work_state
+authority_state
+watches
 ```
 
-Concerns may be explicit ("track this release") or inferred from repeated
-observations and user behavior. Concern identity is what lets Aura group
-evidence across integrations.
-
-### SemanticClaim
-
-A typed claim Aura believes about an observation, concern, actor, or state
-change. Claims are falsifiable statements supported by evidence. They do not
-decide attention by themselves.
-
-Candidate fields:
+Candidate concern kinds:
 
 ```text
-id
+person
+project
+ticket
+branch
+release
+commitment
+company
+founder
+market
+thesis
+repository
+paper
+regulation
+relationship
+risk
+opportunity
+learning_frontier
+```
+
+Concerns are the canonical active-state model. If Aura needs a prompt-visible
+current-state file, that file is generated from active concerns. Prose state is
+a view; concerns are the source of truth.
+
+### CognitiveInterpreter
+
+The model-backed interpreter receives:
+
+```text
+Observation
+EvidenceBundle
+active concerns
+relevant preferences/defaults
+recent generated state when useful
+source/watch metadata
+```
+
+It returns one structured `CognitiveInterpretation`:
+
+```text
+observation_id
+concern_matches
+proposed_concerns
+semantic_claims
+attention_judgment
+work_disposition
+authority_requirement
+gap_events
+explanation
+confidence
+```
+
+This is the core simplification. Aura does not maintain a hand-built routing
+matrix from source to claim to model. The interpreter answers the integrated
+question: what does this observation mean relative to the user's concerns?
+
+### CognitiveInterpretation
+
+`concern_matches` link the observation to existing concerns:
+
+```text
+concern_id
+relation
+confidence
+evidence_refs
+explanation
+```
+
+`proposed_concerns` allow Aura to identify new concerns:
+
+```text
+label
+kind
+reason
+evidence_refs
+lineage_ref
+activation_status
+```
+
+World-state observations may suggest concerns, but they should not activate a
+new durable concern merely because something seems interesting. Activation
+requires lineage to an existing concern, thesis, watch, explicit user request,
+or later user ratification.
+
+`semantic_claims` are falsifiable statements supported by evidence:
+
+```text
 kind
 subject
 object
 confidence
 evidence_refs
-about_observation
-about_concern
-about_actor
 explanation
-qualifiers
-status
+verification_status
 ```
 
-Initial claim kinds should stay small, useful, and source-neutral:
+Initial claim kinds should stay small and useful:
 
 ```text
 contains_request
@@ -140,90 +296,17 @@ risk_decreased
 duplicate_or_superseded
 ```
 
-Claims are the bridge between source-specific evidence and source-neutral
-judgment.
-
-Do not use claims for everything in the middle of the pipeline. These are
-separate concepts:
-
-- `mentions_user` is usually evidence, not enough to drive judgment.
-- `belongs_to_active_concern` is a `ConcernLink`, not a claim.
-- `high_consequence` is a `StakesEstimate`, not a claim.
-- `routine_update` and `low_signal` are often attention outcomes; use narrower
-  evidence or claims such as `duplicate_or_superseded` or `status_only_update`
-  only when the statement is falsifiable.
-- `needs_review` is too broad; prefer claims like `approval_requested`,
-  `artifact_changed`, `artifact_failed_verification`, or `decision_needed`.
-
-Before adding a claim kind, check:
-
-- Can this be false?
-- What evidence supports it?
-- Can more than one integration emit it?
-- Does it avoid deciding attention by itself?
-- Can the user correct it?
-- Can later observations supersede it?
-- Does it help planning, verification, or attention judgment?
-
-### ConcernLink
-
-A source-neutral relation between an observation, resource, actor, or claim and
-a concern.
-
-Candidate fields:
+`attention_judgment` spends or preserves user attention:
 
 ```text
-id
-concern_id
-target_ref
-relation
-confidence
-evidence_refs
-explanation
-```
-
-Concern links answer "what does this relate to?" without deciding how important
-it is or whether to surface it.
-
-### StakesEstimate
-
-An estimate of what happens if Aura ignores or delays action on a concern or
-claim.
-
-Candidate fields:
-
-```text
-id
-concern_id
-claim_refs
-level
-reversibility
-deadline_pressure
-blast_radius
+action
 reason
 confidence
-```
-
-Stakes are derived from claims, concern state, reversibility, actor importance,
-deadline pressure, and learned preferences. They are not source fields and not
-attention actions.
-
-### AttentionJudgment
-
-Aura's decision about how to spend or preserve user attention.
-
-Candidate fields:
-
-```text
-id
-attention_action
-reason
-confidence
-concern_id
-observation_refs
-claim_refs
-mode
-trigger
+trigger_or_schedule
+user_decision_required
+deferral_cost
+why_not_digest
+review_condition
 correction_path
 ```
 
@@ -238,50 +321,14 @@ ask_now
 defer_until_condition
 ```
 
-`suppress` means no user-facing surface. Retention policy separately decides
-whether any audit or event record remains.
-
-`record` stores the event or concern update without spending attention.
-
-`digest_later` includes the update in a scheduled or opportunistic summary.
-
-`surface_now` interrupts or prominently presents the update.
-
-`ask_now` requests a human answer because responsible progress depends on it.
-The reason is usually represented by a `GapEvent`.
-
-`defer_until_condition` holds the update until a time, context, or stakes
-condition changes.
-
-The judgment must explain itself in human terms:
+`work_disposition` decides what work should happen:
 
 ```text
-Surfaced because this changes an active commitment and the deadline moved earlier.
-```
-
-not only:
-
-```text
-Matched sender bob@example.com.
-```
-
-Attention judgments must not encode work execution or authority. Those are
-separate decisions.
-
-### WorkDisposition
-
-Aura's decision about what work, if any, should happen after an observation or
-judgment.
-
-Candidate fields:
-
-```text
-id
-work_action
+action
 target
 reason
 proof_required
-result_expected
+expected_result
 ```
 
 Initial work actions:
@@ -293,27 +340,12 @@ delegate
 execute
 ```
 
-Examples:
-
-- CI failed on an active branch: attention may be `digest_later` or
-  `surface_now`; work may be `delegate` a flare to inspect the failure.
-- Email asks for approval: attention may be `ask_now`; work may be `prepare` a
-  reply draft.
-- Newsletter: attention may be `suppress`; work is usually `none`.
-
-### AuthorityRequirement
-
-Aura's decision about whether progress requires approval, credentials, tools,
-context, or human judgment.
-
-Candidate fields:
+`authority_requirement` decides what must be approved, connected, or clarified:
 
 ```text
-id
 requirement
 reason
 resolver
-gap_ref
 ```
 
 Initial requirements:
@@ -328,22 +360,12 @@ context
 human_judgment
 ```
 
-Authority is separate from attention. Aura may technically be able to send an
-email, merge a PR, or close a ticket, while still requiring user authority
-before doing so.
-
-### GapEvent
-
-A metacognitive event emitted when Aura cannot responsibly proceed.
-
-Candidate fields:
+`gap_events` are metacognitive events:
 
 ```text
-id
 kind
 scope
 observed_during
-concern_id
 blocks
 attempted
 self_help_available
@@ -355,7 +377,27 @@ durable
 risk_if_ignored
 ```
 
-Kinds:
+Raw gaps are not user prompts. A renderer turns high-value gaps into decision
+packets only when they are urgent or reusable enough to spend attention:
+
+```text
+situation
+evidence
+reusable_question
+recommended_default
+consequences
+answer_shortcuts
+use_default_for_now
+make_durable
+not_now
+show_evidence
+```
+
+Many gaps may be observed; few should interrupt. Low-urgency preference gaps
+belong in a batched learning digest with a shared `batch_key`, reuse score, and
+defer-to-digest behavior.
+
+Initial gap kinds:
 
 ```text
 capability
@@ -374,152 +416,180 @@ ambiguity
 conflict
 ```
 
-`capability` means Aura lacks a capability to perform or observe something: no
-Jira integration, no browser, no calendar write API, or no CI inspection tool.
+### LearnedPreference
 
-`credential` means authentication material is missing or expired.
+User-specific policy learned from gap resolutions, corrections, examples, and
+explicit ratification.
 
-`permission` means credentials exist but lack the required remote or local
-authorization.
-
-`availability` means an external system, local service, dependency, or network
-path is unavailable.
-
-`context` means missing facts block progress.
-
-`spec` means missing rules, contract, expected behavior, or definition of done.
-
-`scope` means missing boundaries: how broad the task is, where to stop, or what
-autonomy level is intended.
-
-`identity` means Aura cannot resolve whether two people, resources, tickets,
-branches, or concerns are the same.
-
-`preference` means reusable user policy is missing.
-
-`authority` means Aura can technically act but should not act without approval.
-
-`verification` means Aura cannot prove or check a claim it needs to rely on.
-
-`confidence` means Aura has an answer but cannot trust it enough for the stakes.
-
-`ambiguity` means multiple interpretations remain plausible even after
-available context is used.
-
-`conflict` means instructions, sources, tests, preferences, or flare results
-disagree.
-
-Do not add stages such as `planning` or `execution` as gap kinds. Use
-`observed_during` for stage:
+Candidate fields:
 
 ```text
-planning
-execution
-verification
-attention_judgment
-handback
+id
+scope
+rule
+examples_that_created_it
+last_used_explanation
+precedence
+confidence
+expiry_or_review
+status
+disable_edit_revert_path
 ```
 
-Do not add `safety`, `privacy`, or `urgency` as gap kinds. Model those as risk,
-sensitivity, impact, or policy dimensions.
+Learned preferences are automation debt unless they are inspectable,
+correctable, reversible, and scoped. A preference that cannot explain its
+provenance should not silently govern attention.
 
-A good gap event is precise:
+### Validator
+
+The validator enforces what the model may only suggest.
+
+Checks:
+
+- schema is valid
+- cited evidence refs point to real `EvidenceAtom`s
+- concern IDs exist or are marked as proposed
+- claims cite evidence
+- evidence is fresh enough for the claim being made
+- claims do not contradict active claims without emitting a conflict gap or
+  supersession explanation
+- unverified claims do not mutate verified concern state
+- authority gates obey policy
+- attention actions are allowed and cite the claim or gap that justifies them
+- `surface_now` and `ask_now` include why now, what user decision is required,
+  the cost of deferral, and why record/digest is insufficient
+- gap events have resolver, options, and recommended next step
+- confidence and explanation are present
+
+Invalid output becomes a validation gap or retry, not silent state mutation.
+
+### Concern Updater
+
+Applies validated interpretations:
+
+- update existing concerns
+- create proposed concerns when allowed
+- attach claims
+- record gaps
+- append attention/work/authority history
+- close or supersede stale claims
+
+This component requires a durable concern store. Until that store exists and
+direct prose-state writers are migrated, validated interpretations can be logged
+or tested against fixtures but must not mutate production state.
+
+### Generated STATE.md Renderer
+
+Renders active concerns into prompt-visible current state:
 
 ```text
-I cannot verify the migration because the test DB is unavailable. I can wait,
-run static checks, or ask a flare to inspect the deploy path.
+Concern store -> STATE.md
 ```
 
-It is not a generic failure:
+Example generated entry:
 
 ```text
-Something went wrong.
+§ concern:release-2026-04
+Status: blocked
+Resources: branch release/x, Jira REL-42, Gmail thread 77
+Active claims: contains_request, deadline_created
+Open gaps: preference gap resolved
+Next: prepare release-notes update; require approval before sending
 ```
 
-## Manager Loop
+`STATE.md` is not independent writable state.
 
-The brain is Aura's manager agent. Flares perform object-level work. The brain
-supervises planning quality, verification quality, authority, uncertainty, and
-user load.
+### Attention Surface
 
-Loop:
+Consumes `AttentionJudgment`:
 
 ```text
-objective
--> plan
--> delegate or execute
--> verify
--> assess claims, concern links, stakes, and gaps
--> continue, ask, surface, park, or stop
+suppress
+record
+digest_later
+surface_now
+ask_now
+defer_until_condition
 ```
 
-Manager questions:
+The first implementation should stay log-only. User-facing surfacing comes
+after the interpretation and validation loop proves itself.
 
-- Is the flare still pursuing the right goal?
-- Does the plan preserve the user's actual objective?
-- Can this result be verified with available tools?
-- Which claims are proven, assumed, or uncertain?
-- Is more execution useful, or is the next step a gap resolution?
-- Would asking the user now reduce future cognitive load?
-- Does this cross an authority or approval boundary?
+### Work Dispatch
 
-## Self-Help And Escalation
+Consumes `WorkDisposition`:
 
-Aura should exhaust cheap reversible self-help before asking the user. It should
-escalate when the gap requires human judgment, authority, credentials, missing
-context, or a reusable preference.
+```text
+none
+prepare
+delegate flare
+execute
+```
 
-Self-help examples:
+Flares are for deeper investigation, tool use, verification, or synthesis. Not
+every event gets a flare.
 
-- run tests
-- inspect logs
-- search existing memory
-- ask a flare to review
-- cross-check sources
-- derive a smaller proof packet
-- defer until a scheduled digest
+### Authority Gate
 
-Escalation examples:
+Consumes `AuthorityRequirement` and prevents unsafe action. The model can
+recommend action; code enforces approval, credential, permission, capability,
+context, and human-judgment boundaries.
 
-- missing credentials
-- missing tool integration
-- ambiguous goal
-- irreversible external action
-- preference that will recur
-- verification path unavailable
-- tradeoff involving taste, risk, or values
+### Watch Coverage Contract
 
-## First Implementation Slice
+For concern-indexed world state, the user describes what they care about:
 
-A practical first slice can stay narrow while preserving the general model:
+```text
+Watch early local-first AI agent companies.
+Track papers that affect our browser-agent thesis.
+Tell me when this repo changes license or gets a major release.
+```
 
-1. Convert ingested events into source-neutral observations.
-2. Add a small semantic claim extractor for deterministic claims.
-3. Add a first-pass concern linker for obvious resource and actor links.
-4. Add a deterministic attention-judgment evaluator.
-5. Represent missing reusable preferences, capability gaps, and verification
-   gaps as gap events.
-6. Keep work disposition and authority requirement separate from attention.
-7. Surface judgments and gaps through the existing brain/channel actor path.
-8. Add behavior tests for observation projection, claim extraction, concern
-   linking, judgment, work disposition, authority requirement, and gap emission.
+Aura translates that into a watch plan:
 
-Gmail can be the first source, but the abstraction must also fit Linear,
-Calendar, Jira, branch changes, CI, and future integrations.
+```text
+concern_or_thesis_id
+candidate_sources
+query_or_watch_strategy
+cadence
+evidence_targets
+relevance_test
+coverage_limits
+expiry_or_review_cadence
+noise_budget
+stop_condition
+interruption_policy
+capability_gaps
+```
+
+The user should not need to choose between RSS, search, API, webhook, browser
+scraping, or polling.
+
+A watch is not a news feed. It is a coverage contract: what Aura is watching,
+why it matters, what sources it can and cannot cover, when it will interrupt,
+when it will only digest, when it expires or needs review, and how the user can
+correct it in plain language.
 
 ## Invariants
 
 1. Integrations describe what changed; they do not decide whether the user
    should care.
-2. Observations, semantic claims, concern links, stakes estimates, attention
-   judgments, work dispositions, authority requirements, and gap events are
-   distinct concepts.
-3. Every proactive surface has a human-readable reason and correction path.
-4. Gap events include what Aura tried, why progress is blocked or unsafe, and
+2. Evidence atoms are citable; interpretations must cite evidence.
+3. The model interprets; deterministic code validates and enforces.
+4. Concerns are canonical active state; `STATE.md` is generated.
+5. Attention, work, authority, and gaps remain separate fields in one
+   interpretation object.
+6. Preferences are learned through gaps, corrections, examples, and ratified
+   policy; they are not hard-coded per source.
+7. Many gaps may be observed, but only urgent or reusable gaps should interrupt;
+   the rest are batched into learning digests.
+8. Gap events include what Aura tried, why progress is blocked or unsafe, and
    the recommended next step.
-5. Agents should reduce planning and verification burden before the user is
-   asked to decide.
-6. Aura escalates human judgment only where available evidence and tools cannot
-   responsibly settle the question.
-7. Attention actions spend or preserve attention. They must not encode work
-   execution or authority gates.
+9. Ambient world awareness is concern-indexed. Aura watches the world through
+   concerns and theses, not through an unbounded feed of interesting facts.
+10. World-state observations may not activate durable concerns without existing
+    concern, thesis, watch, or explicit user lineage.
+11. Attention-spending actions explain why now, what decision is required, what
+    deferral costs, and why cheaper handling is insufficient.
+12. Learned preferences carry scope, provenance, precedence, confidence,
+    review/expiry, and an edit/disable/revert path.

@@ -39,9 +39,21 @@ authority, and user load.
 CI, Slack, and future sources report changes. They do not decide whether the
 user should care.
 
+**World state is in scope when it is concern-indexed.** Aura may monitor
+companies, founders, markets, repositories, papers, regulations, communities,
+competitors, and other external state when the user has a concern, thesis,
+relationship, project, risk, or opportunity that makes the change relevant.
+World-state observations should not create durable work for the user unless
+they connect to an existing concern, thesis, watch, or explicit request.
+
 **Concerns are durable units of care or work.** A concern may be a person,
 project, ticket, branch, release, trip, commitment, topic, relationship, or
 learning frontier. Events matter when they affect a concern.
+
+**Active state is derived from concerns.** Aura has one canonical model of what
+is alive: active concerns and their linked observations, claims, gaps,
+judgments, work, and authority state. Prompt-visible current state is a rendered
+view, not a separate source of truth.
 
 **Attention judgments spend user capacity.** Aura must decide whether a change
 should be suppressed, recorded, digested, surfaced now, clarified now, or
@@ -53,6 +65,24 @@ credential, context, preference, verification path, authority, confidence, or
 other required condition, it should represent that as a gap with a resolution
 path.
 
+**Preferences are learned, not hard-coded.** Aura should start with sensible
+defaults and learn user-specific judgment through gap events, corrections,
+examples, and ratified policy. Preference gaps should help the user think by
+explaining the situation, options, consequences, and proposed default.
+Early timelines may produce many observed preference gaps, but Aura should
+interrupt only for gaps that are urgent or reusable enough; the rest should be
+batched into a learning digest.
+
+**Learned preferences have provenance.** A learned preference must carry its
+scope, examples, last-used explanation, confidence, precedence, review or expiry
+condition, and edit/disable/revert path. Otherwise it becomes invisible
+automation debt.
+
+**Model interprets; code validates.** Aura should use model intelligence for
+concern-relative interpretation of non-trivial events, while deterministic code
+extracts evidence, validates citations, enforces authority, renders state, and
+logs outcomes.
+
 ## Product Invariants
 
 1. Aura spends user attention deliberately. Responsiveness is not the goal;
@@ -61,7 +91,7 @@ path.
    attention judgments.
 3. Aura keeps attention, work, and authority decisions separate.
 4. Aura asks for help only when the answer is required or reusable enough to
-   improve future behavior.
+   improve future behavior. Many gaps may be observed; few should interrupt.
 5. Aura uses agents to reduce planning and verification burden before involving
    the user.
 6. Aura escalates only the irreducible human parts: goals, taste, values, risk
@@ -71,6 +101,25 @@ path.
 8. Aura's learned preferences must be inspectable, correctable, and reversible.
 9. Aura must not let integrations become policy engines. Source adapters may
    describe what changed; the common layer decides why it matters.
+10. Aura's ambient world awareness is concern-indexed. It watches broadly enough
+    to notice relevant change, but spends attention only when that change
+    affects a concern, thesis, commitment, relationship, risk, or opportunity.
+11. Current state is a generated view over active concerns. Aura must not keep a
+    parallel prose state store that can drift from the manager engine's
+    structured model.
+12. Aura must not hard-code user preference where it can learn. Early user
+    timelines should produce many observed preference gap events, and those
+    gaps should become thoughtful decision prompts or batched learning digests
+    rather than raw configuration.
+13. Model outputs are proposals until validated. Every interpretation must cite
+    evidence, obey authority boundaries, and survive deterministic validation
+    before it mutates concern state or spends user attention.
+14. Aura must not activate durable concerns from ambient world-state events
+    unless they have lineage to an existing concern, thesis, watch, or explicit
+    user ratification.
+15. Any `surface_now` or `ask_now` action must explain why now, what user
+    decision is required, the cost of deferral, and why digest/record is
+    insufficient.
 
 ## Planning And Verification
 
@@ -94,7 +143,7 @@ settled from available evidence.
 Aura should convert:
 
 ```text
-raw changes + worker activity
+raw changes + worker activity + relevant world-state movement
 ```
 
 into:
