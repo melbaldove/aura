@@ -1,18 +1,17 @@
 {
   "id": "review-request-tomorrow",
+  "event_key": "m5294",
   "description": "Useful but not urgent review request should not interrupt immediately.",
-  "source": "gmail-eval",
-  "type": "email.received",
-  "subject": "REL-42 review tomorrow",
+  "subject": "REL-42 notes",
   "tags": {
-    "from": "teammate@example.com",
+    "from": "maya@product.example",
     "to": "melbournebaldove@gmail.com"
   },
   "data": {
-    "from": "teammate@example.com",
+    "from": "maya@product.example",
     "to": "melbournebaldove@gmail.com",
-    "body_text": "Could you review REL-42 tomorrow? No rush today; I just want another set of eyes before Friday.",
-    "subject": "REL-42 review tomorrow"
+    "body_text": "I left notes on REL-42. If you have a window tomorrow morning, a second pass before I merge would help. Trying to wrap this before Friday.",
+    "subject": "REL-42 notes"
   },
   "expect": {
     "attention_any": ["record", "digest"],

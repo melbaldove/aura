@@ -38,6 +38,7 @@ pub type Context {
 pub type Fixture {
   Fixture(
     id: String,
+    event_key: String,
     description: String,
     source: String,
     type_: String,
@@ -152,7 +153,7 @@ pub fn parse_fixture(raw: String) -> Result(Fixture, String) {
 
 /// Build the synthetic event id for a fixture case.
 pub fn eval_event_id(case_id: String, run_id: String) -> String {
-  "eval-" <> safe_id(case_id) <> "-" <> safe_id(run_id)
+  "mail-" <> safe_id(case_id) <> "-" <> safe_id(run_id)
 }
 
 /// Build the AuraEvent injected for one fixture.
@@ -161,8 +162,8 @@ pub fn fixture_event(
   run_id: String,
   now_ms: Int,
 ) -> event.AuraEvent {
-  let event_id = eval_event_id(fixture.id, run_id)
-  let external_id = "<" <> event_id <> "@aura.eval>"
+  let event_id = eval_event_id(fixture.event_key, run_id)
+  let external_id = "<" <> event_id <> "@mail.gmail.com>"
   let base_data =
     dict.from_list([
       #("message_id", external_id),
@@ -541,8 +542,9 @@ fn ensure_decisions_file(paths: xdg.Paths) -> Result(Nil, String) {
 
 fn fixture_decoder() {
   use id <- decode.field("id", decode.string)
+  use event_key <- decode.optional_field("event_key", id, decode.string)
   use description <- decode.optional_field("description", "", decode.string)
-  use source <- decode.optional_field("source", "gmail-eval", decode.string)
+  use source <- decode.optional_field("source", "gmail", decode.string)
   use type_ <- decode.optional_field("type", "email.received", decode.string)
   use subject <- decode.field("subject", decode.string)
   use tags <- decode.optional_field(
@@ -558,6 +560,7 @@ fn fixture_decoder() {
   use expect <- decode.field("expect", expectation_decoder())
   decode.success(Fixture(
     id: id,
+    event_key: event_key,
     description: description,
     source: source,
     type_: type_,

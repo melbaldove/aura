@@ -35,9 +35,10 @@ fn stop_subject(subject) -> Nil {
 fn routine_fixture_json() -> String {
   "{"
   <> "\"id\":\"routine\","
+  <> "\"event_key\":\"m9001\","
   <> "\"subject\":\"Payment confirmed\","
   <> "\"tags\":{\"from\":\"receipts@example.com\",\"to\":\"melbournebaldove@gmail.com\"},"
-  <> "\"data\":{\"body_text\":\"Your payment has been confirmed. No action is required.\"},"
+  <> "\"data\":{\"body_text\":\"Receipt for order 260421DEU4419T. Card ending 4242 was charged 18.00 USD.\"},"
   <> "\"expect\":{"
   <> "\"attention_any\":[\"record\"],"
   <> "\"work_any\":[\"none\"],"
@@ -99,7 +100,8 @@ pub fn parse_fixture_reads_predicates_test() {
     cognitive_eval.parse_fixture(routine_fixture_json()) |> should.be_ok
 
   fixture.id |> should.equal("routine")
-  fixture.source |> should.equal("gmail-eval")
+  fixture.event_key |> should.equal("m9001")
+  fixture.source |> should.equal("gmail")
   fixture.type_ |> should.equal("email.received")
   fixture.expect.attention_any |> should.equal(["record"])
   fixture.expect.min_citations |> should.equal(2)
@@ -110,10 +112,14 @@ pub fn fixture_event_uses_unique_eval_id_without_marking_body_test() {
     cognitive_eval.parse_fixture(routine_fixture_json()) |> should.be_ok
   let e = cognitive_eval.fixture_event(fixture, "run 1", 1234)
 
-  e.id |> should.equal("eval-routine-run-1")
-  e.source |> should.equal("gmail-eval")
+  e.id |> should.equal("mail-m9001-run-1")
+  e.id |> string.contains("routine") |> should.be_false
+  e.source |> should.equal("gmail")
   e.subject |> should.equal("Payment confirmed")
-  e.data |> string.contains("Your payment has been confirmed") |> should.be_true
+  e.external_id |> should.equal("<mail-m9001-run-1@mail.gmail.com>")
+  e.data |> string.contains("Receipt for order") |> should.be_true
+  e.data |> string.contains("expect") |> should.be_false
+  e.data |> string.contains("description") |> should.be_false
   e.data |> string.contains("cognitive smoke test") |> should.be_false
 }
 
@@ -126,7 +132,7 @@ pub fn run_fixtures_injects_events_and_checks_expected_decision_test() {
   let _ =
     simplifile.write(fixture_dir <> "/001-routine.json", routine_fixture_json())
   let run_id = "unit"
-  let event_id = cognitive_eval.eval_event_id("routine", run_id)
+  let event_id = cognitive_eval.eval_event_id("m9001", run_id)
   let ctx =
     cognitive_eval.Context(
       paths: paths,
@@ -154,7 +160,7 @@ pub fn run_fixtures_injects_events_and_checks_expected_decision_test() {
   report |> string.contains("PASS routine") |> should.be_true
 
   let assert Ok(option.Some(persisted)) = db.get_event(db_subject, event_id)
-  persisted.source |> should.equal("gmail-eval")
+  persisted.source |> should.equal("gmail")
   persisted.subject |> should.equal("Payment confirmed")
 
   stop_subject(ingest_started.data)
@@ -172,7 +178,7 @@ pub fn run_fixtures_reports_predicate_failures_test() {
   let _ =
     simplifile.write(fixture_dir <> "/001-routine.json", routine_fixture_json())
   let run_id = "bad"
-  let event_id = cognitive_eval.eval_event_id("routine", run_id)
+  let event_id = cognitive_eval.eval_event_id("m9001", run_id)
   let ctx =
     cognitive_eval.Context(
       paths: paths,
@@ -215,7 +221,7 @@ pub fn run_fixtures_finds_spaced_decision_json_test() {
   let _ =
     simplifile.write(fixture_dir <> "/001-routine.json", routine_fixture_json())
   let run_id = "spaced"
-  let event_id = cognitive_eval.eval_event_id("routine", run_id)
+  let event_id = cognitive_eval.eval_event_id("m9001", run_id)
   let ctx =
     cognitive_eval.Context(
       paths: paths,
