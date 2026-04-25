@@ -53,6 +53,9 @@ erlc -o . ../src/esqlite3.erl ../src/esqlite3_nif.erl
 ```
 supervisor (OneForOne)
 ├── db          SQLite actor — serializes all DB reads/writes
+├── event_ingest Normalizes, tags, and persists integration events
+├── cognitive_worker Model-backed cognitive decisions for persisted events
+├── cognitive_delivery Validated attention delivery + digest ledger
 ├── poller      Discord gateway WebSocket
 ├── flare_manager Flare lifecycle actor — roster, dispatch, monitor, SQLite persist
 ├── brain       Routes messages, LLM tool loop, progressive streaming, review
@@ -108,6 +111,9 @@ src/aura/
   db.gleam              SQLite actor (serialized writes, FTS5 search)
   db_schema.gleam       DDL, indexes, FTS5 triggers, schema versioning
   db_migration.gleam    One-time JSONL → SQLite migration
+  cognitive_worker.gleam Async model-backed cognitive decisions for events
+  cognitive_delivery.gleam Delivery ledger, digest queue, immediate surfacing
+  cognitive_probe.gleam Operator-triggered live delivery probe
   compressor.gleam      Tiered context compression — tool pruning, domain-aware LLM summarization, iterative updates
   review.gleam          Post-response memory review — auto-persists state + knowledge every N turns
   scaffold.gleam        First-run scaffolding (directory structure, template files, domain creation)

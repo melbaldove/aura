@@ -4,6 +4,7 @@
 //// configured cognitive LLM without requiring the user to generate provider
 //// events by hand. Smoke events are synthetic and must remain side-effect safe.
 
+import aura/cognitive_delivery
 import aura/cognitive_event
 import aura/db
 import aura/event
@@ -32,6 +33,7 @@ pub type Context {
     paths: xdg.Paths,
     db_subject: process.Subject(db.DbMessage),
     event_ingest_subject: process.Subject(event_ingest.IngestMessage),
+    delivery_subject: option.Option(process.Subject(cognitive_delivery.Message)),
   )
 }
 
@@ -73,6 +75,7 @@ pub fn run_gmail_rel42_with(
   let deadline_ms = time.now_ms() + timeout_ms
 
   use _ <- result.try(ensure_decisions_file(ctx.paths))
+  suppress_delivery(ctx.delivery_subject, event_id)
   event_ingest.ingest(ctx.event_ingest_subject, smoke_event)
 
   use persisted <- result.try(wait_for_event(
@@ -97,6 +100,21 @@ pub fn run_gmail_rel42_with(
     [] -> Ok(format_result(persisted, body_text, evidence, decision))
     _ ->
       Error("cognitive-smoke gmail-rel42 failed: " <> string.join(errors, "; "))
+  }
+}
+
+fn suppress_delivery(
+  delivery_subject: option.Option(process.Subject(cognitive_delivery.Message)),
+  event_id: String,
+) -> Nil {
+  case delivery_subject {
+    option.Some(subject) ->
+      cognitive_delivery.suppress_event(
+        subject,
+        event_id,
+        "cognitive smoke event must not notify",
+      )
+    option.None -> Nil
   }
 }
 

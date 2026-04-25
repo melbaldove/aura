@@ -1,7 +1,7 @@
 {
   "id": "prod-rollback-approval",
   "event_key": "m6812",
-  "description": "Time-sensitive production incident requiring user approval should surface.",
+  "description": "Time-sensitive production incident requiring user approval should ask now.",
   "subject": "[checkout] rollback candidate",
   "tags": {
     "from": "oncall@ops.example",
@@ -14,7 +14,7 @@
     "subject": "[checkout] rollback candidate"
   },
   "expect": {
-    "attention_any": ["surface_now", "ask_now"],
+    "attention_any": ["ask_now"],
     "work_any": ["none", "prepare"],
     "authority_any": ["approval", "human_judgment"],
     "min_citations": 2

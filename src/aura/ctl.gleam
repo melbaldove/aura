@@ -1,4 +1,6 @@
+import aura/cognitive_delivery
 import aura/cognitive_eval
+import aura/cognitive_probe
 import aura/cognitive_smoke
 import aura/db
 import aura/dreaming
@@ -8,6 +10,7 @@ import aura/xdg
 import gleam/erlang/process
 import gleam/int
 import gleam/list
+import gleam/option
 import gleam/string
 import logging
 
@@ -40,6 +43,7 @@ pub type CtlContext {
     paths: xdg.Paths,
     db_subject: process.Subject(db.DbMessage),
     event_ingest_subject: process.Subject(event_ingest.IngestMessage),
+    delivery_subject: option.Option(process.Subject(cognitive_delivery.Message)),
     domains: List(String),
     dream_model: String,
     dream_budget_percent: Int,
@@ -117,6 +121,7 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
           paths: ctx.paths,
           db_subject: ctx.db_subject,
           event_ingest_subject: ctx.event_ingest_subject,
+          delivery_subject: ctx.delivery_subject,
         ))
       {
         Ok(report) -> report
@@ -131,6 +136,7 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
           paths: ctx.paths,
           db_subject: ctx.db_subject,
           event_ingest_subject: ctx.event_ingest_subject,
+          delivery_subject: ctx.delivery_subject,
         ))
       {
         Ok(report) -> report
@@ -138,10 +144,35 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
       }
     }
 
+    ["cognitive-test", "deliver-now"] -> {
+      logging.log(logging.Info, "[ctl] Cognitive delivery probe triggered")
+      case
+        cognitive_probe.run_deliver_now(cognitive_probe.Context(
+          paths: ctx.paths,
+          db_subject: ctx.db_subject,
+          event_ingest_subject: ctx.event_ingest_subject,
+        ))
+      {
+        Ok(report) -> report
+        Error(err) -> "ERROR: " <> err
+      }
+    }
+
+    ["cognitive-digest", "flush"] -> {
+      logging.log(logging.Info, "[ctl] Cognitive digest flush triggered")
+      case ctx.delivery_subject {
+        option.Some(subject) -> {
+          cognitive_delivery.flush_digest(subject)
+          "OK: cognitive-digest flush triggered"
+        }
+        option.None -> "ERROR: cognitive delivery actor unavailable"
+      }
+    }
+
     _ ->
       "ERROR: unknown command '"
       <> trimmed
-      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures"
+      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-test deliver-now, cognitive-digest flush"
   }
 }
 

@@ -2,10 +2,11 @@
 
 Updated 2026-04-25
 
-Status: first executable decision harness implemented. This supersedes the
-earlier typed cognitive ontology plan. The first slice is a minimal harness:
-event persistence, evidence/context building, text-policy context, model
-decision envelope, validation, append-only decision logging, and later replay.
+Status: first executable decision + delivery harness implemented. This
+supersedes the earlier typed cognitive ontology plan. The slice is a minimal
+harness: event persistence, evidence/context building, text-policy context,
+model decision envelope, validation, append-only decision logging, delivery
+ledger, digest queue, immediate attention surfacing, and later replay.
 
 ## Goal
 
@@ -33,7 +34,11 @@ AuraEvent
 -> LLM DecisionEnvelope
 -> validator
 -> ~/.local/share/aura/cognitive/decisions.jsonl
+-> cognitive_delivery
+-> ~/.local/share/aura/cognitive/deliveries.jsonl
+-> record | digest queue | surface_now/ask_now Discord delivery
 -> decision_ready log
+-> ctl probes for smoke/eval, unsuppressed delivery, and digest flush
 ```
 
 This proves:
@@ -46,16 +51,27 @@ This proves:
 - markdown concern files can be loaded as citable text refs
 - a model decision is required before a cognitive decision is recorded
 - decisions must cite evidence/raw refs and policy refs
+- decisions must choose a validated delivery target
 - validated decisions are append-only JSONL records
+- record decisions do not send user-facing messages
+- digest decisions queue until digest flush
+- surface_now and ask_now can send immediately with duplicate protection
+- smoke/eval event IDs can be suppressed out-of-band without leaking labels to
+  the model
+- `cognitive-test deliver-now` can inject a realistic Gmail-shaped event,
+  require a model decision, and wait for a delivered ledger entry
+- `cognitive-digest flush` can force queued digest delivery without waiting for
+  a wall-clock window
 - the worker does not block ingestion
 
-It does not yet prove proactive surfacing quality, concern matching quality,
-user-preference learning, replay evaluation, or whether the default policies are
-good enough.
+It does not yet prove proactive surfacing quality at scale, concern matching
+quality, user-preference learning, replay evaluation, or whether the default
+policies are good enough.
 
 ## Correct Next Cut
 
-Add replay before any proactive user-facing behavior.
+Add replay and correction labels before expanding proactive thresholds,
+autonomy, or cognitive structure.
 
 Files:
 
@@ -79,7 +95,6 @@ Non-scope:
 - No typed semantic claim taxonomy.
 - No typed learned preference object.
 - No generated `STATE.md`.
-- No proactive Discord surfacing.
 - No flare dispatch from cognitive decisions.
 
 ## Minimal Types
@@ -93,6 +108,7 @@ EvidenceAtom
 ResourceRef
 ContextPacket
 DecisionEnvelope
+DeliveryDecision
 DecisionValidationError
 ReplayResult
 ```
@@ -128,6 +144,10 @@ Use one broad JSON envelope:
     "required": "none|approval|credential|tool|human_judgment",
     "reason": ""
   },
+  "delivery": {
+    "target": "none|default|domain:<domain-name>",
+    "rationale": "why this destination is appropriate"
+  },
   "gaps": [],
   "proposed_patches": []
 }
@@ -138,6 +158,9 @@ The validator checks:
 - event ID matches the context packet
 - citations reference known evidence, policy files, concern files, or raw refs
 - `surface_now` and `ask_now` include why-now, deferral-cost, and why-not-digest
+- `record` uses `delivery.target=none`
+- `digest`, `surface_now`, and `ask_now` use `default` or configured
+  `domain:<name>` targets
 - non-`none` authority includes a reason
 - proposed patches target allowed text-policy or concern files only
 - model output cannot mutate state directly

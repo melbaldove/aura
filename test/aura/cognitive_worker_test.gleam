@@ -1,3 +1,4 @@
+import aura/cognitive_delivery
 import aura/cognitive_worker
 import aura/db
 import aura/event
@@ -5,8 +6,10 @@ import aura/event_ingest
 import aura/llm
 import aura/test_helpers
 import aura/xdg
+import fakes/fake_discord
 import gleam/dict
 import gleam/erlang/process
+import gleam/list
 import gleam/option.{type Option, Some}
 import gleam/string
 import gleeunit
@@ -56,6 +59,24 @@ fn valid_decision(event_id: String) -> String {
   <> "\"attention\":{\"action\":\"record\",\"rationale\":\"The event is useful to remember but does not justify interrupting the user.\",\"why_now\":\"\",\"deferral_cost\":\"\",\"why_not_digest\":\"\"},"
   <> "\"work\":{\"action\":\"none\",\"target\":\"\",\"proof_required\":\"\"},"
   <> "\"authority\":{\"required\":\"none\",\"reason\":\"\"},"
+  <> "\"delivery\":{\"target\":\"none\",\"rationale\":\"Record-only decisions do not spend user attention.\"},"
+  <> "\"gaps\":[],"
+  <> "\"proposed_patches\":[]"
+  <> "}"
+}
+
+fn attention_decision(event_id: String) -> String {
+  "{"
+  <> "\"event_id\":\""
+  <> event_id
+  <> "\","
+  <> "\"concern_refs\":[],"
+  <> "\"summary\":\"Checkout rollback needs attention.\","
+  <> "\"citations\":[\"evidence:e1\",\"policy:attention.md\"],"
+  <> "\"attention\":{\"action\":\"ask_now\",\"rationale\":\"The user must decide now.\",\"why_now\":\"Checkout errors are active.\",\"deferral_cost\":\"More users may fail checkout.\",\"why_not_digest\":\"Waiting for digest would be too late.\"},"
+  <> "\"work\":{\"action\":\"prepare\",\"target\":\"checkout rollback context\",\"proof_required\":\"summary prepared\"},"
+  <> "\"authority\":{\"required\":\"human_judgment\",\"reason\":\"Rollback risk belongs to the user.\"},"
+  <> "\"delivery\":{\"target\":\"default\",\"rationale\":\"Use the default Aura channel for this cross-cutting incident.\"},"
   <> "\"gaps\":[],"
   <> "\"proposed_patches\":[]"
   <> "}"
@@ -91,6 +112,14 @@ fn fake_invalid_chat(
     <> "\"proposed_patches\":[]"
     <> "}",
   )
+}
+
+fn fake_attention_chat(
+  _config: llm.LlmConfig,
+  _messages: List(llm.Message),
+  _temperature: Option(Float),
+) -> Result(String, String) {
+  Ok(attention_decision("ev-deliver"))
 }
 
 fn stop_subject(subject) -> Nil {
@@ -229,6 +258,63 @@ pub fn event_ingest_notifies_worker_only_for_new_events_test() {
 
   stop_subject(ingest_started.data)
   stop_subject(worker_started.data)
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn worker_sends_validated_decision_to_delivery_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let #(base, paths) = temp_paths("cognitive-worker-delivery")
+  let #(fake, discord) = fake_discord.new()
+  let delivery_reports = process.new_subject()
+  let delivery_targets = [cognitive_delivery.default_target("aura-channel")]
+  let assert Ok(delivery_started) =
+    cognitive_delivery.start_with(
+      paths,
+      discord,
+      delivery_targets,
+      [],
+      Some(delivery_reports),
+    )
+  let worker_reports = process.new_subject()
+  let assert Ok(worker_started) =
+    cognitive_worker.start_with_delivery_and_report(
+      db_subject,
+      paths,
+      fake_config(),
+      fake_attention_chat,
+      Some(worker_reports),
+      delivery_started.data,
+      cognitive_delivery.allowed_target_ids(delivery_targets),
+    )
+
+  let assert Ok(True) =
+    db.insert_event(db_subject, sample_event("ev-deliver", "msg-deliver"))
+  cognitive_worker.build_context(worker_started.data, "ev-deliver")
+
+  let assert Ok(worker_report) = process.receive(worker_reports, 2000)
+  worker_report.status |> should.equal(cognitive_worker.DecisionReady)
+  let assert Ok(delivery_report) = process.receive(delivery_reports, 2000)
+  delivery_report.status |> should.equal(cognitive_delivery.Delivered)
+
+  let decisions_log = simplifile.read(xdg.decisions_path(paths)) |> should.be_ok
+  decisions_log
+  |> string.contains("\"event_id\":\"ev-deliver\"")
+  |> should.be_true
+  let deliveries_log =
+    simplifile.read(xdg.deliveries_path(paths)) |> should.be_ok
+  deliveries_log
+  |> string.contains("\"status\":\"delivered\"")
+  |> should.be_true
+
+  let sent = fake_discord.all_sent_to(fake, "aura-channel")
+  list.length(sent) |> should.equal(1)
+  let assert [message] = sent
+  message |> string.contains("Aura needs a decision") |> should.be_true
+
+  stop_subject(worker_started.data)
+  stop_subject(delivery_started.data)
   process.send(db_subject, db.Shutdown)
   let _ = simplifile.delete_all([base])
   Nil

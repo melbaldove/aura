@@ -4,6 +4,7 @@
 //// path as ambient integrations, but fixtures assert decision predicates rather
 //// than exact model prose. They are judgment checks, not path smoke checks.
 
+import aura/cognitive_delivery
 import aura/cognitive_event
 import aura/db
 import aura/event
@@ -32,6 +33,7 @@ pub type Context {
     paths: xdg.Paths,
     db_subject: process.Subject(db.DbMessage),
     event_ingest_subject: process.Subject(event_ingest.IngestMessage),
+    delivery_subject: option.Option(process.Subject(cognitive_delivery.Message)),
   )
 }
 
@@ -225,6 +227,7 @@ fn run_case(
   let eval_event = fixture_event(fixture, run_id, now_ms)
   let deadline_ms = time.now_ms() + timeout_ms
 
+  suppress_delivery(ctx.delivery_subject, eval_event.id)
   event_ingest.ingest(ctx.event_ingest_subject, eval_event)
 
   case wait_for_event(ctx.db_subject, eval_event.id, deadline_ms, poll_ms) {
@@ -256,6 +259,21 @@ fn run_case(
         }
       }
     }
+  }
+}
+
+fn suppress_delivery(
+  delivery_subject: option.Option(process.Subject(cognitive_delivery.Message)),
+  event_id: String,
+) -> Nil {
+  case delivery_subject {
+    option.Some(subject) ->
+      cognitive_delivery.suppress_event(
+        subject,
+        event_id,
+        "cognitive eval fixture must not notify",
+      )
+    option.None -> Nil
   }
 }
 

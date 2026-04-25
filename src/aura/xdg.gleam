@@ -85,6 +85,10 @@ pub fn decisions_path(paths: Paths) -> String {
   cognitive_dir(paths) <> "/decisions.jsonl"
 }
 
+pub fn deliveries_path(paths: Paths) -> String {
+  cognitive_dir(paths) <> "/deliveries.jsonl"
+}
+
 pub fn concerns_dir(paths: Paths) -> String {
   paths.state <> "/concerns"
 }

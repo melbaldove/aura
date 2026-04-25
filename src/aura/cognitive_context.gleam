@@ -28,6 +28,7 @@ pub type ContextPacket {
     evidence: cognitive_event.EvidenceBundle,
     policies: List(PolicyFile),
     concerns: List(ConcernFile),
+    delivery_targets: List(String),
     recent_decisions: String,
   )
 }
@@ -38,6 +39,16 @@ pub fn build(
   observation: cognitive_event.Observation,
   evidence: cognitive_event.EvidenceBundle,
 ) -> Result(ContextPacket, String) {
+  build_with_delivery_targets(paths, observation, evidence, ["none", "default"])
+}
+
+/// Build the model context packet with explicit delivery targets.
+pub fn build_with_delivery_targets(
+  paths: xdg.Paths,
+  observation: cognitive_event.Observation,
+  evidence: cognitive_event.EvidenceBundle,
+  delivery_targets: List(String),
+) -> Result(ContextPacket, String) {
   use policies <- result.try(load_policies(paths))
   use concerns <- result.try(load_concerns(paths))
 
@@ -46,6 +57,7 @@ pub fn build(
     evidence: evidence,
     policies: policies,
     concerns: concerns,
+    delivery_targets: normalize_delivery_targets(delivery_targets),
     recent_decisions: "",
   ))
 }
@@ -62,6 +74,8 @@ pub fn render(packet: ContextPacket) -> String {
   <> render_policies(packet.policies)
   <> "\n\n## Concerns\n"
   <> render_concerns(packet.concerns)
+  <> "\n\n## Delivery Targets\n"
+  <> render_delivery_targets(packet.delivery_targets)
   <> "\n\n## Recent Decisions\n"
   <> case packet.recent_decisions {
     "" -> "None yet."
@@ -274,6 +288,39 @@ fn render_concerns(concerns: List(ConcernFile)) -> String {
   }
 }
 
+fn normalize_delivery_targets(targets: List(String)) -> List(String) {
+  let with_none = case list.contains(targets, "none") {
+    True -> targets
+    False -> ["none", ..targets]
+  }
+
+  with_none
+  |> list.filter(fn(target) { string.trim(target) != "" })
+  |> unique_strings
+}
+
+fn render_delivery_targets(targets: List(String)) -> String {
+  targets
+  |> list.map(fn(target) { "- " <> target })
+  |> string.join("\n")
+}
+
+fn unique_strings(values: List(String)) -> List(String) {
+  unique_strings_loop(values, [])
+}
+
+fn unique_strings_loop(values: List(String), acc: List(String)) -> List(String) {
+  case values {
+    [] -> list.reverse(acc)
+    [value, ..rest] -> {
+      case list.contains(acc, value) {
+        True -> unique_strings_loop(rest, acc)
+        False -> unique_strings_loop(rest, [value, ..acc])
+      }
+    }
+  }
+}
+
 fn excerpt(text: String, limit: Int) -> String {
   case string.length(text) > limit {
     True -> string.slice(text, 0, limit) <> "\n[truncated]"
@@ -294,6 +341,7 @@ fn default_policies() -> List(#(String, String)) {
     #("authority.md", authority_policy()),
     #("work.md", work_policy()),
     #("learning.md", learning_policy()),
+    #("delivery.md", delivery_policy()),
     #("world-state.md", world_state_policy()),
   ]
 }
@@ -308,6 +356,9 @@ fn attention_policy() -> String {
   <> "- Potentially useful but not time-sensitive updates: digest.\n"
   <> "- Interrupt only when the user must decide now or delay has material cost.\n"
   <> "- Ask now when Aura cannot responsibly proceed without the user's judgment.\n\n"
+  <> "## Ask-Now Rule\n"
+  <> "Use ask_now, not surface_now, when the event explicitly asks the user to approve, sign off, authorize, reject, choose, or otherwise make a decision under an active deadline or material risk.\n"
+  <> "Use surface_now when the user should know urgently but no immediate user decision is being requested.\n\n"
   <> "## Surface-Now Proof\n"
   <> "A surface_now or ask_now decision must explain why now, the cost of deferral, and why digest is insufficient.\n"
 }
@@ -338,6 +389,19 @@ fn learning_policy() -> String {
   "# Learning Policy\n\n"
   <> "Conversation is configuration. When Aura encounters a missing reusable preference, record the gap and propose a text-policy change rather than hiding behavior in code.\n\n"
   <> "Do not promote new structure into code until replayed examples show markdown policy plus model judgment is insufficient.\n"
+}
+
+fn delivery_policy() -> String {
+  "# Delivery Policy\n\n"
+  <> "The model chooses a delivery target, but code validates the target before spending user attention.\n\n"
+  <> "## Targets\n"
+  <> "- none: use only with record. No user-facing delivery.\n"
+  <> "- default: use the configured Aura default channel for cross-cutting or unclear routing.\n"
+  <> "- domain:<name>: use only when the event clearly belongs to that configured domain.\n\n"
+  <> "## Defaults\n"
+  <> "- record decisions should use none.\n"
+  <> "- digest decisions should use default unless a domain target is clearly better.\n"
+  <> "- surface_now and ask_now should use the narrowest valid target that preserves context.\n"
 }
 
 fn world_state_policy() -> String {

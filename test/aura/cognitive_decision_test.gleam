@@ -15,6 +15,12 @@ pub fn main() {
 }
 
 fn temp_context() -> #(String, cognitive_context.ContextPacket, String) {
+  temp_context_with_targets(["none", "default"])
+}
+
+fn temp_context_with_targets(
+  delivery_targets: List(String),
+) -> #(String, cognitive_context.ContextPacket, String) {
   let base = "/tmp/aura-cognitive-decision-" <> test_helpers.random_suffix()
   let _ = simplifile.delete_all([base])
   let paths = xdg.resolve_with_home(base)
@@ -37,7 +43,13 @@ fn temp_context() -> #(String, cognitive_context.ContextPacket, String) {
   let evidence = cognitive_event.extract_evidence(observation)
   let assert [first_atom, ..] = evidence.atoms
   let packet =
-    cognitive_context.build(paths, observation, evidence) |> should.be_ok
+    cognitive_context.build_with_delivery_targets(
+      paths,
+      observation,
+      evidence,
+      delivery_targets,
+    )
+    |> should.be_ok
   #(base, packet, first_atom.id)
 }
 
@@ -46,6 +58,11 @@ fn valid_json(
   atom_id: String,
   attention_action: String,
 ) -> String {
+  let target = case attention_action {
+    "record" -> "none"
+    _ -> "default"
+  }
+
   "{"
   <> "\"event_id\":\""
   <> event_id
@@ -60,6 +77,30 @@ fn valid_json(
   <> "\",\"rationale\":\"No immediate user attention is needed; preserve this for later review.\",\"why_now\":\"\",\"deferral_cost\":\"\",\"why_not_digest\":\"\"},"
   <> "\"work\":{\"action\":\"none\",\"target\":\"\",\"proof_required\":\"\"},"
   <> "\"authority\":{\"required\":\"none\",\"reason\":\"\"},"
+  <> "\"delivery\":{\"target\":\""
+  <> target
+  <> "\",\"rationale\":\"Use the validated target for this attention level.\"},"
+  <> "\"gaps\":[],"
+  <> "\"proposed_patches\":[]"
+  <> "}"
+}
+
+fn interrupt_json(event_id: String, atom_id: String, target: String) -> String {
+  "{"
+  <> "\"event_id\":\""
+  <> event_id
+  <> "\","
+  <> "\"concern_refs\":[],"
+  <> "\"summary\":\"Checkout rollback needs attention.\","
+  <> "\"citations\":[\"evidence:"
+  <> atom_id
+  <> "\",\"policy:attention.md\"],"
+  <> "\"attention\":{\"action\":\"surface_now\",\"rationale\":\"Delay has material cost.\",\"why_now\":\"Checkout errors are climbing.\",\"deferral_cost\":\"Users may keep failing checkout.\",\"why_not_digest\":\"This needs attention before the next digest.\"},"
+  <> "\"work\":{\"action\":\"prepare\",\"target\":\"checkout rollback context\",\"proof_required\":\"current error context is summarized\"},"
+  <> "\"authority\":{\"required\":\"human_judgment\",\"reason\":\"Rollback risk belongs to the user.\"},"
+  <> "\"delivery\":{\"target\":\""
+  <> target
+  <> "\",\"rationale\":\"Route to the narrowest relevant target.\"},"
   <> "\"gaps\":[],"
   <> "\"proposed_patches\":[]"
   <> "}"
@@ -131,6 +172,83 @@ pub fn validate_requires_attention_rationale_for_record_test() {
   Nil
 }
 
+pub fn validate_rejects_record_with_non_none_delivery_test() {
+  let #(base, packet, atom_id) = temp_context()
+  let decision =
+    cognitive_decision.decode_response(valid_json(
+      "ev-decision-1",
+      atom_id,
+      "record",
+    ))
+    |> should.be_ok
+  let invalid =
+    cognitive_decision.DecisionEnvelope(
+      ..decision,
+      delivery: cognitive_decision.DeliveryDecision(
+        target: "default",
+        rationale: "Wrong target for record.",
+      ),
+    )
+
+  let assert Error(errors) = cognitive_decision.validate(invalid, packet)
+  list.any(errors, fn(e) { string.contains(e, "delivery.target") })
+  |> should.be_true
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn validate_accepts_digest_with_default_delivery_test() {
+  let #(base, packet, atom_id) = temp_context()
+  let decision =
+    cognitive_decision.decode_response(valid_json(
+      "ev-decision-1",
+      atom_id,
+      "digest",
+    ))
+    |> should.be_ok
+
+  cognitive_decision.validate(decision, packet) |> should.be_ok
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn validate_accepts_surface_now_with_domain_delivery_test() {
+  let #(base, packet, atom_id) =
+    temp_context_with_targets(["none", "default", "domain:cm2"])
+  let decision =
+    cognitive_decision.decode_response(interrupt_json(
+      "ev-decision-1",
+      atom_id,
+      "domain:cm2",
+    ))
+    |> should.be_ok
+
+  cognitive_decision.validate(decision, packet) |> should.be_ok
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn validate_rejects_unknown_delivery_target_test() {
+  let #(base, packet, atom_id) = temp_context()
+  let decision =
+    cognitive_decision.decode_response(interrupt_json(
+      "ev-decision-1",
+      atom_id,
+      "domain:unknown",
+    ))
+    |> should.be_ok
+
+  let assert Error(errors) = cognitive_decision.validate(decision, packet)
+  list.any(errors, fn(e) { string.contains(e, "invalid delivery.target") })
+  |> should.be_true
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
 pub fn validate_rejects_interrupt_without_attention_proof_test() {
   let #(base, packet, atom_id) = temp_context()
   let decision =
@@ -159,6 +277,7 @@ pub fn build_messages_demands_json_only_and_known_refs_test() {
   rendered |> string.contains("Return only one JSON object") |> should.be_true
   rendered |> string.contains("evidence:" <> atom_id) |> should.be_true
   rendered |> string.contains("policy:attention.md") |> should.be_true
+  rendered |> string.contains("Delivery Targets") |> should.be_true
 
   let _ = simplifile.delete_all([base])
   Nil

@@ -6,6 +6,7 @@ import aura/clients/browser_runner
 import aura/clients/discord_client
 import aura/clients/llm_client
 import aura/clients/skill_runner
+import aura/cognitive_delivery
 import aura/cognitive_worker
 import aura/config
 import aura/ctl
@@ -83,26 +84,6 @@ pub fn start(
     Error(e) ->
       logging.log(logging.Error, "[supervisor] JSONL migration error: " <> e)
   }
-
-  // 3b. Start cognitive worker and event_ingest actor (required — panics on failure).
-  // event_ingest remains fire-and-forget; the cognitive worker observes only
-  // successfully persisted event IDs before asking the model for a validated
-  // decision envelope.
-  use cognitive_llm_config <- result.try(
-    models.build_llm_config(global_config.models.brain)
-    |> result.map_error(fn(e) {
-      "Failed to configure cognitive worker model: " <> e
-    }),
-  )
-  let assert Ok(cognitive_started) =
-    cognitive_worker.start(db_subject, paths, cognitive_llm_config)
-  let cognitive_subject = cognitive_started.data
-  logging.log(logging.Info, "[supervisor] Cognitive worker started")
-
-  let assert Ok(event_ingest_started) =
-    event_ingest.start_with_cognitive(db_subject, Some(cognitive_subject))
-  let event_ingest_subject = event_ingest_started.data
-  logging.log(logging.Info, "[supervisor] Event ingest started")
 
   // 4. Resolve Discord channel name → ID mapping
   let channel_map = case
@@ -185,6 +166,55 @@ pub fn start(
       <> string.join(list.map(brain_domains, fn(d) { d.name }), ", "),
   )
 
+  let discord_client_val =
+    discord_client.production(global_config.discord.token)
+
+  // 5a. Start cognitive delivery, worker, and event_ingest actors.
+  // event_ingest remains fire-and-forget; the cognitive worker observes only
+  // successfully persisted event IDs, and delivery only sees validated
+  // decisions after they are appended to the decision log.
+  let default_channel_id =
+    resolve_channel_id(global_config.discord.default_channel, channel_map)
+  let delivery_targets = [
+    cognitive_delivery.default_target(default_channel_id),
+    ..list.map(brain_domains, fn(d) {
+      cognitive_delivery.domain_target(d.name, d.channel_id)
+    })
+  ]
+  let delivery_target_ids =
+    cognitive_delivery.allowed_target_ids(delivery_targets)
+  let assert Ok(delivery_started) =
+    cognitive_delivery.start(
+      paths,
+      discord_client_val,
+      delivery_targets,
+      global_config.notifications.digest_windows,
+    )
+  let delivery_subject = delivery_started.data
+  logging.log(logging.Info, "[supervisor] Cognitive delivery started")
+
+  use cognitive_llm_config <- result.try(
+    models.build_llm_config(global_config.models.brain)
+    |> result.map_error(fn(e) {
+      "Failed to configure cognitive worker model: " <> e
+    }),
+  )
+  let assert Ok(cognitive_started) =
+    cognitive_worker.start_with_delivery(
+      db_subject,
+      paths,
+      cognitive_llm_config,
+      delivery_subject,
+      delivery_target_ids,
+    )
+  let cognitive_subject = cognitive_started.data
+  logging.log(logging.Info, "[supervisor] Cognitive worker started")
+
+  let assert Ok(event_ingest_started) =
+    event_ingest.start_with_cognitive(db_subject, Some(cognitive_subject))
+  let event_ingest_subject = event_ingest_started.data
+  logging.log(logging.Info, "[supervisor] Event ingest started")
+
   // 5. Load validation rules
   let validation_rules = case
     memory.read_file(xdg.config_path(paths, "validations.toml"))
@@ -240,8 +270,6 @@ pub fn start(
   logging.log(logging.Info, "[supervisor] Channel supervisor started")
 
   // 6. Start brain (with flare_subject and channel_supervisor)
-  let discord_client_val =
-    discord_client.production(global_config.discord.token)
   let llm_client_val = llm_client.production()
   let skill_runner_val = skill_runner.production()
   let browser_runner_val = browser_runner.production()
@@ -327,6 +355,7 @@ pub fn start(
       paths: paths,
       db_subject: db_subject,
       event_ingest_subject: event_ingest_subject,
+      delivery_subject: Some(delivery_subject),
       domains: list.map(brain_domains, fn(d) { d.name }),
       dream_model: global_config.models.dream,
       dream_budget_percent: global_config.dreaming_budget_percent,
@@ -371,6 +400,16 @@ fn migrate_directories(paths: xdg.Paths) -> Nil {
     "config",
   )
   migrate_dir(paths.data <> "/workstreams", paths.data <> "/domains", "data")
+}
+
+fn resolve_channel_id(
+  name_or_id: String,
+  channel_map: List(#(String, String)),
+) -> String {
+  case list.find(channel_map, fn(channel) { channel.0 == name_or_id }) {
+    Ok(#(_, id)) -> id
+    Error(_) -> name_or_id
+  }
 }
 
 fn migrate_dir(from: String, to: String, label: String) -> Nil {

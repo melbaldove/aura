@@ -8,6 +8,7 @@
 import aura/clients/llm_client
 import aura/cognitive_context
 import aura/cognitive_decision
+import aura/cognitive_delivery
 import aura/cognitive_event
 import aura/db
 import aura/llm
@@ -62,6 +63,8 @@ type State {
     chat_text: fn(llm.LlmConfig, List(llm.Message), Option(Float)) ->
       Result(String, String),
     report_to: Option(Subject(Report)),
+    delivery_subject: Option(Subject(cognitive_delivery.Message)),
+    delivery_targets: List(String),
   )
 }
 
@@ -89,6 +92,63 @@ pub fn start_with(
     Result(String, String),
   report_to: Option(Subject(Report)),
 ) -> Result(actor.Started(Subject(Message)), actor.StartError) {
+  start_with_options(db_subject, paths, llm_config, chat_text, report_to, None, [
+    "none",
+    "default",
+  ])
+}
+
+/// Start a production worker connected to the cognitive delivery actor.
+pub fn start_with_delivery(
+  db_subject: Subject(db.DbMessage),
+  paths: xdg.Paths,
+  llm_config: llm.LlmConfig,
+  delivery_subject: Subject(cognitive_delivery.Message),
+  delivery_targets: List(String),
+) -> Result(actor.Started(Subject(Message)), actor.StartError) {
+  start_with_options(
+    db_subject,
+    paths,
+    llm_config,
+    llm_client.production().chat_text,
+    None,
+    Some(delivery_subject),
+    delivery_targets,
+  )
+}
+
+/// Start a worker with injected model, reporting, and delivery for behavior tests.
+pub fn start_with_delivery_and_report(
+  db_subject: Subject(db.DbMessage),
+  paths: xdg.Paths,
+  llm_config: llm.LlmConfig,
+  chat_text: fn(llm.LlmConfig, List(llm.Message), Option(Float)) ->
+    Result(String, String),
+  report_to: Option(Subject(Report)),
+  delivery_subject: Subject(cognitive_delivery.Message),
+  delivery_targets: List(String),
+) -> Result(actor.Started(Subject(Message)), actor.StartError) {
+  start_with_options(
+    db_subject,
+    paths,
+    llm_config,
+    chat_text,
+    report_to,
+    Some(delivery_subject),
+    delivery_targets,
+  )
+}
+
+fn start_with_options(
+  db_subject: Subject(db.DbMessage),
+  paths: xdg.Paths,
+  llm_config: llm.LlmConfig,
+  chat_text: fn(llm.LlmConfig, List(llm.Message), Option(Float)) ->
+    Result(String, String),
+  report_to: Option(Subject(Report)),
+  delivery_subject: Option(Subject(cognitive_delivery.Message)),
+  delivery_targets: List(String),
+) -> Result(actor.Started(Subject(Message)), actor.StartError) {
   actor.new_with_initialiser(5000, fn(self_subject) {
     let state =
       State(
@@ -97,6 +157,8 @@ pub fn start_with(
         llm_config: llm_config,
         chat_text: chat_text,
         report_to: report_to,
+        delivery_subject: delivery_subject,
+        delivery_targets: delivery_targets,
       )
     Ok(actor.initialised(state) |> actor.returning(self_subject))
   })
@@ -179,7 +241,14 @@ fn decide_for_event(
   let resource_ref_count = list.length(evidence.resource_refs)
   let raw_ref_count = list.length(evidence.raw_refs)
 
-  case cognitive_context.build(state.paths, observation, evidence) {
+  case
+    cognitive_context.build_with_delivery_targets(
+      state.paths,
+      observation,
+      evidence,
+      state.delivery_targets,
+    )
+  {
     Error(err) ->
       emit_report(
         state,
@@ -258,7 +327,8 @@ fn decide_for_event(
                         ),
                       )
 
-                    Ok(_) ->
+                    Ok(_) -> {
+                      emit_delivery(state, validated)
                       emit_report(
                         state,
                         Report(
@@ -274,6 +344,7 @@ fn decide_for_event(
                           errors: [],
                         ),
                       )
+                    }
                   }
                 }
               }
@@ -282,6 +353,16 @@ fn decide_for_event(
         }
       }
     }
+  }
+}
+
+fn emit_delivery(
+  state: State,
+  decision: cognitive_decision.DecisionEnvelope,
+) -> Nil {
+  case state.delivery_subject {
+    Some(subject) -> cognitive_delivery.deliver(subject, decision)
+    None -> Nil
   }
 }
 

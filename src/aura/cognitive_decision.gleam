@@ -29,6 +29,10 @@ pub type AuthorityDecision {
   AuthorityDecision(required: String, reason: String)
 }
 
+pub type DeliveryDecision {
+  DeliveryDecision(target: String, rationale: String)
+}
+
 pub type ProposedPatch {
   ProposedPatch(path: String, summary: String, diff: String)
 }
@@ -42,6 +46,7 @@ pub type DecisionEnvelope {
     attention: AttentionDecision,
     work: WorkDecision,
     authority: AuthorityDecision,
+    delivery: DeliveryDecision,
     gaps: List(String),
     proposed_patches: List(ProposedPatch),
   )
@@ -127,6 +132,18 @@ pub fn validate(
       "non-none authority requires reason",
     )
     |> require(
+      delivery_target_allowed(decision.delivery.target, context),
+      "invalid delivery.target",
+    )
+    |> require(
+      present(decision.delivery.rationale),
+      "delivery.rationale is required",
+    )
+    |> require(
+      attention_delivery_is_consistent(decision.attention, decision.delivery),
+      "attention.action and delivery.target are inconsistent",
+    )
+    |> require(
       attention_has_surface_proof(decision.attention),
       "surface_now/ask_now requires why_now, deferral_cost, and why_not_digest",
     )
@@ -163,6 +180,7 @@ pub fn to_json(
     #("attention", attention_to_json(decision.attention)),
     #("work", work_to_json(decision.work)),
     #("authority", authority_to_json(decision.authority)),
+    #("delivery", delivery_to_json(decision.delivery)),
     #("gaps", json.array(decision.gaps, json.string)),
     #("proposed_patches", json.array(decision.proposed_patches, patch_to_json)),
     #("raw_response", json.string(raw_response)),
@@ -177,6 +195,7 @@ fn decision_decoder() {
   use attention <- decode.field("attention", attention_decoder())
   use work <- decode.field("work", work_decoder())
   use authority <- decode.field("authority", authority_decoder())
+  use delivery <- decode.field("delivery", delivery_decoder())
   use gaps <- decode.field("gaps", decode.list(decode.string))
   use proposed_patches <- decode.field(
     "proposed_patches",
@@ -190,6 +209,7 @@ fn decision_decoder() {
     attention: attention,
     work: work,
     authority: authority,
+    delivery: delivery,
     gaps: gaps,
     proposed_patches: proposed_patches,
   ))
@@ -225,6 +245,12 @@ fn authority_decoder() {
   use required <- decode.field("required", decode.string)
   use reason <- decode.field("reason", decode.string)
   decode.success(AuthorityDecision(required: required, reason: reason))
+}
+
+fn delivery_decoder() {
+  use target <- decode.field("target", decode.string)
+  use rationale <- decode.field("rationale", decode.string)
+  decode.success(DeliveryDecision(target: target, rationale: rationale))
 }
 
 fn patch_decoder() {
@@ -277,11 +303,16 @@ fn decision_instructions() -> String {
   <> "    \"required\": \"none|approval|credential|tool|human_judgment\",\n"
   <> "    \"reason\": \"required unless none\"\n"
   <> "  },\n"
+  <> "  \"delivery\": {\n"
+  <> "    \"target\": \"none|default|domain:<domain-name> from Delivery Targets\",\n"
+  <> "    \"rationale\": \"required: why this is the right destination\"\n"
+  <> "  },\n"
   <> "  \"gaps\": [\"plain-language gap with resolution path\"],\n"
   <> "  \"proposed_patches\": []\n"
   <> "}\n\n"
   <> "Rules: cite at least one evidence/raw ref and at least one policy ref. "
   <> "If there are no relevant concern files, use an empty concern_refs list. "
+  <> "Use delivery.target=none only for record. Use a listed non-none Delivery Target for digest, surface_now, or ask_now. "
   <> "Do not propose patches unless the user preference or policy gap is reusable."
 }
 
@@ -323,6 +354,24 @@ fn authority_has_reason(authority: AuthorityDecision) -> Bool {
   case authority.required {
     "none" -> True
     _ -> present(authority.reason)
+  }
+}
+
+fn delivery_target_allowed(
+  target: String,
+  context: cognitive_context.ContextPacket,
+) -> Bool {
+  list.contains(context.delivery_targets, target)
+}
+
+fn attention_delivery_is_consistent(
+  attention: AttentionDecision,
+  delivery: DeliveryDecision,
+) -> Bool {
+  case attention.action {
+    "record" -> delivery.target == "none"
+    "digest" | "surface_now" | "ask_now" -> delivery.target != "none"
+    _ -> False
   }
 }
 
@@ -374,6 +423,13 @@ fn authority_to_json(authority: AuthorityDecision) -> json.Json {
   json.object([
     #("required", json.string(authority.required)),
     #("reason", json.string(authority.reason)),
+  ])
+}
+
+fn delivery_to_json(delivery: DeliveryDecision) -> json.Json {
+  json.object([
+    #("target", json.string(delivery.target)),
+    #("rationale", json.string(delivery.rationale)),
   ])
 }
 

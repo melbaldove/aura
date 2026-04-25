@@ -36,7 +36,7 @@
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `digest_windows` | array of strings | yes | Times to deliver digest (e.g., `["07:35", "09:10"]`). |
+| `digest_windows` | array of strings | yes | Local times to deliver queued digests, including cognitive `attention=digest` items (e.g., `["07:35", "09:10"]`). |
 | `timezone` | string | yes | IANA timezone (e.g., `Asia/Manila`). |
 | `urgent_bypass` | bool | yes | Whether urgent findings skip the digest schedule. |
 

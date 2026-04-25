@@ -138,6 +138,7 @@ pub fn run_fixtures_injects_events_and_checks_expected_decision_test() {
       paths: paths,
       db_subject: db_subject,
       event_ingest_subject: ingest_started.data,
+      delivery_subject: option.None,
     )
 
   let _ =
@@ -184,6 +185,7 @@ pub fn run_fixtures_reports_predicate_failures_test() {
       paths: paths,
       db_subject: db_subject,
       event_ingest_subject: ingest_started.data,
+      delivery_subject: option.None,
     )
 
   let _ =
@@ -227,6 +229,7 @@ pub fn run_fixtures_finds_spaced_decision_json_test() {
       paths: paths,
       db_subject: db_subject,
       event_ingest_subject: ingest_started.data,
+      delivery_subject: option.None,
     )
 
   let _ =

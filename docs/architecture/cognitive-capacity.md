@@ -54,11 +54,12 @@ Source Adapter
 -> Model decision envelope
 -> Validator / authority gate
 -> Decision log
--> Optional patch, digest, surface, or flare dispatch
+-> Delivery ledger
+-> Optional digest or immediate surface
 -> Replay evaluation
 ```
 
-The current executable slice stops at a validated decision log:
+The current executable slice reaches validated attention delivery:
 
 ```text
 AuraEvent
@@ -68,12 +69,18 @@ AuraEvent
 -> LLM DecisionEnvelope
 -> validator
 -> decisions.jsonl
+-> cognitive_delivery
+-> deliveries.jsonl
+-> record | digest queue | Discord surface_now/ask_now
 -> [cognitive] decision_ready log
 ```
 
-That is intentional. It proves the ingestion, provenance, text-policy, model,
-and validation substrate without yet spending user attention or dispatching
-work.
+It proves the ingestion, provenance, text-policy, model, validation, delivery
+ledger, duplicate suppression, digest queue, and immediate-surface substrate
+without dispatching autonomous work. Operator commands can also inject a
+realistic Gmail-shaped event through the live daemon (`cognitive-test
+deliver-now`) and force digest delivery (`cognitive-digest flush`) so the
+delivery path can be verified without asking the user to send provider messages.
 
 ## Filesystem Model
 
@@ -83,6 +90,7 @@ Policy files:
 ~/.config/aura/policies/
   attention.md
   authority.md
+  delivery.md
   work.md
   learning.md
   world-state.md
@@ -103,6 +111,7 @@ Cognitive logs:
 ~/.local/share/aura/cognitive/
   events.jsonl
   decisions.jsonl
+  deliveries.jsonl
   evaluations.jsonl
 ```
 
@@ -119,7 +128,8 @@ Code owns only the parts that must be reliable:
 - Select policy and concern text for context.
 - Call the model with a bounded context packet.
 - Validate decision-envelope shape, citations, authority, and patch paths.
-- Append decisions and evaluation outcomes.
+- Append decisions, delivery outcomes, and evaluation outcomes.
+- Enforce duplicate protection before spending user attention.
 - Apply validated file patches through existing tiers.
 - Replay historical events against current policies.
 
@@ -169,6 +179,10 @@ The model should eventually return one small JSON object:
   "authority": {
     "required": "none|approval|credential|tool|human_judgment",
     "reason": "why this gate applies"
+  },
+  "delivery": {
+    "target": "none|default|domain:<domain-name>",
+    "rationale": "why this destination is appropriate"
   },
   "gaps": ["plain-language gaps with resolution paths"],
   "proposed_patches": []
@@ -268,16 +282,17 @@ The rule: structure earns its way into code only by reducing replay failures.
 3. Every accepted decision must cite at least one evidence/raw ref and one
    policy ref.
 4. A cognitive decision log is not user notification. Spending attention
-   requires a later surface/digest path and replay-backed thresholds.
-2. Policies and concerns are ordinary text first.
-3. Code validates safety, provenance, authority, and patch paths; it does not
+   requires a validated delivery target and a delivery ledger entry.
+5. Policies and concerns are ordinary text first.
+6. Code validates safety, provenance, authority, delivery targets, and patch paths; it does not
    encode cognitive ontology.
-4. Model decisions cite event evidence and concern/policy files.
-5. `surface_now` and `ask_now` require why-now, deferral-cost, and
+7. Model decisions cite event evidence and concern/policy files.
+8. `surface_now` and `ask_now` require why-now, deferral-cost, and
    why-not-digest proof.
-6. Many gaps may be observed; few should interrupt.
-7. World-state awareness is concern-indexed, not an unbounded feed of
+9. Many gaps may be observed; few should interrupt.
+10. World-state awareness is concern-indexed, not an unbounded feed of
    interesting facts.
-8. Replay evaluation is required before proactive surfacing.
-9. New structure is added only when replay shows text plus model judgment is
+11. Replay evaluation is required before expanding proactive thresholds,
+    autonomy, or cognitive structure.
+12. New structure is added only when replay shows text plus model judgment is
    insufficient.

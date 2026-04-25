@@ -123,6 +123,7 @@ pub fn run_gmail_rel42_injects_event_and_waits_for_decision_test() {
       paths: paths,
       db_subject: db_subject,
       event_ingest_subject: ingest_started.data,
+      delivery_subject: option.None,
     )
 
   let _ =

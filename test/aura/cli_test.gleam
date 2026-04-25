@@ -16,6 +16,16 @@ pub fn parse_args_dispatches_cognitive_eval_test() {
   |> should.equal(aura.CliCtl("cognitive-eval fixtures"))
 }
 
+pub fn parse_args_dispatches_cognitive_delivery_probe_test() {
+  aura.parse_args_for_test(["cognitive-test", "deliver-now"])
+  |> should.equal(aura.CliCtl("cognitive-test deliver-now"))
+}
+
+pub fn parse_args_dispatches_cognitive_digest_flush_test() {
+  aura.parse_args_for_test(["cognitive-digest", "flush"])
+  |> should.equal(aura.CliCtl("cognitive-digest flush"))
+}
+
 pub fn parse_args_tolerates_leading_dash_dash_test() {
   aura.parse_args_for_test(["--", "cognitive-smoke", "gmail-rel42"])
   |> should.equal(aura.CliCtl("cognitive-smoke gmail-rel42"))
