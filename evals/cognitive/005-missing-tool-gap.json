@@ -1,0 +1,24 @@
+{
+  "id": "missing-tool-gap",
+  "description": "Request that names missing access should create a visible gap instead of confident execution.",
+  "source": "gmail-eval",
+  "type": "email.received",
+  "subject": "Stripe dispute dashboard",
+  "tags": {
+    "from": "finance@example.com",
+    "to": "melbournebaldove@gmail.com"
+  },
+  "data": {
+    "from": "finance@example.com",
+    "to": "melbournebaldove@gmail.com",
+    "body_text": "Please check the internal Stripe dispute dashboard and tell me whether any high-risk disputes need action today. You may not have access yet.",
+    "subject": "Stripe dispute dashboard"
+  },
+  "expect": {
+    "attention_any": ["digest", "ask_now", "surface_now"],
+    "work_any": ["prepare", "none"],
+    "authority_any": ["credential", "tool", "human_judgment"],
+    "min_citations": 2,
+    "min_gaps": 1
+  }
+}

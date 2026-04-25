@@ -52,8 +52,7 @@ fn valid_decision(event_id: String) -> String {
   <> "\"concern_refs\":[],"
   <> "\"summary\":\"Record the email for later review.\","
   <> "\"citations\":[\"evidence:"
-  <> event_id
-  <> ":e1\",\"policy:attention.md\"],"
+  <> "e1\",\"policy:attention.md\"],"
   <> "\"attention\":{\"action\":\"record\",\"rationale\":\"The event is useful to remember but does not justify interrupting the user.\",\"why_now\":\"\",\"deferral_cost\":\"\",\"why_not_digest\":\"\"},"
   <> "\"work\":{\"action\":\"none\",\"target\":\"\",\"proof_required\":\"\"},"
   <> "\"authority\":{\"required\":\"none\",\"reason\":\"\"},"

@@ -46,10 +46,7 @@ fn fake_decision(event_id: String) -> json.Json {
     ),
     #(
       "citations",
-      json.array(
-        ["evidence:" <> event_id <> ":e4", "policy:attention.md"],
-        json.string,
-      ),
+      json.array(["evidence:e4", "policy:attention.md"], json.string),
     ),
     #(
       "attention",

@@ -26,6 +26,7 @@ rsync -av --delete \
 echo "==> Syncing man pages + scripts..."
 rsync -av docs/man/ "${REMOTE}:${REMOTE_DIR}/docs/man/"
 rsync -av scripts/ "${REMOTE}:${REMOTE_DIR}/scripts/"
+rsync -av --delete evals/ "${REMOTE}:${REMOTE_DIR}/evals/"
 
 echo "==> Bootstrapping agent-browser (if missing)..."
 ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && if ! command -v agent-browser >/dev/null 2>&1; then

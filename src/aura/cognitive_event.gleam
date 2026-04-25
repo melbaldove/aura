@@ -143,7 +143,7 @@ pub fn extract_evidence(observation: Observation) -> EvidenceBundle {
       list.append(tag_atoms, list.append(json_atoms, text_atoms)),
     )
     |> dedupe_raw_atoms
-    |> assign_ids(observation.id)
+    |> assign_ids
 
   EvidenceBundle(
     observation_id: observation.id,
@@ -211,14 +211,11 @@ fn raw_atom(
   )
 }
 
-fn assign_ids(
-  atoms: List(RawAtom),
-  observation_id: String,
-) -> List(EvidenceAtom) {
+fn assign_ids(atoms: List(RawAtom)) -> List(EvidenceAtom) {
   atoms
   |> list.index_map(fn(a, index) {
     EvidenceAtom(
-      id: observation_id <> ":e" <> int.to_string(index + 1),
+      id: "e" <> int.to_string(index + 1),
       kind: a.kind,
       value: a.value,
       source_path: a.source_path,

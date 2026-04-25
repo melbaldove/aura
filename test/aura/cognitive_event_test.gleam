@@ -86,6 +86,9 @@ pub fn extract_evidence_finds_gmail_atoms_test() {
   has_atom(bundle, "datetime", "tomorrow") |> should.be_true
   has_atom(bundle, "datetime", "2026-04-24") |> should.be_true
   has_atom(bundle, "url", "https://example.com/doc") |> should.be_true
+  let assert [first_atom, ..] = bundle.atoms
+  first_atom.id |> should.equal("e1")
+  first_atom.id |> string.contains("ev-1") |> should.be_false
   count_atoms(bundle, "actor_email", "alice@example.com") |> should.equal(1)
   count_atoms(bundle, "actor_email", "bob@example.com") |> should.equal(1)
   count_atoms(bundle, "thread_id", "t-1") |> should.equal(1)

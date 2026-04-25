@@ -1,0 +1,23 @@
+{
+  "id": "review-request-tomorrow",
+  "description": "Useful but not urgent review request should not interrupt immediately.",
+  "source": "gmail-eval",
+  "type": "email.received",
+  "subject": "REL-42 review tomorrow",
+  "tags": {
+    "from": "teammate@example.com",
+    "to": "melbournebaldove@gmail.com"
+  },
+  "data": {
+    "from": "teammate@example.com",
+    "to": "melbournebaldove@gmail.com",
+    "body_text": "Could you review REL-42 tomorrow? No rush today; I just want another set of eyes before Friday.",
+    "subject": "REL-42 review tomorrow"
+  },
+  "expect": {
+    "attention_any": ["record", "digest"],
+    "work_any": ["none", "prepare"],
+    "authority_any": ["none"],
+    "min_citations": 2
+  }
+}

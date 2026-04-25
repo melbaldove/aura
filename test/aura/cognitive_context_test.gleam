@@ -51,7 +51,7 @@ pub fn build_creates_and_loads_default_policies_test() {
 
   let rendered = cognitive_context.render(packet)
   rendered |> string.contains("policy:attention.md") |> should.be_true
-  rendered |> string.contains("ev-ctx-1:e1") |> should.be_true
+  rendered |> string.contains("evidence:e1") |> should.be_true
   rendered |> string.contains("gmail:msg-1") |> should.be_true
 
   let _ = simplifile.delete_all([base])

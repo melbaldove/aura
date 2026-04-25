@@ -1,0 +1,23 @@
+{
+  "id": "prod-rollback-approval",
+  "description": "Time-sensitive production incident requiring user approval should surface.",
+  "source": "gmail-eval",
+  "type": "email.received",
+  "subject": "Production checkout is down",
+  "tags": {
+    "from": "ops@example.com",
+    "to": "melbournebaldove@gmail.com"
+  },
+  "data": {
+    "from": "ops@example.com",
+    "to": "melbournebaldove@gmail.com",
+    "body_text": "Production checkout is down and failed payments are increasing. Can you approve rollback to the last known good release now?",
+    "subject": "Production checkout is down"
+  },
+  "expect": {
+    "attention_any": ["surface_now", "ask_now"],
+    "work_any": ["none", "prepare"],
+    "authority_any": ["approval"],
+    "min_citations": 2
+  }
+}

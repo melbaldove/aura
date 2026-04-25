@@ -294,7 +294,7 @@ When making any non-trivial change, check whether these need updating:
 If any of these are in-flight, wait for them to settle (or warn the user) before deploying. Deploying over a conversation is more disruptive than it looks — we already lost a skill-review outcome to a mid-review deploy.
 
 The script does:
-1. `rsync` source + test `.gleam` and `.erl` files to Eisenhower (192.168.50.140)
+1. `rsync` source + test `.gleam`/`.erl` files and `evals/` fixtures to Eisenhower (192.168.50.140)
 2. `gleam clean && gleam build` — ensures no stale beams from previous builds
 3. Fix esqlite NIF — `gleam clean` wipes the NIF, OTP 27+ needs manual `erlc` recompile
 4. Recompile all Erlang FFI beams — `gleam build` doesn't compile `.erl` files, so every `aura_*_ffi.erl` is compiled with `erlc -o ebin`

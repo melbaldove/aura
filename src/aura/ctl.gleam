@@ -1,3 +1,4 @@
+import aura/cognitive_eval
 import aura/cognitive_smoke
 import aura/db
 import aura/dreaming
@@ -123,10 +124,24 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
       }
     }
 
+    ["cognitive-eval", "fixtures"] -> {
+      logging.log(logging.Info, "[ctl] Cognitive eval triggered: fixtures")
+      case
+        cognitive_eval.run_fixtures(cognitive_eval.Context(
+          paths: ctx.paths,
+          db_subject: ctx.db_subject,
+          event_ingest_subject: ctx.event_ingest_subject,
+        ))
+      {
+        Ok(report) -> report
+        Error(err) -> "ERROR: " <> err
+      }
+    }
+
     _ ->
       "ERROR: unknown command '"
       <> trimmed
-      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42"
+      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures"
   }
 }
 

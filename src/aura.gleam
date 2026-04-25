@@ -56,6 +56,7 @@ fn parse_args(args: List(String)) -> CliCommand {
     ["status"] -> CliCtl("status")
     ["ping"] -> CliCtl("ping")
     ["cognitive-smoke", "gmail-rel42"] -> CliCtl("cognitive-smoke gmail-rel42")
+    ["cognitive-eval", "fixtures"] -> CliCtl("cognitive-eval fixtures")
     ["oauth", "gmail", email] -> CliOauthGmail(email)
     _ -> CliStart
   }
@@ -123,7 +124,13 @@ fn run_start() {
 fn run_ctl(command: String) {
   let paths = xdg.resolve()
   case ctl.send(paths, command) {
-    Ok(response) -> io.println(response)
+    Ok(response) -> {
+      io.println(response)
+      case string.starts_with(response, "ERROR:") {
+        True -> halt(1)
+        False -> Nil
+      }
+    }
     Error(e) -> {
       io.println("ERROR: " <> e)
       halt(1)

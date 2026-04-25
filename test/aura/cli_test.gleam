@@ -11,6 +11,11 @@ pub fn parse_args_dispatches_cognitive_smoke_test() {
   |> should.equal(aura.CliCtl("cognitive-smoke gmail-rel42"))
 }
 
+pub fn parse_args_dispatches_cognitive_eval_test() {
+  aura.parse_args_for_test(["cognitive-eval", "fixtures"])
+  |> should.equal(aura.CliCtl("cognitive-eval fixtures"))
+}
+
 pub fn parse_args_tolerates_leading_dash_dash_test() {
   aura.parse_args_for_test(["--", "cognitive-smoke", "gmail-rel42"])
   |> should.equal(aura.CliCtl("cognitive-smoke gmail-rel42"))

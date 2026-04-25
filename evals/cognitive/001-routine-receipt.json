@@ -1,0 +1,23 @@
+{
+  "id": "routine-receipt",
+  "description": "Routine transactional email should be recorded without spending attention.",
+  "source": "gmail-eval",
+  "type": "email.received",
+  "subject": "Your payment has been confirmed",
+  "tags": {
+    "from": "receipts@example.shop",
+    "to": "melbournebaldove@gmail.com"
+  },
+  "data": {
+    "from": "receipts@example.shop",
+    "to": "melbournebaldove@gmail.com",
+    "body_text": "Your payment for order 260421DEU4419T has been confirmed. No action is required.",
+    "subject": "Your payment has been confirmed"
+  },
+  "expect": {
+    "attention_any": ["record"],
+    "work_any": ["none"],
+    "authority_any": ["none"],
+    "min_citations": 2
+  }
+}

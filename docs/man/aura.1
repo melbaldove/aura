@@ -9,6 +9,8 @@ flares, scheduled tasks, and domain\-partitioned knowledge
 .br
 .B gleam run \-\- cognitive\-smoke gmail\-rel42
 .br
+.B gleam run \-\- cognitive\-eval fixtures
+.br
 .B bash scripts/deploy.sh
 .SH DESCRIPTION
 Aura is an OTP application.
@@ -84,6 +86,14 @@ one\-line proof containing event id, body length, evidence count, attention
 rationale, work action, authority gate, and citation count.
 The event is tagged as synthetic smoke data and policy requires record\-only,
 no work, and no downstream side effects.
+.TP
+.B gleam run \-\- cognitive\-eval fixtures
+Send every JSON fixture in evals/cognitive to the running daemon over the local
+Unix socket, wait for the cognitive worker to call the configured LLM, and check
+decision predicates such as attention action, work action, authority gate,
+minimum citations, and expected gaps.
+Fixtures avoid exact prose matching; they test judgment surfaces, not output
+wording.
 .SH LIMITATIONS
 .IP \(bu 2
 Stdio ACP sessions die on deploy.
