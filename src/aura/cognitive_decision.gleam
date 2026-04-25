@@ -59,9 +59,10 @@ pub fn build_messages(
   [
     llm.SystemMessage(
       "You are Aura's cognitive decision loop. Read the event context, "
-      <> "policies, concerns, and evidence. Return only one JSON object matching "
-      <> "the requested DecisionEnvelope schema. Do not use markdown. Do not "
-      <> "invent citation refs; cite only refs listed in Known Citation Refs.",
+      <> "policies, user/domain context, concerns, and evidence. Return only "
+      <> "one JSON object matching the requested DecisionEnvelope schema. Do "
+      <> "not use markdown. Do not invent citation refs; cite only refs listed "
+      <> "in Known Citation Refs.",
     ),
     llm.UserMessage(
       cognitive_context.render(context) <> "\n\n" <> decision_instructions(),
@@ -311,6 +312,7 @@ fn decision_instructions() -> String {
   <> "  \"proposed_patches\": []\n"
   <> "}\n\n"
   <> "Rules: cite at least one evidence/raw ref and at least one policy ref. "
+  <> "Cite user/domain context when it materially affects the decision. "
   <> "If there are no relevant concern files, use an empty concern_refs list. "
   <> "Use delivery.target=none only for record. Use a listed non-none Delivery Target for digest, surface_now, or ask_now. "
   <> "Do not propose patches unless the user preference or policy gap is reusable."

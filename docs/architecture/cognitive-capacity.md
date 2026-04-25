@@ -99,6 +99,23 @@ Policy files:
   world-state.md
 ```
 
+User and domain context files:
+
+```text
+~/.config/aura/USER.md
+~/.local/state/aura/MEMORY.md
+~/.local/state/aura/STATE.md
+~/.config/aura/domains/<name>/AGENTS.md
+~/.local/share/aura/domains/<name>/MEMORY.md
+~/.local/state/aura/domains/<name>/STATE.md
+```
+
+These are the directed-conversation surfaces Aura already uses when the user
+says "remember this", "save to state", "check current memory", or corrects a
+workflow. Ambient cognitive decisions load the same files as citable context, so
+the user does not need to create or administer concerns before Aura can use what
+it has learned.
+
 Concern files:
 
 ```text

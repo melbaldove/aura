@@ -22,11 +22,16 @@ pub type ConcernFile {
   ConcernFile(name: String, path: String, source_ref: String, content: String)
 }
 
+pub type ContextFile {
+  ContextFile(name: String, path: String, source_ref: String, content: String)
+}
+
 pub type ContextPacket {
   ContextPacket(
     observation: cognitive_event.Observation,
     evidence: cognitive_event.EvidenceBundle,
     policies: List(PolicyFile),
+    context_files: List(ContextFile),
     concerns: List(ConcernFile),
     delivery_targets: List(String),
     recent_decisions: String,
@@ -50,12 +55,14 @@ pub fn build_with_delivery_targets(
   delivery_targets: List(String),
 ) -> Result(ContextPacket, String) {
   use policies <- result.try(load_policies(paths))
+  use context_files <- result.try(load_context_files(paths))
   use concerns <- result.try(load_concerns(paths))
 
   Ok(ContextPacket(
     observation: observation,
     evidence: evidence,
     policies: policies,
+    context_files: context_files,
     concerns: concerns,
     delivery_targets: normalize_delivery_targets(delivery_targets),
     recent_decisions: "",
@@ -72,6 +79,8 @@ pub fn render(packet: ContextPacket) -> String {
   <> render_known_refs(known_citation_refs(packet))
   <> "\n\n## Policies\n"
   <> render_policies(packet.policies)
+  <> "\n\n## User And Domain Context\n"
+  <> render_context_files(packet.context_files)
   <> "\n\n## Concerns\n"
   <> render_concerns(packet.concerns)
   <> "\n\n## Delivery Targets\n"
@@ -87,7 +96,10 @@ pub fn render(packet: ContextPacket) -> String {
 pub fn known_citation_refs(packet: ContextPacket) -> List(String) {
   list.append(
     evidence_citation_refs(packet),
-    list.append(policy_citation_refs(packet), concern_citation_refs(packet)),
+    list.append(
+      policy_citation_refs(packet),
+      list.append(context_citation_refs(packet), concern_citation_refs(packet)),
+    ),
   )
 }
 
@@ -102,6 +114,11 @@ pub fn evidence_citation_refs(packet: ContextPacket) -> List(String) {
 pub fn policy_citation_refs(packet: ContextPacket) -> List(String) {
   packet.policies
   |> list.map(fn(policy) { policy.source_ref })
+}
+
+pub fn context_citation_refs(packet: ContextPacket) -> List(String) {
+  packet.context_files
+  |> list.map(fn(file) { file.source_ref })
 }
 
 pub fn concern_citation_refs(packet: ContextPacket) -> List(String) {
@@ -154,6 +171,113 @@ fn ensure_default_policies(dir: String) -> Result(Nil, String) {
         })
     }
   })
+}
+
+fn load_context_files(paths: xdg.Paths) -> Result(List(ContextFile), String) {
+  use global_context <- result.try(load_global_context_files(paths))
+  use domain_context <- result.try(load_domain_context_files(paths))
+  Ok(list.append(global_context, domain_context))
+}
+
+fn load_global_context_files(
+  paths: xdg.Paths,
+) -> Result(List(ContextFile), String) {
+  [
+    #("User profile", xdg.user_path(paths), "user:USER.md"),
+    #("Global memory", xdg.memory_path(paths), "memory:global"),
+    #("Global state", xdg.state_path(paths, "STATE.md"), "state:global"),
+  ]
+  |> list.try_map(load_context_file_spec)
+  |> result.map(flatten_context_lists)
+}
+
+fn load_domain_context_files(
+  paths: xdg.Paths,
+) -> Result(List(ContextFile), String) {
+  let domains_dir = paths.config <> "/domains"
+  case simplifile.is_directory(domains_dir) {
+    Ok(True) -> {
+      use entries <- result.try(
+        simplifile.read_directory(domains_dir)
+        |> result.map_error(fn(e) {
+          "Failed to read domains directory "
+          <> domains_dir
+          <> ": "
+          <> string.inspect(e)
+        }),
+      )
+
+      entries
+      |> list.filter(fn(entry) { is_domain_dir(domains_dir, entry) })
+      |> list.sort(string.compare)
+      |> list.try_map(fn(name) { load_domain_context_for_name(paths, name) })
+      |> result.map(flatten_context_lists)
+    }
+    _ -> Ok([])
+  }
+}
+
+fn load_domain_context_for_name(
+  paths: xdg.Paths,
+  name: String,
+) -> Result(List(ContextFile), String) {
+  [
+    #(
+      "Domain " <> name <> " instructions",
+      xdg.domain_config_dir(paths, name) <> "/AGENTS.md",
+      "domain:" <> name <> ":instructions",
+    ),
+    #(
+      "Domain " <> name <> " memory",
+      xdg.domain_memory_path(paths, name),
+      "domain:" <> name <> ":memory",
+    ),
+    #(
+      "Domain " <> name <> " state",
+      xdg.domain_state_path(paths, name),
+      "domain:" <> name <> ":state",
+    ),
+  ]
+  |> list.try_map(load_context_file_spec)
+  |> result.map(flatten_context_lists)
+}
+
+fn load_context_file_spec(
+  spec: #(String, String, String),
+) -> Result(List(ContextFile), String) {
+  let #(name, path, source_ref) = spec
+  case simplifile.read(path) {
+    Ok(content) -> {
+      case string.trim(content) {
+        "" -> Ok([])
+        _ ->
+          Ok([
+            ContextFile(
+              name: name,
+              path: path,
+              source_ref: source_ref,
+              content: content,
+            ),
+          ])
+      }
+    }
+    Error(simplifile.Enoent) -> Ok([])
+    Error(e) -> Error("Failed to read " <> path <> ": " <> string.inspect(e))
+  }
+}
+
+fn is_domain_dir(domains_dir: String, entry: String) -> Bool {
+  case simplifile.is_directory(domains_dir <> "/" <> entry) {
+    Ok(True) -> True
+    _ -> False
+  }
+}
+
+fn flatten_context_lists(groups: List(List(ContextFile))) -> List(ContextFile) {
+  case groups {
+    [] -> []
+    [first, ..rest] -> list.append(first, flatten_context_lists(rest))
+  }
 }
 
 fn load_concerns(paths: xdg.Paths) -> Result(List(ConcernFile), String) {
@@ -276,6 +400,25 @@ fn render_policies(policies: List(PolicyFile)) -> String {
   }
 }
 
+fn render_context_files(files: List(ContextFile)) -> String {
+  case files {
+    [] -> "No user or domain context loaded."
+    _ ->
+      files
+      |> list.map(fn(file) {
+        "### "
+        <> file.source_ref
+        <> "\nName: "
+        <> file.name
+        <> "\nPath: "
+        <> file.path
+        <> "\n"
+        <> context_excerpt(file.content)
+      })
+      |> string.join("\n\n")
+  }
+}
+
 fn render_concerns(concerns: List(ConcernFile)) -> String {
   case concerns {
     [] -> "No concern files loaded."
@@ -318,6 +461,17 @@ fn unique_strings_loop(values: List(String), acc: List(String)) -> List(String) 
         False -> unique_strings_loop(rest, [value, ..acc])
       }
     }
+  }
+}
+
+fn context_excerpt(text: String) -> String {
+  let limit = 5000
+  case string.length(text) > limit {
+    True ->
+      string.slice(text, 0, 2500)
+      <> "\n[truncated middle]\n"
+      <> string.slice(text, string.length(text) - 2500, 2500)
+    False -> text
   }
 }
 
