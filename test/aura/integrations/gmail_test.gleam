@@ -5,6 +5,7 @@ import aura/oauth
 import gleam/dict
 import gleam/dynamic/decode
 import gleam/json
+import gleam/option
 import gleeunit/should
 
 fn sample_config() -> gmail.GmailConfig {
@@ -131,4 +132,32 @@ pub fn envelope_to_event_data_carries_full_envelope_test() {
   let assert Ok(#(subject, body_text)) = json.parse(ae.data, decoder)
   subject |> should.equal("Re: Q4 terms")
   body_text |> should.equal("Please review REL-42 tomorrow")
+}
+
+pub fn plan_reconcile_fetches_when_uidnext_advanced_test() {
+  let mailbox = imap.MailboxState(exists: 12, uidvalidity: 1, uidnext: 20779)
+
+  gmail.plan_reconcile(option.Some(#(1, 20777)), mailbox)
+  |> should.equal(gmail.CatchUpFromUid(20778))
+}
+
+pub fn plan_reconcile_is_current_when_checkpoint_reaches_uidnext_minus_one_test() {
+  let mailbox = imap.MailboxState(exists: 12, uidvalidity: 1, uidnext: 20778)
+
+  gmail.plan_reconcile(option.Some(#(1, 20777)), mailbox)
+  |> should.equal(gmail.AlreadyCurrent)
+}
+
+pub fn plan_reconcile_seeds_fresh_install_without_backfill_test() {
+  let mailbox = imap.MailboxState(exists: 12, uidvalidity: 1, uidnext: 20778)
+
+  gmail.plan_reconcile(option.None, mailbox)
+  |> should.equal(gmail.SeedCheckpoint(20777))
+}
+
+pub fn plan_reconcile_resets_uidvalidity_change_without_backfill_test() {
+  let mailbox = imap.MailboxState(exists: 12, uidvalidity: 2, uidnext: 20778)
+
+  gmail.plan_reconcile(option.Some(#(1, 12000)), mailbox)
+  |> should.equal(gmail.ResetCheckpoint(20777))
 }
