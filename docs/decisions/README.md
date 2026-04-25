@@ -57,10 +57,11 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [026](026-native-integrations-no-public-endpoint.md) | Native integrations — no public endpoint, no MCP subscribe | Accepted |
 | [027](027-shell-approval-restart-cancellation.md) | Restart-cancel shell approvals | Accepted |
 | [028](028-cognitive-attention-delivery.md) | Cognitive attention delivery | Accepted |
+| [029](029-cognitive-replay-labels.md) | Cognitive replay labels | Accepted |
 
 ## Adding a new ADR
 
 1. Copy the template above
-2. Number sequentially (next is 029)
+2. Number sequentially (next is 030)
 3. Add to the index in this README
 4. Commit with the code change it relates to

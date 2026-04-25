@@ -56,7 +56,7 @@ Source Adapter
 -> Decision log
 -> Delivery ledger
 -> Optional digest or immediate surface
--> Replay evaluation
+-> Replay evaluation against labels
 ```
 
 The current executable slice reaches validated attention delivery:
@@ -72,6 +72,7 @@ AuraEvent
 -> cognitive_delivery
 -> deliveries.jsonl
 -> record | digest queue | Discord surface_now/ask_now
+-> cognitive_replay over labels.jsonl
 -> [cognitive] decision_ready log
 ```
 
@@ -79,8 +80,10 @@ It proves the ingestion, provenance, text-policy, model, validation, delivery
 ledger, duplicate suppression, digest queue, and immediate-surface substrate
 without dispatching autonomous work. Operator commands can also inject a
 realistic Gmail-shaped event through the live daemon (`cognitive-test
-deliver-now`) and force digest delivery (`cognitive-digest flush`) so the
-delivery path can be verified without asking the user to send provider messages.
+deliver-now`), replay human-labeled persisted events (`cognitive-replay
+labels`), and force digest delivery (`cognitive-digest flush`) so the decision
+and delivery paths can be verified without asking the user to send provider
+messages.
 
 ## Filesystem Model
 
@@ -112,6 +115,7 @@ Cognitive logs:
   events.jsonl
   decisions.jsonl
   deliveries.jsonl
+  labels.jsonl
   evaluations.jsonl
 ```
 
@@ -130,6 +134,8 @@ Code owns only the parts that must be reliable:
 - Validate decision-envelope shape, citations, authority, and patch paths.
 - Append decisions, delivery outcomes, and evaluation outcomes.
 - Enforce duplicate protection before spending user attention.
+- Replay labeled events through the current worker/model/policy path without
+  notifying Discord.
 - Apply validated file patches through existing tiers.
 - Replay historical events against current policies.
 

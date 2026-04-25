@@ -1,7 +1,9 @@
 import aura/cognitive_delivery
 import aura/cognitive_eval
 import aura/cognitive_probe
+import aura/cognitive_replay
 import aura/cognitive_smoke
+import aura/cognitive_worker
 import aura/db
 import aura/dreaming
 import aura/event_ingest
@@ -43,6 +45,7 @@ pub type CtlContext {
     paths: xdg.Paths,
     db_subject: process.Subject(db.DbMessage),
     event_ingest_subject: process.Subject(event_ingest.IngestMessage),
+    cognitive_subject: process.Subject(cognitive_worker.Message),
     delivery_subject: option.Option(process.Subject(cognitive_delivery.Message)),
     domains: List(String),
     dream_model: String,
@@ -144,6 +147,21 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
       }
     }
 
+    ["cognitive-replay", "labels"] -> {
+      logging.log(logging.Info, "[ctl] Cognitive replay triggered: labels")
+      case
+        cognitive_replay.run_labels(cognitive_replay.Context(
+          paths: ctx.paths,
+          db_subject: ctx.db_subject,
+          cognitive_subject: ctx.cognitive_subject,
+          delivery_subject: ctx.delivery_subject,
+        ))
+      {
+        Ok(report) -> report
+        Error(err) -> "ERROR: " <> err
+      }
+    }
+
     ["cognitive-test", "deliver-now"] -> {
       logging.log(logging.Info, "[ctl] Cognitive delivery probe triggered")
       case
@@ -172,7 +190,7 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
     _ ->
       "ERROR: unknown command '"
       <> trimmed
-      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-test deliver-now, cognitive-digest flush"
+      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-replay labels, cognitive-test deliver-now, cognitive-digest flush"
   }
 }
 

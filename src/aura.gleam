@@ -57,6 +57,7 @@ fn parse_args(args: List(String)) -> CliCommand {
     ["ping"] -> CliCtl("ping")
     ["cognitive-smoke", "gmail-rel42"] -> CliCtl("cognitive-smoke gmail-rel42")
     ["cognitive-eval", "fixtures"] -> CliCtl("cognitive-eval fixtures")
+    ["cognitive-replay", "labels"] -> CliCtl("cognitive-replay labels")
     ["cognitive-test", "deliver-now"] -> CliCtl("cognitive-test deliver-now")
     ["cognitive-digest", "flush"] -> CliCtl("cognitive-digest flush")
     ["oauth", "gmail", email] -> CliOauthGmail(email)

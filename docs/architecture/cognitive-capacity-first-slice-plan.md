@@ -2,11 +2,11 @@
 
 Updated 2026-04-25
 
-Status: first executable decision + delivery harness implemented. This
+Status: first executable decision, delivery, and replay harness implemented. This
 supersedes the earlier typed cognitive ontology plan. The slice is a minimal
 harness: event persistence, evidence/context building, text-policy context,
 model decision envelope, validation, append-only decision logging, delivery
-ledger, digest queue, immediate attention surfacing, and later replay.
+ledger, digest queue, immediate attention surfacing, and label-backed replay.
 
 ## Goal
 
@@ -38,7 +38,7 @@ AuraEvent
 -> ~/.local/share/aura/cognitive/deliveries.jsonl
 -> record | digest queue | surface_now/ask_now Discord delivery
 -> decision_ready log
--> ctl probes for smoke/eval, unsuppressed delivery, and digest flush
+-> ctl probes for smoke/eval/replay, unsuppressed delivery, and digest flush
 ```
 
 This proves:
@@ -62,32 +62,35 @@ This proves:
   require a model decision, and wait for a delivered ledger entry
 - `cognitive-digest flush` can force queued digest delivery without waiting for
   a wall-clock window
+- `cognitive-replay labels` can rerun labeled persisted events through the
+  current worker/model/policy path without notifying Discord
 - the worker does not block ingestion
 
 It does not yet prove proactive surfacing quality at scale, concern matching
-quality, user-preference learning, replay evaluation, or whether the default
-policies are good enough.
+quality, user-preference learning, label capture quality, or whether the
+default policies are good enough.
 
 ## Correct Next Cut
 
-Add replay and correction labels before expanding proactive thresholds,
+Add a correction-label capture UX before expanding proactive thresholds,
 autonomy, or cognitive structure.
 
 Files:
 
-- `src/aura/cognitive_replay.gleam`
-- `test/aura/cognitive_replay_test.gleam`
-- CLI or ctl entrypoint for replaying recent decisions
+- Discord correction actions or a CLI command for writing labels.
+- `~/.local/share/aura/cognitive/labels.jsonl`
+- Replay report summaries that identify which policy or concern likely needs
+  adjustment.
 
 Scope:
 
-- Re-run historical events against recorded or fresh model outputs.
-- Compare validator outcomes and decision envelopes.
-- Attach user correction labels to decision records.
+- Attach user correction labels to existing event/decision records.
 - Produce failure labels such as `false_interrupt`, `missed_important`,
   `bad_concern_match`, and `bad_authority_call`.
-- Keep replay offline-safe: recorded model outputs must be enough for behavior
-  regression tests.
+- Feed those labels into replay as expectations.
+- Keep replay offline-safe where possible: recorded model outputs should be
+  enough for behavior regression tests, with live model replay as an explicit
+  operator check.
 
 Non-scope:
 

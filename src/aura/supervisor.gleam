@@ -355,6 +355,7 @@ pub fn start(
       paths: paths,
       db_subject: db_subject,
       event_ingest_subject: event_ingest_subject,
+      cognitive_subject: cognitive_subject,
       delivery_subject: Some(delivery_subject),
       domains: list.map(brain_domains, fn(d) { d.name }),
       dream_model: global_config.models.dream,
