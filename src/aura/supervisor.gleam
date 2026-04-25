@@ -16,6 +16,7 @@ import aura/event_ingest
 import aura/integrations/supervisor as integrations_supervisor
 import aura/mcp/pool as mcp_pool
 import aura/memory
+import aura/models
 import aura/notification
 import aura/poller
 import aura/review_runner
@@ -85,8 +86,16 @@ pub fn start(
 
   // 3b. Start cognitive worker and event_ingest actor (required — panics on failure).
   // event_ingest remains fire-and-forget; the cognitive worker observes only
-  // successfully persisted event IDs and builds evidence context only.
-  let assert Ok(cognitive_started) = cognitive_worker.start(db_subject)
+  // successfully persisted event IDs before asking the model for a validated
+  // decision envelope.
+  use cognitive_llm_config <- result.try(
+    models.build_llm_config(global_config.models.brain)
+    |> result.map_error(fn(e) {
+      "Failed to configure cognitive worker model: " <> e
+    }),
+  )
+  let assert Ok(cognitive_started) =
+    cognitive_worker.start(db_subject, paths, cognitive_llm_config)
   let cognitive_subject = cognitive_started.data
   logging.log(logging.Info, "[supervisor] Cognitive worker started")
 

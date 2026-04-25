@@ -1,10 +1,11 @@
 # Cognitive Capacity First Slice Plan
 
-Updated 2026-04-24
+Updated 2026-04-25
 
-Status: planning note. This supersedes the earlier typed cognitive ontology
-plan. The first slice is a minimal harness: event persistence, evidence/context
-building, text-policy context, model decision envelope, validation, and replay.
+Status: first executable decision harness implemented. This supersedes the
+earlier typed cognitive ontology plan. The first slice is a minimal harness:
+event persistence, evidence/context building, text-policy context, model
+decision envelope, validation, append-only decision logging, and later replay.
 
 ## Goal
 
@@ -20,7 +21,7 @@ ontologies in code before replay proves they are necessary.
 
 ## Current Cut
 
-Already implemented:
+Implemented:
 
 ```text
 AuraEvent
@@ -28,7 +29,11 @@ AuraEvent
 -> cognitive_worker
 -> Observation
 -> EvidenceBundle
--> context_ready log
+-> ContextPacket(policy markdown + concern markdown)
+-> LLM DecisionEnvelope
+-> validator
+-> ~/.local/share/aura/cognitive/decisions.jsonl
+-> decision_ready log
 ```
 
 This proves:
@@ -37,33 +42,36 @@ This proves:
 - duplicates do not enqueue duplicate worker work
 - persisted events can be reloaded by ID
 - deterministic evidence is citable
+- default policy markdown can be created and loaded
+- markdown concern files can be loaded as citable text refs
+- a model decision is required before a cognitive decision is recorded
+- decisions must cite evidence/raw refs and policy refs
+- validated decisions are append-only JSONL records
 - the worker does not block ingestion
 
-It does not prove cognition, attention judgment, concern matching, or model
-decision quality.
+It does not yet prove proactive surfacing quality, concern matching quality,
+user-preference learning, replay evaluation, or whether the default policies are
+good enough.
 
 ## Correct Next Cut
 
-Add text-policy and concern context without adding a typed ontology.
+Add replay before any proactive user-facing behavior.
 
 Files:
 
-- `src/aura/cognitive_context.gleam`
-- `src/aura/cognitive_decision.gleam`
-- `test/aura/cognitive_context_test.gleam`
-- `test/aura/cognitive_decision_test.gleam`
-- default policy markdown files under the appropriate scaffold/config path
+- `src/aura/cognitive_replay.gleam`
+- `test/aura/cognitive_replay_test.gleam`
+- CLI or ctl entrypoint for replaying recent decisions
 
 Scope:
 
-- Load relevant policy files as text.
-- Load candidate concern markdown files as text.
-- Build a bounded `ContextPacket` from event, evidence, policies, concerns, and
-  recent decisions.
-- Define a small `DecisionEnvelope` JSON decoder/validator.
-- Validate citations, attention-spending proof, authority gates, and proposed
-  patch paths.
-- Append model decisions to a decision log.
+- Re-run historical events against recorded or fresh model outputs.
+- Compare validator outcomes and decision envelopes.
+- Attach user correction labels to decision records.
+- Produce failure labels such as `false_interrupt`, `missed_important`,
+  `bad_concern_match`, and `bad_authority_call`.
+- Keep replay offline-safe: recorded model outputs must be enough for behavior
+  regression tests.
 
 Non-scope:
 

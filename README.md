@@ -64,7 +64,7 @@ gleam run -- start
 supervisor (OneForOne)
 ├── db                   SQLite actor — serializes all DB reads/writes
 ├── event_ingest         Normalizes, tags, and persists integration events
-├── cognitive_worker     Async evidence/context build for persisted events
+├── cognitive_worker     Async model-backed decision harness for events
 ├── poller               Gateway WebSocket (Discord first, pluggable)
 ├── flare_manager        Flare lifecycle — roster, dispatch, monitor, persist
 ├── channel_supervisor   Hosts one actor per Discord channel
@@ -83,18 +83,21 @@ A.U.R.A. follows the XDG Base Directory specification:
   config.toml                        # Global settings
   SOUL.md                            # Personality and boundaries
   USER.md                            # User profile
+  policies/*.md                      # Cognitive policies
   schedules.toml                     # Scheduled tasks
   domains/<name>/config.toml         # Per-domain settings
   domains/<name>/AGENTS.md           # Domain instructions
 
 ~/.local/share/aura/               # Data
   aura.db                            # Conversations (SQLite)
+  cognitive/decisions.jsonl          # Validated cognitive decisions
   skills/<name>/SKILL.md             # Skills
   domains/<name>/MEMORY.md           # Durable domain knowledge
   domains/<name>/repos/              # Project repositories
 
 ~/.local/state/aura/               # Runtime state
   MEMORY.md                          # Global cross-domain memory
+  concerns/*.md                      # Cognitive concern files
   domains/<name>/STATE.md            # Current domain status
 ```
 

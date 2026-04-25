@@ -1,6 +1,6 @@
 # Cognitive Capacity Architecture
 
-Updated 2026-04-24
+Updated 2026-04-25
 
 Status: exploratory architecture note. The current direction is a minimal code
 harness around model judgment, ordinary text policies, replay, and validation.
@@ -58,18 +58,22 @@ Source Adapter
 -> Replay evaluation
 ```
 
-The current executable slice stops at evidence/context building:
+The current executable slice stops at a validated decision log:
 
 ```text
 AuraEvent
 -> Observation
 -> EvidenceBundle
--> [cognitive] context_ready log
+-> ContextPacket
+-> LLM DecisionEnvelope
+-> validator
+-> decisions.jsonl
+-> [cognitive] decision_ready log
 ```
 
-That is intentional. It proves the ingestion and provenance substrate without
-pretending to make attention/work decisions before a real model+policy loop
-exists.
+That is intentional. It proves the ingestion, provenance, text-policy, model,
+and validation substrate without yet spending user attention or dispatching
+work.
 
 ## Filesystem Model
 
@@ -258,6 +262,12 @@ The rule: structure earns its way into code only by reducing replay failures.
 
 1. Integrations describe what changed; they do not decide whether the user
    should care.
+2. A persisted cognitive decision must have gone through a model call and
+   validator.
+3. Every accepted decision must cite at least one evidence/raw ref and one
+   policy ref.
+4. A cognitive decision log is not user notification. Spending attention
+   requires a later surface/digest path and replay-backed thresholds.
 2. Policies and concerns are ordinary text first.
 3. Code validates safety, provenance, authority, and patch paths; it does not
    encode cognitive ontology.

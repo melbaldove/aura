@@ -8,7 +8,7 @@ Aura is an OTP application where every component is a supervised actor. Actors c
 supervisor (OneForOne, 3 restarts / 5s)
 ├── db              SQLite actor — single writer, serialized via mailbox
 ├── event_ingest    Normalizes, tags, dedupes, and persists integration events
-├── cognitive_worker Async evidence/context build for persisted events
+├── cognitive_worker Async model-backed decision harness for persisted events
 ├── poller          Discord WebSocket — reconnects with exponential backoff
 ├── brain           Routes messages, runs LLM tool loop with streaming
 ├── workstream_sup  Factory — one actor per configured workstream
@@ -52,15 +52,22 @@ Integration actor
 -> event_ingest
 -> db.events
 -> cognitive_worker
--> [cognitive] context-ready log summary
+-> Observation + EvidenceBundle
+-> text policy + concern ContextPacket
+-> LLM DecisionEnvelope
+-> validator
+-> ~/.local/share/aura/cognitive/decisions.jsonl
+-> [cognitive] decision_ready log summary
 ```
 
 `event_ingest` remains fire-and-forget for producers. It normalizes, tags, and
 persists `AuraEvent`s; only successfully inserted events notify the
 `cognitive_worker`, so duplicate `(source, external_id)` events are not handled
 twice. The cognitive worker loads the persisted event by ID, extracts citable
-evidence, and logs a compact context-ready summary. It does not decide
-attention, work, authority, concerns, memory, `STATE.md`, or flares.
+evidence, loads ordinary markdown policy/concern context, calls the configured
+brain model for one decision envelope, validates citations/attention proof/
+authority gates/patch paths, and appends accepted decisions to JSONL. It does
+not yet notify the user, mutate memory, update `STATE.md`, or dispatch flares.
 
 ## Data model
 
@@ -129,10 +136,13 @@ Key is `platform:platform_id`. Loaded from SQLite on first access, written throu
 ~/.config/aura/config.toml       Global settings
 ~/.config/aura/SOUL.md           Agent personality
 ~/.config/aura/USER.md           User profile
+~/.config/aura/policies/*.md     Cognitive policy text
 ~/.config/aura/.env              Credentials
 ~/.local/share/aura/aura.db      SQLite database
+~/.local/share/aura/cognitive/   Cognitive decision/evaluation logs
 ~/.local/share/aura/skills/      Skill definitions
 ~/.local/state/aura/MEMORY.md    Agent long-term memory
+~/.local/state/aura/concerns/*.md Cognitive concern text
 ```
 
 ## LLM integration
