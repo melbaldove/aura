@@ -38,7 +38,14 @@ fn ffi_connect(
 fn ffi_send(sock: SslSocket, data: BitArray) -> Result(Nil, BitArray)
 
 @external(erlang, "aura_imap_ffi", "recv")
-fn ffi_recv(sock: SslSocket, len: Int, timeout_ms: Int) -> Result(BitArray, BitArray)
+fn ffi_recv(
+  sock: SslSocket,
+  len: Int,
+  timeout_ms: Int,
+) -> Result(BitArray, BitArray)
+
+@external(erlang, "aura_imap_ffi", "set_packet_mode")
+fn ffi_set_packet_mode(sock: SslSocket, mode: BitArray) -> Result(Nil, BitArray)
 
 @external(erlang, "aura_imap_ffi", "close")
 fn ffi_close(sock: SslSocket) -> Dynamic
@@ -128,10 +135,7 @@ pub fn authenticate(conn: Connection, auth: Auth) -> Result(Nil, String) {
 }
 
 /// Select a mailbox. Returns EXISTS / UIDVALIDITY / UIDNEXT.
-pub fn select(
-  conn: Connection,
-  mailbox: String,
-) -> Result(MailboxState, String) {
+pub fn select(conn: Connection, mailbox: String) -> Result(MailboxState, String) {
   let tag = format_tag(ffi_unique_tag())
   let cmd = tag <> " SELECT " <> mailbox <> "\r\n"
   use _ <- result.try(send_raw(conn, cmd))
@@ -165,12 +169,7 @@ pub fn idle(
   // Leave IDLE.
   use _ <- result.try(send_raw(conn, "DONE\r\n"))
   // Drain until tagged OK.
-  use _ <- result.try(read_until_tagged(
-    conn,
-    tag,
-    default_cmd_timeout,
-    False,
-  ))
+  use _ <- result.try(read_until_tagged(conn, tag, default_cmd_timeout, False))
   case events {
     [] -> Ok([Timeout])
     _ -> Ok(list.reverse(events))
@@ -190,10 +189,7 @@ pub fn fetch_envelopes_by_uid(
 ) -> Result(List(Envelope), String) {
   let tag = format_tag(ffi_unique_tag())
   let cmd =
-    tag
-    <> " UID FETCH "
-    <> int.to_string(from_uid)
-    <> ":* (ENVELOPE UID)\r\n"
+    tag <> " UID FETCH " <> int.to_string(from_uid) <> ":* (ENVELOPE UID)\r\n"
   use _ <- result.try(send_raw(conn, cmd))
   use #(untagged, tagged) <- result.try(read_until_tagged(
     conn,
@@ -232,6 +228,44 @@ pub fn fetch_envelope(conn: Connection, seq: Int) -> Result(Envelope, String) {
     Tagged(_, _, text) -> Error("FETCH failed: " <> text)
     _ -> Error("FETCH: unexpected non-tagged terminator")
   }
+}
+
+/// Fetch bounded text body content for one sequence number.
+///
+/// Gmail returns body sections as IMAP literals. The normal client reads
+/// line-packet responses; this function temporarily switches the socket to raw
+/// packets so the literal body can be read and parsed as one response.
+pub fn fetch_body_text(
+  conn: Connection,
+  seq: Int,
+  max_bytes: Int,
+) -> Result(String, String) {
+  let tag = format_tag(ffi_unique_tag())
+  let cmd =
+    tag
+    <> " FETCH "
+    <> int.to_string(seq)
+    <> " (BODY.PEEK[TEXT]<0."
+    <> int.to_string(max_bytes)
+    <> ">)\r\n"
+  fetch_body_text_raw(conn, tag, cmd)
+}
+
+/// Fetch bounded text body content by UID.
+pub fn fetch_body_text_by_uid(
+  conn: Connection,
+  uid: Int,
+  max_bytes: Int,
+) -> Result(String, String) {
+  let tag = format_tag(ffi_unique_tag())
+  let cmd =
+    tag
+    <> " UID FETCH "
+    <> int.to_string(uid)
+    <> " (BODY.PEEK[TEXT]<0."
+    <> int.to_string(max_bytes)
+    <> ">)\r\n"
+  fetch_body_text_raw(conn, tag, cmd)
 }
 
 /// Close the TLS socket. Errors from the underlying `ssl:close/1` are
@@ -327,19 +361,14 @@ pub fn parse_expunge_seq(payload: String) -> Result(Int, String) {
 
 /// Extract an integer from a `[KEY N]` response code embedded in text.
 /// e.g. `parse_resp_code_int("OK [UIDVALIDITY 1234] ...", "UIDVALIDITY")`.
-pub fn parse_resp_code_int(
-  text: String,
-  key: String,
-) -> Result(Int, String) {
+pub fn parse_resp_code_int(text: String, key: String) -> Result(Int, String) {
   let needle = "[" <> key <> " "
   case string.split_once(text, needle) {
     Ok(#(_, after)) ->
       case string.split_once(after, "]") {
         Ok(#(n_str, _)) ->
           int.parse(string.trim(n_str))
-          |> result.map_error(fn(_) {
-            "invalid " <> key <> " int: " <> n_str
-          })
+          |> result.map_error(fn(_) { "invalid " <> key <> " int: " <> n_str })
         _ -> Error("missing ']' after " <> key)
       }
     _ -> Error(key <> " not found")
@@ -355,6 +384,22 @@ pub fn parse_envelope_fetch(raw: String) -> Result(Envelope, String) {
   case tokens {
     [TOpen, ..rest_tokens] -> parse_envelope_body(rest_tokens)
     _ -> Error("FETCH response missing opening paren")
+  }
+}
+
+/// Parse a FETCH response containing a single BODY[TEXT] literal.
+pub fn parse_body_text_fetch(raw: String) -> Result(String, String) {
+  use #(_, after_header) <- result.try(
+    string.split_once(raw, "\r\n")
+    |> result.map_error(fn(_) { "BODY fetch missing literal separator" }),
+  )
+  case string.split_once(after_header, "\r\n)\r\n") {
+    Ok(#(body, _)) -> Ok(string.trim(body))
+    Error(_) ->
+      case string.split_once(after_header, ")\r\n") {
+        Ok(#(body, _)) -> Ok(string.trim(body))
+        Error(_) -> Error("BODY fetch missing closing paren")
+      }
   }
 }
 
@@ -400,6 +445,11 @@ fn send_raw(conn: Connection, cmd: String) -> Result(Nil, String) {
   |> result.map_error(bit_to_string)
 }
 
+fn set_packet_mode(conn: Connection, mode: String) -> Result(Nil, String) {
+  ffi_set_packet_mode(conn.sock, bit_array.from_string(mode))
+  |> result.map_error(bit_to_string)
+}
+
 fn recv_line(conn: Connection, timeout_ms: Int) -> Result(String, String) {
   use bits <- result.try(
     ffi_recv(conn.sock, 0, timeout_ms)
@@ -407,6 +457,63 @@ fn recv_line(conn: Connection, timeout_ms: Int) -> Result(String, String) {
   )
   bit_array.to_string(bits)
   |> result.map_error(fn(_) { "imap: non-utf8 line from server" })
+}
+
+fn recv_raw(conn: Connection, timeout_ms: Int) -> Result(String, String) {
+  use bits <- result.try(
+    ffi_recv(conn.sock, 0, timeout_ms)
+    |> result.map_error(bit_to_string),
+  )
+  bit_array.to_string(bits)
+  |> result.map_error(fn(_) { "imap: non-utf8 body response from server" })
+}
+
+fn fetch_body_text_raw(
+  conn: Connection,
+  tag: String,
+  cmd: String,
+) -> Result(String, String) {
+  use _ <- result.try(set_packet_mode(conn, "raw"))
+  let result = {
+    use _ <- result.try(send_raw(conn, cmd))
+    use raw <- result.try(read_raw_until_tag(conn, tag, default_cmd_timeout, ""))
+    parse_body_text_fetch(raw)
+  }
+  let restore = set_packet_mode(conn, "line")
+  case result, restore {
+    Ok(body), Ok(_) -> Ok(body)
+    Error(err), Ok(_) -> Error(err)
+    Ok(_), Error(err) -> Error("failed to restore IMAP line mode: " <> err)
+    Error(err), Error(restore_err) ->
+      Error(err <> "; failed to restore IMAP line mode: " <> restore_err)
+  }
+}
+
+fn read_raw_until_tag(
+  conn: Connection,
+  tag: String,
+  timeout_ms: Int,
+  acc: String,
+) -> Result(String, String) {
+  use chunk <- result.try(recv_raw(conn, timeout_ms))
+  let next = acc <> chunk
+  case has_tagged_terminator(next, tag) {
+    True -> Ok(next)
+    False ->
+      case string.length(next) > 100_000 {
+        True -> Error("BODY fetch response exceeded 100KB without terminator")
+        False -> read_raw_until_tag(conn, tag, timeout_ms, next)
+      }
+  }
+}
+
+fn has_tagged_terminator(raw: String, tag: String) -> Bool {
+  string.contains(raw, "\r\n" <> tag <> " OK ")
+  || string.contains(raw, "\r\n" <> tag <> " NO ")
+  || string.contains(raw, "\r\n" <> tag <> " BAD ")
+  || string.starts_with(raw, tag <> " OK ")
+  || string.starts_with(raw, tag <> " NO ")
+  || string.starts_with(raw, tag <> " BAD ")
 }
 
 fn bit_to_string(b: BitArray) -> String {
@@ -525,7 +632,9 @@ fn authenticate_xoauth2(
 ) -> Result(Nil, String) {
   let tag = format_tag(ffi_unique_tag())
   let raw = xoauth2_auth_string(user, token)
-  let b64 = case bit_array.to_string(ffi_base64_encode(bit_array.from_string(raw))) {
+  let b64 = case
+    bit_array.to_string(ffi_base64_encode(bit_array.from_string(raw)))
+  {
     Ok(s) -> s
     _ -> ""
   }
@@ -542,8 +651,7 @@ fn authenticate_xoauth2_loop(
   use parsed <- result.try(parse_response_line(line))
   case parsed {
     Tagged(t, StatusOk, _) if t == tag -> Ok(Nil)
-    Tagged(t, _, text) if t == tag ->
-      Error("XOAUTH2 failed: " <> text)
+    Tagged(t, _, text) if t == tag -> Error("XOAUTH2 failed: " <> text)
     Continuation(err_b64) -> {
       // Google convention: continuation carries a base64-encoded JSON
       // error blob. Client must send an empty line to acknowledge before
@@ -554,7 +662,9 @@ fn authenticate_xoauth2_loop(
       case parsed2 {
         Tagged(_, StatusOk, _) -> Ok(Nil)
         Tagged(_, _, text) ->
-          Error("XOAUTH2 failed: " <> text <> " (detail b64: " <> err_b64 <> ")")
+          Error(
+            "XOAUTH2 failed: " <> text <> " (detail b64: " <> err_b64 <> ")",
+          )
         _ -> Error("XOAUTH2: unexpected response after continuation")
       }
     }
@@ -567,9 +677,7 @@ fn authenticate_xoauth2_loop(
 // Internal — SELECT parsing
 // ---------------------------------------------------------------------------
 
-fn parse_select_untagged(
-  lines: List(String),
-) -> Result(MailboxState, String) {
+fn parse_select_untagged(lines: List(String)) -> Result(MailboxState, String) {
   // Scan for EXISTS, UIDVALIDITY, UIDNEXT across all untagged lines.
   // Each is independent — ordering varies.
   let exists =
@@ -592,10 +700,7 @@ fn parse_select_untagged(
   ))
 }
 
-fn find_resp_code_int(
-  lines: List(String),
-  key: String,
-) -> Result(Int, String) {
+fn find_resp_code_int(lines: List(String), key: String) -> Result(Int, String) {
   list.fold(lines, Error(key <> " not found"), fn(acc, line) {
     case acc {
       Ok(_) -> acc
@@ -629,10 +734,7 @@ fn tokenize(input: String) -> Result(List(Token), String) {
   tokenize_loop(input, [])
 }
 
-fn tokenize_loop(
-  input: String,
-  acc: List(Token),
-) -> Result(List(Token), String) {
+fn tokenize_loop(input: String, acc: List(Token)) -> Result(List(Token), String) {
   case string.first(input) {
     Error(_) -> Ok(list.reverse(acc))
     Ok(c) ->
@@ -724,8 +826,20 @@ fn parse_envelope_body(tokens: List(Token)) -> Result(Envelope, String) {
 }
 
 fn build_envelope(env_fields: List(Token), uid: Int) -> Result(Envelope, String) {
-  use #(date, subject, from_list, _sender, _reply_to, to_list, _cc, _bcc,
-    _in_reply_to, message_id) <- result.try(extract_envelope_fields(env_fields))
+  use
+    #(
+      date,
+      subject,
+      from_list,
+      _sender,
+      _reply_to,
+      to_list,
+      _cc,
+      _bcc,
+      _in_reply_to,
+      message_id,
+    )
+  <- result.try(extract_envelope_fields(env_fields))
   Ok(Envelope(
     uid: uid,
     message_id: message_id,
@@ -745,12 +859,9 @@ fn take_until_close(
 ) -> Result(#(List(Token), List(Token)), String) {
   case tokens {
     [] -> Error("unterminated paren group")
-    [TClose, ..rest] if depth == 1 ->
-      Ok(#(list.reverse(acc), rest))
-    [TClose, ..rest] ->
-      take_until_close(rest, depth - 1, [TClose, ..acc])
-    [TOpen, ..rest] ->
-      take_until_close(rest, depth + 1, [TOpen, ..acc])
+    [TClose, ..rest] if depth == 1 -> Ok(#(list.reverse(acc), rest))
+    [TClose, ..rest] -> take_until_close(rest, depth - 1, [TClose, ..acc])
+    [TOpen, ..rest] -> take_until_close(rest, depth + 1, [TOpen, ..acc])
     [t, ..rest] -> take_until_close(rest, depth, [t, ..acc])
   }
 }
@@ -762,8 +873,16 @@ fn extract_envelope_fields(
   tokens: List(Token),
 ) -> Result(
   #(
-    String, String, List(Token), List(Token), List(Token),
-    List(Token), List(Token), List(Token), String, String,
+    String,
+    String,
+    List(Token),
+    List(Token),
+    List(Token),
+    List(Token),
+    List(Token),
+    List(Token),
+    String,
+    String,
   ),
   String,
 ) {

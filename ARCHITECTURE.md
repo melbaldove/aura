@@ -68,6 +68,10 @@ evidence, loads ordinary markdown policy/concern context, calls the configured
 brain model for one decision envelope, validates citations/attention proof/
 authority gates/patch paths, and appends accepted decisions to JSONL. It does
 not yet notify the user, mutate memory, update `STATE.md`, or dispatch flares.
+Content-bearing integrations must persist decision-sufficient payloads. For
+Gmail, this means the `AuraEvent.data_json` includes envelope fields plus
+bounded `body_text`; subject-only email events are not sufficient for cognitive
+judgment.
 
 ## Data model
 

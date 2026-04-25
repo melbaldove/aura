@@ -2,6 +2,7 @@ import aura/cognitive_event
 import aura/event
 import gleam/dict
 import gleam/list
+import gleam/string
 import gleeunit
 import gleeunit/should
 
@@ -90,6 +91,41 @@ pub fn extract_evidence_finds_gmail_atoms_test() {
   count_atoms(bundle, "thread_id", "t-1") |> should.equal(1)
   count_atoms(bundle, "text", subject) |> should.equal(1)
   { list.length(bundle.resource_refs) >= 3 } |> should.be_true
+}
+
+pub fn from_event_includes_gmail_body_text_in_observation_test() {
+  let e =
+    sample_event(
+      "gmail",
+      "email.received",
+      "Cognitive",
+      "{\"from\":\"alice@example.com\",\"body_text\":\"AURA cognitive smoke test: Please review REL-42 tomorrow\"}",
+      dict.from_list([#("from", "alice@example.com")]),
+    )
+
+  let observation = cognitive_event.from_event(e)
+
+  observation.text |> string.contains("Subject: Cognitive") |> should.be_true
+  observation.text
+  |> string.contains("AURA cognitive smoke test: Please review REL-42 tomorrow")
+  |> should.be_true
+}
+
+pub fn extract_evidence_uses_gmail_body_text_for_text_atoms_test() {
+  let e =
+    sample_event(
+      "gmail",
+      "email.received",
+      "Cognitive",
+      "{\"body_text\":\"AURA cognitive smoke test: Please review REL-42 tomorrow\"}",
+      dict.new(),
+    )
+
+  let bundle =
+    e |> cognitive_event.from_event |> cognitive_event.extract_evidence
+
+  has_atom(bundle, "resource_id", "REL-42") |> should.be_true
+  has_atom(bundle, "datetime", "tomorrow") |> should.be_true
 }
 
 pub fn extract_evidence_handles_ticket_calendar_ci_and_world_shapes_test() {

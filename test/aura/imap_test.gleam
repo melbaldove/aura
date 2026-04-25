@@ -173,3 +173,13 @@ pub fn parse_envelope_uid_first_test() {
   e.subject |> should.equal("Re: Q4 terms")
   e.from |> should.equal("alice@acme.com")
 }
+
+pub fn parse_body_text_fetch_fixture_test() {
+  let raw =
+    "* 42 FETCH (BODY[TEXT]<0> {43}\r\nAURA cognitive smoke test: Please review REL-42 tomorrow\r\n)\r\na123 OK Success\r\n"
+
+  let body = imap.parse_body_text_fetch(raw)
+
+  body
+  |> should.equal(Ok("AURA cognitive smoke test: Please review REL-42 tomorrow"))
+}

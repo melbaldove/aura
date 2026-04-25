@@ -1,5 +1,5 @@
 -module(aura_imap_ffi).
--export([connect/3, send/2, recv/3, close/1, base64_encode/1, unique_tag/0]).
+-export([connect/3, send/2, recv/3, set_packet_mode/2, close/1, base64_encode/1, unique_tag/0]).
 
 %% ---------------------------------------------------------------------------
 %% aura_imap_ffi — thin wrapper around the Erlang `ssl` module for the IMAP
@@ -53,6 +53,21 @@ recv(Socket, Len, TimeoutMs) ->
         {ok, Data} -> {ok, Data};
         {error, timeout} -> {error, <<"timeout">>};
         {error, closed} -> {error, <<"closed">>};
+        {error, Reason} ->
+            {error, iolist_to_binary(io_lib:format("~p", [Reason]))}
+    end.
+
+%% set_packet_mode(Socket, <<"line">> | <<"raw">>) -> ok | {error, BinaryReason}
+%% Body literals need raw reads, while the normal IMAP command loop uses line
+%% packets. Switching modes locally keeps the Gleam parser simple for both.
+set_packet_mode(Socket, Mode) ->
+    Packet = case Mode of
+        <<"raw">> -> raw;
+        <<"line">> -> line;
+        _ -> line
+    end,
+    case ssl:setopts(Socket, [{packet, Packet}]) of
+        ok -> {ok, nil};
         {error, Reason} ->
             {error, iolist_to_binary(io_lib:format("~p", [Reason]))}
     end.

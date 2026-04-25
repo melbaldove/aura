@@ -85,12 +85,20 @@ pub fn from_event(e: event.AuraEvent) -> Observation {
     event_time_ms: e.time_ms,
     actors: actors,
     tags: e.tags,
-    text: e.subject,
+    text: event_text(e),
     state_before: "",
     state_after: "",
     raw_ref: e.source <> ":" <> e.external_id,
     raw_data: e.data,
   )
+}
+
+fn event_text(e: event.AuraEvent) -> String {
+  let body_text = json_string(e.data, ["body_text"])
+  case body_text {
+    "" -> e.subject
+    body -> "Subject: " <> e.subject <> "\n\nBody:\n" <> body
+  }
 }
 
 /// Extract source-direct and generic text evidence from an observation.
@@ -293,6 +301,7 @@ fn extract_json_atoms(data: String) -> List(RawAtom) {
         json_atom(payload, "status", ["issue", "state", "name"]),
         json_atom(payload, "url", ["url"]),
         json_atom(payload, "url", ["html_url"]),
+        json_atom(payload, "text", ["body_text"]),
         json_atom(payload, "datetime", ["date"]),
         json_atom(payload, "datetime", ["start"]),
         json_atom(payload, "datetime", ["end"]),
@@ -302,6 +311,17 @@ fn extract_json_atoms(data: String) -> List(RawAtom) {
       ]
       |> list.filter_map(fn(result) { result })
     Error(_) -> []
+  }
+}
+
+fn json_string(data: String, path: List(String)) -> String {
+  case json.parse(data, decode.dynamic) {
+    Ok(payload) ->
+      case decode.run(payload, decode.at(path, decode.string)) {
+        Ok(value) -> value
+        Error(_) -> ""
+      }
+    Error(_) -> ""
   }
 }
 
