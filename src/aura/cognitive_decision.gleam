@@ -14,6 +14,7 @@ import gleam/string
 pub type AttentionDecision {
   AttentionDecision(
     action: String,
+    rationale: String,
     why_now: String,
     deferral_cost: String,
     why_not_digest: String,
@@ -112,6 +113,10 @@ pub fn validate(
       valid_attention_action(decision.attention.action),
       "invalid attention.action",
     )
+    |> require(
+      present(decision.attention.rationale),
+      "attention.rationale is required",
+    )
     |> require(valid_work_action(decision.work.action), "invalid work.action")
     |> require(
       valid_authority(decision.authority.required),
@@ -192,11 +197,13 @@ fn decision_decoder() {
 
 fn attention_decoder() {
   use action <- decode.field("action", decode.string)
+  use rationale <- decode.field("rationale", decode.string)
   use why_now <- decode.field("why_now", decode.string)
   use deferral_cost <- decode.field("deferral_cost", decode.string)
   use why_not_digest <- decode.field("why_not_digest", decode.string)
   decode.success(AttentionDecision(
     action: action,
+    rationale: rationale,
     why_now: why_now,
     deferral_cost: deferral_cost,
     why_not_digest: why_not_digest,
@@ -256,6 +263,7 @@ fn decision_instructions() -> String {
   <> "  \"citations\": [\"evidence:<atom-id>\", \"policy:attention.md\"],\n"
   <> "  \"attention\": {\n"
   <> "    \"action\": \"record|digest|surface_now|ask_now\",\n"
+  <> "    \"rationale\": \"required: why this is the right attention level\",\n"
   <> "    \"why_now\": \"required for surface_now or ask_now, else empty\",\n"
   <> "    \"deferral_cost\": \"required for surface_now or ask_now, else empty\",\n"
   <> "    \"why_not_digest\": \"required for surface_now or ask_now, else empty\"\n"
@@ -347,6 +355,7 @@ fn valid_patch_bodies(patches: List(ProposedPatch)) -> Bool {
 fn attention_to_json(attention: AttentionDecision) -> json.Json {
   json.object([
     #("action", json.string(attention.action)),
+    #("rationale", json.string(attention.rationale)),
     #("why_now", json.string(attention.why_now)),
     #("deferral_cost", json.string(attention.deferral_cost)),
     #("why_not_digest", json.string(attention.why_not_digest)),

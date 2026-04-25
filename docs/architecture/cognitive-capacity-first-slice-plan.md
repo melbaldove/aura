@@ -114,6 +114,7 @@ Use one broad JSON envelope:
   "citations": ["evidence:e1", "policy:attention.md"],
   "attention": {
     "action": "record|digest|surface_now|ask_now",
+    "rationale": "required: why this is the right attention level",
     "why_now": "",
     "deferral_cost": "",
     "why_not_digest": ""

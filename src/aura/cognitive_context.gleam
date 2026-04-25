@@ -301,6 +301,7 @@ fn default_policies() -> List(#(String, String)) {
 fn attention_policy() -> String {
   "# Attention Policy\n\n"
   <> "Aura preserves the user's cognitive capacity. Do not interrupt merely because something changed.\n\n"
+  <> "Every attention decision must include a rationale. Record and digest are decisions, not silent defaults.\n\n"
   <> "## Defaults\n"
   <> "- Routine external updates: record.\n"
   <> "- Potentially useful but not time-sensitive updates: digest.\n"

@@ -156,6 +156,7 @@ The model should eventually return one small JSON object:
   "citations": ["event.subject", "evidence:e1", "concerns/rel-42-release.md"],
   "attention": {
     "action": "record|digest|surface_now|ask_now",
+    "rationale": "required: why this is the right attention level",
     "why_now": "required for surface_now/ask_now",
     "deferral_cost": "required for surface_now/ask_now",
     "why_not_digest": "required for surface_now/ask_now"

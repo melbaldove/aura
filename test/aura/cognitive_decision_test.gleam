@@ -57,7 +57,7 @@ fn valid_json(
   <> "\",\"policy:attention.md\"],"
   <> "\"attention\":{\"action\":\""
   <> attention_action
-  <> "\",\"why_now\":\"\",\"deferral_cost\":\"\",\"why_not_digest\":\"\"},"
+  <> "\",\"rationale\":\"No immediate user attention is needed; preserve this for later review.\",\"why_now\":\"\",\"deferral_cost\":\"\",\"why_not_digest\":\"\"},"
   <> "\"work\":{\"action\":\"none\",\"target\":\"\",\"proof_required\":\"\"},"
   <> "\"authority\":{\"required\":\"none\",\"reason\":\"\"},"
   <> "\"gaps\":[],"
@@ -97,6 +97,34 @@ pub fn validate_requires_evidence_and_policy_citations_test() {
     ])
   let assert Error(errors) = cognitive_decision.validate(missing_policy, packet)
   list.any(errors, fn(e) { string.contains(e, "policy citation") })
+  |> should.be_true
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn validate_requires_attention_rationale_for_record_test() {
+  let #(base, packet, atom_id) = temp_context()
+  let decision =
+    cognitive_decision.decode_response(valid_json(
+      "ev-decision-1",
+      atom_id,
+      "record",
+    ))
+    |> should.be_ok
+  let missing_rationale =
+    cognitive_decision.DecisionEnvelope(
+      ..decision,
+      attention: cognitive_decision.AttentionDecision(
+        ..decision.attention,
+        rationale: "",
+      ),
+    )
+
+  let assert Error(errors) =
+    cognitive_decision.validate(missing_rationale, packet)
+
+  list.any(errors, fn(e) { string.contains(e, "attention.rationale") })
   |> should.be_true
 
   let _ = simplifile.delete_all([base])

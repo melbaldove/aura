@@ -54,7 +54,7 @@ fn valid_decision(event_id: String) -> String {
   <> "\"citations\":[\"evidence:"
   <> event_id
   <> ":e1\",\"policy:attention.md\"],"
-  <> "\"attention\":{\"action\":\"record\",\"why_now\":\"\",\"deferral_cost\":\"\",\"why_not_digest\":\"\"},"
+  <> "\"attention\":{\"action\":\"record\",\"rationale\":\"The event is useful to remember but does not justify interrupting the user.\",\"why_now\":\"\",\"deferral_cost\":\"\",\"why_not_digest\":\"\"},"
   <> "\"work\":{\"action\":\"none\",\"target\":\"\",\"proof_required\":\"\"},"
   <> "\"authority\":{\"required\":\"none\",\"reason\":\"\"},"
   <> "\"gaps\":[],"
@@ -85,7 +85,7 @@ fn fake_invalid_chat(
     <> "\"concern_refs\":[],"
     <> "\"summary\":\"Bad envelope.\","
     <> "\"citations\":[],"
-    <> "\"attention\":{\"action\":\"record\",\"why_now\":\"\",\"deferral_cost\":\"\",\"why_not_digest\":\"\"},"
+    <> "\"attention\":{\"action\":\"record\",\"rationale\":\"The event lacks enough signal to interrupt.\",\"why_now\":\"\",\"deferral_cost\":\"\",\"why_not_digest\":\"\"},"
     <> "\"work\":{\"action\":\"none\",\"target\":\"\",\"proof_required\":\"\"},"
     <> "\"authority\":{\"required\":\"none\",\"reason\":\"\"},"
     <> "\"gaps\":[],"
@@ -137,6 +137,9 @@ pub fn worker_logs_decision_ready_report_and_decision_jsonl_test() {
   log |> string.contains("\"event_id\":\"ev-1\"") |> should.be_true
   log
   |> string.contains("\"attention\":{\"action\":\"record\"")
+  |> should.be_true
+  log
+  |> string.contains("\"rationale\":\"The event is useful to remember")
   |> should.be_true
 
   stop_subject(started.data)
