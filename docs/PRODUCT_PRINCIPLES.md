@@ -1,10 +1,25 @@
 # Product Principles
 
-Updated 2026-04-24
+Updated 2026-04-25
 
 This document describes what Aura is for. `docs/ENGINEERING.md` describes how
 we build it. Architecture notes and ADRs describe how current implementations
 satisfy these product principles.
+
+## North Star
+
+Aura is a conversational, ambient manager agent.
+
+The user can directly tell Aura what to do, ask what matters, delegate work,
+correct judgment, and set preferences in natural language. Aura also watches
+relevant world state and agent work in the background, prepares context, verifies
+claims, coordinates flares, and interrupts only when human attention or authority
+is genuinely needed.
+
+The user should control Aura through natural delegation and correction, not by
+administering internal machinery. Concepts like concerns, evidence, labels,
+routing, delivery ledgers, and replay should stay implementation surfaces unless
+the user is explicitly inspecting or debugging Aura.
 
 ## Core Thesis
 
