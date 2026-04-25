@@ -496,6 +496,7 @@ fn default_policies() -> List(#(String, String)) {
     #("work.md", work_policy()),
     #("learning.md", learning_policy()),
     #("delivery.md", delivery_policy()),
+    #("concerns.md", concerns_policy()),
     #("world-state.md", world_state_policy()),
   ]
 }
@@ -556,6 +557,21 @@ fn delivery_policy() -> String {
   <> "- record decisions should use none.\n"
   <> "- digest decisions should use default unless a domain target is clearly better.\n"
   <> "- surface_now and ask_now should use the narrowest valid target that preserves context.\n"
+}
+
+fn concerns_policy() -> String {
+  "# Concerns Policy\n\n"
+  <> "Aura tracks concerns: durable objects of care, work, watch, risk, or taste that future observations should be interpreted against.\n\n"
+  <> "The user should not need to know or administer the concern abstraction. Infer tracking intent from natural conversation and durable context, then use the track tool when the object should remain alive across future turns or ambient observations.\n\n"
+  <> "## When To Track\n"
+  <> "- Track when there is resolved durable intent: an active commitment, project, ticket, person, relationship, thesis, open question, deadline, risk, workflow, or external world-state source the user expects Aura to keep in view.\n"
+  <> "- Track when the user explicitly asks Aura to watch, follow, keep track, monitor, remember for next time, or check where things stand.\n"
+  <> "- Track after investigation when a thing proves active, owned, risky, blocked, deadline-bearing, or likely to need future matching.\n\n"
+  <> "## When Not To Track\n"
+  <> "- Do not track one-off lookups, transient facts, generic preferences, or ordinary summaries; use memory or state instead.\n"
+  <> "- Ambient observations should update or cite existing concerns when possible. Do not silently create a new durable concern from an isolated event unless policy, state, memory, or user-ratified intent provides lineage.\n\n"
+  <> "## Gaps\n"
+  <> "If Aura suspects a durable concern exists but lacks enough context to track it responsibly, surface a gap with examples of what would make it trackable.\n"
 }
 
 fn world_state_policy() -> String {

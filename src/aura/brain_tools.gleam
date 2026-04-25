@@ -6,6 +6,7 @@ import aura/clients/browser_runner.{type BrowserRunner}
 import aura/clients/discord_client.{type DiscordClient}
 import aura/clients/llm_client.{type LLMClient}
 import aura/clients/skill_runner.{type SkillRunner}
+import aura/concern
 import aura/db
 import aura/discord/rest
 import aura/discord/types as discord_types
@@ -386,6 +387,7 @@ fn execute_tool_dispatch(
         Error(e) -> TextResult("Error: " <> e)
       }
     }
+    "track" -> execute_track(ctx, args)
     "memory" -> {
       case require_arg(args, "action") {
         Error(e) -> TextResult(e)
@@ -1930,6 +1932,48 @@ fn tag_or_empty(tags: dict.Dict(String, String), key: String) -> String {
   }
 }
 
+fn execute_track(ctx: ToolContext, args: List(#(String, String))) -> ToolResult {
+  case require_arg(args, "action") {
+    Error(e) -> TextResult(e)
+    Ok(action) ->
+      case require_arg(args, "slug") {
+        Error(e) -> TextResult(e)
+        Ok(slug) -> {
+          let request =
+            concern.TrackRequest(
+              action: action,
+              slug: slug,
+              title: get_arg(args, "title"),
+              summary: get_arg(args, "summary"),
+              why: get_arg(args, "why"),
+              current_state: get_arg(args, "current_state"),
+              watch_signals: get_arg(args, "watch_signals"),
+              evidence: get_arg(args, "evidence"),
+              authority: get_arg(args, "authority"),
+              gaps: get_arg(args, "gaps"),
+              note: get_arg(args, "note"),
+            )
+
+          case concern.apply(ctx.paths, request) {
+            Ok(result) ->
+              TextResult(
+                "Tracking "
+                <> result.action
+                <> ": "
+                <> result.title
+                <> " ("
+                <> result.source_ref
+                <> ", status="
+                <> result.status
+                <> ").",
+              )
+            Error(e) -> TextResult(e)
+          }
+        }
+      }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -2114,6 +2158,78 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
       name: "list_skills",
       description: "List all available skills with descriptions. Check before creating a new skill to avoid duplicates, or when deciding which skill to run.",
       parameters: [],
+    ),
+    llm.ToolDefinition(
+      name: "track",
+      description: "Track a durable object of care, work, watch, or risk as an ordinary concern markdown file. Use after enough context shows the thing is durably alive, or when the user explicitly asks Aura to watch or keep track. Do not use for one-off lookups, transient facts, or generic preferences; use memory or state instead.",
+      parameters: [
+        llm.ToolParam(
+          name: "action",
+          param_type: "string",
+          description: "One of: start | update | pause | close",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "slug",
+          param_type: "string",
+          description: "Stable lowercase kebab-case tracking key, e.g. rel-42-release or vc-sourcing-thesis.",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "title",
+          param_type: "string",
+          description: "Human-readable title for the tracked object.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "summary",
+          param_type: "string",
+          description: "Short summary of what is being tracked.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "why",
+          param_type: "string",
+          description: "Why this matters to the user or future Aura judgment.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "current_state",
+          param_type: "string",
+          description: "Current known state, including what is active, blocked, decided, or unresolved.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "watch_signals",
+          param_type: "string",
+          description: "Signals future observations should be matched against.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "evidence",
+          param_type: "string",
+          description: "Relevant resource links, ids, citations, or source refs.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "authority",
+          param_type: "string",
+          description: "Standing authority boundaries, preferences, or decision rules known so far.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "gaps",
+          param_type: "string",
+          description: "Open questions or missing context that should be surfaced later if relevant.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "note",
+          param_type: "string",
+          description: "Append-only update note for existing tracked objects.",
+          required: False,
+        ),
+      ],
     ),
     llm.ToolDefinition(
       name: "memory",

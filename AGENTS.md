@@ -97,7 +97,7 @@ Two-model pipeline: vision model as preprocessor, orchestrator model for tool lo
 - **Domain** — a knowledge partition representing an area of the user's life (job, project, responsibility). Has its own config, AGENTS.md, anchors, logs, skills, conversation history. One Discord channel per domain.
 - **Conversation** — per-channel message history. In-memory buffer (hot cache) backed by SQLite. Tiered auto-compression: tool pruning at 50%, LLM summarization at 70% of context window.
 - **Skill** — a directory with a SKILL.md and optional CLI entrypoint. Instruction-only skills teach the LLM; external skills are invoked as subprocesses.
-- **Tool** — primitive operation the LLM can call. 19 built-in tools (filesystem, Discord, skills, memory, search, web, schedules, shell, browser, attachments, vision, events).
+- **Tool** — primitive operation the LLM can call. 26 built-in tools (filesystem, Discord, skills, memory, tracking, search, web, schedules, shell, browser, attachments, vision, events).
 - **Schedule** — a config-driven periodic task defined in `schedules.toml`. Supports fixed intervals ("15m") and cron expressions ("0 9 * * *"). Each schedule invokes a skill, classifies urgency via LLM, and emits findings.
 - **Dreaming** — periodic offline memory consolidation. Cron-triggered, per-domain, parallel. Four-phase LLM process (consolidate, promote, reflect, render) that synthesizes knowledge from memory, state, flare outcomes, and conversation summaries. Writes to flat files through SQLite archive for lossless lineage tracking.
 
@@ -116,6 +116,7 @@ src/aura/
   cognitive_delivery.gleam Delivery ledger, digest queue, immediate surfacing
   cognitive_replay.gleam Label-backed replay through current model/policy
   cognitive_probe.gleam Operator-triggered live delivery probe
+  concern.gleam         Text-first concern tracking writer
   compressor.gleam      Tiered context compression — tool pruning, domain-aware LLM summarization, iterative updates
   review.gleam          Post-response memory review — auto-persists state + knowledge every N turns
   scaffold.gleam        First-run scaffolding (directory structure, template files, domain creation)
@@ -211,7 +212,7 @@ Additional conventions:
 
 ### Tool system
 
-- 19 built-in tools defined in `brain.gleam:make_built_in_tools()`
+- 26 built-in tools defined in `brain_tools.gleam:make_built_in_tools()`
 - Tools are static — constructed once at brain startup, stored in `BrainState.built_in_tools`
 - Skill-based tools invoked via `run_skill` tool → subprocess
 - New tools: add definition to `make_built_in_tools()`, add execution case to `execute_tool()`
@@ -320,8 +321,8 @@ The script does:
 
 ### Add a new built-in tool
 
-1. Add `llm.ToolDefinition` to `make_built_in_tools()` in `brain.gleam`
-2. Add execution case in `execute_tool()` in `brain.gleam`
+1. Add `llm.ToolDefinition` to `make_built_in_tools()` in `brain_tools.gleam`
+2. Add execution case in `execute_tool()` in `brain_tools.gleam`
 3. If the tool needs new credentials, add env var to: AGENTS.md, README.md, init.gleam, .env
 4. Write tests for any testable logic
 5. Add `///` doc comment to the tool description
@@ -386,7 +387,7 @@ When making a change that involves choosing between approaches (e.g., "should we
 
 ADRs are immutable once accepted. If a decision is reversed, write a new ADR that supersedes the old one.
 
-Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression (superseded), ACP manager actor, keyed memory entries, active memory review, tiered runtime compression, ACP protocol for agent dispatch, memory dreaming.
+Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression (superseded), ACP manager actor, keyed memory entries, active memory review, tiered runtime compression, ACP protocol for agent dispatch, memory dreaming, and text-first concern tracking.
 
 ## Known limitations
 

@@ -45,15 +45,18 @@ pub fn build_creates_and_loads_default_policies_test() {
   let packet =
     cognitive_context.build(paths, observation, evidence) |> should.be_ok
 
-  list.length(packet.policies) |> should.equal(6)
+  list.length(packet.policies) |> should.equal(7)
   simplifile.is_file(xdg.policy_dir(paths) <> "/attention.md")
   |> should.equal(Ok(True))
   simplifile.is_file(xdg.policy_dir(paths) <> "/delivery.md")
+  |> should.equal(Ok(True))
+  simplifile.is_file(xdg.policy_dir(paths) <> "/concerns.md")
   |> should.equal(Ok(True))
 
   let rendered = cognitive_context.render(packet)
   rendered |> string.contains("policy:attention.md") |> should.be_true
   rendered |> string.contains("policy:delivery.md") |> should.be_true
+  rendered |> string.contains("policy:concerns.md") |> should.be_true
   rendered |> string.contains("evidence:e1") |> should.be_true
   rendered |> string.contains("gmail:msg-1") |> should.be_true
   rendered |> string.contains("Delivery Targets") |> should.be_true

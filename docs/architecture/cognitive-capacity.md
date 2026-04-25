@@ -1,6 +1,6 @@
 # Cognitive Capacity Architecture
 
-Updated 2026-04-25
+Updated 2026-04-26
 
 Status: exploratory architecture note. The current direction is a minimal code
 harness around model judgment, ordinary text policies, replay, and validation.
@@ -94,6 +94,7 @@ Policy files:
   attention.md
   authority.md
   delivery.md
+  concerns.md
   work.md
   learning.md
   world-state.md
@@ -125,6 +126,12 @@ Concern files:
   alice-relationship.md
 ```
 
+The user should not need to create or manage concern files directly. In normal
+use the user talks to Aura naturally: "watch this", "keep track of this",
+"remember this for next time", "where are we on X?", or simply asks Aura to do
+work that reveals a durable object of care. Aura's internal `track` tool is the
+mechanism that turns resolved durable intent into a markdown concern file.
+
 Cognitive logs:
 
 ```text
@@ -154,6 +161,7 @@ Code owns only the parts that must be reliable:
 - Replay labeled events through the current worker/model/policy path without
   notifying Discord.
 - Apply validated file patches through existing tiers.
+- Track durable concerns through the `track` tool as ordinary markdown.
 - Replay historical events against current policies.
 
 Code must not own:
@@ -163,6 +171,24 @@ Code must not own:
 - A claim routing matrix.
 - A typed concern schema before text concerns fail replay.
 - Durable learned preference rules without provenance and correction paths.
+
+## Concern Tracking
+
+Aura tracks concerns; the user uses ordinary language. A concern is any durable
+object future observations should be interpreted against: a ticket, branch,
+release, project, person, company, thesis, risk, workflow, learning frontier,
+deadline, or open question.
+
+The `track` tool is intentionally small. It can start, update, pause, or close a
+markdown concern file under `~/.local/state/aura/concerns/`. Code validates the
+slug, path, security scan, and file write. The model decides whether tracking is
+appropriate from policy, conversation, state, memory, and evidence.
+
+Concern creation is not input parsing. A command like "triage X" may reveal a
+concern, but the concern should be created only after Aura has enough context to
+know X is durably alive, or when the user has explicitly asked Aura to keep it
+in view. Ambient events should update or cite existing concerns when possible;
+if Aura suspects a new durable concern but lacks lineage, the gap is the event.
 
 ## Observation And Evidence
 

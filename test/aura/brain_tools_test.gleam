@@ -2,11 +2,14 @@ import aura/brain_tools
 import aura/db
 import aura/event
 import aura/llm
+import aura/test_helpers
+import aura/xdg
 import gleam/dict
 import gleam/erlang/process
 import gleam/list
 import gleam/string
 import gleeunit/should
+import simplifile
 import test_harness
 
 pub fn parse_tool_args_valid_json_test() {
@@ -154,6 +157,18 @@ pub fn built_in_tools_no_acp_dispatch_test() {
   has_acp |> should.be_false
 }
 
+pub fn built_in_tools_include_track_test() {
+  let tools = brain_tools.make_built_in_tools()
+  let has_track =
+    list.any(tools, fn(t) {
+      case t {
+        llm.ToolDefinition(name: "track", ..) -> True
+        _ -> False
+      }
+    })
+  has_track |> should.be_true
+}
+
 // Regression: GLM concatenates calls for different tools without embedding a
 // "name" key.  expand_tool_calls must infer the tool name from the parameter
 // keys so each part targets the correct tool.
@@ -214,6 +229,65 @@ pub fn memory_tool_has_domain_param_test() {
     }
     _ -> should.fail()
   }
+}
+
+fn track_ctx(base: String) -> brain_tools.ToolContext {
+  let stub = test_harness.standalone_tool_context()
+  brain_tools.ToolContext(
+    ..stub,
+    paths: xdg.resolve_with_home(base),
+    domain_name: "aura",
+  )
+}
+
+fn run_track_tool(ctx: brain_tools.ToolContext, args_json: String) -> String {
+  let call = llm.ToolCall(id: "1", name: "track", arguments: args_json)
+  let #(result, _) = brain_tools.execute_tool(ctx, call)
+  case result {
+    brain_tools.TextResult(s) -> s
+  }
+}
+
+pub fn track_tool_starts_concern_file_test() {
+  let base = "/tmp/aura-track-tool-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = track_ctx(base)
+
+  let out =
+    run_track_tool(
+      ctx,
+      "{\"action\":\"start\",\"slug\":\"cics-342\",\"title\":\"CICS-342 Payment Reconciliation\",\"summary\":\"Payment reconciliation follow-up is active.\",\"why\":\"Blocked reconciliation can carry incorrect payment state forward.\",\"current_state\":\"Needs triage and owner confirmation.\",\"watch_signals\":\"Status changes and rollback requests.\",\"evidence\":\"Jira CICS-342\",\"authority\":\"Human approval required for production rollback.\",\"gaps\":\"Rollback runbook is not yet linked.\"}",
+    )
+
+  out
+  |> string.contains("Tracking start: CICS-342 Payment Reconciliation")
+  |> should.be_true
+  let path = xdg.concerns_dir(ctx.paths) <> "/cics-342.md"
+  let content = simplifile.read(path) |> should.be_ok
+  content |> string.contains("Status: active") |> should.be_true
+  content |> string.contains("Jira CICS-342") |> should.be_true
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn track_tool_rejects_invalid_slug_test() {
+  let base = "/tmp/aura-track-tool-invalid-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = track_ctx(base)
+
+  let out =
+    run_track_tool(
+      ctx,
+      "{\"action\":\"start\",\"slug\":\"../cics-342\",\"title\":\"Bad\"}",
+    )
+
+  out |> string.contains("Error: invalid slug") |> should.be_true
+  simplifile.is_file(xdg.concerns_dir(ctx.paths) <> "/../cics-342.md")
+  |> should.equal(Ok(False))
+
+  let _ = simplifile.delete_all([base])
+  Nil
 }
 
 pub fn expand_tool_calls_preserves_non_concat_test() {
@@ -295,8 +369,7 @@ fn run_search_events_tool(
   ctx: brain_tools.ToolContext,
   args_json: String,
 ) -> String {
-  let call =
-    llm.ToolCall(id: "1", name: "search_events", arguments: args_json)
+  let call = llm.ToolCall(id: "1", name: "search_events", arguments: args_json)
   let #(result, _) = brain_tools.execute_tool(ctx, call)
   case result {
     brain_tools.TextResult(s) -> s
