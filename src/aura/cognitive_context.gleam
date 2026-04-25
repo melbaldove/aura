@@ -302,6 +302,7 @@ fn attention_policy() -> String {
   "# Attention Policy\n\n"
   <> "Aura preserves the user's cognitive capacity. Do not interrupt merely because something changed.\n\n"
   <> "Every attention decision must include a rationale. Record and digest are decisions, not silent defaults.\n\n"
+  <> "Synthetic smoke events are verification artifacts. They must be record-only and must not notify, dispatch, mutate memory, or learn preferences.\n\n"
   <> "## Defaults\n"
   <> "- Routine external updates: record.\n"
   <> "- Potentially useful but not time-sensitive updates: digest.\n"
@@ -324,6 +325,7 @@ fn authority_policy() -> String {
 fn work_policy() -> String {
   "# Work Policy\n\n"
   <> "Prefer doing useful preparatory work before spending user attention.\n\n"
+  <> "Synthetic smoke events must use work=none; they exist to prove the path, not to start work.\n\n"
   <> "## Defaults\n"
   <> "- none: no work is useful now.\n"
   <> "- prepare: gather context, summarize, or verify before asking.\n"

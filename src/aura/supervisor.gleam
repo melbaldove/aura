@@ -326,6 +326,7 @@ pub fn start(
     ctl.start(ctl.CtlContext(
       paths: paths,
       db_subject: db_subject,
+      event_ingest_subject: event_ingest_subject,
       domains: list.map(brain_domains, fn(d) { d.name }),
       dream_model: global_config.models.dream,
       dream_budget_percent: global_config.dreaming_budget_percent,

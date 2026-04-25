@@ -1,5 +1,7 @@
+import aura/cognitive_smoke
 import aura/db
 import aura/dreaming
+import aura/event_ingest
 import aura/time
 import aura/xdg
 import gleam/erlang/process
@@ -36,6 +38,7 @@ pub type CtlContext {
   CtlContext(
     paths: xdg.Paths,
     db_subject: process.Subject(db.DbMessage),
+    event_ingest_subject: process.Subject(event_ingest.IngestMessage),
     domains: List(String),
     dream_model: String,
     dream_budget_percent: Int,
@@ -61,10 +64,11 @@ pub fn start(ctx: CtlContext) -> Result(Nil, String) {
 
 /// Handle a single command from a CLI client.
 fn handle_command(command: String, ctx: CtlContext) -> String {
-  case string.trim(command) {
-    "ping" -> "pong"
+  let trimmed = string.trim(command)
+  case string.split(trimmed, " ") {
+    ["ping"] -> "pong"
 
-    "dream" -> {
+    ["dream"] -> {
       logging.log(logging.Info, "[ctl] Dream triggered via CLI")
       process.spawn_unlinked(fn() {
         dreaming.dream_all(dreaming.DreamConfig(
@@ -79,7 +83,7 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
       "OK: dream cycle started"
     }
 
-    "status" -> {
+    ["status"] -> {
       let uptime_ms = time.now_ms() - ctx.started_at_ms
       let uptime_min = uptime_ms / 60_000
       let domain_list = string.join(ctx.domains, ", ")
@@ -105,10 +109,24 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
       <> last_dream
     }
 
-    unknown ->
+    ["cognitive-smoke", "gmail-rel42"] -> {
+      logging.log(logging.Info, "[ctl] Cognitive smoke triggered: gmail-rel42")
+      case
+        cognitive_smoke.run_gmail_rel42(cognitive_smoke.Context(
+          paths: ctx.paths,
+          db_subject: ctx.db_subject,
+          event_ingest_subject: ctx.event_ingest_subject,
+        ))
+      {
+        Ok(report) -> report
+        Error(err) -> "ERROR: " <> err
+      }
+    }
+
+    _ ->
       "ERROR: unknown command '"
-      <> unknown
-      <> "'. Commands: ping, dream, status"
+      <> trimmed
+      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42"
   }
 }
 

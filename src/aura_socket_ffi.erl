@@ -77,7 +77,7 @@ connect_and_send(SocketPath, Command) ->
     ], 5000) of
         {ok, Sock} ->
             ok = gen_tcp:send(Sock, [Command, <<"\n">>]),
-            Result = case gen_tcp:recv(Sock, 0, 30000) of
+            Result = case gen_tcp:recv(Sock, 0, 180000) of
                 {ok, Data} -> {ok, string:trim(Data)};
                 {error, Reason} -> {error, iolist_to_binary(io_lib:format("~p", [Reason]))}
             end,

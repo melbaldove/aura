@@ -13,26 +13,24 @@ import gleam/string
 import logging
 import simplifile
 
+pub type CliCommand {
+  CliStart
+  CliDoctor
+  CliCtl(command: String)
+  CliOauthGmail(email: String)
+}
+
 pub fn main() {
-  let args = get_args()
-  case args {
-    ["doctor"] -> {
+  case parse_args(get_args()) {
+    CliDoctor -> {
       doctor.run()
       halt(0)
     }
-    ["dream"] -> {
-      run_ctl("dream")
+    CliCtl(command) -> {
+      run_ctl(command)
       halt(0)
     }
-    ["status"] -> {
-      run_ctl("status")
-      halt(0)
-    }
-    ["ping"] -> {
-      run_ctl("ping")
-      halt(0)
-    }
-    ["oauth", "gmail", email] -> {
+    CliOauthGmail(email) -> {
       logging.configure()
       case oauth_cli.run_gmail(email) {
         Ok(path) -> {
@@ -45,8 +43,33 @@ pub fn main() {
         }
       }
     }
-    _ -> run_start()
+    CliStart -> run_start()
   }
+}
+
+fn parse_args(args: List(String)) -> CliCommand {
+  case drop_leading_dash_dash(args) {
+    [] -> CliStart
+    ["start"] -> CliStart
+    ["doctor"] -> CliDoctor
+    ["dream"] -> CliCtl("dream")
+    ["status"] -> CliCtl("status")
+    ["ping"] -> CliCtl("ping")
+    ["cognitive-smoke", "gmail-rel42"] -> CliCtl("cognitive-smoke gmail-rel42")
+    ["oauth", "gmail", email] -> CliOauthGmail(email)
+    _ -> CliStart
+  }
+}
+
+fn drop_leading_dash_dash(args: List(String)) -> List(String) {
+  case args {
+    ["--", ..rest] -> rest
+    _ -> args
+  }
+}
+
+pub fn parse_args_for_test(args: List(String)) -> CliCommand {
+  parse_args(args)
 }
 
 fn run_start() {
@@ -135,5 +158,5 @@ fn halt(code: Int) -> Nil
 @external(erlang, "aura_runtime_ffi", "sleep_forever")
 fn sleep_forever() -> Nil
 
-@external(erlang, "init", "get_plain_arguments")
+@external(erlang, "aura_runtime_ffi", "get_plain_arguments")
 fn get_args() -> List(String)
