@@ -115,3 +115,13 @@ pub fn fake_llm_chat_text_scripts_are_fifo_test() {
   client.chat_text(fake_config(), [], None) |> should.equal(Ok("first"))
   client.chat_text(fake_config(), [], None) |> should.equal(Ok("second"))
 }
+
+pub fn fake_llm_chat_text_can_script_errors_test() {
+  let #(fake, client) = fake_llm.new()
+  fake_llm.script_chat_text_error(fake, "temporary timeout")
+  fake_llm.script_chat_text_response(fake, "recovered")
+
+  client.chat_text(fake_config(), [], None)
+  |> should.equal(Error("temporary timeout"))
+  client.chat_text(fake_config(), [], None) |> should.equal(Ok("recovered"))
+}

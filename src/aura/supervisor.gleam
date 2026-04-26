@@ -100,66 +100,8 @@ pub fn start(
   }
 
   // 5. Load domain configs (no actors — brain handles all channels directly)
-  let #(brain_domains, domain_configs) = case scaffold.list_domains(paths) {
-    Ok(names) -> {
-      let results =
-        list.filter_map(names, fn(name) {
-          let config_path = xdg.domain_config_path(paths, name)
-          // Ensure AGENTS.md exists for this domain
-          let agents_path = xdg.domain_config_dir(paths, name) <> "/AGENTS.md"
-          case simplifile.is_file(agents_path) {
-            Ok(True) -> Nil
-            _ -> {
-              let _ =
-                simplifile.write(
-                  agents_path,
-                  "# " <> name <> "\n\nDomain-specific instructions go here.\n",
-                )
-              Nil
-            }
-          }
-          case simplifile.read(config_path) {
-            Ok(toml_content) -> {
-              case config.parse_domain(toml_content) {
-                Ok(cfg) -> {
-                  // Resolve channel name → ID. If the config value is already numeric, use it directly.
-                  let channel_id = case
-                    list.find(channel_map, fn(c) { c.0 == cfg.discord_channel })
-                  {
-                    Ok(#(_, id)) -> id
-                    Error(_) -> cfg.discord_channel
-                  }
-                  Ok(
-                    #(brain.DomainInfo(name: name, channel_id: channel_id), #(
-                      name,
-                      cfg,
-                    )),
-                  )
-                }
-                Error(e) -> {
-                  logging.log(
-                    logging.Error,
-                    "[supervisor] Failed to parse domain " <> name <> ": " <> e,
-                  )
-                  Error(Nil)
-                }
-              }
-            }
-            Error(_) -> {
-              logging.log(
-                logging.Error,
-                "[supervisor] Failed to read config for domain " <> name,
-              )
-              Error(Nil)
-            }
-          }
-        })
-      let domains = list.map(results, fn(r) { r.0 })
-      let configs = list.map(results, fn(r) { r.1 })
-      #(domains, configs)
-    }
-    Error(_) -> #([], [])
-  }
+  use domain_info <- result.try(load_domain_configs(paths, channel_map))
+  let #(brain_domains, domain_configs) = domain_info
   logging.log(
     logging.Info,
     "[supervisor] Domains: "
@@ -173,8 +115,11 @@ pub fn start(
   // event_ingest remains fire-and-forget; the cognitive worker observes only
   // successfully persisted event IDs, and delivery only sees validated
   // decisions after they are appended to the decision log.
-  let default_channel_id =
-    resolve_channel_id(global_config.discord.default_channel, channel_map)
+  use default_channel_id <- result.try(resolve_channel_id(
+    "discord.default_channel",
+    global_config.discord.default_channel,
+    channel_map,
+  ))
   let delivery_targets = [
     cognitive_delivery.default_target(default_channel_id),
     ..list.map(brain_domains, fn(d) {
@@ -206,6 +151,7 @@ pub fn start(
       cognitive_llm_config,
       delivery_subject,
       delivery_target_ids,
+      global_config.notifications.digest_windows,
     )
   let cognitive_subject = cognitive_started.data
   logging.log(logging.Info, "[supervisor] Cognitive worker started")
@@ -403,13 +349,119 @@ fn migrate_directories(paths: xdg.Paths) -> Nil {
   migrate_dir(paths.data <> "/workstreams", paths.data <> "/domains", "data")
 }
 
-fn resolve_channel_id(
+fn load_domain_configs(
+  paths: xdg.Paths,
+  channel_map: List(#(String, String)),
+) -> Result(
+  #(List(brain.DomainInfo), List(#(String, config.DomainConfig))),
+  String,
+) {
+  case scaffold.list_domains(paths) {
+    Error(_) -> Ok(#([], []))
+    Ok(names) -> {
+      use results <- result.try(
+        names
+        |> list.try_map(fn(name) {
+          load_domain_config(paths, channel_map, name)
+        }),
+      )
+      Ok(#(list.map(results, fn(r) { r.0 }), list.map(results, fn(r) { r.1 })))
+    }
+  }
+}
+
+fn load_domain_config(
+  paths: xdg.Paths,
+  channel_map: List(#(String, String)),
+  name: String,
+) -> Result(#(brain.DomainInfo, #(String, config.DomainConfig)), String) {
+  let config_path = xdg.domain_config_path(paths, name)
+  let agents_path = xdg.domain_config_dir(paths, name) <> "/AGENTS.md"
+  case simplifile.is_file(agents_path) {
+    Ok(True) -> Nil
+    _ -> {
+      let _ =
+        simplifile.write(
+          agents_path,
+          "# " <> name <> "\n\nDomain-specific instructions go here.\n",
+        )
+      Nil
+    }
+  }
+
+  use toml_content <- result.try(
+    simplifile.read(config_path)
+    |> result.map_error(fn(_) {
+      "[supervisor] Failed to read config for domain " <> name
+    }),
+  )
+  use cfg <- result.try(
+    config.parse_domain(toml_content)
+    |> result.map_error(fn(e) {
+      "[supervisor] Failed to parse domain " <> name <> ": " <> e
+    }),
+  )
+  use channel_id <- result.try(resolve_channel_id(
+    "domain " <> name <> " discord.channel",
+    cfg.discord_channel,
+    channel_map,
+  ))
+  Ok(#(brain.DomainInfo(name: name, channel_id: channel_id), #(name, cfg)))
+}
+
+/// Resolve a configured Discord channel name to a numeric channel ID.
+///
+/// Numeric IDs are accepted directly. Names must be present in the channel map;
+/// silently falling back to the unresolved name causes Discord sends to fail
+/// later with opaque 400s.
+pub fn resolve_channel_id(
+  label: String,
   name_or_id: String,
   channel_map: List(#(String, String)),
-) -> String {
-  case list.find(channel_map, fn(channel) { channel.0 == name_or_id }) {
-    Ok(#(_, id)) -> id
-    Error(_) -> name_or_id
+) -> Result(String, String) {
+  let raw = string.trim(name_or_id)
+  let name = case string.starts_with(raw, "#") {
+    True -> string.drop_start(raw, 1)
+    False -> raw
+  }
+
+  case is_discord_snowflake(raw) {
+    True -> Ok(raw)
+    False ->
+      case list.find(channel_map, fn(channel) { channel.0 == name }) {
+        Ok(#(_, id)) -> Ok(id)
+        Error(_) ->
+          Error(
+            "Configured Discord channel for "
+            <> label
+            <> " was not found: '"
+            <> name_or_id
+            <> "'. Use an existing text channel name or numeric channel ID. Available text channels: "
+            <> available_channel_names(channel_map),
+          )
+      }
+  }
+}
+
+fn is_discord_snowflake(value: String) -> Bool {
+  let chars = string.to_graphemes(value)
+  string.length(value) >= 17
+  && string.length(value) <= 22
+  && list.all(chars, is_digit)
+}
+
+fn is_digit(char: String) -> Bool {
+  list.contains(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], char)
+}
+
+fn available_channel_names(channel_map: List(#(String, String))) -> String {
+  case channel_map {
+    [] -> "(none discovered)"
+    _ ->
+      channel_map
+      |> list.map(fn(channel) { channel.0 })
+      |> list.sort(string.compare)
+      |> string.join(", ")
   }
 }
 

@@ -51,7 +51,7 @@ type State {
   State(
     scripts: List(List(ScriptedEvent)),
     calls: List(LlmCall),
-    chat_text_scripts: List(String),
+    chat_text_scripts: List(Result(String, String)),
   )
 }
 
@@ -59,7 +59,7 @@ type Msg {
   PushScript(events: List(ScriptedEvent))
   Consume(call: LlmCall, callback_pid: Pid, reply: process.Subject(Nil))
   GetCalls(reply: process.Subject(List(LlmCall)))
-  PushChatTextScript(text: String)
+  PushChatTextScript(result: Result(String, String))
   PopChatText(reply: process.Subject(Result(String, String)))
 }
 
@@ -89,11 +89,11 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       actor.continue(state)
     }
 
-    PushChatTextScript(text:) ->
+    PushChatTextScript(result:) ->
       actor.continue(
         State(
           ..state,
-          chat_text_scripts: list.append(state.chat_text_scripts, [text]),
+          chat_text_scripts: list.append(state.chat_text_scripts, [result]),
         ),
       )
 
@@ -104,7 +104,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
           actor.continue(state)
         }
         [first, ..tail] -> {
-          process.send(reply, Ok(first))
+          process.send(reply, first)
           actor.continue(State(..state, chat_text_scripts: tail))
         }
       }
@@ -269,5 +269,10 @@ pub fn calls(fake: FakeLLM) -> List(LlmCall) {
 /// scripted response in FIFO order and returns `Ok(text)`. An empty queue
 /// returns `Error("fake_llm: no chat_text script")`.
 pub fn script_chat_text_response(fake: FakeLLM, text: String) -> Nil {
-  process.send(fake.subject, PushChatTextScript(text: text))
+  process.send(fake.subject, PushChatTextScript(result: Ok(text)))
+}
+
+/// Push a scripted error onto the `chat_text` queue.
+pub fn script_chat_text_error(fake: FakeLLM, reason: String) -> Nil {
+  process.send(fake.subject, PushChatTextScript(result: Error(reason)))
 }

@@ -6,6 +6,7 @@
 //// interprets it, and the validator gates the result.
 
 import aura/cognitive_event
+import aura/time
 import aura/xdg
 import gleam/dict
 import gleam/int
@@ -34,6 +35,8 @@ pub type ContextPacket {
     context_files: List(ContextFile),
     concerns: List(ConcernFile),
     delivery_targets: List(String),
+    digest_windows: List(String),
+    current_local_time: String,
     recent_decisions: String,
   )
 }
@@ -54,6 +57,25 @@ pub fn build_with_delivery_targets(
   evidence: cognitive_event.EvidenceBundle,
   delivery_targets: List(String),
 ) -> Result(ContextPacket, String) {
+  build_with_delivery_targets_and_digest_windows(
+    paths,
+    observation,
+    evidence,
+    delivery_targets,
+    [],
+  )
+}
+
+/// Build the model context packet with explicit delivery targets and digest
+/// windows. The model needs delivery timing to decide whether digest is
+/// sufficient; hiding the schedule causes over-eager surface_now decisions.
+pub fn build_with_delivery_targets_and_digest_windows(
+  paths: xdg.Paths,
+  observation: cognitive_event.Observation,
+  evidence: cognitive_event.EvidenceBundle,
+  delivery_targets: List(String),
+  digest_windows: List(String),
+) -> Result(ContextPacket, String) {
   use policies <- result.try(load_policies(paths))
   use context_files <- result.try(load_context_files(paths))
   use concerns <- result.try(load_concerns(paths))
@@ -65,6 +87,8 @@ pub fn build_with_delivery_targets(
     context_files: context_files,
     concerns: concerns,
     delivery_targets: normalize_delivery_targets(delivery_targets),
+    digest_windows: normalize_digest_windows(digest_windows),
+    current_local_time: time.now_datetime_string(),
     recent_decisions: "",
   ))
 }
@@ -85,6 +109,8 @@ pub fn render(packet: ContextPacket) -> String {
   <> render_concerns(packet.concerns)
   <> "\n\n## Delivery Targets\n"
   <> render_delivery_targets(packet.delivery_targets)
+  <> "\n\n## Delivery Timing\n"
+  <> render_delivery_timing(packet)
   <> "\n\n## Recent Decisions\n"
   <> case packet.recent_decisions {
     "" -> "None yet."
@@ -442,10 +468,32 @@ fn normalize_delivery_targets(targets: List(String)) -> List(String) {
   |> unique_strings
 }
 
+fn normalize_digest_windows(windows: List(String)) -> List(String) {
+  windows
+  |> list.filter_map(fn(window) {
+    let trimmed = string.trim(window)
+    case trimmed == "" {
+      True -> Error(Nil)
+      False -> Ok(trimmed)
+    }
+  })
+}
+
 fn render_delivery_targets(targets: List(String)) -> String {
   targets
   |> list.map(fn(target) { "- " <> target })
   |> string.join("\n")
+}
+
+fn render_delivery_timing(packet: ContextPacket) -> String {
+  "- current_local_time: "
+  <> packet.current_local_time
+  <> "\n- digest_windows_local: "
+  <> case packet.digest_windows {
+    [] -> "(none configured)"
+    windows -> string.join(windows, ", ")
+  }
+  <> "\n- timing_policy: choose digest when the next scheduled digest can reach the user before the action window; choose surface_now only when waiting for digest would miss or materially shrink that window."
 }
 
 fn unique_strings(values: List(String)) -> List(String) {
@@ -509,6 +557,7 @@ fn attention_policy() -> String {
   <> "## Defaults\n"
   <> "- Routine external updates: record.\n"
   <> "- Potentially useful but not time-sensitive updates: digest.\n"
+  <> "- Future-window requests default to digest when the next scheduled digest can surface them before the requested window; do not interrupt tonight for a tomorrow-morning review unless digest would miss or materially shrink that window.\n"
   <> "- Interrupt only when the user must decide now or delay has material cost.\n"
   <> "- Ask now when Aura cannot responsibly proceed without the user's judgment.\n\n"
   <> "## Ask-Now Rule\n"

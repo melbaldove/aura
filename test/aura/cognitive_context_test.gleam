@@ -65,6 +65,37 @@ pub fn build_creates_and_loads_default_policies_test() {
   Nil
 }
 
+pub fn build_renders_delivery_timing_for_attention_judgment_test() {
+  let #(base, paths) = temp_paths("cognitive-context-delivery-timing")
+  let observation = sample_observation()
+  let evidence = cognitive_event.extract_evidence(observation)
+
+  let packet =
+    cognitive_context.build_with_delivery_targets_and_digest_windows(
+      paths,
+      observation,
+      evidence,
+      ["none", "default"],
+      ["07:35", "09:10"],
+    )
+    |> should.be_ok
+
+  let rendered = cognitive_context.render(packet)
+  rendered |> string.contains("## Delivery Timing") |> should.be_true
+  rendered
+  |> string.contains("digest_windows_local: 07:35, 09:10")
+  |> should.be_true
+  rendered
+  |> string.contains("choose digest when the next scheduled digest can reach")
+  |> should.be_true
+  rendered
+  |> string.contains("tomorrow-morning review")
+  |> should.be_true
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
 pub fn build_loads_markdown_concerns_as_text_refs_test() {
   let #(base, paths) = temp_paths("cognitive-context-concerns")
   let _ = simplifile.create_directory_all(xdg.concerns_dir(paths))

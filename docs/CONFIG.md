@@ -10,7 +10,7 @@
 |-------|------|----------|-------------|
 | `token` | string | yes | Discord bot token. Use `${AURA_DISCORD_TOKEN}` to read from env. |
 | `guild` | string | yes | Discord server (guild) ID. |
-| `default_channel` | string | yes | Default channel name for #aura. |
+| `default_channel` | string | yes | Existing Discord text channel name or numeric channel ID for cross-domain messages and digest delivery. Startup fails if this cannot be resolved. |
 
 ### [models]
 
@@ -74,7 +74,7 @@
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `channel` | string | yes | Discord channel name for this domain. |
+| `channel` | string | yes | Existing Discord text channel name or numeric channel ID for this domain. |
 
 ### [model] (optional overrides)
 

@@ -115,7 +115,7 @@ See [docs/CONFIG.md](docs/CONFIG.md) for the full reference.
 [discord]
 token = "${AURA_DISCORD_TOKEN}"
 guild = "your-guild-id"
-default_channel = "aura"
+default_channel = "general"
 
 [models]
 brain = "zai/glm-5.1"

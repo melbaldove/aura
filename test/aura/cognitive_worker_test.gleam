@@ -7,6 +7,7 @@ import aura/llm
 import aura/test_helpers
 import aura/xdg
 import fakes/fake_discord
+import fakes/fake_llm
 import gleam/dict
 import gleam/erlang/process
 import gleam/list
@@ -229,6 +230,39 @@ pub fn worker_reports_invalid_decision_without_log_write_test() {
   Nil
 }
 
+pub fn worker_retries_transient_model_errors_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let #(base, paths) = temp_paths("cognitive-worker-retry")
+  let reports = process.new_subject()
+  let #(fake, client) = fake_llm.new()
+  fake_llm.script_chat_text_error(fake, "HTTP request failed: ResponseTimeout")
+  fake_llm.script_chat_text_response(fake, valid_decision("ev-1"))
+  let assert Ok(started) =
+    cognitive_worker.start_with(
+      db_subject,
+      paths,
+      fake_config(),
+      client.chat_text,
+      Some(reports),
+    )
+
+  let assert Ok(True) =
+    db.insert_event(db_subject, sample_event("ev-1", "msg-1"))
+  cognitive_worker.build_context(started.data, "ev-1")
+
+  let assert Ok(report) = process.receive(reports, 3000)
+  report.status |> should.equal(cognitive_worker.DecisionReady)
+  report.attention_action |> should.equal("record")
+
+  let log = simplifile.read(xdg.decisions_path(paths)) |> should.be_ok
+  log |> string.contains("\"event_id\":\"ev-1\"") |> should.be_true
+
+  stop_subject(started.data)
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
 pub fn event_ingest_notifies_worker_only_for_new_events_test() {
   let assert Ok(db_subject) = db.start(":memory:")
   let #(base, paths) = temp_paths("cognitive-worker-ingest")
@@ -287,6 +321,7 @@ pub fn worker_sends_validated_decision_to_delivery_test() {
       Some(worker_reports),
       delivery_started.data,
       cognitive_delivery.allowed_target_ids(delivery_targets),
+      ["07:35", "09:10"],
     )
 
   let assert Ok(True) =

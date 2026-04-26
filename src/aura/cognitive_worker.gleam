@@ -40,6 +40,10 @@ pub type Status {
   DecisionLogError
 }
 
+const model_max_attempts = 3
+
+const model_retry_delay_ms = 1000
+
 pub type Report {
   Report(
     event_id: String,
@@ -65,6 +69,7 @@ type State {
     report_to: Option(Subject(Report)),
     delivery_subject: Option(Subject(cognitive_delivery.Message)),
     delivery_targets: List(String),
+    digest_windows: List(String),
   )
 }
 
@@ -92,10 +97,19 @@ pub fn start_with(
     Result(String, String),
   report_to: Option(Subject(Report)),
 ) -> Result(actor.Started(Subject(Message)), actor.StartError) {
-  start_with_options(db_subject, paths, llm_config, chat_text, report_to, None, [
-    "none",
-    "default",
-  ])
+  start_with_options(
+    db_subject,
+    paths,
+    llm_config,
+    chat_text,
+    report_to,
+    None,
+    [
+      "none",
+      "default",
+    ],
+    [],
+  )
 }
 
 /// Start a production worker connected to the cognitive delivery actor.
@@ -105,6 +119,7 @@ pub fn start_with_delivery(
   llm_config: llm.LlmConfig,
   delivery_subject: Subject(cognitive_delivery.Message),
   delivery_targets: List(String),
+  digest_windows: List(String),
 ) -> Result(actor.Started(Subject(Message)), actor.StartError) {
   start_with_options(
     db_subject,
@@ -114,6 +129,7 @@ pub fn start_with_delivery(
     None,
     Some(delivery_subject),
     delivery_targets,
+    digest_windows,
   )
 }
 
@@ -127,6 +143,7 @@ pub fn start_with_delivery_and_report(
   report_to: Option(Subject(Report)),
   delivery_subject: Subject(cognitive_delivery.Message),
   delivery_targets: List(String),
+  digest_windows: List(String),
 ) -> Result(actor.Started(Subject(Message)), actor.StartError) {
   start_with_options(
     db_subject,
@@ -136,6 +153,7 @@ pub fn start_with_delivery_and_report(
     report_to,
     Some(delivery_subject),
     delivery_targets,
+    digest_windows,
   )
 }
 
@@ -148,6 +166,7 @@ fn start_with_options(
   report_to: Option(Subject(Report)),
   delivery_subject: Option(Subject(cognitive_delivery.Message)),
   delivery_targets: List(String),
+  digest_windows: List(String),
 ) -> Result(actor.Started(Subject(Message)), actor.StartError) {
   actor.new_with_initialiser(5000, fn(self_subject) {
     let state =
@@ -159,6 +178,7 @@ fn start_with_options(
         report_to: report_to,
         delivery_subject: delivery_subject,
         delivery_targets: delivery_targets,
+        digest_windows: digest_windows,
       )
     Ok(actor.initialised(state) |> actor.returning(self_subject))
   })
@@ -242,11 +262,12 @@ fn decide_for_event(
   let raw_ref_count = list.length(evidence.raw_refs)
 
   case
-    cognitive_context.build_with_delivery_targets(
+    cognitive_context.build_with_delivery_targets_and_digest_windows(
       state.paths,
       observation,
       evidence,
       state.delivery_targets,
+      state.digest_windows,
     )
   {
     Error(err) ->
@@ -264,7 +285,7 @@ fn decide_for_event(
 
     Ok(context) -> {
       let messages = cognitive_decision.build_messages(context)
-      case state.chat_text(state.llm_config, messages, Some(0.0)) {
+      case chat_text_with_retries(state, messages, model_max_attempts) {
         Error(err) ->
           emit_report(
             state,
@@ -351,6 +372,29 @@ fn decide_for_event(
             }
           }
         }
+      }
+    }
+  }
+}
+
+fn chat_text_with_retries(
+  state: State,
+  messages: List(llm.Message),
+  attempts_remaining: Int,
+) -> Result(String, String) {
+  case state.chat_text(state.llm_config, messages, Some(0.0)) {
+    Ok(raw_response) -> Ok(raw_response)
+    Error(err) -> {
+      case attempts_remaining > 1 {
+        True -> {
+          logging.log(
+            logging.Warning,
+            "[cognitive] model call failed, retrying: " <> err,
+          )
+          process.sleep(model_retry_delay_ms)
+          chat_text_with_retries(state, messages, attempts_remaining - 1)
+        }
+        False -> Error(err)
       }
     }
   }

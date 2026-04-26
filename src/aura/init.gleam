@@ -245,7 +245,7 @@ fn generate_config(
         "[discord]",
         "token = \"${AURA_DISCORD_TOKEN}\"",
         "guild = \"" <> guild_id <> "\"",
-        "default_channel = \"aura\"",
+        "default_channel = \"general\"",
         "",
         "[models]",
         "brain = \"" <> brain_model <> "\"",

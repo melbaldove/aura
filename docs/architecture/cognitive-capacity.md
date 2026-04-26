@@ -254,6 +254,9 @@ Interrupt only when the user must decide now or delay is materially costly.
 ## Defaults
 - Routine external updates: record.
 - Active commitment changed: digest unless deadline moved earlier.
+- Future-window requests: digest when the next scheduled digest can reach the
+  user before the action window; surface now only when digest would miss or
+  materially shrink that window.
 - Missing reusable preference: batch unless urgent.
 
 ## Examples
@@ -338,10 +341,12 @@ The rule: structure earns its way into code only by reducing replay failures.
 7. Model decisions cite event evidence and concern/policy files.
 8. `surface_now` and `ask_now` require why-now, deferral-cost, and
    why-not-digest proof.
-9. Many gaps may be observed; few should interrupt.
-10. World-state awareness is concern-indexed, not an unbounded feed of
+9. The model sees delivery timing, including local digest windows, before it
+   decides that digest is insufficient.
+10. Many gaps may be observed; few should interrupt.
+11. World-state awareness is concern-indexed, not an unbounded feed of
    interesting facts.
-11. Replay evaluation is required before expanding proactive thresholds,
+12. Replay evaluation is required before expanding proactive thresholds,
     autonomy, or cognitive structure.
-12. New structure is added only when replay shows text plus model judgment is
+13. New structure is added only when replay shows text plus model judgment is
    insufficient.
