@@ -332,6 +332,14 @@ The rule: structure earns its way into code only by reducing replay failures.
 Replay reports should carry the correction label and likely adjustment surface
 so the next move is a text policy or concern-file patch, not a hidden heuristic.
 
+GEPA and DSPy are useful reference designs for this loop. In Aura's version,
+real events are examples, decisions and deliveries are traces, correction
+labels are textual feedback, and `policies/*.md` plus `concerns/*.md` are the
+candidate artifacts being improved. Do not adopt GEPA/DSPy as runtime
+dependencies before the local replay loop proves the need; first implement the
+minimal replay-to-policy-patch path, then evaluate GEPA-style reflective
+optimization once enough labeled failures exist.
+
 ## Invariants
 
 1. Integrations describe what changed; they do not decide whether the user

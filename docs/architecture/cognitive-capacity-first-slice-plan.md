@@ -99,6 +99,10 @@ Scope:
 - Keep patch application behind the existing approval/tier path.
 - Keep replay offline-safe where possible, with live model replay as an
   explicit operator check.
+- Keep GEPA/DSPy as reference designs for reflective prompt/policy
+  optimization, not immediate runtime dependencies.
+- Preserve Aura's local-first text-file substrate. Optimizer adoption must be
+  earned by replay results against real correction labels.
 
 Non-scope:
 

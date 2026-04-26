@@ -1,6 +1,6 @@
 # Cognitive Capacity Literature
 
-Updated 2026-04-24
+Updated 2026-04-26
 
 Status: living reference list for the cognitive-capacity and manager-agent
 architecture. Use this note as provenance for
@@ -170,6 +170,34 @@ sensemaking in unfamiliar domains.
 Aura implication: Aura should help the user choose and understand problem
 spaces, not just execute tasks. Summaries should include criteria, tradeoffs,
 and options that support taste and problem selection.
+
+## Policy Learning And Prompt Optimization
+
+[DSPy](https://github.com/stanfordnlp/dspy)
+
+Why it matters: DSPy treats language-model behavior as optimizable programs
+with examples, metrics, traces, and prompt/module compilation. It is relevant
+because Aura's cognitive loop is intentionally becoming example-driven rather
+than hand-tuned by intuition.
+
+Aura implication: keep the local substrate simple first. Aura's immediate
+artifacts are persisted events, decision traces, correction labels, replay
+reports, and markdown policy/concern patches. DSPy becomes interesting when we
+have enough labeled examples to justify systematic optimization.
+
+[GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning](https://arxiv.org/abs/2507.19457)
+
+Why it matters: GEPA uses textual feedback and execution traces to evolve
+language-model prompts/programs. That shape maps closely to Aura's desired
+policy-learning loop: real events as examples, cognitive decisions and
+deliveries as traces, user correction labels as feedback, and policy files as
+candidate artifacts.
+
+Aura implication: GEPA is a reference design, not an immediate dependency.
+First build the minimal replay-to-policy-patch loop over ordinary text files.
+If replay labels accumulate enough repeated failure patterns, evaluate
+GEPA-style reflective optimization for `attention.md`, `authority.md`,
+`delivery.md`, and concern templates.
 
 ## Human-AI Interaction, Control, And Trust
 
