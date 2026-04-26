@@ -169,6 +169,22 @@ pub fn built_in_tools_include_track_test() {
   has_track |> should.be_true
 }
 
+pub fn built_in_tools_include_record_cognitive_feedback_test() {
+  let tools = brain_tools.make_built_in_tools()
+  let has_tool =
+    list.any(tools, fn(t) {
+      case t {
+        llm.ToolDefinition(
+          name: "record_cognitive_feedback",
+          parameters: params,
+          ..,
+        ) -> list.any(params, fn(p) { p.name == "event_id" && p.required })
+        _ -> False
+      }
+    })
+  has_tool |> should.be_true
+}
+
 // Regression: GLM concatenates calls for different tools without embedding a
 // "name" key.  expand_tool_calls must infer the tool name from the parameter
 // keys so each part targets the correct tool.
@@ -374,6 +390,100 @@ fn run_search_events_tool(
   case result {
     brain_tools.TextResult(s) -> s
   }
+}
+
+fn cognitive_feedback_ctx(
+  base: String,
+  db_subject: process.Subject(db.DbMessage),
+) -> brain_tools.ToolContext {
+  let stub = test_harness.standalone_tool_context()
+  brain_tools.ToolContext(
+    ..stub,
+    paths: xdg.resolve_with_home(base),
+    db_subject: db_subject,
+  )
+}
+
+fn run_cognitive_feedback_tool(
+  ctx: brain_tools.ToolContext,
+  args_json: String,
+) -> String {
+  let call =
+    llm.ToolCall(
+      id: "1",
+      name: "record_cognitive_feedback",
+      arguments: args_json,
+    )
+  let #(result, _) = brain_tools.execute_tool(ctx, call)
+  case result {
+    brain_tools.TextResult(s) -> s
+  }
+}
+
+pub fn record_cognitive_feedback_tool_writes_label_for_existing_event_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let base = "/tmp/aura-feedback-tool-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = cognitive_feedback_ctx(base, db_subject)
+  let assert Ok(True) =
+    db.insert_event(
+      db_subject,
+      gmail_event(
+        "ev-feedback",
+        "Rollback request",
+        "ops@example.com",
+        "thread-feedback",
+        1_700_000_000_000,
+      ),
+    )
+
+  let out =
+    run_cognitive_feedback_tool(
+      ctx,
+      "{\"event_id\":\"ev-feedback\",\"label\":\"false_interrupt\",\"expected_attention\":\"digest\",\"note\":\"User said this was too noisy; interpret as digest-worthy, not interrupt-worthy.\"}",
+    )
+
+  out
+  |> string.contains("Recorded cognitive feedback")
+  |> should.be_true
+  out |> string.contains("event_id=ev-feedback") |> should.be_true
+  out |> string.contains("label=false_interrupt") |> should.be_true
+  out |> string.contains("attention_any=[digest]") |> should.be_true
+
+  let content = simplifile.read(xdg.labels_path(ctx.paths)) |> should.be_ok
+  content
+  |> string.contains("\"event_id\":\"ev-feedback\"")
+  |> should.be_true
+  content
+  |> string.contains("\"label\":\"false_interrupt\"")
+  |> should.be_true
+  content
+  |> string.contains("\"attention_any\":[\"digest\"]")
+  |> should.be_true
+
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn record_cognitive_feedback_tool_rejects_unknown_event_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let base = "/tmp/aura-feedback-tool-missing-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = cognitive_feedback_ctx(base, db_subject)
+
+  let out =
+    run_cognitive_feedback_tool(
+      ctx,
+      "{\"event_id\":\"missing\",\"label\":\"false_interrupt\"}",
+    )
+
+  out |> should.equal("Error: event not found: missing")
+  simplifile.is_file(xdg.labels_path(ctx.paths)) |> should.equal(Ok(False))
+
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([base])
+  Nil
 }
 
 pub fn search_events_tool_returns_matching_events_test() {

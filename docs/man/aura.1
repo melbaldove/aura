@@ -111,6 +111,10 @@ bad_concern_match, bad_authority_call, verification_burden_reduced, and
 planning_burden_reduced.
 EXPECTED_ATTENTION, when provided, must be record, digest, surface_now, or
 ask_now and overrides the label's default replay attention expectation.
+.PP
+In normal Discord use, the user should not need this command. The brain can
+record the same labels with the record_cognitive_feedback tool when ordinary
+feedback clearly references a specific event id.
 .TP
 .B gleam run \-\- cognitive\-delivery retry\-dead\-letter
 Ask the running daemon to retry delivery ledger entries whose latest state is

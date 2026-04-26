@@ -39,11 +39,12 @@ AuraEvent
 -> ~/.local/share/aura/cognitive/deliveries.jsonl
 -> record | digest queue | surface_now/ask_now Discord delivery
 -> delivery dead-letter retry for failed send effects
--> correction labels in ~/.local/share/aura/cognitive/labels.jsonl
+-> natural correction capture into ~/.local/share/aura/cognitive/labels.jsonl
 -> patch proposal reports in ~/.local/share/aura/cognitive/patch-proposals/
 -> decision_ready log
--> ctl probes for smoke/eval/replay, correction labels, unsuppressed delivery,
-   digest flush, dead-letter retry, and patch proposal generation
+-> ctl probes for smoke/eval/replay, operator correction labels,
+   unsuppressed delivery, digest flush, dead-letter retry, and patch proposal
+   generation
 ```
 
 This proves:
@@ -70,6 +71,8 @@ This proves:
   require a model decision, and wait for a delivered ledger entry
 - `cognitive-digest flush` can force queued digest delivery without waiting for
   a wall-clock window
+- ordinary Discord feedback can be recorded as correction labels when it names
+  or clearly references a specific event id
 - `cognitive-label <event_id> <label> [expected_attention] [note...]` can
   attach correction labels to existing persisted events
 - `cognitive-replay labels` can rerun labeled persisted events through the

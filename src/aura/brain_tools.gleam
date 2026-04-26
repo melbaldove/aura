@@ -6,6 +6,7 @@ import aura/clients/browser_runner.{type BrowserRunner}
 import aura/clients/discord_client.{type DiscordClient}
 import aura/clients/llm_client.{type LLMClient}
 import aura/clients/skill_runner.{type SkillRunner}
+import aura/cognitive_label
 import aura/concern
 import aura/db
 import aura/discord/rest
@@ -388,6 +389,7 @@ fn execute_tool_dispatch(
       }
     }
     "track" -> execute_track(ctx, args)
+    "record_cognitive_feedback" -> execute_record_cognitive_feedback(ctx, args)
     "memory" -> {
       case require_arg(args, "action") {
         Error(e) -> TextResult(e)
@@ -1974,6 +1976,52 @@ fn execute_track(ctx: ToolContext, args: List(#(String, String))) -> ToolResult 
   }
 }
 
+fn execute_record_cognitive_feedback(
+  ctx: ToolContext,
+  args: List(#(String, String)),
+) -> ToolResult {
+  case require_arg(args, "event_id") {
+    Error(e) -> TextResult(e)
+    Ok(event_id) ->
+      case require_arg(args, "label") {
+        Error(e) -> TextResult(e)
+        Ok(label) -> {
+          case db.get_event(ctx.db_subject, event_id) {
+            Error(e) ->
+              TextResult(
+                "Error: failed to load event for cognitive feedback: " <> e,
+              )
+            Ok(None) -> TextResult("Error: event not found: " <> event_id)
+            Ok(Some(_)) -> {
+              case
+                cognitive_label.capture(
+                  ctx.paths,
+                  event_id,
+                  label,
+                  get_arg(args, "expected_attention"),
+                  get_arg(args, "note"),
+                )
+              {
+                Error(e) -> TextResult("Error: " <> e)
+                Ok(result) ->
+                  TextResult(
+                    "Recorded cognitive feedback: event_id="
+                    <> result.event_id
+                    <> " label="
+                    <> result.label
+                    <> " attention_any=["
+                    <> string.join(result.attention_any, ", ")
+                    <> "] path="
+                    <> result.path,
+                  )
+              }
+            }
+          }
+        }
+      }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -2227,6 +2275,36 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "note",
           param_type: "string",
           description: "Append-only update note for existing tracked objects.",
+          required: False,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
+      name: "record_cognitive_feedback",
+      description: "Record natural-language user correction about a specific Aura cognitive event as a replay label. Use when the user says a notification, digest item, or missed alert was too noisy, too quiet, too late, wrongly matched, or should have asked for authority. Requires the exact event_id from the Aura message or nearby context; if ambiguous, ask one clarifying question instead of guessing.",
+      parameters: [
+        llm.ToolParam(
+          name: "event_id",
+          param_type: "string",
+          description: "Exact Aura event id being corrected, e.g. mail-m1777110979719.",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "label",
+          param_type: "string",
+          description: "One of: false_interrupt | missed_important | bad_deferral | useful_digest | bad_concern_match | bad_authority_call | verification_burden_reduced | planning_burden_reduced.",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "expected_attention",
+          param_type: "string",
+          description: "Optional override: record | digest | surface_now | ask_now. Leave empty to use the label default.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "note",
+          param_type: "string",
+          description: "The user's correction plus a short interpretation, preserving the reason in ordinary language.",
           required: False,
         ),
       ],
