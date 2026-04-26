@@ -78,12 +78,15 @@ AuraEvent
 
 It proves the ingestion, provenance, text-policy, model, validation, delivery
 ledger, duplicate suppression, digest queue, and immediate-surface substrate
-without dispatching autonomous work. Operator commands can also inject a
-realistic Gmail-shaped event through the live daemon (`cognitive-test
-deliver-now`), replay human-labeled persisted events (`cognitive-replay
-labels`), and force digest delivery (`cognitive-digest flush`) so the decision
-and delivery paths can be verified without asking the user to send provider
-messages.
+without dispatching autonomous work. Delivery send failures become explicit
+dead-letter ledger entries so they can be retried after configuration or
+provider recovery without rerunning the model decision. Operator commands can
+also inject a realistic Gmail-shaped event through the live daemon
+(`cognitive-test deliver-now`), replay human-labeled persisted events
+(`cognitive-replay labels`), force digest delivery (`cognitive-digest flush`),
+and retry failed delivery effects (`cognitive-delivery retry-dead-letter`) so
+the decision and delivery paths can be verified without asking the user to send
+provider messages.
 
 ## Filesystem Model
 

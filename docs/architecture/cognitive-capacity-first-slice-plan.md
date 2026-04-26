@@ -6,7 +6,8 @@ Status: first executable decision, delivery, and replay harness implemented. Thi
 supersedes the earlier typed cognitive ontology plan. The slice is a minimal
 harness: event persistence, evidence/context building, text-policy context,
 model decision envelope, validation, append-only decision logging, delivery
-ledger, digest queue, immediate attention surfacing, and label-backed replay.
+ledger, digest queue, immediate attention surfacing, delivery dead letters, and
+label-backed replay.
 
 ## Goal
 
@@ -37,8 +38,10 @@ AuraEvent
 -> cognitive_delivery
 -> ~/.local/share/aura/cognitive/deliveries.jsonl
 -> record | digest queue | surface_now/ask_now Discord delivery
+-> delivery dead-letter retry for failed send effects
 -> decision_ready log
--> ctl probes for smoke/eval/replay, unsuppressed delivery, and digest flush
+-> ctl probes for smoke/eval/replay, unsuppressed delivery, digest flush, and
+   dead-letter retry
 ```
 
 This proves:
@@ -56,6 +59,9 @@ This proves:
 - record decisions do not send user-facing messages
 - digest decisions queue until digest flush
 - surface_now and ask_now can send immediately with duplicate protection
+- send failures are explicit dead letters, not silent drops
+- `cognitive-delivery retry-dead-letter` can resend failed delivery effects
+  after channel configuration or provider recovery, without rerunning the model
 - smoke/eval event IDs can be suppressed out-of-band without leaking labels to
   the model
 - `cognitive-test deliver-now` can inject a realistic Gmail-shaped event,

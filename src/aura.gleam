@@ -60,6 +60,8 @@ fn parse_args(args: List(String)) -> CliCommand {
     ["cognitive-replay", "labels"] -> CliCtl("cognitive-replay labels")
     ["cognitive-test", "deliver-now"] -> CliCtl("cognitive-test deliver-now")
     ["cognitive-digest", "flush"] -> CliCtl("cognitive-digest flush")
+    ["cognitive-delivery", "retry-dead-letter"] ->
+      CliCtl("cognitive-delivery retry-dead-letter")
     ["oauth", "gmail", email] -> CliOauthGmail(email)
     _ -> CliStart
   }

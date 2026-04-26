@@ -11,6 +11,8 @@ flares, scheduled tasks, and domain\-partitioned knowledge
 .br
 .B gleam run \-\- cognitive\-eval fixtures
 .br
+.B gleam run \-\- cognitive\-delivery retry\-dead\-letter
+.br
 .B bash scripts/deploy.sh
 .SH DESCRIPTION
 Aura is an OTP application.
@@ -94,6 +96,16 @@ decision predicates such as attention action, work action, authority gate,
 minimum citations, and expected gaps.
 Fixtures avoid exact prose matching; they test judgment surfaces, not output
 wording.
+.TP
+.B gleam run \-\- cognitive\-digest flush
+Ask the running daemon to send any queued cognitive digest entries immediately,
+using the same delivery path as a scheduled digest window.
+.TP
+.B gleam run \-\- cognitive\-delivery retry\-dead\-letter
+Ask the running daemon to retry delivery ledger entries whose latest state is
+dead_letter or legacy failed for digest, surface_now, or ask_now decisions.
+The command re-resolves the current configured target and appends a new
+delivered or dead_letter ledger entry; it does not rerun the model decision.
 .SH LIMITATIONS
 .IP \(bu 2
 Stdio ACP sessions die on deploy.

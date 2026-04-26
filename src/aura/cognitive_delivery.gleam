@@ -2,7 +2,7 @@
 ////
 //// The model chooses an attention action and delivery target. This actor owns
 //// the mechanical effects: duplicate protection, JSONL delivery state,
-//// immediate Discord sends, and digest flushing.
+//// immediate Discord sends, digest flushing, and operator dead-letter retry.
 
 import aura/clients/discord_client.{type DiscordClient}
 import aura/cognitive_decision
@@ -12,6 +12,7 @@ import aura/time
 import aura/xdg
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Subject}
+import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -28,6 +29,7 @@ pub type DeliveryTarget {
 pub type Message {
   Deliver(cognitive_decision.DecisionEnvelope)
   FlushDigest
+  RetryDeadLetters(reply: Subject(Result(RetrySummary, String)))
   SuppressEvent(event_id: String, reason: String)
   Tick
 }
@@ -38,11 +40,16 @@ pub type Status {
   Delivered
   Suppressed
   Failed
+  DeadLetter
   DuplicateSuppressed
 }
 
 pub type Report {
   Report(event_id: String, status: Status, target: String, error: String)
+}
+
+pub type RetrySummary {
+  RetrySummary(retryable: Int, delivered: Int, failed: Int, skipped: Int)
 }
 
 type State {
@@ -119,6 +126,23 @@ pub fn flush_digest(subject: Subject(Message)) -> Nil {
   process.send(subject, FlushDigest)
 }
 
+pub fn retry_dead_letters(
+  subject: Subject(Message),
+) -> Result(RetrySummary, String) {
+  process.call(subject, 120_000, fn(reply) { RetryDeadLetters(reply:) })
+}
+
+pub fn retry_summary_to_string(summary: RetrySummary) -> String {
+  "retried="
+  <> int.to_string(summary.retryable)
+  <> " delivered="
+  <> int.to_string(summary.delivered)
+  <> " failed="
+  <> int.to_string(summary.failed)
+  <> " skipped="
+  <> int.to_string(summary.skipped)
+}
+
 pub fn suppress_event(
   subject: Subject(Message),
   event_id: String,
@@ -153,6 +177,11 @@ fn handle_message(state: State, message: Message) -> actor.Next(State, Message) 
 
     FlushDigest -> {
       flush_digest_entries(state)
+      actor.continue(state)
+    }
+
+    RetryDeadLetters(reply:) -> {
+      process.send(reply, retry_dead_letter_entries(state))
       actor.continue(state)
     }
 
@@ -254,12 +283,12 @@ fn queue_digest(
 ) -> Nil {
   case resolve_target(state, decision.delivery.target) {
     Error(err) -> {
-      let _ = append_decision_state(state, decision, "failed", "", err)
+      let _ = append_decision_state(state, decision, "dead_letter", "", err)
       emit_report(
         state,
         Report(
           event_id: decision.event_id,
-          status: Failed,
+          status: DeadLetter,
           target: decision.delivery.target,
           error: err,
         ),
@@ -288,12 +317,12 @@ fn send_immediate(
 ) -> Nil {
   case resolve_target(state, decision.delivery.target) {
     Error(err) -> {
-      let _ = append_decision_state(state, decision, "failed", "", err)
+      let _ = append_decision_state(state, decision, "dead_letter", "", err)
       emit_report(
         state,
         Report(
           event_id: decision.event_id,
-          status: Failed,
+          status: DeadLetter,
           target: decision.delivery.target,
           error: err,
         ),
@@ -330,7 +359,7 @@ fn send_immediate(
             append_decision_state(
               state,
               decision,
-              "failed",
+              "dead_letter",
               target.channel_id,
               err,
             )
@@ -338,7 +367,7 @@ fn send_immediate(
             state,
             Report(
               event_id: decision.event_id,
-              status: Failed,
+              status: DeadLetter,
               target: decision.delivery.target,
               error: err,
             ),
@@ -419,12 +448,12 @@ fn send_digest_group(
         "" -> {
           let err = "queued digest entry has no channel_id"
           list.each(entries, fn(entry) {
-            let _ = append_entry_state(state.paths, entry, "failed", err)
+            let _ = append_entry_state(state.paths, entry, "dead_letter", err)
             emit_report(
               state,
               Report(
                 event_id: entry.event_id,
-                status: Failed,
+                status: DeadLetter,
                 target: target_id,
                 error: err,
               ),
@@ -454,18 +483,245 @@ fn send_digest_group(
 
             Error(err) ->
               list.each(entries, fn(entry) {
-                let _ = append_entry_state(state.paths, entry, "failed", err)
+                let _ =
+                  append_entry_state(state.paths, entry, "dead_letter", err)
                 emit_report(
                   state,
                   Report(
                     event_id: entry.event_id,
-                    status: Failed,
+                    status: DeadLetter,
                     target: target_id,
                     error: err,
                   ),
                 )
               })
           }
+        }
+      }
+    }
+  }
+}
+
+fn retry_dead_letter_entries(state: State) -> Result(RetrySummary, String) {
+  use entries <- result.try(retryable_dead_letter_entries(state.paths))
+  let summary =
+    RetrySummary(
+      retryable: list.length(entries),
+      delivered: 0,
+      failed: 0,
+      skipped: 0,
+    )
+
+  let summary = retry_digest_dead_letters(entries, state, summary)
+  Ok(retry_immediate_dead_letters(entries, state, summary))
+}
+
+fn retry_digest_dead_letters(
+  entries: List(LedgerEntry),
+  state: State,
+  summary: RetrySummary,
+) -> RetrySummary {
+  let digest_entries =
+    entries
+    |> list.filter(fn(entry) { entry.attention_action == "digest" })
+  let target_ids =
+    digest_entries
+    |> list.map(fn(entry) { entry.target })
+    |> unique_strings
+
+  list.fold(target_ids, summary, fn(acc, target_id) {
+    let target_entries =
+      digest_entries
+      |> list.filter(fn(entry) { entry.target == target_id })
+    retry_digest_group(state, target_id, target_entries, acc)
+  })
+}
+
+fn retry_digest_group(
+  state: State,
+  target_id: String,
+  entries: List(LedgerEntry),
+  summary: RetrySummary,
+) -> RetrySummary {
+  case entries {
+    [] -> summary
+    _ -> {
+      case resolve_target(state, target_id) {
+        Error(err) -> {
+          list.each(entries, fn(entry) {
+            let _ =
+              append_entry_state_with_channel(
+                state.paths,
+                entry,
+                "dead_letter",
+                "",
+                err,
+              )
+            emit_report(
+              state,
+              Report(
+                event_id: entry.event_id,
+                status: DeadLetter,
+                target: target_id,
+                error: err,
+              ),
+            )
+          })
+          RetrySummary(..summary, failed: summary.failed + list.length(entries))
+        }
+
+        Ok(target) -> {
+          let content =
+            entries
+            |> format_digest
+            |> discord_message.clip_to_discord_limit
+          case state.discord.send_message(target.channel_id, content) {
+            Ok(_) -> {
+              list.each(entries, fn(entry) {
+                let _ =
+                  append_entry_state_with_channel(
+                    state.paths,
+                    entry,
+                    "delivered",
+                    target.channel_id,
+                    "",
+                  )
+                emit_report(
+                  state,
+                  Report(
+                    event_id: entry.event_id,
+                    status: Delivered,
+                    target: target_id,
+                    error: "",
+                  ),
+                )
+              })
+              RetrySummary(
+                ..summary,
+                delivered: summary.delivered + list.length(entries),
+              )
+            }
+
+            Error(err) -> {
+              list.each(entries, fn(entry) {
+                let _ =
+                  append_entry_state_with_channel(
+                    state.paths,
+                    entry,
+                    "dead_letter",
+                    target.channel_id,
+                    err,
+                  )
+                emit_report(
+                  state,
+                  Report(
+                    event_id: entry.event_id,
+                    status: DeadLetter,
+                    target: target_id,
+                    error: err,
+                  ),
+                )
+              })
+              RetrySummary(
+                ..summary,
+                failed: summary.failed + list.length(entries),
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fn retry_immediate_dead_letters(
+  entries: List(LedgerEntry),
+  state: State,
+  summary: RetrySummary,
+) -> RetrySummary {
+  entries
+  |> list.filter(fn(entry) {
+    entry.attention_action == "surface_now"
+    || entry.attention_action == "ask_now"
+  })
+  |> list.fold(summary, fn(acc, entry) {
+    retry_immediate_entry(state, entry, acc)
+  })
+}
+
+fn retry_immediate_entry(
+  state: State,
+  entry: LedgerEntry,
+  summary: RetrySummary,
+) -> RetrySummary {
+  case resolve_target(state, entry.target) {
+    Error(err) -> {
+      let _ =
+        append_entry_state_with_channel(
+          state.paths,
+          entry,
+          "dead_letter",
+          "",
+          err,
+        )
+      emit_report(
+        state,
+        Report(
+          event_id: entry.event_id,
+          status: DeadLetter,
+          target: entry.target,
+          error: err,
+        ),
+      )
+      RetrySummary(..summary, failed: summary.failed + 1)
+    }
+
+    Ok(target) -> {
+      let content =
+        entry
+        |> format_retry_immediate
+        |> discord_message.clip_to_discord_limit
+      case state.discord.send_message(target.channel_id, content) {
+        Ok(_) -> {
+          let _ =
+            append_entry_state_with_channel(
+              state.paths,
+              entry,
+              "delivered",
+              target.channel_id,
+              "",
+            )
+          emit_report(
+            state,
+            Report(
+              event_id: entry.event_id,
+              status: Delivered,
+              target: entry.target,
+              error: "",
+            ),
+          )
+          RetrySummary(..summary, delivered: summary.delivered + 1)
+        }
+
+        Error(err) -> {
+          let _ =
+            append_entry_state_with_channel(
+              state.paths,
+              entry,
+              "dead_letter",
+              target.channel_id,
+              err,
+            )
+          emit_report(
+            state,
+            Report(
+              event_id: entry.event_id,
+              status: DeadLetter,
+              target: entry.target,
+              error: err,
+            ),
+          )
+          RetrySummary(..summary, failed: summary.failed + 1)
         }
       }
     }
@@ -517,6 +773,28 @@ fn format_digest(entries: List(LedgerEntry)) -> String {
     })
 
   "**Aura digest**\n\n" <> string.join(lines, "\n")
+}
+
+fn format_retry_immediate(entry: LedgerEntry) -> String {
+  let header = case entry.attention_action {
+    "ask_now" -> "**Aura needs a decision**"
+    _ -> "**Aura noticed something attention-worthy**"
+  }
+
+  header
+  <> "\n\n"
+  <> entry.summary
+  <> "\n\nRationale: "
+  <> entry.rationale
+  <> case entry.authority_required {
+    "none" | "" -> ""
+    other -> "\nAuthority: " <> other
+  }
+  <> gaps_block(entry.gaps)
+  <> "\nCitations: "
+  <> string.join(entry.citations, ", ")
+  <> "\nEvent: "
+  <> entry.event_id
 }
 
 fn authority_reason(authority: cognitive_decision.AuthorityDecision) -> String {
@@ -579,6 +857,16 @@ fn append_entry_state(
   status: String,
   error: String,
 ) -> Result(Nil, String) {
+  append_entry_state_with_channel(paths, entry, status, entry.channel_id, error)
+}
+
+fn append_entry_state_with_channel(
+  paths: xdg.Paths,
+  entry: LedgerEntry,
+  status: String,
+  channel_id: String,
+  error: String,
+) -> Result(Nil, String) {
   append_ledger(
     paths,
     json.object([
@@ -587,7 +875,7 @@ fn append_entry_state(
       #("status", json.string(status)),
       #("attention_action", json.string(entry.attention_action)),
       #("target", json.string(entry.target)),
-      #("channel_id", json.string(entry.channel_id)),
+      #("channel_id", json.string(channel_id)),
       #("summary", json.string(entry.summary)),
       #("rationale", json.string(entry.rationale)),
       #("authority_required", json.string(entry.authority_required)),
@@ -637,6 +925,49 @@ fn pending_digest_entries(paths: xdg.Paths) -> Result(List(LedgerEntry), String)
     entry.status == "queued" && !list.contains(terminal_ids, entry.event_id)
   })
   |> Ok
+}
+
+fn retryable_dead_letter_entries(
+  paths: xdg.Paths,
+) -> Result(List(LedgerEntry), String) {
+  use entries <- result.try(read_ledger_entries(paths))
+
+  entries
+  |> latest_entries
+  |> list.filter(is_retryable_dead_letter)
+  |> Ok
+}
+
+fn latest_entries(entries: List(LedgerEntry)) -> List(LedgerEntry) {
+  collect_latest(list.reverse(entries), [], [])
+}
+
+fn collect_latest(
+  entries: List(LedgerEntry),
+  seen_ids: List(String),
+  acc: List(LedgerEntry),
+) -> List(LedgerEntry) {
+  case entries {
+    [] -> acc
+    [entry, ..rest] -> {
+      case list.contains(seen_ids, entry.event_id) {
+        True -> collect_latest(rest, seen_ids, acc)
+        False ->
+          collect_latest(rest, [entry.event_id, ..seen_ids], [entry, ..acc])
+      }
+    }
+  }
+}
+
+fn is_retryable_dead_letter(entry: LedgerEntry) -> Bool {
+  let retryable_status =
+    entry.status == "dead_letter" || entry.status == "failed"
+  let retryable_attention =
+    entry.attention_action == "digest"
+    || entry.attention_action == "surface_now"
+    || entry.attention_action == "ask_now"
+
+  retryable_status && retryable_attention
 }
 
 fn read_ledger_entries(paths: xdg.Paths) -> Result(List(LedgerEntry), String) {
@@ -744,7 +1075,7 @@ fn emit_report(state: State, report: Report) -> Nil {
     <> report.error
 
   case report.status {
-    Failed -> logging.log(logging.Error, msg)
+    Failed | DeadLetter -> logging.log(logging.Error, msg)
     _ -> logging.log(logging.Info, msg)
   }
 }
@@ -756,6 +1087,7 @@ pub fn status_to_string(status: Status) -> String {
     Delivered -> "delivered"
     Suppressed -> "suppressed"
     Failed -> "failed"
+    DeadLetter -> "dead_letter"
     DuplicateSuppressed -> "duplicate_suppressed"
   }
 }

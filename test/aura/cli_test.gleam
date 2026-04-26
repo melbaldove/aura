@@ -31,6 +31,11 @@ pub fn parse_args_dispatches_cognitive_digest_flush_test() {
   |> should.equal(aura.CliCtl("cognitive-digest flush"))
 }
 
+pub fn parse_args_dispatches_cognitive_delivery_retry_test() {
+  aura.parse_args_for_test(["cognitive-delivery", "retry-dead-letter"])
+  |> should.equal(aura.CliCtl("cognitive-delivery retry-dead-letter"))
+}
+
 pub fn parse_args_tolerates_leading_dash_dash_test() {
   aura.parse_args_for_test(["--", "cognitive-smoke", "gmail-rel42"])
   |> should.equal(aura.CliCtl("cognitive-smoke gmail-rel42"))

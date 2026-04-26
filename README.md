@@ -15,7 +15,7 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Every 
 - **Memory** — active review persists state and knowledge every N turns; nightly dreaming consolidates the archive offline, promotes durable facts, and enforces a token budget.
 - **Concern tracking** — Aura can internally track durable objects of care, work, watch, or risk from natural conversation and ambient events using ordinary markdown state files.
 - **Skills** — language-agnostic CLI tools. Drop a script in a directory, it becomes a capability the LLM can call.
-- **Self-diagnosis** — ships with man pages plus live cognitive smoke/eval/replay, delivery probe, and digest flush commands. The brain reads them via the shell tool when it needs to understand its own behavior.
+- **Self-diagnosis** — ships with man pages plus live cognitive smoke/eval/replay, delivery probe, digest flush, and delivery dead-letter retry commands. The brain reads them via the shell tool when it needs to understand its own behavior.
 - **Shell approvals** — dangerous shell commands require Discord button approval; unresolved approvals are invalidated visibly after actor restart.
 - **Pluggable gateways and ACP transports** — Discord first; multi-platform conversation schema from day one.
 
@@ -66,7 +66,7 @@ supervisor (OneForOne)
 ├── db                   SQLite actor — serializes all DB reads/writes
 ├── event_ingest         Normalizes, tags, and persists integration events
 ├── cognitive_worker     Async model-backed decision harness for events
-├── cognitive_delivery   Validated attention delivery, digest queue, ledger
+├── cognitive_delivery   Validated attention delivery, digest queue, ledger, dead letters
 ├── poller               Gateway WebSocket (Discord first, pluggable)
 ├── flare_manager        Flare lifecycle — roster, dispatch, monitor, persist
 ├── channel_supervisor   Hosts one actor per Discord channel
@@ -93,7 +93,7 @@ A.U.R.A. follows the XDG Base Directory specification:
 ~/.local/share/aura/               # Data
   aura.db                            # Conversations (SQLite)
   cognitive/decisions.jsonl          # Validated cognitive decisions
-  cognitive/deliveries.jsonl         # Cognitive delivery ledger
+  cognitive/deliveries.jsonl         # Cognitive delivery ledger and dead letters
   cognitive/labels.jsonl             # Human replay labels
   skills/<name>/SKILL.md             # Skills
   domains/<name>/MEMORY.md           # Durable domain knowledge

@@ -187,10 +187,29 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
       }
     }
 
+    ["cognitive-delivery", "retry-dead-letter"] -> {
+      logging.log(
+        logging.Info,
+        "[ctl] Cognitive delivery dead-letter retry triggered",
+      )
+      case ctx.delivery_subject {
+        option.Some(subject) -> {
+          case cognitive_delivery.retry_dead_letters(subject) {
+            Ok(summary) ->
+              "OK: cognitive-delivery retry-dead-letter "
+              <> cognitive_delivery.retry_summary_to_string(summary)
+            Error(err) ->
+              "ERROR: cognitive delivery dead-letter retry failed: " <> err
+          }
+        }
+        option.None -> "ERROR: cognitive delivery actor unavailable"
+      }
+    }
+
     _ ->
       "ERROR: unknown command '"
       <> trimmed
-      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-replay labels, cognitive-test deliver-now, cognitive-digest flush"
+      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-replay labels, cognitive-test deliver-now, cognitive-digest flush, cognitive-delivery retry-dead-letter"
   }
 }
 

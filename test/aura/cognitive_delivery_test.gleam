@@ -1,3 +1,4 @@
+import aura/clients/discord_client.{DiscordClient}
 import aura/cognitive_decision
 import aura/cognitive_delivery
 import aura/test_helpers
@@ -116,6 +117,50 @@ fn start_delivery(
   #(fake, started.data, reports)
 }
 
+fn failing_discord(error: String) {
+  DiscordClient(
+    send_message: fn(_, _) { Error(error) },
+    edit_message: fn(_, _, _) { Ok(Nil) },
+    trigger_typing: fn(_) { Ok(Nil) },
+    get_channel_parent: fn(_) { Ok("") },
+    send_message_with_attachment: fn(_, _, _) { Error(error) },
+    create_thread_from_message: fn(_, _, _) { Error(error) },
+  )
+}
+
+fn write_ledger(paths: xdg.Paths, lines: List(String)) -> Nil {
+  let assert Ok(Nil) = simplifile.create_directory_all(xdg.cognitive_dir(paths))
+  let assert Ok(Nil) =
+    simplifile.write(
+      xdg.deliveries_path(paths),
+      string.join(lines, "\n") <> "\n",
+    )
+  Nil
+}
+
+fn ledger_line(
+  event_id: String,
+  status: String,
+  attention_action: String,
+  target: String,
+  channel_id: String,
+  error: String,
+) -> String {
+  "{\"timestamp_ms\":1,\"event_id\":\""
+  <> event_id
+  <> "\",\"status\":\""
+  <> status
+  <> "\",\"attention_action\":\""
+  <> attention_action
+  <> "\",\"target\":\""
+  <> target
+  <> "\",\"channel_id\":\""
+  <> channel_id
+  <> "\",\"summary\":\"Old digest summary\",\"rationale\":\"Useful but not urgent.\",\"authority_required\":\"none\",\"citations\":[\"e1\"],\"gaps\":[],\"error\":\""
+  <> error
+  <> "\"}"
+}
+
 fn stop_subject(subject) -> Nil {
   case process.subject_owner(subject) {
     Ok(pid) -> {
@@ -165,6 +210,77 @@ pub fn digest_queues_then_flushes_one_group_test() {
   let log = simplifile.read(xdg.deliveries_path(paths)) |> should.be_ok
   log |> string.contains("\"status\":\"queued\"") |> should.be_true
   log |> string.contains("\"status\":\"delivered\"") |> should.be_true
+
+  stop_subject(subject)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn digest_send_failure_writes_dead_letter_test() {
+  let #(base, paths) = temp_paths("cognitive-delivery-dead-letter")
+  let reports = process.new_subject()
+  let assert Ok(started) =
+    cognitive_delivery.start_with(
+      paths,
+      failing_discord("discord unavailable"),
+      targets(),
+      [],
+      Some(reports),
+    )
+  let subject = started.data
+
+  cognitive_delivery.deliver(subject, digest_decision("ev-dlq"))
+  let assert Ok(queued) = process.receive(reports, 1000)
+  queued.status |> should.equal(cognitive_delivery.Queued)
+
+  cognitive_delivery.flush_digest(subject)
+  let assert Ok(dead_letter) = process.receive(reports, 1000)
+  dead_letter.status |> should.equal(cognitive_delivery.DeadLetter)
+  dead_letter.error |> should.equal("discord unavailable")
+  let log = simplifile.read(xdg.deliveries_path(paths)) |> should.be_ok
+  log |> string.contains("\"event_id\":\"ev-dlq\"") |> should.be_true
+  log |> string.contains("\"status\":\"dead_letter\"") |> should.be_true
+  log |> string.contains("discord unavailable") |> should.be_true
+
+  stop_subject(subject)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn retry_dead_letters_resends_legacy_failed_digest_test() {
+  let #(base, paths) = temp_paths("cognitive-delivery-retry-legacy")
+  write_ledger(paths, [
+    ledger_line("ev-old", "queued", "digest", "default", "aura", ""),
+    ledger_line(
+      "ev-old",
+      "failed",
+      "digest",
+      "default",
+      "aura",
+      "Unexpected status 400",
+    ),
+  ])
+  let #(fake, subject, reports) = start_delivery(paths)
+
+  let summary =
+    cognitive_delivery.retry_dead_letters(subject)
+    |> should.be_ok
+  summary.retryable |> should.equal(1)
+  summary.delivered |> should.equal(1)
+  summary.failed |> should.equal(0)
+  summary.skipped |> should.equal(0)
+
+  let assert Ok(delivered) = process.receive(reports, 1000)
+  delivered.status |> should.equal(cognitive_delivery.Delivered)
+  let sent = fake_discord.all_sent_to(fake, "aura-channel")
+  list.length(sent) |> should.equal(1)
+  let assert [digest] = sent
+  digest |> string.contains("Aura digest") |> should.be_true
+  digest |> string.contains("ev-old") |> should.be_true
+
+  let log = simplifile.read(xdg.deliveries_path(paths)) |> should.be_ok
+  log |> string.contains("\"status\":\"delivered\"") |> should.be_true
+  log |> string.contains("\"channel_id\":\"aura-channel\"") |> should.be_true
 
   stop_subject(subject)
   let _ = simplifile.delete_all([base])
