@@ -40,9 +40,10 @@ AuraEvent
 -> record | digest queue | surface_now/ask_now Discord delivery
 -> delivery dead-letter retry for failed send effects
 -> correction labels in ~/.local/share/aura/cognitive/labels.jsonl
+-> patch proposal reports in ~/.local/share/aura/cognitive/patch-proposals/
 -> decision_ready log
 -> ctl probes for smoke/eval/replay, correction labels, unsuppressed delivery,
-   digest flush, and dead-letter retry
+   digest flush, dead-letter retry, and patch proposal generation
 ```
 
 This proves:
@@ -74,28 +75,39 @@ This proves:
 - `cognitive-replay labels` can rerun labeled persisted events through the
   current worker/model/policy path without notifying Discord and report the
   likely policy or concern surface implicated by each label
+- `cognitive-replay propose-patches` can turn captured labels into a durable
+  markdown proposal report grouped by allowed policy or concern surface without
+  applying changes
 - the worker does not block ingestion
 
 It does not yet prove proactive surfacing quality at scale, concern matching
-quality, user-preference learning from labels, or whether the default policies
-are good enough.
+quality, model-written policy diffs, user-preference learning from labels, or
+whether the default policies are good enough.
 
 ## Correct Next Cut
 
 Use correction labels to propose text-policy and concern-file patches before
 expanding proactive thresholds, autonomy, or cognitive structure.
 
-Files:
+Initial implementation:
 
-- Policy/concern patch proposal path from replay failures.
+- `cognitive-replay propose-patches` reads labels and writes
+  `~/.local/share/aura/cognitive/patch-proposals/<timestamp>.md`.
+- Reports group labeled failures by allowed text target such as
+  `policies/attention.md`, `policies/authority.md`, `policies/work.md`, or
+  `policies/concerns.md`.
+- Reports are proposal artifacts only. Policy and concern files are not mutated.
+
+Remaining files:
+
 - `~/.local/share/aura/cognitive/labels.jsonl` as input evidence.
 - Existing `policies/*.md` and `concerns/*.md` as the only mutable targets.
 
 Scope:
 
 - Summarize repeated replay failures by implicated surface.
-- Propose ordinary markdown patches for attention, authority, work, delivery,
-  concerns policy, or specific concern files.
+- Propose ordinary markdown patch briefs for attention, authority, work,
+  delivery, concerns policy, or specific concern files.
 - Keep patch application behind the existing approval/tier path.
 - Keep replay offline-safe where possible, with live model replay as an
   explicit operator check.

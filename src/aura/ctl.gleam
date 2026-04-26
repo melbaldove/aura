@@ -1,6 +1,7 @@
 import aura/cognitive_delivery
 import aura/cognitive_eval
 import aura/cognitive_label
+import aura/cognitive_patch
 import aura/cognitive_probe
 import aura/cognitive_replay
 import aura/cognitive_smoke
@@ -163,6 +164,28 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
       }
     }
 
+    ["cognitive-replay", "propose-patches"] -> {
+      logging.log(
+        logging.Info,
+        "[ctl] Cognitive replay patch proposal triggered",
+      )
+      case cognitive_patch.propose_from_labels(ctx.paths, ctx.db_subject) {
+        Ok(report) -> {
+          case report.proposal_count {
+            0 -> report.markdown
+            _ ->
+              "OK: cognitive-replay propose-patches labels="
+              <> int.to_string(report.label_count)
+              <> " proposals="
+              <> int.to_string(report.proposal_count)
+              <> " path="
+              <> report.path
+          }
+        }
+        Error(err) -> "ERROR: cognitive replay patch proposal failed: " <> err
+      }
+    }
+
     ["cognitive-test", "deliver-now"] -> {
       logging.log(logging.Info, "[ctl] Cognitive delivery probe triggered")
       case
@@ -224,7 +247,7 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
     _ ->
       "ERROR: unknown command '"
       <> trimmed
-      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-replay labels, cognitive-test deliver-now, cognitive-digest flush, cognitive-delivery retry-dead-letter, cognitive-label <event_id> <label> [expected_attention] [note]"
+      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-replay labels, cognitive-replay propose-patches, cognitive-test deliver-now, cognitive-digest flush, cognitive-delivery retry-dead-letter, cognitive-label <event_id> <label> [expected_attention] [note]"
   }
 }
 

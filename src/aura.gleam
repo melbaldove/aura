@@ -58,6 +58,8 @@ fn parse_args(args: List(String)) -> CliCommand {
     ["cognitive-smoke", "gmail-rel42"] -> CliCtl("cognitive-smoke gmail-rel42")
     ["cognitive-eval", "fixtures"] -> CliCtl("cognitive-eval fixtures")
     ["cognitive-replay", "labels"] -> CliCtl("cognitive-replay labels")
+    ["cognitive-replay", "propose-patches"] ->
+      CliCtl("cognitive-replay propose-patches")
     ["cognitive-test", "deliver-now"] -> CliCtl("cognitive-test deliver-now")
     ["cognitive-digest", "flush"] -> CliCtl("cognitive-digest flush")
     ["cognitive-delivery", "retry-dead-letter"] ->

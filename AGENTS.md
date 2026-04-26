@@ -57,6 +57,7 @@ supervisor (OneForOne)
 ├── cognitive_worker Model-backed cognitive decisions for persisted events
 ├── cognitive_delivery Validated attention delivery + digest ledger
 ├── cognitive_replay Label-backed replay checks for cognitive decisions
+├── cognitive_patch Label-backed policy/concern patch proposal reports
 ├── poller      Discord gateway WebSocket
 ├── flare_manager Flare lifecycle actor — roster, dispatch, monitor, SQLite persist
 ├── brain       Routes messages, LLM tool loop, progressive streaming, review
@@ -115,6 +116,7 @@ src/aura/
   cognitive_worker.gleam Async model-backed cognitive decisions for events
   cognitive_delivery.gleam Delivery ledger, digest queue, immediate surfacing
   cognitive_replay.gleam Label-backed replay through current model/policy
+  cognitive_patch.gleam Label-backed markdown proposal reports
   cognitive_probe.gleam Operator-triggered live delivery probe
   concern.gleam         Text-first concern tracking writer
   compressor.gleam      Tiered context compression — tool pruning, domain-aware LLM summarization, iterative updates

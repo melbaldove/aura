@@ -74,6 +74,7 @@ AuraEvent
 -> record | digest queue | Discord surface_now/ask_now
 -> cognitive-label correction capture
 -> cognitive_replay over labels.jsonl
+-> cognitive_patch proposal reports
 -> [cognitive] decision_ready log
 ```
 
@@ -86,9 +87,11 @@ also inject a realistic Gmail-shaped event through the live daemon
 (`cognitive-test deliver-now`), replay human-labeled persisted events
 (`cognitive-replay labels`), attach correction labels (`cognitive-label`),
 force digest delivery (`cognitive-digest flush`), and retry failed delivery
-effects (`cognitive-delivery retry-dead-letter`) so the decision, correction,
-and delivery paths can be verified without asking the user to send provider
-messages.
+effects (`cognitive-delivery retry-dead-letter`). Correction labels can also be
+converted into reviewable markdown patch proposal reports
+(`cognitive-replay propose-patches`) without mutating policy or concern files.
+These probes let the decision, correction, learning, and delivery paths be
+verified without asking the user to send provider messages.
 
 ## Filesystem Model
 
@@ -145,6 +148,7 @@ Cognitive logs:
   decisions.jsonl
   deliveries.jsonl
   labels.jsonl
+  patch-proposals/*.md
   evaluations.jsonl
 ```
 
@@ -165,6 +169,7 @@ Code owns only the parts that must be reliable:
 - Enforce duplicate protection before spending user attention.
 - Replay labeled events through the current worker/model/policy path without
   notifying Discord.
+- Propose reviewable policy/concern patch reports from correction labels.
 - Apply validated file patches through existing tiers.
 - Track durable concerns through the `track` tool as ordinary markdown.
 - Replay historical events against current policies.
