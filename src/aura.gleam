@@ -62,6 +62,21 @@ fn parse_args(args: List(String)) -> CliCommand {
     ["cognitive-digest", "flush"] -> CliCtl("cognitive-digest flush")
     ["cognitive-delivery", "retry-dead-letter"] ->
       CliCtl("cognitive-delivery retry-dead-letter")
+    ["cognitive-label", event_id, label] ->
+      CliCtl("cognitive-label " <> event_id <> " " <> label)
+    ["cognitive-label", event_id, label, expected_attention, ..note_words] ->
+      CliCtl(
+        "cognitive-label "
+        <> event_id
+        <> " "
+        <> label
+        <> " "
+        <> expected_attention
+        <> case string.join(note_words, " ") {
+          "" -> ""
+          note -> " " <> note
+        },
+      )
     ["oauth", "gmail", email] -> CliOauthGmail(email)
     _ -> CliStart
   }

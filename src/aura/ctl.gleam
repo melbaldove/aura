@@ -1,5 +1,6 @@
 import aura/cognitive_delivery
 import aura/cognitive_eval
+import aura/cognitive_label
 import aura/cognitive_probe
 import aura/cognitive_replay
 import aura/cognitive_smoke
@@ -206,10 +207,60 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
       }
     }
 
+    ["cognitive-label", event_id, label] -> {
+      handle_cognitive_label(ctx, event_id, label, "", "")
+    }
+
+    ["cognitive-label", event_id, label, expected_attention, ..note_words] -> {
+      handle_cognitive_label(
+        ctx,
+        event_id,
+        label,
+        expected_attention,
+        string.join(note_words, " "),
+      )
+    }
+
     _ ->
       "ERROR: unknown command '"
       <> trimmed
-      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-replay labels, cognitive-test deliver-now, cognitive-digest flush, cognitive-delivery retry-dead-letter"
+      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-replay labels, cognitive-test deliver-now, cognitive-digest flush, cognitive-delivery retry-dead-letter, cognitive-label <event_id> <label> [expected_attention] [note]"
+  }
+}
+
+fn handle_cognitive_label(
+  ctx: CtlContext,
+  event_id: String,
+  label: String,
+  expected_attention: String,
+  note: String,
+) -> String {
+  logging.log(logging.Info, "[ctl] Cognitive label capture triggered")
+  case db.get_event(ctx.db_subject, event_id) {
+    Error(err) -> "ERROR: failed to load event for label: " <> err
+    Ok(option.None) -> "ERROR: event not found: " <> event_id
+    Ok(option.Some(_event)) -> {
+      case
+        cognitive_label.capture(
+          ctx.paths,
+          event_id,
+          label,
+          expected_attention,
+          note,
+        )
+      {
+        Ok(result) ->
+          "OK: cognitive-label event_id="
+          <> result.event_id
+          <> " label="
+          <> result.label
+          <> " attention_any=["
+          <> string.join(result.attention_any, ", ")
+          <> "] path="
+          <> result.path
+        Error(err) -> "ERROR: cognitive label failed: " <> err
+      }
+    }
   }
 }
 

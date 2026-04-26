@@ -72,6 +72,7 @@ AuraEvent
 -> cognitive_delivery
 -> deliveries.jsonl
 -> record | digest queue | Discord surface_now/ask_now
+-> cognitive-label correction capture
 -> cognitive_replay over labels.jsonl
 -> [cognitive] decision_ready log
 ```
@@ -83,10 +84,11 @@ dead-letter ledger entries so they can be retried after configuration or
 provider recovery without rerunning the model decision. Operator commands can
 also inject a realistic Gmail-shaped event through the live daemon
 (`cognitive-test deliver-now`), replay human-labeled persisted events
-(`cognitive-replay labels`), force digest delivery (`cognitive-digest flush`),
-and retry failed delivery effects (`cognitive-delivery retry-dead-letter`) so
-the decision and delivery paths can be verified without asking the user to send
-provider messages.
+(`cognitive-replay labels`), attach correction labels (`cognitive-label`),
+force digest delivery (`cognitive-digest flush`), and retry failed delivery
+effects (`cognitive-delivery retry-dead-letter`) so the decision, correction,
+and delivery paths can be verified without asking the user to send provider
+messages.
 
 ## Filesystem Model
 
@@ -327,6 +329,8 @@ planning_burden_reduced
 ```
 
 The rule: structure earns its way into code only by reducing replay failures.
+Replay reports should carry the correction label and likely adjustment surface
+so the next move is a text policy or concern-file patch, not a hidden heuristic.
 
 ## Invariants
 

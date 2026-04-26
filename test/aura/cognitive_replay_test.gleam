@@ -74,6 +74,7 @@ fn fake_ask_now_chat(
 fn label_json(event_id: String, attention_any: List(String)) -> json.Json {
   json.object([
     #("event_id", json.string(event_id)),
+    #("label", json.string("missed_important")),
     #("note", json.string("rollback approval should ask now")),
     #("attention_any", json.array(attention_any, json.string)),
     #("work_any", json.array(["prepare"], json.string)),
@@ -102,6 +103,7 @@ pub fn parse_label_line_extracts_expectations_test() {
     |> should.be_ok
 
   label.event_id |> should.equal("ev-replay")
+  label.label |> should.equal("missed_important")
   label.attention_any |> should.equal(["ask_now"])
   label.min_citations |> should.equal(2)
   label.require_gap_contains |> should.equal("rollback")
@@ -180,6 +182,12 @@ pub fn run_labels_replays_event_and_passes_matching_label_test() {
   report |> string.contains("OK: cognitive-replay labels") |> should.be_true
   report
   |> string.contains("PASS ev-replay attention=ask_now")
+  |> should.be_true
+  report
+  |> string.contains("label=missed_important")
+  |> should.be_true
+  report
+  |> string.contains("issue=policy:attention.md missed urgency")
   |> should.be_true
 
   stop_subject(worker_started.data)

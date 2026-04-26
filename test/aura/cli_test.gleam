@@ -36,6 +36,19 @@ pub fn parse_args_dispatches_cognitive_delivery_retry_test() {
   |> should.equal(aura.CliCtl("cognitive-delivery retry-dead-letter"))
 }
 
+pub fn parse_args_dispatches_cognitive_label_test() {
+  aura.parse_args_for_test([
+    "cognitive-label",
+    "ev-1",
+    "false_interrupt",
+    "digest",
+    "too noisy",
+  ])
+  |> should.equal(aura.CliCtl(
+    "cognitive-label ev-1 false_interrupt digest too noisy",
+  ))
+}
+
 pub fn parse_args_tolerates_leading_dash_dash_test() {
   aura.parse_args_for_test(["--", "cognitive-smoke", "gmail-rel42"])
   |> should.equal(aura.CliCtl("cognitive-smoke gmail-rel42"))

@@ -1,13 +1,13 @@
 # Cognitive Capacity First Slice Plan
 
-Updated 2026-04-25
+Updated 2026-04-26
 
 Status: first executable decision, delivery, and replay harness implemented. This
 supersedes the earlier typed cognitive ontology plan. The slice is a minimal
 harness: event persistence, evidence/context building, text-policy context,
 model decision envelope, validation, append-only decision logging, delivery
-ledger, digest queue, immediate attention surfacing, delivery dead letters, and
-label-backed replay.
+ledger, digest queue, immediate attention surfacing, delivery dead letters,
+correction-label capture, and label-backed replay.
 
 ## Goal
 
@@ -39,9 +39,10 @@ AuraEvent
 -> ~/.local/share/aura/cognitive/deliveries.jsonl
 -> record | digest queue | surface_now/ask_now Discord delivery
 -> delivery dead-letter retry for failed send effects
+-> correction labels in ~/.local/share/aura/cognitive/labels.jsonl
 -> decision_ready log
--> ctl probes for smoke/eval/replay, unsuppressed delivery, digest flush, and
-   dead-letter retry
+-> ctl probes for smoke/eval/replay, correction labels, unsuppressed delivery,
+   digest flush, and dead-letter retry
 ```
 
 This proves:
@@ -68,35 +69,36 @@ This proves:
   require a model decision, and wait for a delivered ledger entry
 - `cognitive-digest flush` can force queued digest delivery without waiting for
   a wall-clock window
+- `cognitive-label <event_id> <label> [expected_attention] [note...]` can
+  attach correction labels to existing persisted events
 - `cognitive-replay labels` can rerun labeled persisted events through the
-  current worker/model/policy path without notifying Discord
+  current worker/model/policy path without notifying Discord and report the
+  likely policy or concern surface implicated by each label
 - the worker does not block ingestion
 
 It does not yet prove proactive surfacing quality at scale, concern matching
-quality, user-preference learning, label capture quality, or whether the
-default policies are good enough.
+quality, user-preference learning from labels, or whether the default policies
+are good enough.
 
 ## Correct Next Cut
 
-Add a correction-label capture UX before expanding proactive thresholds,
-autonomy, or cognitive structure.
+Use correction labels to propose text-policy and concern-file patches before
+expanding proactive thresholds, autonomy, or cognitive structure.
 
 Files:
 
-- Discord correction actions or a CLI command for writing labels.
-- `~/.local/share/aura/cognitive/labels.jsonl`
-- Replay report summaries that identify which policy or concern likely needs
-  adjustment.
+- Policy/concern patch proposal path from replay failures.
+- `~/.local/share/aura/cognitive/labels.jsonl` as input evidence.
+- Existing `policies/*.md` and `concerns/*.md` as the only mutable targets.
 
 Scope:
 
-- Attach user correction labels to existing event/decision records.
-- Produce failure labels such as `false_interrupt`, `missed_important`,
-  `bad_concern_match`, and `bad_authority_call`.
-- Feed those labels into replay as expectations.
-- Keep replay offline-safe where possible: recorded model outputs should be
-  enough for behavior regression tests, with live model replay as an explicit
-  operator check.
+- Summarize repeated replay failures by implicated surface.
+- Propose ordinary markdown patches for attention, authority, work, delivery,
+  concerns policy, or specific concern files.
+- Keep patch application behind the existing approval/tier path.
+- Keep replay offline-safe where possible, with live model replay as an
+  explicit operator check.
 
 Non-scope:
 

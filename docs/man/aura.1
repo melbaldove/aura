@@ -11,6 +11,8 @@ flares, scheduled tasks, and domain\-partitioned knowledge
 .br
 .B gleam run \-\- cognitive\-eval fixtures
 .br
+.B gleam run \-\- cognitive\-label EVENT_ID LABEL [EXPECTED_ATTENTION] [NOTE...]
+.br
 .B gleam run \-\- cognitive\-delivery retry\-dead\-letter
 .br
 .B bash scripts/deploy.sh
@@ -100,6 +102,15 @@ wording.
 .B gleam run \-\- cognitive\-digest flush
 Ask the running daemon to send any queued cognitive digest entries immediately,
 using the same delivery path as a scheduled digest window.
+.TP
+.B gleam run \-\- cognitive\-label EVENT_ID LABEL [EXPECTED_ATTENTION] [NOTE...]
+Append a correction label for an existing cognitive event to
+~/.local/share/aura/cognitive/labels.jsonl.
+Labels include false_interrupt, missed_important, bad_deferral, useful_digest,
+bad_concern_match, bad_authority_call, verification_burden_reduced, and
+planning_burden_reduced.
+EXPECTED_ATTENTION, when provided, must be record, digest, surface_now, or
+ask_now and overrides the label's default replay attention expectation.
 .TP
 .B gleam run \-\- cognitive\-delivery retry\-dead\-letter
 Ask the running daemon to retry delivery ledger entries whose latest state is

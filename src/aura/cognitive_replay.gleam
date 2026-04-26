@@ -6,6 +6,7 @@
 
 import aura/cognitive_decision
 import aura/cognitive_delivery
+import aura/cognitive_label
 import aura/cognitive_worker
 import aura/db
 import aura/time
@@ -36,6 +37,7 @@ pub type Context {
 pub type Label {
   Label(
     event_id: String,
+    label: String,
     note: String,
     attention_any: List(String),
     work_any: List(String),
@@ -60,6 +62,9 @@ pub type ReplayDecision {
 pub type CaseResult {
   CaseResult(
     event_id: String,
+    label: String,
+    note: String,
+    diagnosis: String,
     passed: Bool,
     skipped: Bool,
     attention_action: String,
@@ -161,6 +166,9 @@ fn replay_label(
     False ->
       CaseResult(
         event_id: label.event_id,
+        label: label.label,
+        note: label.note,
+        diagnosis: cognitive_label.diagnosis_for_label(label.label),
         passed: True,
         skipped: True,
         attention_action: "",
@@ -173,12 +181,11 @@ fn replay_label(
     True -> {
       let deadline_ms = time.now_ms() + timeout_ms
       case db.get_event(ctx.db_subject, label.event_id) {
-        Error(err) ->
-          failed_case(label.event_id, ["failed to load event: " <> err])
-        Ok(option.None) -> failed_case(label.event_id, ["event not found"])
+        Error(err) -> failed_case(label, ["failed to load event: " <> err])
+        Ok(option.None) -> failed_case(label, ["event not found"])
         Ok(option.Some(_event)) -> {
           case count_decisions(ctx.paths, label.event_id) {
-            Error(err) -> failed_case(label.event_id, [err])
+            Error(err) -> failed_case(label, [err])
             Ok(before_count) -> {
               suppress_delivery(ctx.delivery_subject, label.event_id)
               cognitive_worker.build_context(
@@ -194,11 +201,14 @@ fn replay_label(
                   poll_ms,
                 )
               {
-                Error(err) -> failed_case(label.event_id, [err])
+                Error(err) -> failed_case(label, [err])
                 Ok(decision) -> {
                   let errors = expectation_errors(label, decision)
                   CaseResult(
                     event_id: label.event_id,
+                    label: label.label,
+                    note: label.note,
+                    diagnosis: cognitive_label.diagnosis_for_label(label.label),
                     passed: errors == [],
                     skipped: False,
                     attention_action: decision.attention_action,
@@ -435,9 +445,12 @@ fn has_expectation(label: Label) -> Bool {
   || string.trim(label.require_gap_contains) != ""
 }
 
-fn failed_case(event_id: String, errors: List(String)) -> CaseResult {
+fn failed_case(label: Label, errors: List(String)) -> CaseResult {
   CaseResult(
-    event_id: event_id,
+    event_id: label.event_id,
+    label: label.label,
+    note: label.note,
+    diagnosis: cognitive_label.diagnosis_for_label(label.label),
     passed: False,
     skipped: False,
     attention_action: "",
@@ -497,6 +510,14 @@ fn format_case_result(result: CaseResult) -> String {
   <> int.to_string(result.citation_count)
   <> " gaps="
   <> int.to_string(result.gap_count)
+  <> " label="
+  <> blank_dash(result.label)
+  <> " issue="
+  <> blank_dash(result.diagnosis)
+  <> case result.note {
+    "" -> ""
+    note -> " note=" <> note
+  }
   <> case result.errors {
     [] -> ""
     _ -> " errors=" <> string.join(result.errors, "; ")
@@ -512,6 +533,7 @@ fn blank_dash(value: String) -> String {
 
 fn label_decoder() {
   use event_id <- decode.field("event_id", decode.string)
+  use label <- decode.optional_field("label", "", decode.string)
   use note <- decode.optional_field("note", "", decode.string)
   use attention_any <- decode.optional_field(
     "attention_any",
@@ -537,6 +559,7 @@ fn label_decoder() {
   )
   decode.success(Label(
     event_id: event_id,
+    label: label,
     note: note,
     attention_any: attention_any,
     work_any: work_any,
