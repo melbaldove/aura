@@ -323,6 +323,49 @@ pub fn tool_result_all_resolved_spawns_next_stream_test() {
   |> should.be_true
 }
 
+pub fn failed_cognitive_feedback_cannot_finalize_as_saved_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let tool_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"1\\\",\\\"label\\\":\\\"false_interrupt\\\"}\"}]"
+
+  let #(after_tool_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", tool_calls_json, 100),
+    )
+  let #(after_tool_error, _) =
+    channel_actor.transition(
+      after_tool_request,
+      channel_actor.ToolResult("c1", "Error: event not found: 1", True),
+    )
+  let #(_, effects) =
+    channel_actor.transition(
+      after_tool_error,
+      channel_actor.StreamComplete(
+        "Got it — the preference is already saved in your profile.",
+        "[]",
+        100,
+      ),
+    )
+
+  let final_text =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  final_text
+  |> string.contains("I could not record that cognitive feedback")
+  |> should.be_true
+  final_text
+  |> string.contains("preference is already saved")
+  |> should.be_false
+}
+
 // --- Task 13: stream error retry ---------------------------------------------
 
 pub fn stream_error_retries_up_to_max_test() {
@@ -411,8 +454,7 @@ pub fn turn_deadline_fails_turn_test() {
 pub fn worker_down_stream_translates_to_stream_error_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let ref = channel_actor.fake_monitor_ref()
-  let with_monitor =
-    channel_actor.with_fake_stream_turn_monitored(state, ref)
+  let with_monitor = channel_actor.with_fake_stream_turn_monitored(state, ref)
   let #(new_state, effects) =
     channel_actor.transition(
       with_monitor,
@@ -1106,10 +1148,7 @@ pub fn retry_stream_message_spawns_stream_worker_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
   let #(_, effects) =
-    channel_actor.transition(
-      with_stream,
-      channel_actor.RetryStream,
-    )
+    channel_actor.transition(with_stream, channel_actor.RetryStream)
   list.any(effects, fn(e) {
     case e {
       channel_actor.SpawnStreamWorker(_) -> True
@@ -1123,10 +1162,7 @@ pub fn retry_stream_message_spawns_stream_worker_test() {
 pub fn retry_stream_when_idle_is_noop_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let #(new_state, effects) =
-    channel_actor.transition(
-      state,
-      channel_actor.RetryStream,
-    )
+    channel_actor.transition(state, channel_actor.RetryStream)
   effects |> should.equal([])
   new_state.turn |> should.equal(option.None)
 }
@@ -1160,8 +1196,7 @@ pub fn worker_down_stale_ref_is_ignored_test() {
 pub fn worker_down_matching_ref_dispatches_stream_error_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let ref = channel_actor.fake_monitor_ref()
-  let with_stream =
-    channel_actor.with_fake_stream_turn_monitored(state, ref)
+  let with_stream = channel_actor.with_fake_stream_turn_monitored(state, ref)
   let #(new_state, effects) =
     channel_actor.transition(
       with_stream,

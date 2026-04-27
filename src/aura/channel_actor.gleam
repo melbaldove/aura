@@ -2264,8 +2264,9 @@ fn finalize_turn(
   content: String,
   prompt_tokens: Int,
 ) -> #(ChannelState, List(Effect)) {
+  let final_content = guard_cognitive_feedback_failure(turn.traces, content)
   let final_messages =
-    list.append(turn.new_messages, [llm.AssistantMessage(content)])
+    list.append(turn.new_messages, [llm.AssistantMessage(final_content)])
   let #(author_id, author_name) = case turn.kind {
     UserTurn(_, aid, aname) -> #(aid, aname)
     HandbackTurn(_, _) -> #("aura", "Aura")
@@ -2322,7 +2323,7 @@ fn finalize_turn(
   let base_effects = [
     DiscordEdit(
       turn.discord_msg_id,
-      conversation.format_full_message(turn.traces, content),
+      conversation.format_full_message(turn.traces, final_content),
     ),
     DbSaveExchange(final_messages, author_id, author_name, prompt_tokens),
     UpdateCompressorTokens(prompt_tokens),
@@ -2332,7 +2333,11 @@ fn finalize_turn(
     list.append(base_effects, [
       SpawnMemoryReview(full_history),
       SpawnSkillReview(full_history, new_skill_iterations, skill_review_count),
-      LogStreamSummary(turn.stream_stats, "complete", string.length(content)),
+      LogStreamSummary(
+        turn.stream_stats,
+        "complete",
+        string.length(final_content),
+      ),
     ])
   // Stop the typing indicator before the final Discord edit so the user sees
   // the typing indicator disappear before the message is updated.
@@ -2357,6 +2362,35 @@ fn finalize_turn(
       let #(new_state, start_effects) =
         start_turn(ChannelState(..cleared, queue: rest), next)
       #(new_state, list.append(with_deadline, start_effects))
+    }
+  }
+}
+
+fn guard_cognitive_feedback_failure(
+  traces: List(conversation.ToolTrace),
+  content: String,
+) -> String {
+  let feedback_traces =
+    traces
+    |> list.filter(fn(trace) { trace.name == "record_cognitive_feedback" })
+  let has_failed_feedback =
+    list.any(feedback_traces, fn(trace) { trace.is_error })
+  let has_recorded_feedback =
+    list.any(feedback_traces, fn(trace) {
+      !trace.is_error
+      && string.starts_with(trace.result, "Recorded cognitive feedback")
+    })
+
+  case has_failed_feedback && !has_recorded_feedback {
+    False -> content
+    True -> {
+      let errors =
+        feedback_traces
+        |> list.filter(fn(trace) { trace.is_error })
+        |> list.map(fn(trace) { trace.result })
+        |> string.join("; ")
+      "I could not record that cognitive feedback, so I have not saved or changed that preference. The feedback tool failed: "
+      <> errors
     }
   }
 }

@@ -649,6 +649,8 @@ pub fn search_events_tool_returns_matching_events_test() {
   let out = run_search_events_tool(ctx, "{\"query\":\"alice\"}")
   string.contains(out, "gmail-work") |> should.be_true
   string.contains(out, "linear") |> should.be_true
+  string.contains(out, "Event ID: g1") |> should.be_true
+  string.contains(out, "Event ID: l1") |> should.be_true
   string.contains(out, "alice@acme.com") |> should.be_true
   string.contains(out, "t-abc-123") |> should.be_true
   string.contains(out, "In Progress") |> should.be_true

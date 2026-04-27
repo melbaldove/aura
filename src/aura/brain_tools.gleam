@@ -1855,7 +1855,9 @@ fn format_event(index: Int, e: event.AuraEvent) -> String {
   let date = time.format_ms_utc(e.time_ms)
   let head =
     int.to_string(index)
-    <> ". ["
+    <> ". Event ID: "
+    <> e.id
+    <> "\n   ["
     <> e.source
     <> "] "
     <> date
@@ -2510,7 +2512,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "search_events",
-      description: "Search events ingested from external sources (email, Linear tickets, etc.). Use this when the user asks about external activity that isn't part of a conversation — e.g. 'any new emails from alice today?' or 'what happened on the login bug ticket?'. Returns matched events with their source, subject, and a short snippet.",
+      description: "Search events ingested from external sources (email, Linear tickets, etc.). Use this when the user asks about external activity that isn't part of a conversation — e.g. 'any new emails from alice today?' or 'what happened on the login bug ticket?'. Returns matched events with exact Event ID values; pass that Event ID unchanged to tools like record_cognitive_feedback.",
       parameters: [
         llm.ToolParam(
           name: "query",
