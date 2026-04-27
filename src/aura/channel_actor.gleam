@@ -1508,6 +1508,15 @@ pub fn transition(
                     0,
                   )
                 False -> {
+                  let new_messages = case needs_attention_memory_followup(
+                    new_messages,
+                  ) {
+                    True ->
+                      list.append(new_messages, [
+                        llm.SystemMessage(attention_memory_followup_prompt),
+                      ])
+                    False -> new_messages
+                  }
                   let next_llm_messages =
                     list.append(state.conversation, new_messages)
                   let stream_turn =
@@ -1889,7 +1898,13 @@ fn has_recorded_cognitive_feedback_trace(
 }
 
 fn should_finalize_after_attention_memory(messages: List(llm.Message)) -> Bool {
-  has_successful_attention_memory_write(messages)
+  has_successful_event_grounded_attention_memory_write(messages)
+}
+
+const attention_memory_followup_prompt = "An attention memory entry was saved as a standing preference. No replay label was recorded because the write had no event_id and expected_attention. Do not claim the full feedback loop is complete yet. First decide whether the user's correction was about a concrete recent external event or prior Aura notification. If yes, call search_events with content words from the user's latest message, then call memory(target='attention') again with event_id and expected_attention. If no concrete event can be resolved, answer that the standing attention preference was saved and no event label was recorded."
+
+fn needs_attention_memory_followup(messages: List(llm.Message)) -> Bool {
+  has_successful_plain_attention_memory_write(messages)
 }
 
 /// Common failure path: emit user-facing error, optional typing stop,
@@ -2578,6 +2593,28 @@ fn contains_any(content: String, needles: List(String)) -> Bool {
 }
 
 fn has_successful_attention_memory_write(messages: List(llm.Message)) -> Bool {
+  has_successful_plain_attention_memory_write(messages)
+  || has_successful_event_grounded_attention_memory_write(messages)
+}
+
+fn has_successful_plain_attention_memory_write(messages: List(llm.Message)) -> Bool {
+  has_successful_attention_memory_write_matching(messages, fn(result) {
+    !string.contains(result, "recorded cognitive feedback")
+  })
+}
+
+fn has_successful_event_grounded_attention_memory_write(
+  messages: List(llm.Message),
+) -> Bool {
+  has_successful_attention_memory_write_matching(messages, fn(result) {
+    string.contains(result, "recorded cognitive feedback")
+  })
+}
+
+fn has_successful_attention_memory_write_matching(
+  messages: List(llm.Message),
+  result_matches: fn(String) -> Bool,
+) -> Bool {
   let attention_memory_call_ids =
     messages
     |> list.flat_map(fn(message) {
@@ -2596,6 +2633,7 @@ fn has_successful_attention_memory_write(messages: List(llm.Message)) -> Bool {
         list.contains(attention_memory_call_ids, id)
         && string.starts_with(result, "Saved [")
         && string.contains(result, "] to attention")
+        && result_matches(result)
       _ -> False
     }
   })

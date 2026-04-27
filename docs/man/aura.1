@@ -116,6 +116,9 @@ In normal Discord use, the user should not need this command. The brain can
 record the same labels as an internal side effect of
 memory target='attention' when ordinary feedback clearly references a specific
 event id.
+If Aura saves attention memory without event evidence, it must continue the
+tool loop before claiming completion, because no replay label has been recorded
+yet.
 .TP
 .B gleam run \-\- cognitive\-improve propose
 Run labeled cognitive events through the current worker/model/policy path and

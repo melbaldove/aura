@@ -462,11 +462,11 @@ pub fn second_no_tool_attention_claim_after_repair_finalizes_honestly_test() {
   |> should.be_true
 }
 
-pub fn attention_memory_can_claim_future_preference_test() {
+pub fn event_grounded_attention_memory_can_claim_future_preference_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
   let tool_calls_json =
-    "[{\"id\":\"c1\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"package-tracker\\\",\\\"content\\\":\\\"Suppress routine package alerts.\\\"}\"}]"
+    "[{\"id\":\"c1\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"package-tracker\\\",\\\"content\\\":\\\"Suppress routine package alerts.\\\",\\\"event_id\\\":\\\"package-event-1\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
 
   let #(after_tool_request, _) =
     channel_actor.transition(
@@ -478,7 +478,7 @@ pub fn attention_memory_can_claim_future_preference_test() {
       after_tool_request,
       channel_actor.ToolResult(
         "c1",
-        "Saved [package-tracker] to attention.",
+        "Saved [package-tracker] to attention and recorded cognitive feedback: event_id=<package-event-1> label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl.",
         False,
       ),
     )
@@ -686,6 +686,54 @@ pub fn event_grounded_feedback_memory_success_finalizes_without_extra_stream_tes
     |> should.be_ok
   final_edit
   |> string.contains("Saved the attention preference")
+  |> should.be_true
+}
+
+pub fn plain_attention_memory_success_requires_followup_model_step_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let memory_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\"}\"}]"
+
+  let #(after_memory_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", memory_calls_json, 100),
+    )
+  let #(next_state, effects) =
+    channel_actor.transition(
+      after_memory_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Saved [notification-suppressions] to attention.",
+        False,
+      ),
+    )
+
+  case next_state.turn {
+    option.Some(_) -> Nil
+    option.None -> should.fail()
+  }
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.DiscordEdit(_, _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnStreamWorker(messages) ->
+        list.any(messages, fn(message) {
+          case message {
+            llm.SystemMessage(content) ->
+              string.contains(content, "No replay label was recorded")
+            _ -> False
+          }
+        })
+      _ -> False
+    }
+  })
   |> should.be_true
 }
 

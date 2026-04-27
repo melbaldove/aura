@@ -38,6 +38,13 @@ same memory call also includes the resolved `event_id` and
 `expected_attention`. The tool validates the event and appends the corresponding
 correction label to replay input before saving the attention memory.
 
+A plain attention-memory save is not treated as completion of an event-feedback
+loop. If the model writes a standing preference without event evidence, the
+channel actor continues one more model step with explicit context that no replay
+label was recorded, so the model can either resolve the concrete event and
+rewrite with `event_id`/`expected_attention` or honestly report that only a
+standing preference was saved.
+
 The model still does the semantic work: resolving natural language, searching
 recent events when needed, choosing the expected attention action, and deciding
 whether clarification is necessary. Code validates mechanical invariants only:
