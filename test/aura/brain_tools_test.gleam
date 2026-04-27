@@ -1,5 +1,4 @@
 import aura/brain_tools
-import aura/cognitive_label
 import aura/db
 import aura/event
 import aura/llm
@@ -301,7 +300,7 @@ fn run_memory_tool(ctx: brain_tools.ToolContext, args_json: String) -> String {
   }
 }
 
-pub fn memory_tool_rejects_notification_suppression_without_feedback_label_test() {
+pub fn memory_tool_saves_notification_suppression_without_keyword_guard_test() {
   let base = "/tmp/aura-memory-feedback-guard-" <> test_helpers.random_suffix()
   let _ = simplifile.delete_all([base])
   let ctx = memory_ctx(base)
@@ -313,20 +312,22 @@ pub fn memory_tool_rejects_notification_suppression_without_feedback_label_test(
       "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for routine package tracker alerts. These should be recorded but never surfaced or digested.\"}",
     )
 
-  out
-  |> string.contains("record_cognitive_feedback")
+  out |> should.equal("Saved [email-suppressions] to user.")
+  let content = simplifile.read(xdg.user_path(ctx.paths)) |> should.be_ok
+  content
+  |> string.contains("routine package tracker alerts")
   |> should.be_true
-  simplifile.is_file(xdg.user_path(ctx.paths)) |> should.equal(Ok(False))
 
   let _ = simplifile.delete_all([base])
   Nil
 }
 
-pub fn memory_tool_rejects_negated_notification_preference_without_feedback_label_test() {
+pub fn memory_tool_saves_negated_notification_preference_without_keyword_guard_test() {
   let base =
     "/tmp/aura-memory-feedback-guard-negation-" <> test_helpers.random_suffix()
   let _ = simplifile.delete_all([base])
   let ctx = memory_ctx(base)
+  let assert Ok(_) = simplifile.create_directory_all(ctx.paths.config)
 
   let out =
     run_memory_tool(
@@ -334,10 +335,9 @@ pub fn memory_tool_rejects_negated_notification_preference_without_feedback_labe
       "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"No alerts for routine package tracker events.\"}",
     )
 
-  out
-  |> string.contains("record_cognitive_feedback")
-  |> should.be_true
-  simplifile.is_file(xdg.user_path(ctx.paths)) |> should.equal(Ok(False))
+  out |> should.equal("Saved [email-suppressions] to user.")
+  let content = simplifile.read(xdg.user_path(ctx.paths)) |> should.be_ok
+  content |> string.contains("No alerts") |> should.be_true
 
   let _ = simplifile.delete_all([base])
   Nil
@@ -366,7 +366,7 @@ pub fn memory_tool_allows_neutral_notification_memory_without_feedback_label_tes
   Nil
 }
 
-pub fn memory_tool_allows_notification_suppression_after_feedback_label_test() {
+pub fn memory_tool_can_save_preference_after_feedback_label_test() {
   let assert Ok(db_subject) = db.start(":memory:")
   let base =
     "/tmp/aura-memory-feedback-guard-ok-" <> test_helpers.random_suffix()
@@ -408,35 +408,6 @@ pub fn memory_tool_allows_notification_suppression_after_feedback_label_test() {
   |> should.be_true
 
   process.send(db_subject, db.Shutdown)
-  let _ = simplifile.delete_all([base])
-  Nil
-}
-
-pub fn memory_tool_rejects_notification_suppression_after_unrelated_label_test() {
-  let base =
-    "/tmp/aura-memory-feedback-guard-unrelated-" <> test_helpers.random_suffix()
-  let _ = simplifile.delete_all([base])
-  let ctx = memory_ctx(base)
-  let assert Ok(_) =
-    cognitive_label.capture(
-      ctx.paths,
-      "ev-unrelated",
-      "false_interrupt",
-      "record",
-      "A different correction happened recently.",
-    )
-
-  let out =
-    run_memory_tool(
-      ctx,
-      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for routine package tracker alerts. These should be recorded but never surfaced or digested.\"}",
-    )
-
-  out
-  |> string.contains("record_cognitive_feedback")
-  |> should.be_true
-  simplifile.is_file(xdg.user_path(ctx.paths)) |> should.equal(Ok(False))
-
   let _ = simplifile.delete_all([base])
   Nil
 }

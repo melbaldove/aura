@@ -46,8 +46,6 @@ import simplifile
 // Types
 // ---------------------------------------------------------------------------
 
-const current_turn_cognitive_feedback_window_ms: Int = 600_000
-
 /// Result of executing a tool.
 pub type ToolResult {
   TextResult(String)
@@ -418,24 +416,12 @@ fn execute_tool_dispatch(
                   case key {
                     "" -> TextResult("Error: 'key' is required for set action.")
                     _ -> {
-                      case
-                        notification_feedback_needs_label(
-                          ctx,
-                          target,
-                          key,
-                          content,
-                        )
-                      {
-                        True ->
-                          TextResult(notification_feedback_label_required_msg())
-                        False ->
-                          case structured_memory.set(path, key, content) {
-                            Ok(_) ->
-                              TextResult(
-                                "Saved [" <> key <> "] to " <> target <> ".",
-                              )
-                            Error(e) -> TextResult("Error: " <> e)
-                          }
+                      case structured_memory.set(path, key, content) {
+                        Ok(_) ->
+                          TextResult(
+                            "Saved [" <> key <> "] to " <> target <> ".",
+                          )
+                        Error(e) -> TextResult("Error: " <> e)
                       }
                     }
                   }
@@ -2141,16 +2127,6 @@ fn execute_record_cognitive_feedback(
               {
                 Error(e) -> TextResult("Error: " <> e)
                 Ok(result) -> {
-                  let marker_warning = case
-                    mark_current_turn_has_cognitive_feedback(
-                      ctx,
-                      result.event_id,
-                    )
-                  {
-                    Ok(_) -> ""
-                    Error(e) ->
-                      " warning=current turn feedback marker failed: " <> e
-                  }
                   TextResult(
                     "Recorded cognitive feedback: event_id="
                     <> result.event_id
@@ -2159,8 +2135,7 @@ fn execute_record_cognitive_feedback(
                     <> " attention_any=["
                     <> string.join(result.attention_any, ", ")
                     <> "] path="
-                    <> result.path
-                    <> marker_warning,
+                    <> result.path,
                   )
                 }
               }
@@ -2226,151 +2201,6 @@ fn strip_wrapping(value: String, prefix: String, suffix: String) -> String {
       |> string.drop_end(string.length(suffix))
     False -> value
   }
-}
-
-fn notification_feedback_needs_label(
-  ctx: ToolContext,
-  target: String,
-  key: String,
-  content: String,
-) -> Bool {
-  case
-    target == "user"
-    && looks_like_notification_suppression(key <> "\n" <> content)
-  {
-    False -> False
-    True ->
-      case current_turn_has_cognitive_feedback_label(ctx) {
-        True -> False
-        False -> True
-      }
-  }
-}
-
-fn looks_like_notification_suppression(text: String) -> Bool {
-  let lower = string.lowercase(text)
-  contains_any(lower, [
-    "notify",
-    "notification",
-    "alert",
-    "digest",
-    "surface",
-    "surfaced",
-    "interrupt",
-    "noisy",
-  ])
-  && contains_attention_suppression_marker(lower)
-}
-
-fn contains_attention_suppression_marker(lower: String) -> Bool {
-  contains_any(lower, [
-    "suppress",
-    "silent",
-    "silently",
-    "noise",
-    "noisy",
-    "unwanted",
-  ])
-  || contains_any_token(lower, ["no", "not", "never", "dont"])
-}
-
-fn contains_any_token(text: String, needles: List(String)) -> Bool {
-  let tokens =
-    text
-    |> string.replace("\n", " ")
-    |> string.replace("\t", " ")
-    |> string.replace(".", " ")
-    |> string.replace(",", " ")
-    |> string.replace("!", " ")
-    |> string.replace("?", " ")
-    |> string.replace(":", " ")
-    |> string.replace(";", " ")
-    |> string.replace("(", " ")
-    |> string.replace(")", " ")
-    |> string.replace("[", " ")
-    |> string.replace("]", " ")
-    |> string.replace("/", " ")
-    |> string.replace("-", " ")
-    |> string.replace("_", " ")
-    |> string.replace("'", "")
-    |> string.split(" ")
-    |> list.filter(fn(token) { string.trim(token) != "" })
-
-  list.any(needles, fn(needle) { list.contains(tokens, needle) })
-}
-
-fn contains_any(text: String, needles: List(String)) -> Bool {
-  list.any(needles, fn(needle) { string.contains(text, needle) })
-}
-
-fn cognitive_feedback_turns_path(paths: xdg.Paths) -> String {
-  xdg.cognitive_dir(paths) <> "/feedback_turns.jsonl"
-}
-
-fn mark_current_turn_has_cognitive_feedback(
-  ctx: ToolContext,
-  event_id: String,
-) -> Result(Nil, String) {
-  case string.trim(ctx.message_id) {
-    "" -> Ok(Nil)
-    message_id -> {
-      use _ <- result.try(
-        simplifile.create_directory_all(xdg.cognitive_dir(ctx.paths))
-        |> result.map_error(fn(e) {
-          "failed to create cognitive directory "
-          <> xdg.cognitive_dir(ctx.paths)
-          <> ": "
-          <> string.inspect(e)
-        }),
-      )
-      memory.append_jsonl(
-        cognitive_feedback_turns_path(ctx.paths),
-        json.object([
-          #("timestamp_ms", json.int(time.now_ms())),
-          #("message_id", json.string(message_id)),
-          #("event_id", json.string(event_id)),
-        ]),
-      )
-    }
-  }
-}
-
-fn current_turn_has_cognitive_feedback_label(ctx: ToolContext) -> Bool {
-  let cutoff = time.now_ms() - current_turn_cognitive_feedback_window_ms
-  case string.trim(ctx.message_id) {
-    "" -> False
-    message_id ->
-      case simplifile.read(cognitive_feedback_turns_path(ctx.paths)) {
-        Error(_) -> False
-        Ok(raw) ->
-          raw
-          |> string.split("\n")
-          |> list.any(fn(line) {
-            feedback_turn_line_matches(line, message_id, cutoff)
-          })
-      }
-  }
-}
-
-fn feedback_turn_line_matches(
-  line: String,
-  message_id: String,
-  cutoff: Int,
-) -> Bool {
-  let decoder = {
-    use timestamp_ms <- decode.field("timestamp_ms", decode.int)
-    use marker_message_id <- decode.field("message_id", decode.string)
-    decode.success(#(timestamp_ms, marker_message_id))
-  }
-  case json.parse(line, decoder) {
-    Ok(#(timestamp_ms, marker_message_id)) ->
-      timestamp_ms >= cutoff && marker_message_id == message_id
-    Error(_) -> False
-  }
-}
-
-fn notification_feedback_label_required_msg() -> String {
-  "Error: this looks like user feedback about Aura notifications or digest delivery. First resolve the recent event with search_events, then call record_cognitive_feedback with the inferred label and expected attention. After that label is recorded, save the reusable user preference with memory if still needed. Do not ask the user for event ids, labels, record, or digest unless multiple plausible recent events remain."
 }
 
 // ---------------------------------------------------------------------------
@@ -2662,7 +2492,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "memory",
-      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use 'state' for current domain status (active tickets, blockers, PRs). Use 'memory' for durable knowledge (decisions, patterns, conventions). Use 'user' for user profile (always global). State and memory are per-domain when in a domain channel. If the user is correcting Aura notifications, digests, interruptions, or missed alerts, call record_cognitive_feedback first; memory is only for the reusable preference after feedback evidence is recorded.",
+      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use 'state' for current domain status (active tickets, blockers, PRs). Use 'memory' for durable knowledge (decisions, patterns, conventions). Use 'user' for user profile (always global). State and memory are per-domain when in a domain channel. This is storage, not an audit log; event-level cognitive feedback belongs in record_cognitive_feedback before any reusable preference is saved.",
       parameters: [
         llm.ToolParam(
           name: "action",

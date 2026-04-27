@@ -1,6 +1,6 @@
 # ADR-033: Natural cognitive feedback capture
 
-**Status:** Accepted
+**Status:** Accepted; semantic memory guard superseded by ADR-035
 **Date:** 2026-04-26
 
 ## Context
@@ -42,13 +42,12 @@ preference to `USER.md` after recording the correction label. Routine feedback
 should not directly edit policy files; labels feed replay and improvement
 proposals, while user memory gives the immediate preference.
 
-The `memory` tool enforces this order for notification and digest corrections.
-If the model tries to save a user-level notification suppression preference
-before `record_cognitive_feedback` has run in the same user turn, the tool
-returns a visible error directing the model to resolve the event with
-`search_events`, call `record_cognitive_feedback`, and only then save the
-reusable preference. This keeps notification-suppression feedback from silently
-bypassing replay evidence.
+The original version of this ADR made the `memory` tool enforce this order for
+notification and digest corrections. ADR-035 supersedes that mechanism: semantic
+keyword guards in `memory` are the wrong abstraction. The desired model
+behavior remains the same, but it is enforced through prompt/policy pressure,
+replay labels, and evaluation rather than deterministic word lists in storage
+code.
 
 The CLI `cognitive-label` remains as an operator escape hatch and test surface,
 not the primary user experience.
@@ -64,7 +63,6 @@ The model now performs the semantic mapping from user phrasing to label. That
 is intentional under the Bitter Lesson principle, but it means ambiguous
 feedback must be clarified rather than deterministically guessed.
 
-Tool-boundary validation is still necessary. Prompt guidance alone is not a
-reliable invariant: when a natural correction looks like a preference, the model
-may choose memory first. The harness must reject that route until the auditable
-feedback event exists.
+Tool-boundary validation is still necessary for mechanical invariants such as
+event existence, label validity, append-only persistence, and security scanning.
+It must not become semantic language classification inside unrelated tools.
