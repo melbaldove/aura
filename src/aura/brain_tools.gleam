@@ -2082,17 +2082,44 @@ fn looks_like_notification_suppression(text: String) -> Bool {
     "interrupt",
     "noisy",
   ])
-  && contains_any(lower, [
+  && contains_attention_suppression_marker(lower)
+}
+
+fn contains_attention_suppression_marker(lower: String) -> Bool {
+  contains_any(lower, [
     "suppress",
-    "dont notify",
-    "don't notify",
-    "do not notify",
-    "never surfaced",
-    "never surface",
-    "not notify",
-    "silently recorded",
-    "too noisy",
+    "silent",
+    "silently",
+    "noise",
+    "noisy",
+    "unwanted",
   ])
+  || contains_any_token(lower, ["no", "not", "never", "dont"])
+}
+
+fn contains_any_token(text: String, needles: List(String)) -> Bool {
+  let tokens =
+    text
+    |> string.replace("\n", " ")
+    |> string.replace("\t", " ")
+    |> string.replace(".", " ")
+    |> string.replace(",", " ")
+    |> string.replace("!", " ")
+    |> string.replace("?", " ")
+    |> string.replace(":", " ")
+    |> string.replace(";", " ")
+    |> string.replace("(", " ")
+    |> string.replace(")", " ")
+    |> string.replace("[", " ")
+    |> string.replace("]", " ")
+    |> string.replace("/", " ")
+    |> string.replace("-", " ")
+    |> string.replace("_", " ")
+    |> string.replace("'", "")
+    |> string.split(" ")
+    |> list.filter(fn(token) { string.trim(token) != "" })
+
+  list.any(needles, fn(needle) { list.contains(tokens, needle) })
 }
 
 fn contains_any(text: String, needles: List(String)) -> Bool {
@@ -2428,7 +2455,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "record_cognitive_feedback",
-      description: "Record natural-language user correction about a specific Aura cognitive event as a replay label. Use when the user says a notification, digest item, or missed alert was too noisy, too quiet, too late, wrongly matched, or should have asked for authority. For colloquial references, first use search_events with concrete keywords from the user's phrase to resolve the recent external event; then pass the exact event_id here. If the user says \"don't notify\", \"do not notify\", \"never notify\", \"stop notifying\", or equivalent, pass expected_attention=record. If the user says it was too noisy but still useful later, pass expected_attention=digest. Do not ask the user to choose labels, record/digest, or event ids. Ask one clarifying question only if multiple plausible recent events remain.",
+      description: "Record natural-language user correction about a specific Aura cognitive event as a replay label. Use when the user says a notification, digest item, or missed alert was too noisy, too quiet, too late, wrongly matched, or should have asked for authority. For colloquial references, first use search_events with source-neutral concrete content words from the user's message to resolve the recent external event; then pass the exact event_id here. Choose expected_attention from meaning: no future user-facing attention means record; later batch attention means digest; immediate interruption means surface_now or ask_now. Do not ask the user to choose labels, record/digest, or event ids. Ask one clarifying question only if multiple plausible recent events remain.",
       parameters: [
         llm.ToolParam(
           name: "event_id",

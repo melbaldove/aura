@@ -595,10 +595,10 @@ fn learning_policy() -> String {
   <> "Do not promote new structure into code until replayed examples show markdown policy plus model judgment is insufficient.\n\n"
   <> "## Natural Corrections\n"
   <> "When the user corrects a specific Aura cognitive event in ordinary language, do not make them learn labels or operator commands. Record the feedback as a correction label if the event id is clear.\n"
-  <> "- \"Too noisy\", \"this should not have interrupted\", or \"could have waited\" usually means false_interrupt, often with expected attention record or digest.\n"
-  <> "- \"You should have told me\", \"this was important\", or \"why did this wait\" usually means missed_important or bad_deferral, with expected attention surface_now or ask_now when appropriate.\n"
-  <> "- \"You should have asked me\" or \"you decided without authority\" usually means bad_authority_call, with expected attention ask_now when the missing action was a user decision.\n"
-  <> "- \"Wrong match\" or \"not related to that project/person\" usually means bad_concern_match.\n"
+  <> "- Corrections saying an event should not have spent immediate attention usually mean false_interrupt; choose record when no future user-facing attention is desired, or digest when later batch attention is desired.\n"
+  <> "- Corrections saying an important event was missed or delayed usually mean missed_important or bad_deferral, with expected attention surface_now or ask_now when appropriate.\n"
+  <> "- Corrections saying Aura acted without needed authority usually mean bad_authority_call, with expected attention ask_now when the missing action was a user decision.\n"
+  <> "- Corrections saying the event was mapped to the wrong concern usually mean bad_concern_match.\n"
   <> "If the event id is ambiguous, ask one clarifying question instead of guessing.\n"
 }
 

@@ -28,13 +28,14 @@ Code gates the effect. It verifies that the event exists in SQLite, delegates
 label validation and security scanning to the existing correction-label module,
 and appends to the same `labels.jsonl` replay input. If the event id is unclear,
 the model should first try to resolve colloquial references through recent event
-search. For example, "don't notify me about Shopee deliveries" should search
-events for Shopee/order/delivery, identify the recent event that produced the
-digest or notification, and then record a `false_interrupt` label with the
-expected attention chosen by the model. In natural language, "don't notify" /
-"do not notify" / "stop notifying" means `expected_attention=record`; "too
-noisy but still useful later" means `expected_attention=digest`. It should ask
-one clarifying question only when multiple plausible recent events remain.
+search using source-neutral content words from the user's message. It then
+records a correction label with expected attention chosen from meaning: no
+future user-facing attention means `record`, later batch attention means
+`digest`, and immediate interruption means `surface_now` or `ask_now`. It should
+ask one clarifying question only when multiple plausible recent events remain.
+Runtime prompts and tool descriptions must stay source-neutral. They must not
+include vendor/device-specific examples or phrase-to-action mappings copied from
+live tests; concrete cases belong in replay fixtures, not in production policy.
 
 If the feedback also states a reusable preference, the model should save that
 preference to `USER.md` after recording the correction label. Routine feedback
@@ -46,7 +47,7 @@ If the model tries to save a user-level notification suppression preference
 before `record_cognitive_feedback` has run in the same user turn, the tool
 returns a visible error directing the model to resolve the event with
 `search_events`, call `record_cognitive_feedback`, and only then save the
-reusable preference. This keeps "don't notify me about X" from silently
+reusable preference. This keeps notification-suppression feedback from silently
 bypassing replay evidence.
 
 The CLI `cognitive-label` remains as an operator escape hatch and test surface,

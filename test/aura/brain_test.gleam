@@ -80,11 +80,14 @@ pub fn build_system_prompt_includes_natural_cognitive_feedback_rule_test() {
   |> string.contains("Do not make the user name labels")
   |> should.be_true
   prompt
-  |> string.contains("don't notify")
+  |> string.contains("ordinary language")
   |> should.be_true
   prompt
-  |> string.contains("expected_attention=record")
+  |> string.contains("no future user-facing attention")
   |> should.be_true
+  prompt |> string.contains("like '") |> should.be_false
+  prompt |> string.contains("If the user says \"") |> should.be_false
+  prompt |> string.contains("expected_attention=") |> should.be_false
 }
 
 pub fn resolve_model_name_test() {

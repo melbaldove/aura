@@ -208,14 +208,17 @@ pub fn record_cognitive_feedback_tool_description_guides_event_resolution_test()
   |> string.contains("Do not ask the user to choose labels")
   |> should.be_true
   description
-  |> string.contains("don't notify")
+  |> string.contains("source-neutral")
   |> should.be_true
   description
-  |> string.contains("expected_attention=record")
+  |> string.contains("no future user-facing attention")
   |> should.be_true
   description
-  |> string.contains("too noisy but still useful")
+  |> string.contains("later batch")
   |> should.be_true
+  description |> string.contains("like '") |> should.be_false
+  description |> string.contains("If the user says \"") |> should.be_false
+  description |> string.contains("expected_attention=") |> should.be_false
 }
 
 // Regression: GLM concatenates calls for different tools without embedding a
@@ -302,17 +305,62 @@ pub fn memory_tool_rejects_notification_suppression_without_feedback_label_test(
   let base = "/tmp/aura-memory-feedback-guard-" <> test_helpers.random_suffix()
   let _ = simplifile.delete_all([base])
   let ctx = memory_ctx(base)
+  let assert Ok(_) = simplifile.create_directory_all(ctx.paths.config)
 
   let out =
     run_memory_tool(
       ctx,
-      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for Find My iPhone alerts. These should be recorded but never surfaced or digested.\"}",
+      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for routine package tracker alerts. These should be recorded but never surfaced or digested.\"}",
     )
 
   out
   |> string.contains("record_cognitive_feedback")
   |> should.be_true
   simplifile.is_file(xdg.user_path(ctx.paths)) |> should.equal(Ok(False))
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn memory_tool_rejects_negated_notification_preference_without_feedback_label_test() {
+  let base =
+    "/tmp/aura-memory-feedback-guard-negation-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = memory_ctx(base)
+
+  let out =
+    run_memory_tool(
+      ctx,
+      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"No alerts for routine package tracker events.\"}",
+    )
+
+  out
+  |> string.contains("record_cognitive_feedback")
+  |> should.be_true
+  simplifile.is_file(xdg.user_path(ctx.paths)) |> should.equal(Ok(False))
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn memory_tool_allows_neutral_notification_memory_without_feedback_label_test() {
+  let base =
+    "/tmp/aura-memory-feedback-guard-neutral-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = memory_ctx(base)
+  let assert Ok(_) = simplifile.create_directory_all(ctx.paths.config)
+
+  let out =
+    run_memory_tool(
+      ctx,
+      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"notification-channels\",\"content\":\"Remember notification channel preferences for routine package tracker alerts.\"}",
+    )
+
+  out |> should.equal("Saved [notification-channels] to user.")
+  let content = simplifile.read(xdg.user_path(ctx.paths)) |> should.be_ok
+  content
+  |> string.contains("notification channel preferences")
+  |> should.be_true
 
   let _ = simplifile.delete_all([base])
   Nil
@@ -329,10 +377,10 @@ pub fn memory_tool_allows_notification_suppression_after_feedback_label_test() {
     db.insert_event(
       db_subject,
       gmail_event(
-        "ev-find-my",
-        "Find My iPhone alert",
-        "noreply@apple.com",
-        "thread-find-my",
+        "ev-package-tracker",
+        "Routine package tracker alert",
+        "alerts@example.invalid",
+        "thread-package-tracker",
         1_700_000_000_000,
       ),
     )
@@ -340,7 +388,7 @@ pub fn memory_tool_allows_notification_suppression_after_feedback_label_test() {
   let feedback_out =
     run_cognitive_feedback_tool(
       ctx,
-      "{\"event_id\":\"ev-find-my\",\"label\":\"false_interrupt\",\"expected_attention\":\"record\",\"note\":\"User said Find My iPhone alerts are noise.\"}",
+      "{\"event_id\":\"ev-package-tracker\",\"label\":\"false_interrupt\",\"expected_attention\":\"record\",\"note\":\"User said routine package tracker alerts are noise.\"}",
     )
 
   feedback_out
@@ -350,13 +398,13 @@ pub fn memory_tool_allows_notification_suppression_after_feedback_label_test() {
   let out =
     run_memory_tool(
       ctx,
-      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for Find My iPhone alerts. These should be recorded but never surfaced or digested.\"}",
+      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for routine package tracker alerts. These should be recorded but never surfaced or digested.\"}",
     )
 
   out |> should.equal("Saved [email-suppressions] to user.")
   let content = simplifile.read(xdg.user_path(ctx.paths)) |> should.be_ok
   content
-  |> string.contains("Find My iPhone alerts")
+  |> string.contains("routine package tracker alerts")
   |> should.be_true
 
   process.send(db_subject, db.Shutdown)
@@ -381,7 +429,7 @@ pub fn memory_tool_rejects_notification_suppression_after_unrelated_label_test()
   let out =
     run_memory_tool(
       ctx,
-      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for Find My iPhone alerts. These should be recorded but never surfaced or digested.\"}",
+      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for routine package tracker alerts. These should be recorded but never surfaced or digested.\"}",
     )
 
   out
