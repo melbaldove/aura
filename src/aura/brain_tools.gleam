@@ -2281,7 +2281,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "record_cognitive_feedback",
-      description: "Record natural-language user correction about a specific Aura cognitive event as a replay label. Use when the user says a notification, digest item, or missed alert was too noisy, too quiet, too late, wrongly matched, or should have asked for authority. Requires the exact event_id from the Aura message or nearby context; if ambiguous, ask one clarifying question instead of guessing.",
+      description: "Record natural-language user correction about a specific Aura cognitive event as a replay label. Use when the user says a notification, digest item, or missed alert was too noisy, too quiet, too late, wrongly matched, or should have asked for authority. For colloquial references, first use search_events with concrete keywords from the user's phrase to resolve the recent external event; then pass the exact event_id here. Do not ask the user to choose labels, record/digest, or event ids. Ask one clarifying question only if multiple plausible recent events remain.",
       parameters: [
         llm.ToolParam(
           name: "event_id",

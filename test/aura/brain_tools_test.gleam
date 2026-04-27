@@ -185,6 +185,29 @@ pub fn built_in_tools_include_record_cognitive_feedback_test() {
   has_tool |> should.be_true
 }
 
+pub fn record_cognitive_feedback_tool_description_guides_event_resolution_test() {
+  let tools = brain_tools.make_built_in_tools()
+  let description = case
+    list.find(tools, fn(t) {
+      case t {
+        llm.ToolDefinition(name: "record_cognitive_feedback", ..) -> True
+        _ -> False
+      }
+    })
+  {
+    Ok(llm.ToolDefinition(description: d, ..)) -> d
+    Error(_) -> ""
+  }
+
+  description |> string.contains("search_events") |> should.be_true
+  description
+  |> string.contains("colloquial references")
+  |> should.be_true
+  description
+  |> string.contains("Do not ask the user to choose labels")
+  |> should.be_true
+}
+
 // Regression: GLM concatenates calls for different tools without embedding a
 // "name" key.  expand_tool_calls must infer the tool name from the parameter
 // keys so each part targets the correct tool.

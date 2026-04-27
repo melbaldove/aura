@@ -62,6 +62,19 @@ pub fn build_system_prompt_includes_soul_content_test() {
   prompt |> string.contains("No domains") |> should.be_true
 }
 
+pub fn build_system_prompt_includes_natural_cognitive_feedback_rule_test() {
+  let prompt =
+    system_prompt.build_system_prompt("You are Aura.", [], [], "", "")
+
+  prompt
+  |> string.contains("record_cognitive_feedback")
+  |> should.be_true
+  prompt |> string.contains("search_events") |> should.be_true
+  prompt
+  |> string.contains("Do not make the user name labels")
+  |> should.be_true
+}
+
 pub fn resolve_model_name_test() {
   models.resolve_model_name("zai/glm-5-turbo")
   |> should.equal("glm-5-turbo")

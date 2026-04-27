@@ -27,7 +27,17 @@ vocabulary, optionally with an expected attention action and note.
 Code gates the effect. It verifies that the event exists in SQLite, delegates
 label validation and security scanning to the existing correction-label module,
 and appends to the same `labels.jsonl` replay input. If the event id is unclear,
-the model should ask one clarifying question instead of guessing.
+the model should first try to resolve colloquial references through recent event
+search. For example, "don't notify me about Shopee deliveries" should search
+events for Shopee/order/delivery, identify the recent event that produced the
+digest or notification, and then record a `false_interrupt` label with the
+expected attention chosen by the model. It should ask one clarifying question
+only when multiple plausible recent events remain.
+
+If the feedback also states a reusable preference, the model should save that
+preference to `USER.md` after recording the correction label. Routine feedback
+should not directly edit policy files; labels feed replay and improvement
+proposals, while user memory gives the immediate preference.
 
 The CLI `cognitive-label` remains as an operator escape hatch and test surface,
 not the primary user experience.
