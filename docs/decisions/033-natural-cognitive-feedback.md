@@ -41,10 +41,11 @@ proposals, while user memory gives the immediate preference.
 
 The `memory` tool enforces this order for notification and digest corrections.
 If the model tries to save a user-level notification suppression preference
-before a recent cognitive feedback label exists, the tool returns a visible
-error directing the model to resolve the event with `search_events`, call
-`record_cognitive_feedback`, and only then save the reusable preference. This
-keeps "don't notify me about X" from silently bypassing replay evidence.
+before `record_cognitive_feedback` has run in the same user turn, the tool
+returns a visible error directing the model to resolve the event with
+`search_events`, call `record_cognitive_feedback`, and only then save the
+reusable preference. This keeps "don't notify me about X" from silently
+bypassing replay evidence.
 
 The CLI `cognitive-label` remains as an operator escape hatch and test surface,
 not the primary user experience.

@@ -277,6 +277,7 @@ fn memory_ctx(base: String) -> brain_tools.ToolContext {
     ..stub,
     paths: xdg.resolve_with_home(base),
     domain_name: "aura",
+    message_id: "turn-feedback",
   )
 }
 
@@ -289,8 +290,7 @@ fn run_memory_tool(ctx: brain_tools.ToolContext, args_json: String) -> String {
 }
 
 pub fn memory_tool_rejects_notification_suppression_without_feedback_label_test() {
-  let base =
-    "/tmp/aura-memory-feedback-guard-" <> test_helpers.random_suffix()
+  let base = "/tmp/aura-memory-feedback-guard-" <> test_helpers.random_suffix()
   let _ = simplifile.delete_all([base])
   let ctx = memory_ctx(base)
 
@@ -310,19 +310,33 @@ pub fn memory_tool_rejects_notification_suppression_without_feedback_label_test(
 }
 
 pub fn memory_tool_allows_notification_suppression_after_feedback_label_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
   let base =
     "/tmp/aura-memory-feedback-guard-ok-" <> test_helpers.random_suffix()
   let _ = simplifile.delete_all([base])
-  let ctx = memory_ctx(base)
+  let ctx = brain_tools.ToolContext(..memory_ctx(base), db_subject: db_subject)
   let assert Ok(_) = simplifile.create_directory_all(ctx.paths.config)
-  let assert Ok(_) =
-    cognitive_label.capture(
-      ctx.paths,
-      "ev-find-my",
-      "false_interrupt",
-      "record",
-      "User said Find My iPhone alerts are noise.",
+  let assert Ok(True) =
+    db.insert_event(
+      db_subject,
+      gmail_event(
+        "ev-find-my",
+        "Find My iPhone alert",
+        "noreply@apple.com",
+        "thread-find-my",
+        1_700_000_000_000,
+      ),
     )
+
+  let feedback_out =
+    run_cognitive_feedback_tool(
+      ctx,
+      "{\"event_id\":\"ev-find-my\",\"label\":\"false_interrupt\",\"expected_attention\":\"record\",\"note\":\"User said Find My iPhone alerts are noise.\"}",
+    )
+
+  feedback_out
+  |> string.contains("Recorded cognitive feedback")
+  |> should.be_true
 
   let out =
     run_memory_tool(
@@ -335,6 +349,36 @@ pub fn memory_tool_allows_notification_suppression_after_feedback_label_test() {
   content
   |> string.contains("Find My iPhone alerts")
   |> should.be_true
+
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn memory_tool_rejects_notification_suppression_after_unrelated_label_test() {
+  let base =
+    "/tmp/aura-memory-feedback-guard-unrelated-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = memory_ctx(base)
+  let assert Ok(_) =
+    cognitive_label.capture(
+      ctx.paths,
+      "ev-unrelated",
+      "false_interrupt",
+      "record",
+      "A different correction happened recently.",
+    )
+
+  let out =
+    run_memory_tool(
+      ctx,
+      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for Find My iPhone alerts. These should be recorded but never surfaced or digested.\"}",
+    )
+
+  out
+  |> string.contains("record_cognitive_feedback")
+  |> should.be_true
+  simplifile.is_file(xdg.user_path(ctx.paths)) |> should.equal(Ok(False))
 
   let _ = simplifile.delete_all([base])
   Nil

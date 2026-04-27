@@ -46,7 +46,7 @@ import simplifile
 // Types
 // ---------------------------------------------------------------------------
 
-const recent_cognitive_feedback_window_ms: Int = 600_000
+const current_turn_cognitive_feedback_window_ms: Int = 600_000
 
 /// Result of executing a tool.
 pub type ToolResult {
@@ -2018,7 +2018,17 @@ fn execute_record_cognitive_feedback(
                 )
               {
                 Error(e) -> TextResult("Error: " <> e)
-                Ok(result) ->
+                Ok(result) -> {
+                  let marker_warning = case
+                    mark_current_turn_has_cognitive_feedback(
+                      ctx,
+                      result.event_id,
+                    )
+                  {
+                    Ok(_) -> ""
+                    Error(e) ->
+                      " warning=current turn feedback marker failed: " <> e
+                  }
                   TextResult(
                     "Recorded cognitive feedback: event_id="
                     <> result.event_id
@@ -2027,8 +2037,10 @@ fn execute_record_cognitive_feedback(
                     <> " attention_any=["
                     <> string.join(result.attention_any, ", ")
                     <> "] path="
-                    <> result.path,
+                    <> result.path
+                    <> marker_warning,
                   )
+                }
               }
             }
           }
@@ -2043,12 +2055,13 @@ fn notification_feedback_needs_label(
   key: String,
   content: String,
 ) -> Bool {
-  case target == "user"
+  case
+    target == "user"
     && looks_like_notification_suppression(key <> "\n" <> content)
   {
     False -> False
     True ->
-      case has_recent_cognitive_feedback_label(ctx.paths) {
+      case current_turn_has_cognitive_feedback_label(ctx) {
         True -> False
         False -> True
       }
@@ -2084,20 +2097,68 @@ fn contains_any(text: String, needles: List(String)) -> Bool {
   list.any(needles, fn(needle) { string.contains(text, needle) })
 }
 
-fn has_recent_cognitive_feedback_label(paths: xdg.Paths) -> Bool {
-  let cutoff = time.now_ms() - recent_cognitive_feedback_window_ms
-  case simplifile.read(xdg.labels_path(paths)) {
-    Error(_) -> False
-    Ok(raw) ->
-      raw
-      |> string.split("\n")
-      |> list.any(fn(line) { label_line_is_recent(line, cutoff) })
+fn cognitive_feedback_turns_path(paths: xdg.Paths) -> String {
+  xdg.cognitive_dir(paths) <> "/feedback_turns.jsonl"
+}
+
+fn mark_current_turn_has_cognitive_feedback(
+  ctx: ToolContext,
+  event_id: String,
+) -> Result(Nil, String) {
+  case string.trim(ctx.message_id) {
+    "" -> Ok(Nil)
+    message_id -> {
+      use _ <- result.try(
+        simplifile.create_directory_all(xdg.cognitive_dir(ctx.paths))
+        |> result.map_error(fn(e) {
+          "failed to create cognitive directory "
+          <> xdg.cognitive_dir(ctx.paths)
+          <> ": "
+          <> string.inspect(e)
+        }),
+      )
+      memory.append_jsonl(
+        cognitive_feedback_turns_path(ctx.paths),
+        json.object([
+          #("timestamp_ms", json.int(time.now_ms())),
+          #("message_id", json.string(message_id)),
+          #("event_id", json.string(event_id)),
+        ]),
+      )
+    }
   }
 }
 
-fn label_line_is_recent(line: String, cutoff: Int) -> Bool {
-  case json.parse(line, decode.at(["timestamp_ms"], decode.int)) {
-    Ok(timestamp_ms) -> timestamp_ms >= cutoff
+fn current_turn_has_cognitive_feedback_label(ctx: ToolContext) -> Bool {
+  let cutoff = time.now_ms() - current_turn_cognitive_feedback_window_ms
+  case string.trim(ctx.message_id) {
+    "" -> False
+    message_id ->
+      case simplifile.read(cognitive_feedback_turns_path(ctx.paths)) {
+        Error(_) -> False
+        Ok(raw) ->
+          raw
+          |> string.split("\n")
+          |> list.any(fn(line) {
+            feedback_turn_line_matches(line, message_id, cutoff)
+          })
+      }
+  }
+}
+
+fn feedback_turn_line_matches(
+  line: String,
+  message_id: String,
+  cutoff: Int,
+) -> Bool {
+  let decoder = {
+    use timestamp_ms <- decode.field("timestamp_ms", decode.int)
+    use marker_message_id <- decode.field("message_id", decode.string)
+    decode.success(#(timestamp_ms, marker_message_id))
+  }
+  case json.parse(line, decoder) {
+    Ok(#(timestamp_ms, marker_message_id)) ->
+      timestamp_ms >= cutoff && marker_message_id == message_id
     Error(_) -> False
   }
 }

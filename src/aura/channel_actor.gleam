@@ -1087,7 +1087,12 @@ fn execute_spawn_tool_worker(
   state: ChannelState,
   call: llm.ToolCall,
 ) -> ChannelState {
-  let pid = state.tool_spawn(state.tool_ctx, call, state.self_subject)
+  let pid =
+    state.tool_spawn(
+      tool_context_for_current_turn(state),
+      call,
+      state.self_subject,
+    )
   let monitor = process.monitor(pid)
   update_turn_with_worker(
     state,
@@ -1095,6 +1100,14 @@ fn execute_spawn_tool_worker(
     Some(monitor),
     ToolWorker(call.name, call.id),
   )
+}
+
+fn tool_context_for_current_turn(state: ChannelState) -> brain_tools.ToolContext {
+  case state.turn {
+    Some(TurnState(kind: UserTurn(message_id: message_id, ..), ..)) ->
+      brain_tools.ToolContext(..state.tool_ctx, message_id: message_id)
+    _ -> state.tool_ctx
+  }
 }
 
 fn execute_spawn_vision_worker(
