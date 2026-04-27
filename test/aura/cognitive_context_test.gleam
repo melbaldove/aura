@@ -172,3 +172,43 @@ pub fn build_loads_user_and_domain_context_as_citable_text_refs_test() {
   let _ = simplifile.delete_all([base])
   Nil
 }
+
+pub fn learned_notification_preference_is_visible_to_cognitive_context_test() {
+  let #(base, paths) = temp_paths("cognitive-context-learned-preference")
+  let _ = simplifile.create_directory_all(paths.config)
+  let _ =
+    simplifile.write(
+      xdg.user_path(paths),
+      "§ email-suppressions\nSuppress routine delivery-status emails from sender domain example-delivery.test. Record only; do not surface.",
+    )
+
+  let observation =
+    cognitive_event.Observation(
+      ..sample_observation(),
+      id: "ev-delivery-pref",
+      actors: ["robot@example-delivery.test"],
+      tags: dict.from_list([#("from", "robot@example-delivery.test")]),
+      text: "Your routine delivery status has changed.",
+    )
+  let evidence = cognitive_event.extract_evidence(observation)
+
+  let packet =
+    cognitive_context.build(paths, observation, evidence) |> should.be_ok
+  let rendered = cognitive_context.render(packet)
+
+  cognitive_context.context_citation_refs(packet)
+  |> list.contains("user:USER.md")
+  |> should.be_true
+  rendered
+  |> string.contains("§ email-suppressions")
+  |> should.be_true
+  rendered
+  |> string.contains("example-delivery.test")
+  |> should.be_true
+  rendered
+  |> string.contains("Record only; do not surface.")
+  |> should.be_true
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}

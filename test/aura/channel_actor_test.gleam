@@ -633,6 +633,90 @@ pub fn event_grounded_user_memory_after_feedback_can_save_test() {
   |> should.be_true
 }
 
+pub fn event_grounded_feedback_memory_success_finalizes_without_extra_stream_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let search_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"search_events\",\"arguments\":\"{\\\"query\\\":\\\"routine delivery\\\",\\\"limit\\\":\\\"5\\\"}\"}]"
+  let feedback_calls_json =
+    "[{\"id\":\"c2\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"delivery-event-1\\\",\\\"label\\\":\\\"false_interrupt\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
+  let memory_calls_json =
+    "[{\"id\":\"c3\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"user\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\"}\"}]"
+
+  let #(after_search_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", search_calls_json, 100),
+    )
+  let #(after_search_result, _) =
+    channel_actor.transition(
+      after_search_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Found 1 event:\n\n1. Event ID: <delivery-event-1>\n   [gmail] Routine delivery alert",
+        False,
+      ),
+    )
+  let #(after_feedback_request, _) =
+    channel_actor.transition(
+      after_search_result,
+      channel_actor.StreamComplete("", feedback_calls_json, 100),
+    )
+  let #(after_feedback_result, _) =
+    channel_actor.transition(
+      after_feedback_request,
+      channel_actor.ToolResult(
+        "c2",
+        "Recorded cognitive feedback: event_id=<delivery-event-1> label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl",
+        False,
+      ),
+    )
+  let #(after_memory_request, _) =
+    channel_actor.transition(
+      after_feedback_result,
+      channel_actor.StreamComplete("", memory_calls_json, 100),
+    )
+  let #(final_state, effects) =
+    channel_actor.transition(
+      after_memory_request,
+      channel_actor.ToolResult(
+        "c3",
+        "Saved [notification-suppressions] to user.",
+        False,
+      ),
+    )
+
+  case final_state.turn {
+    option.None -> Nil
+    option.Some(_) -> should.fail()
+  }
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.DbSaveExchange(_, _, _, _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+  let final_edit =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+  final_edit
+  |> string.contains("Recorded the feedback and saved the reusable preference")
+  |> should.be_true
+}
+
 pub fn blocked_event_grounded_memory_cannot_finalize_as_saved_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)

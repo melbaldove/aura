@@ -1472,8 +1472,6 @@ pub fn transition(
                   ],
                   tool_result_messages,
                 ])
-              let next_llm_messages =
-                list.append(state.conversation, new_messages)
               let new_turn =
                 TurnState(
                   ..turn,
@@ -1483,7 +1481,6 @@ pub fn transition(
                   pending_tool_results: dict.new(),
                   new_messages: new_messages,
                   traces: new_traces,
-                  messages_at_llm_call: next_llm_messages,
                   stream_retry_count: 0,
                   stream_stats: StreamStats(
                     start_ms: 0,
@@ -1491,11 +1488,32 @@ pub fn transition(
                     delta_count: 0,
                     last_heartbeat_ms: 0,
                   ),
-                  worker_kind: StreamWorker,
                 )
-              #(ChannelState(..state, turn: Some(new_turn)), [
-                SpawnStreamWorker(next_llm_messages),
-              ])
+              case should_finalize_after_event_feedback_memory(
+                new_messages,
+                new_traces,
+              ) {
+                True ->
+                  finalize_turn(
+                    state,
+                    new_turn,
+                    "Recorded the feedback and saved the reusable preference.",
+                    0,
+                  )
+                False -> {
+                  let next_llm_messages =
+                    list.append(state.conversation, new_messages)
+                  let stream_turn =
+                    TurnState(
+                      ..new_turn,
+                      messages_at_llm_call: next_llm_messages,
+                      worker_kind: StreamWorker,
+                    )
+                  #(ChannelState(..state, turn: Some(stream_turn)), [
+                    SpawnStreamWorker(next_llm_messages),
+                  ])
+                }
+              }
             }
           }
         }
@@ -1871,6 +1889,15 @@ fn has_recorded_cognitive_feedback_trace(
     && !trace.is_error
     && string.starts_with(trace.result, "Recorded cognitive feedback")
   })
+}
+
+fn should_finalize_after_event_feedback_memory(
+  messages: List(llm.Message),
+  traces: List(conversation.ToolTrace),
+) -> Bool {
+  has_event_search_trace(traces)
+  && has_recorded_cognitive_feedback_trace(traces)
+  && has_successful_user_memory_write(messages)
 }
 
 /// Common failure path: emit user-facing error, optional typing stop,
