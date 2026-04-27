@@ -409,6 +409,43 @@ pub fn memory_attention_tool_rejects_standing_feedback_when_recent_event_matches
   Nil
 }
 
+pub fn memory_attention_tool_rejects_standing_feedback_on_single_source_token_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let base =
+    "/tmp/aura-attention-memory-source-overlap-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = brain_tools.ToolContext(..memory_ctx(base), db_subject: db_subject)
+  let assert Ok(_) =
+    simplifile.create_directory_all(xdg.cognitive_dir(ctx.paths))
+  let assert Ok(True) =
+    db.insert_event(
+      db_subject,
+      gmail_event(
+        "ev-vendorco",
+        "Your order has been delivered",
+        "notice@vendorco.test",
+        "thread-vendorco",
+        1_700_000_000_000,
+      ),
+    )
+
+  let out =
+    run_memory_tool(
+      ctx,
+      "{\"action\":\"set\",\"target\":\"attention\",\"key\":\"vendorco\",\"content\":\"Suppress VendorCo notifications.\",\"scope\":\"standing\"}",
+    )
+
+  out
+  |> should.equal(
+    "Error: standing attention preference overlaps recent event ev-vendorco (Your order has been delivered). Include event_id and expected_attention so replay feedback is recorded, or save a standing preference only when it is not grounded in a recent event.",
+  )
+  simplifile.read(xdg.attention_memory_path(ctx.paths)) |> should.be_error
+
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
 pub fn memory_attention_tool_records_label_for_event_grounded_feedback_test() {
   let assert Ok(db_subject) = db.start(":memory:")
   let base = "/tmp/aura-attention-memory-label-" <> test_helpers.random_suffix()

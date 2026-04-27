@@ -1821,6 +1821,7 @@ fn loose_query_tokens(query: String) -> List(String) {
   |> string.replace("[", " ")
   |> string.replace("]", " ")
   |> string.replace("/", " ")
+  |> string.replace("@", " ")
   |> string.replace("-", " ")
   |> string.replace("_", " ")
   |> string.replace("'", "")
@@ -2241,7 +2242,7 @@ fn reject_standing_attention_event_overlap(
   content: String,
 ) -> Result(Nil, String) {
   let tokens = attention_probe_tokens(key <> " " <> content)
-  case list.length(tokens) < 2 {
+  case tokens == [] {
     True -> Ok(Nil)
     False ->
       case db.search_events(ctx.db_subject, "", None, None, 100) {
@@ -2278,7 +2279,7 @@ fn event_overlaps_attention_tokens(
     |> list.filter(fn(token) { list.contains(event_tokens, token) })
 
   list.length(overlap) >= 2
-  || list.any(overlap, fn(token) { string.length(token) >= 8 })
+  || list.any(overlap, fn(token) { string.length(token) >= 5 })
 }
 
 fn event_probe_tokens(e: event.AuraEvent) -> List(String) {
