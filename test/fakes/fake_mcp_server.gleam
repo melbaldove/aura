@@ -87,10 +87,10 @@ pub fn start(steps: List(Step)) -> FakeMcpServer {
 }
 
 fn unique_integer() -> Int {
-  int.absolute_value(erlang_unique_integer())
+  erlang_unique_integer()
 }
 
-@external(erlang, "erlang", "unique_integer")
+@external(erlang, "aura_test_ffi", "unique_integer")
 fn erlang_unique_integer() -> Int
 
 /// The command to spawn this fake. Always `escript`, since we use a
@@ -128,10 +128,7 @@ pub fn initialize_result_json() -> String {
         #("version", json.string("0.0.1")),
       ]),
     ),
-    #(
-      "capabilities",
-      json.object([#("resources", json.object([]))]),
-    ),
+    #("capabilities", json.object([#("resources", json.object([]))])),
   ])
   |> json.to_string
 }
