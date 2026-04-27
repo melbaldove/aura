@@ -105,10 +105,16 @@ pub fn args(server: FakeMcpServer) -> List(String) {
   [escript_path(), server.script_path]
 }
 
-/// Delete the temp script file. Does not kill the subprocess — the client
-/// owns that.
+/// Path touched by the escript after it consumes notifications/initialized.
+pub fn ready_path(server: FakeMcpServer) -> String {
+  server.script_path <> ".ready"
+}
+
+/// Remove readiness marker only. The client owns subprocess shutdown, and
+/// supervised tests can restart a child briefly after `stop`; deleting the
+/// script file here races with that late escript start.
 pub fn stop(server: FakeMcpServer) -> Nil {
-  let _ = simplifile.delete(server.script_path)
+  let _ = simplifile.delete(ready_path(server))
   Nil
 }
 
