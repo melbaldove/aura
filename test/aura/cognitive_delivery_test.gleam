@@ -1,6 +1,7 @@
 import aura/clients/discord_client.{DiscordClient}
 import aura/cognitive_decision
 import aura/cognitive_delivery
+import aura/db
 import aura/test_helpers
 import aura/xdg
 import fakes/fake_discord
@@ -117,6 +118,28 @@ fn start_delivery(
   #(fake, started.data, reports)
 }
 
+fn start_delivery_with_history(
+  paths: xdg.Paths,
+  db_subject: process.Subject(db.DbMessage),
+) -> #(
+  fake_discord.FakeDiscord,
+  process.Subject(cognitive_delivery.Message),
+  process.Subject(cognitive_delivery.Report),
+) {
+  let #(fake, discord) = fake_discord.new()
+  let reports = process.new_subject()
+  let assert Ok(started) =
+    cognitive_delivery.start_with_history(
+      paths,
+      discord,
+      targets(),
+      [],
+      db_subject,
+      Some(reports),
+    )
+  #(fake, started.data, reports)
+}
+
 fn failing_discord(error: String) {
   DiscordClient(
     send_message: fn(_, _) { Error(error) },
@@ -126,6 +149,17 @@ fn failing_discord(error: String) {
     send_message_with_attachment: fn(_, _, _) { Error(error) },
     create_thread_from_message: fn(_, _, _) { Error(error) },
   )
+}
+
+fn channel_history(
+  db_subject: process.Subject(db.DbMessage),
+  channel_id: String,
+) -> List(db.StoredMessage) {
+  let convo_id =
+    db.resolve_conversation(db_subject, "discord", channel_id, 1)
+    |> should.be_ok
+  db.load_messages(db_subject, convo_id, 50)
+  |> should.be_ok
 }
 
 fn write_ledger(paths: xdg.Paths, lines: List(String)) -> Nil {
@@ -216,6 +250,37 @@ pub fn digest_queues_then_flushes_one_group_test() {
   Nil
 }
 
+pub fn digest_flush_persists_sent_message_to_channel_history_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let #(base, paths) = temp_paths("cognitive-delivery-digest-history")
+  let #(fake, subject, reports) = start_delivery_with_history(paths, db_subject)
+
+  cognitive_delivery.deliver(subject, digest_decision("ev-digest-history"))
+  let assert Ok(queued) = process.receive(reports, 1000)
+  queued.status |> should.equal(cognitive_delivery.Queued)
+
+  cognitive_delivery.flush_digest(subject)
+  let assert Ok(delivered) = process.receive(reports, 1000)
+  delivered.status |> should.equal(cognitive_delivery.Delivered)
+
+  let assert [sent] = fake_discord.all_sent_to(fake, "aura-channel")
+  sent |> string.contains("Aura digest") |> should.be_true
+  sent |> string.contains("ev-digest-history") |> should.be_true
+
+  let history = channel_history(db_subject, "aura-channel")
+  list.length(history) |> should.equal(1)
+  let assert [stored] = history
+  stored.role |> should.equal("assistant")
+  stored.content |> should.equal(sent)
+  stored.author_id |> should.equal("aura")
+  stored.author_name |> should.equal("Aura")
+
+  process.send(db_subject, db.Shutdown)
+  stop_subject(subject)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
 pub fn digest_send_failure_writes_dead_letter_test() {
   let #(base, paths) = temp_paths("cognitive-delivery-dead-letter")
   let reports = process.new_subject()
@@ -242,6 +307,37 @@ pub fn digest_send_failure_writes_dead_letter_test() {
   log |> string.contains("\"status\":\"dead_letter\"") |> should.be_true
   log |> string.contains("discord unavailable") |> should.be_true
 
+  stop_subject(subject)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn digest_send_failure_does_not_persist_channel_history_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let #(base, paths) = temp_paths("cognitive-delivery-digest-history-fail")
+  let reports = process.new_subject()
+  let assert Ok(started) =
+    cognitive_delivery.start_with_history(
+      paths,
+      failing_discord("discord unavailable"),
+      targets(),
+      [],
+      db_subject,
+      Some(reports),
+    )
+  let subject = started.data
+
+  cognitive_delivery.deliver(subject, digest_decision("ev-history-dlq"))
+  let assert Ok(queued) = process.receive(reports, 1000)
+  queued.status |> should.equal(cognitive_delivery.Queued)
+
+  cognitive_delivery.flush_digest(subject)
+  let assert Ok(dead_letter) = process.receive(reports, 1000)
+  dead_letter.status |> should.equal(cognitive_delivery.DeadLetter)
+
+  channel_history(db_subject, "aura-channel") |> should.equal([])
+
+  process.send(db_subject, db.Shutdown)
   stop_subject(subject)
   let _ = simplifile.delete_all([base])
   Nil
@@ -306,6 +402,36 @@ pub fn ask_now_sends_immediately_and_duplicate_does_not_resend_test() {
   duplicate.status |> should.equal(cognitive_delivery.DuplicateSuppressed)
   fake_discord.all_sent_to(fake, "aura-channel") |> should.equal(first_sent)
 
+  stop_subject(subject)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn ask_now_persists_sent_message_to_channel_history_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let #(base, paths) = temp_paths("cognitive-delivery-immediate-history")
+  let #(fake, subject, reports) = start_delivery_with_history(paths, db_subject)
+
+  cognitive_delivery.deliver(
+    subject,
+    decision("ev-ask-history", "ask_now", "default"),
+  )
+  let assert Ok(delivered) = process.receive(reports, 1000)
+  delivered.status |> should.equal(cognitive_delivery.Delivered)
+
+  let assert [sent] = fake_discord.all_sent_to(fake, "aura-channel")
+  sent |> string.contains("Aura needs a decision") |> should.be_true
+  sent |> string.contains("ev-ask-history") |> should.be_true
+
+  let history = channel_history(db_subject, "aura-channel")
+  list.length(history) |> should.equal(1)
+  let assert [stored] = history
+  stored.role |> should.equal("assistant")
+  stored.content |> should.equal(sent)
+  stored.author_id |> should.equal("aura")
+  stored.author_name |> should.equal("Aura")
+
+  process.send(db_subject, db.Shutdown)
   stop_subject(subject)
   let _ = simplifile.delete_all([base])
   Nil

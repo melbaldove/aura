@@ -118,6 +118,7 @@ Properties that must hold at all times. Violations are bugs.
 6. **Active flare ↔ active monitor.** A dispatch creates exactly one session and one monitor actor. The monitor lives as long as the flare is active — it never stops itself. The monitor is stopped explicitly when the flare is killed, parked, or archived via the session handle. On rekindle, a fresh monitor is created with the new session. No orphaned monitors, no zombie sessions.
 7. **Handback is never silent.** When an ACP session completes with `end_turn`, the brain always processes the result through the tool loop. If the tool loop fails, the raw result is posted to Discord as a fallback. No completion goes unacknowledged.
 8. **Gaps are explicit.** Missing tools, access, credentials, context, specs, preferences, verification paths, authority, or confidence must be represented as visible gap states with a resolution path. Aura must not continue low-value motion when the next responsible action is to ask, defer, delegate verification, or stop.
+9. **Front-facing output is conversation state.** Anything Aura successfully sends to a user-facing surface, including proactive delivery, digests, progress messages, and direct replies, must be persisted to that surface's conversation history as the content the user saw. Aura cannot reason about user feedback if its own prior notifications are only present in side ledgers or logs.
 
 ## Domain model
 

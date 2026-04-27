@@ -30,7 +30,7 @@ import aura/xdg
 import gleam/erlang/process
 import gleam/int
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/otp/static_supervisor
 import gleam/result
 import gleam/string
@@ -129,11 +129,13 @@ pub fn start(
   let delivery_target_ids =
     cognitive_delivery.allowed_target_ids(delivery_targets)
   let assert Ok(delivery_started) =
-    cognitive_delivery.start(
+    cognitive_delivery.start_with_history(
       paths,
       discord_client_val,
       delivery_targets,
       global_config.notifications.digest_windows,
+      db_subject,
+      None,
     )
   let delivery_subject = delivery_started.data
   logging.log(logging.Info, "[supervisor] Cognitive delivery started")

@@ -6,6 +6,7 @@
 
 import aura/clients/discord_client.{type DiscordClient}
 import aura/cognitive_decision
+import aura/db
 import aura/discord/message as discord_message
 import aura/memory
 import aura/time
@@ -58,6 +59,7 @@ type State {
     discord: DiscordClient,
     targets: List(DeliveryTarget),
     digest_windows: List(String),
+    history_db_subject: Option(Subject(db.DbMessage)),
     self_subject: Subject(Message),
     last_digest_window: String,
     report_to: Option(Subject(Report)),
@@ -103,6 +105,37 @@ pub fn start_with(
         discord: discord,
         targets: targets,
         digest_windows: digest_windows,
+        history_db_subject: None,
+        self_subject: self_subject,
+        last_digest_window: "",
+        report_to: report_to,
+      )
+
+    process.send_after(self_subject, 60_000, Tick)
+    Ok(actor.initialised(state) |> actor.returning(self_subject))
+  })
+  |> actor.on_message(handle_message)
+  |> actor.start
+}
+
+/// Start cognitive delivery with a DB-backed history sink for successful
+/// user-facing sends.
+pub fn start_with_history(
+  paths: xdg.Paths,
+  discord: DiscordClient,
+  targets: List(DeliveryTarget),
+  digest_windows: List(String),
+  history_db_subject: Subject(db.DbMessage),
+  report_to: Option(Subject(Report)),
+) -> Result(actor.Started(Subject(Message)), actor.StartError) {
+  actor.new_with_initialiser(5000, fn(self_subject) {
+    let state =
+      State(
+        paths: paths,
+        discord: discord,
+        targets: targets,
+        digest_windows: digest_windows,
+        history_db_subject: Some(history_db_subject),
         self_subject: self_subject,
         last_digest_window: "",
         report_to: report_to,
@@ -336,6 +369,7 @@ fn send_immediate(
         |> discord_message.clip_to_discord_limit
       case state.discord.send_message(target.channel_id, content) {
         Ok(_) -> {
+          persist_front_surface_message(state, target.channel_id, content)
           let _ =
             append_decision_state(
               state,
@@ -467,7 +501,8 @@ fn send_digest_group(
             |> format_digest
             |> discord_message.clip_to_discord_limit
           case state.discord.send_message(channel_id, content) {
-            Ok(_) ->
+            Ok(_) -> {
+              persist_front_surface_message(state, channel_id, content)
               list.each(entries, fn(entry) {
                 let _ = append_entry_state(state.paths, entry, "delivered", "")
                 emit_report(
@@ -480,6 +515,7 @@ fn send_digest_group(
                   ),
                 )
               })
+            }
 
             Error(err) ->
               list.each(entries, fn(entry) {
@@ -577,6 +613,7 @@ fn retry_digest_group(
             |> discord_message.clip_to_discord_limit
           case state.discord.send_message(target.channel_id, content) {
             Ok(_) -> {
+              persist_front_surface_message(state, target.channel_id, content)
               list.each(entries, fn(entry) {
                 let _ =
                   append_entry_state_with_channel(
@@ -683,6 +720,7 @@ fn retry_immediate_entry(
         |> discord_message.clip_to_discord_limit
       case state.discord.send_message(target.channel_id, content) {
         Ok(_) -> {
+          persist_front_surface_message(state, target.channel_id, content)
           let _ =
             append_entry_state_with_channel(
               state.paths,
@@ -723,6 +761,55 @@ fn retry_immediate_entry(
           )
           RetrySummary(..summary, failed: summary.failed + 1)
         }
+      }
+    }
+  }
+}
+
+fn persist_front_surface_message(
+  state: State,
+  channel_id: String,
+  content: String,
+) -> Nil {
+  case state.history_db_subject {
+    None -> Nil
+    Some(db_subject) -> {
+      let now = time.now_ms()
+      case db.resolve_conversation(db_subject, "discord", channel_id, now) {
+        Ok(conversation_id) -> {
+          case
+            db.append_message(
+              db_subject,
+              conversation_id,
+              "assistant",
+              content,
+              "aura",
+              "Aura",
+              now,
+            )
+          {
+            Ok(_) -> {
+              let _ = db.update_last_active(db_subject, conversation_id, now)
+              Nil
+            }
+            Error(err) ->
+              logging.log(
+                logging.Error,
+                "[cognitive_delivery] history append failed for channel "
+                  <> channel_id
+                  <> ": "
+                  <> err,
+              )
+          }
+        }
+        Error(err) ->
+          logging.log(
+            logging.Error,
+            "[cognitive_delivery] history conversation resolve failed for channel "
+              <> channel_id
+              <> ": "
+              <> err,
+          )
       }
     }
   }

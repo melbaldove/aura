@@ -57,6 +57,8 @@ Integration actor
 -> LLM DecisionEnvelope
 -> validator
 -> ~/.local/share/aura/cognitive/decisions.jsonl
+-> cognitive_delivery
+-> Discord + db.messages
 -> [cognitive] decision_ready log summary
 ```
 
@@ -67,7 +69,11 @@ twice. The cognitive worker loads the persisted event by ID, extracts citable
 evidence, loads ordinary markdown policy/concern context, calls the configured
 brain model for one decision envelope, validates citations/attention proof/
 authority gates/patch paths, and appends accepted decisions to JSONL. It does
-not yet notify the user, mutate memory, update `STATE.md`, or dispatch flares.
+not mutate memory, update `STATE.md`, or dispatch flares. Validated delivery
+decisions flow through `cognitive_delivery`: `record` stays ledger-only,
+`digest` queues until a digest window, and `surface_now` / `ask_now` send to
+Discord immediately. Any successful user-facing cognitive delivery also appends
+the exact sent message to the matching Discord conversation history.
 Content-bearing integrations must persist decision-sufficient payloads. For
 Gmail, this means the `AuraEvent.data_json` includes envelope fields plus
 bounded `body_text`; subject-only email events are not sufficient for cognitive

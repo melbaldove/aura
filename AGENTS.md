@@ -55,7 +55,7 @@ supervisor (OneForOne)
 ├── db          SQLite actor — serializes all DB reads/writes
 ├── event_ingest Normalizes, tags, and persists integration events
 ├── cognitive_worker Model-backed cognitive decisions for persisted events
-├── cognitive_delivery Validated attention delivery + digest ledger
+├── cognitive_delivery Validated attention delivery + digest ledger/history writes
 ├── cognitive_replay Label-backed replay checks for cognitive decisions
 ├── cognitive_patch Label-backed policy/concern patch proposal reports
 ├── cognitive_improve Replay-aware cognitive improvement proposal reports
@@ -115,7 +115,7 @@ src/aura/
   db_schema.gleam       DDL, indexes, FTS5 triggers, schema versioning
   db_migration.gleam    One-time JSONL → SQLite migration
   cognitive_worker.gleam Async model-backed cognitive decisions for events
-  cognitive_delivery.gleam Delivery ledger, digest queue, immediate surfacing
+  cognitive_delivery.gleam Delivery ledger, digest queue, immediate surfacing, conversation history writes
   cognitive_replay.gleam Label-backed replay through current model/policy
   cognitive_patch.gleam Label-backed markdown proposal reports
   cognitive_improve.gleam Replay-aware improvement proposal reports

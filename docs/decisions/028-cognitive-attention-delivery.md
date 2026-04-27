@@ -67,6 +67,9 @@ Delivery behavior:
 - `digest` becomes `queued`; digest windows flush grouped messages by target.
 - `surface_now` and `ask_now` send Discord messages immediately to the resolved
   target channel.
+- Successful user-facing Discord sends append the exact sent content to that
+  channel's conversation history, so follow-up feedback can refer to what the
+  user actually saw. Failed sends do not create conversation history entries.
 - Existing delivery ledger rows for an event id suppress repeat delivery.
 - Failed sends are recorded as `failed`; v1 does not silently retry.
 - `SuppressEvent(event_id, reason)` lets eval and smoke flows mark synthetic
