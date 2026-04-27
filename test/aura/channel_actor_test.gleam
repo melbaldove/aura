@@ -323,11 +323,11 @@ pub fn tool_result_all_resolved_spawns_next_stream_test() {
   |> should.be_true
 }
 
-pub fn failed_cognitive_feedback_cannot_finalize_as_saved_test() {
+pub fn failed_attention_memory_cannot_finalize_as_saved_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
   let tool_calls_json =
-    "[{\"id\":\"c1\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"1\\\",\\\"label\\\":\\\"false_interrupt\\\"}\"}]"
+    "[{\"id\":\"c1\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"package-tracker\\\",\\\"content\\\":\\\"Suppress routine package tracker alerts.\\\",\\\"event_id\\\":\\\"1\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
 
   let #(after_tool_request, _) =
     channel_actor.transition(
@@ -359,7 +359,7 @@ pub fn failed_cognitive_feedback_cannot_finalize_as_saved_test() {
     |> should.be_ok
 
   final_text
-  |> string.contains("I could not record that cognitive feedback")
+  |> string.contains("I have not changed that attention preference yet")
   |> should.be_true
   final_text
   |> string.contains("preference is already saved")
@@ -386,7 +386,7 @@ pub fn no_tool_notification_preference_claim_retries_with_tools_test() {
         list.any(messages, fn(message) {
           case message {
             llm.SystemMessage(content) ->
-              string.contains(content, "resolve the relevant event")
+              string.contains(content, "memory(target='attention')")
             _ -> False
           }
         })
@@ -407,7 +407,7 @@ pub fn no_tool_notification_preference_claim_retries_with_tools_test() {
       list.any(turn.new_messages, fn(message) {
         case message {
           llm.SystemMessage(content) ->
-            string.contains(content, "resolve the relevant event")
+            string.contains(content, "memory(target='attention')")
           _ -> False
         }
       })
@@ -458,40 +458,32 @@ pub fn second_no_tool_attention_claim_after_repair_finalizes_honestly_test() {
     |> should.be_ok
 
   final_text
-  |> string.contains("I have not changed that notification preference yet")
+  |> string.contains("I have not changed that attention preference yet")
   |> should.be_true
 }
 
-pub fn cognitive_feedback_without_memory_cannot_claim_future_preference_test() {
+pub fn attention_memory_can_claim_future_preference_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
   let tool_calls_json =
-    "[{\"id\":\"c1\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"1\\\",\\\"label\\\":\\\"false_interrupt\\\"}\"}]"
+    "[{\"id\":\"c1\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"package-tracker\\\",\\\"content\\\":\\\"Suppress routine package alerts.\\\"}\"}]"
 
   let #(after_tool_request, _) =
     channel_actor.transition(
       with_stream,
       channel_actor.StreamComplete("", tool_calls_json, 100),
     )
-  let #(after_feedback, _) =
+  let #(final_state, effects) =
     channel_actor.transition(
       after_tool_request,
       channel_actor.ToolResult(
         "c1",
-        "Recorded cognitive feedback: event_id=1 label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl",
+        "Saved [package-tracker] to attention.",
         False,
       ),
     )
-  let #(_, effects) =
-    channel_actor.transition(
-      after_feedback,
-      channel_actor.StreamComplete(
-        "Done. Routine delivery alerts will be suppressed going forward.",
-        "[]",
-        100,
-      ),
-    )
 
+  final_state.turn |> should.equal(option.None)
   let final_text =
     list.find_map(effects, fn(effect) {
       case effect {
@@ -502,98 +494,28 @@ pub fn cognitive_feedback_without_memory_cannot_claim_future_preference_test() {
     |> should.be_ok
 
   final_text
-  |> string.contains("I recorded this as cognitive feedback")
+  |> string.contains("Saved the attention preference")
   |> should.be_true
   final_text
-  |> string.contains("have not saved a reusable preference")
-  |> should.be_true
-  final_text |> string.contains("will be suppressed") |> should.be_false
-}
-
-pub fn cognitive_feedback_with_memory_can_claim_future_preference_test() {
-  let state = channel_actor.initial_state_for_test("ch1")
-  let with_stream = channel_actor.with_fake_stream_turn(state)
-  let tool_calls_json =
-    "[{\"id\":\"c1\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"1\\\",\\\"label\\\":\\\"false_interrupt\\\"}\"},{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"user\\\",\\\"key\\\":\\\"email-suppressions\\\",\\\"content\\\":\\\"Suppress routine package alerts.\\\"}\"}]"
-
-  let #(after_tool_request, _) =
-    channel_actor.transition(
-      with_stream,
-      channel_actor.StreamComplete("", tool_calls_json, 100),
-    )
-  let #(after_feedback, _) =
-    channel_actor.transition(
-      after_tool_request,
-      channel_actor.ToolResult(
-        "c1",
-        "Recorded cognitive feedback: event_id=1 label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl",
-        False,
-      ),
-    )
-  let #(after_memory, _) =
-    channel_actor.transition(
-      after_feedback,
-      channel_actor.ToolResult(
-        "c2",
-        "Saved [email-suppressions] to user.",
-        False,
-      ),
-    )
-  let #(_, effects) =
-    channel_actor.transition(
-      after_memory,
-      channel_actor.StreamComplete(
-        "Done. Routine delivery alerts will be suppressed going forward.",
-        "[]",
-        100,
-      ),
-    )
-
-  let final_text =
-    list.find_map(effects, fn(effect) {
-      case effect {
-        channel_actor.DiscordEdit(_, content) -> Ok(content)
-        _ -> Error(Nil)
-      }
-    })
-    |> should.be_ok
-
-  final_text
-  |> string.contains("will be suppressed going forward")
-  |> should.be_true
-  final_text
-  |> string.contains("have not saved a reusable preference")
+  |> string.contains("have not changed")
   |> should.be_false
 }
 
-pub fn cognitive_feedback_with_non_user_memory_cannot_claim_future_preference_test() {
+pub fn non_attention_memory_cannot_claim_future_preference_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
   let tool_calls_json =
-    "[{\"id\":\"c1\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"1\\\",\\\"label\\\":\\\"false_interrupt\\\"}\"},{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"state\\\",\\\"key\\\":\\\"email-suppressions\\\",\\\"content\\\":\\\"Suppress routine package alerts.\\\"}\"}]"
+    "[{\"id\":\"c1\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"state\\\",\\\"key\\\":\\\"package-tracker\\\",\\\"content\\\":\\\"Suppress routine package alerts.\\\"}\"}]"
 
   let #(after_tool_request, _) =
     channel_actor.transition(
       with_stream,
       channel_actor.StreamComplete("", tool_calls_json, 100),
     )
-  let #(after_feedback, _) =
-    channel_actor.transition(
-      after_tool_request,
-      channel_actor.ToolResult(
-        "c1",
-        "Recorded cognitive feedback: event_id=1 label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl",
-        False,
-      ),
-    )
   let #(after_memory, _) =
     channel_actor.transition(
-      after_feedback,
-      channel_actor.ToolResult(
-        "c2",
-        "Saved [email-suppressions] to user.",
-        False,
-      ),
+      after_tool_request,
+      channel_actor.ToolResult("c1", "Saved [package-tracker] to state.", False),
     )
   let #(_, effects) =
     channel_actor.transition(
@@ -615,42 +537,26 @@ pub fn cognitive_feedback_with_non_user_memory_cannot_claim_future_preference_te
     |> should.be_ok
 
   final_text
-  |> string.contains("have not saved a reusable preference")
+  |> string.contains("have not changed that attention preference")
   |> should.be_true
   final_text |> string.contains("will be suppressed") |> should.be_false
 }
 
-pub fn event_grounded_user_memory_requires_feedback_before_saving_test() {
+pub fn record_cognitive_feedback_tool_call_is_blocked_as_internal_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
-  let search_calls_json =
-    "[{\"id\":\"c1\",\"name\":\"search_events\",\"arguments\":\"{\\\"query\\\":\\\"routine delivery\\\",\\\"limit\\\":\\\"5\\\"}\"}]"
-  let memory_calls_json =
-    "[{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"user\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\"}\"}]"
+  let feedback_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"delivery-event-1\\\",\\\"label\\\":\\\"false_interrupt\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
 
-  let #(after_search_request, _) =
+  let #(after_feedback_request, effects) =
     channel_actor.transition(
       with_stream,
-      channel_actor.StreamComplete("", search_calls_json, 100),
-    )
-  let #(after_search_result, _) =
-    channel_actor.transition(
-      after_search_request,
-      channel_actor.ToolResult(
-        "c1",
-        "Found 1 event:\n\n1. Event ID: <delivery-event-1>\n   [gmail] Routine delivery alert",
-        False,
-      ),
-    )
-  let #(after_memory_request, effects) =
-    channel_actor.transition(
-      after_search_result,
-      channel_actor.StreamComplete("", memory_calls_json, 100),
+      channel_actor.StreamComplete("", feedback_calls_json, 100),
     )
 
   list.any(effects, fn(effect) {
     case effect {
-      channel_actor.SpawnToolWorker(call) -> call.name == "memory"
+      channel_actor.SpawnToolWorker(_) -> True
       _ -> False
     }
   })
@@ -663,28 +569,28 @@ pub fn event_grounded_user_memory_requires_feedback_before_saving_test() {
   })
   |> should.be_true
 
-  let turn = case after_memory_request.turn {
+  let turn = case after_feedback_request.turn {
     option.Some(turn) -> turn
     option.None -> panic as "expected tool-loop turn to continue"
   }
   let blocked_trace =
-    list.find(turn.traces, fn(trace) { trace.name == "memory" })
+    list.find(turn.traces, fn(trace) {
+      trace.name == "record_cognitive_feedback"
+    })
     |> should.be_ok
   blocked_trace.is_error |> should.be_true
   blocked_trace.result
-  |> string.contains("record_cognitive_feedback")
+  |> string.contains("memory(target='attention')")
   |> should.be_true
 }
 
-pub fn event_grounded_user_memory_after_feedback_can_save_test() {
+pub fn event_grounded_attention_memory_can_save_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
   let search_calls_json =
     "[{\"id\":\"c1\",\"name\":\"search_events\",\"arguments\":\"{\\\"query\\\":\\\"routine delivery\\\",\\\"limit\\\":\\\"5\\\"}\"}]"
-  let feedback_calls_json =
-    "[{\"id\":\"c2\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"delivery-event-1\\\",\\\"label\\\":\\\"false_interrupt\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
   let memory_calls_json =
-    "[{\"id\":\"c3\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"user\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\"}\"}]"
+    "[{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\",\\\"event_id\\\":\\\"delivery-event-1\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
 
   let #(after_search_request, _) =
     channel_actor.transition(
@@ -700,23 +606,9 @@ pub fn event_grounded_user_memory_after_feedback_can_save_test() {
         False,
       ),
     )
-  let #(after_feedback_request, _) =
-    channel_actor.transition(
-      after_search_result,
-      channel_actor.StreamComplete("", feedback_calls_json, 100),
-    )
-  let #(after_feedback_result, _) =
-    channel_actor.transition(
-      after_feedback_request,
-      channel_actor.ToolResult(
-        "c2",
-        "Recorded cognitive feedback: event_id=<delivery-event-1> label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl",
-        False,
-      ),
-    )
   let #(_, effects) =
     channel_actor.transition(
-      after_feedback_result,
+      after_search_result,
       channel_actor.StreamComplete("", memory_calls_json, 100),
     )
 
@@ -734,10 +626,8 @@ pub fn event_grounded_feedback_memory_success_finalizes_without_extra_stream_tes
   let with_stream = channel_actor.with_fake_stream_turn(state)
   let search_calls_json =
     "[{\"id\":\"c1\",\"name\":\"search_events\",\"arguments\":\"{\\\"query\\\":\\\"routine delivery\\\",\\\"limit\\\":\\\"5\\\"}\"}]"
-  let feedback_calls_json =
-    "[{\"id\":\"c2\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"delivery-event-1\\\",\\\"label\\\":\\\"false_interrupt\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
   let memory_calls_json =
-    "[{\"id\":\"c3\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"user\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\"}\"}]"
+    "[{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\",\\\"event_id\\\":\\\"delivery-event-1\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
 
   let #(after_search_request, _) =
     channel_actor.transition(
@@ -753,31 +643,17 @@ pub fn event_grounded_feedback_memory_success_finalizes_without_extra_stream_tes
         False,
       ),
     )
-  let #(after_feedback_request, _) =
-    channel_actor.transition(
-      after_search_result,
-      channel_actor.StreamComplete("", feedback_calls_json, 100),
-    )
-  let #(after_feedback_result, _) =
-    channel_actor.transition(
-      after_feedback_request,
-      channel_actor.ToolResult(
-        "c2",
-        "Recorded cognitive feedback: event_id=<delivery-event-1> label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl",
-        False,
-      ),
-    )
   let #(after_memory_request, _) =
     channel_actor.transition(
-      after_feedback_result,
+      after_search_result,
       channel_actor.StreamComplete("", memory_calls_json, 100),
     )
   let #(final_state, effects) =
     channel_actor.transition(
       after_memory_request,
       channel_actor.ToolResult(
-        "c3",
-        "Saved [notification-suppressions] to user.",
+        "c2",
+        "Saved [notification-suppressions] to attention and recorded cognitive feedback: event_id=<delivery-event-1> label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl.",
         False,
       ),
     )
@@ -809,7 +685,7 @@ pub fn event_grounded_feedback_memory_success_finalizes_without_extra_stream_tes
     })
     |> should.be_ok
   final_edit
-  |> string.contains("Recorded the feedback and saved the reusable preference")
+  |> string.contains("Saved the attention preference")
   |> should.be_true
 }
 
@@ -840,9 +716,18 @@ pub fn blocked_event_grounded_memory_cannot_finalize_as_saved_test() {
       after_search_result,
       channel_actor.StreamComplete("", memory_calls_json, 100),
     )
-  let #(_, effects) =
+  let #(after_memory_result, _) =
     channel_actor.transition(
       after_memory_request,
+      channel_actor.ToolResult(
+        "c2",
+        "Saved [notification-suppressions] to user.",
+        False,
+      ),
+    )
+  let #(_, effects) =
+    channel_actor.transition(
+      after_memory_result,
       channel_actor.StreamComplete(
         "Done. Routine delivery alerts are now suppressed.",
         "[]",
@@ -860,7 +745,7 @@ pub fn blocked_event_grounded_memory_cannot_finalize_as_saved_test() {
     |> should.be_ok
 
   final_text
-  |> string.contains("I did not save that preference")
+  |> string.contains("I have not changed that attention preference")
   |> should.be_true
   final_text |> string.contains("now suppressed") |> should.be_false
 }

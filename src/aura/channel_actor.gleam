@@ -1499,15 +1499,12 @@ pub fn transition(
                     last_heartbeat_ms: 0,
                   ),
                 )
-              case should_finalize_after_event_feedback_memory(
-                new_messages,
-                new_traces,
-              ) {
+              case should_finalize_after_attention_memory(new_messages) {
                 True ->
                   finalize_turn(
                     state,
                     new_turn,
-                    "Recorded the feedback and saved the reusable preference.",
+                    "Saved the attention preference.",
                     0,
                   )
                 False -> {
@@ -1842,7 +1839,7 @@ const max_stream_retries = 3
 /// loops that could otherwise only be bounded by the 10-minute turn deadline.
 const max_tool_iterations: Int = 80
 
-const event_grounded_memory_requires_feedback_error = "Error: this turn resolved external Event ID values before a user-memory write, but no record_cognitive_feedback label has succeeded yet. Call record_cognitive_feedback with the exact Event ID first, then retry memory(target=user). If this was not feedback about Aura attention, do not save it as a user preference in this turn."
+const record_cognitive_feedback_is_internal_error = "Error: record_cognitive_feedback is internal. Use memory(target='attention') for user feedback about Aura notifications, digests, surfacing, asks, or missed alerts."
 
 /// True when every accumulated tool call has a result recorded in `pending`.
 fn all_tool_calls_resolved(
@@ -1873,22 +1870,12 @@ fn blocked_tool_call_result(
   turn: TurnState,
   call: llm.ToolCall,
 ) -> Option(String) {
-  case
-    is_user_memory_set_call(call)
-    && has_event_search_trace(turn.traces)
-    && !has_recorded_cognitive_feedback_trace(turn.traces)
-  {
-    True -> Some(event_grounded_memory_requires_feedback_error)
-    False -> None
+  let _ = turn
+  case call.name {
+    "record_cognitive_feedback" ->
+      Some(record_cognitive_feedback_is_internal_error)
+    _ -> None
   }
-}
-
-fn has_event_search_trace(traces: List(conversation.ToolTrace)) -> Bool {
-  list.any(traces, fn(trace) {
-    trace.name == "search_events"
-    && !trace.is_error
-    && string.contains(trace.result, "Event ID:")
-  })
 }
 
 fn has_recorded_cognitive_feedback_trace(
@@ -1901,13 +1888,8 @@ fn has_recorded_cognitive_feedback_trace(
   })
 }
 
-fn should_finalize_after_event_feedback_memory(
-  messages: List(llm.Message),
-  traces: List(conversation.ToolTrace),
-) -> Bool {
-  has_event_search_trace(traces)
-  && has_recorded_cognitive_feedback_trace(traces)
-  && has_successful_user_memory_write(messages)
+fn should_finalize_after_attention_memory(messages: List(llm.Message)) -> Bool {
+  has_successful_attention_memory_write(messages)
 }
 
 /// Common failure path: emit user-facing error, optional typing stop,
@@ -2049,6 +2031,16 @@ fn build_base_system_prompt(state: ChannelState) -> String {
     Ok(c) -> c
     Error(_) -> ""
   }
+  let attention_content = case
+    structured_memory.format_for_display(xdg.attention_memory_path(state.paths))
+  {
+    Ok(c) -> c
+    Error(_) -> ""
+  }
+  let attention_section = case attention_content {
+    "" | "(empty)" -> ""
+    content -> "\n\n## Attention Memory\n" <> content
+  }
   let system_prompt_text =
     system_prompt.build_system_prompt(
       state.soul,
@@ -2057,6 +2049,7 @@ fn build_base_system_prompt(state: ChannelState) -> String {
       memory_content,
       user_content,
     )
+    <> attention_section
 
   let domain_prompt = case state.domain {
     Some(name) -> {
@@ -2462,12 +2455,6 @@ fn guard_cognitive_feedback_failure(
     list.any(feedback_traces, fn(trace) { trace.is_error })
   let has_recorded_feedback =
     has_recorded_cognitive_feedback_trace(feedback_traces)
-  let has_blocked_event_grounded_memory =
-    list.any(traces, fn(trace) {
-      trace.name == "memory"
-      && trace.is_error
-      && trace.result == event_grounded_memory_requires_feedback_error
-    })
 
   case has_failed_feedback && !has_recorded_feedback {
     True -> {
@@ -2480,30 +2467,26 @@ fn guard_cognitive_feedback_failure(
       <> errors
     }
     False ->
-      case has_blocked_event_grounded_memory && !has_recorded_feedback {
+      case
+        has_recorded_feedback
+        && !has_successful_attention_memory_write(messages)
+      {
         True ->
-          "I did not save that preference because this turn resolved external events but did not record event-level cognitive feedback first. I need to call record_cognitive_feedback with the resolved Event ID before saving the reusable preference."
+          "I recorded this as cognitive feedback. I have not saved attention memory, so future attention behavior has not been changed yet."
         False ->
           case
-            has_recorded_feedback && !has_successful_user_memory_write(messages)
+            !has_successful_attention_memory_write(messages)
+            && claims_runtime_attention_preference(content)
           {
             True ->
-              "I recorded this as cognitive feedback. I have not saved a reusable preference in memory, so future behavior has not been changed yet."
-            False ->
-              case
-                !has_successful_user_memory_write(messages)
-                && claims_runtime_attention_preference(content)
-              {
-                True ->
-                  "I have not changed that notification preference yet because this turn did not save a user preference. I need to resolve the relevant event, record cognitive feedback, and save user memory before claiming future notification behavior changed."
-                False -> content
-              }
+              "I have not changed that attention preference yet because this turn did not save attention memory. I need to use memory(target='attention') before claiming future notification behavior changed."
+            False -> content
           }
       }
   }
 }
 
-const runtime_attention_repair_prompt = "Your previous draft claimed that a future notification, digest, or surfacing preference had already changed, but this turn has not saved user memory. Do not answer the user yet. Continue the same turn with tools: resolve the relevant event, record event-level cognitive feedback, then save the reusable user preference before claiming future notification behavior changed. If no relevant event can be resolved, say exactly what is missing instead of claiming success."
+const runtime_attention_repair_prompt = "Your previous draft claimed that a future notification, digest, surfacing, or ask preference had already changed, but this turn has not saved attention memory. Do not answer the user yet. Continue the same turn with tools: if the user is correcting Aura attention behavior, call memory(target='attention'). If the correction is grounded in a concrete external event, first resolve the event, then include event_id and expected_attention in the attention memory write. If no relevant event can be resolved, say exactly what is missing instead of claiming success."
 
 fn should_repair_runtime_attention_claim(
   turn: TurnState,
@@ -2511,8 +2494,11 @@ fn should_repair_runtime_attention_claim(
 ) -> Bool {
   turn.traces == []
   && turn.iteration + 1 < max_tool_iterations
-  && !has_system_message(turn.messages_at_llm_call, runtime_attention_repair_prompt)
-  && !has_successful_user_memory_write(turn.new_messages)
+  && !has_system_message(
+    turn.messages_at_llm_call,
+    runtime_attention_repair_prompt,
+  )
+  && !has_successful_attention_memory_write(turn.new_messages)
   && claims_runtime_attention_preference(content)
 }
 
@@ -2578,6 +2564,7 @@ fn claims_runtime_attention_preference(content: String) -> Bool {
     "already set",
     "changed",
     "going forward",
+    "now suppressed",
     "saved",
     "updated",
     "will be",
@@ -2590,14 +2577,14 @@ fn contains_any(content: String, needles: List(String)) -> Bool {
   list.any(needles, fn(needle) { string.contains(content, needle) })
 }
 
-fn has_successful_user_memory_write(messages: List(llm.Message)) -> Bool {
-  let user_memory_call_ids =
+fn has_successful_attention_memory_write(messages: List(llm.Message)) -> Bool {
+  let attention_memory_call_ids =
     messages
     |> list.flat_map(fn(message) {
       case message {
         llm.AssistantToolCallMessage(_, calls) ->
           calls
-          |> list.filter(is_user_memory_set_call)
+          |> list.filter(is_attention_memory_set_call)
           |> list.map(fn(call) { call.id })
         _ -> []
       }
@@ -2606,15 +2593,15 @@ fn has_successful_user_memory_write(messages: List(llm.Message)) -> Bool {
   list.any(messages, fn(message) {
     case message {
       llm.ToolResultMessage(id, result) ->
-        list.contains(user_memory_call_ids, id)
+        list.contains(attention_memory_call_ids, id)
         && string.starts_with(result, "Saved [")
-        && string.ends_with(result, " to user.")
+        && string.contains(result, "] to attention")
       _ -> False
     }
   })
 }
 
-fn is_user_memory_set_call(call: llm.ToolCall) -> Bool {
+fn is_attention_memory_set_call(call: llm.ToolCall) -> Bool {
   case call.name {
     "memory" -> {
       let decoder = {
@@ -2623,7 +2610,7 @@ fn is_user_memory_set_call(call: llm.ToolCall) -> Bool {
         decode.success(#(action, target))
       }
       case json.parse(call.arguments, decoder) {
-        Ok(#("set", "user")) -> True
+        Ok(#("set", "attention")) -> True
         _ -> False
       }
     }

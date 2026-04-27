@@ -72,7 +72,7 @@ AuraEvent
 -> cognitive_delivery
 -> deliveries.jsonl
 -> record | digest queue | Discord surface_now/ask_now
--> natural correction capture (record_cognitive_feedback or cognitive-label)
+-> natural correction capture (memory target='attention' or cognitive-label)
 -> cognitive_replay over labels.jsonl
 -> cognitive_patch proposal reports
 -> cognitive_improve replay-aware improvement proposals

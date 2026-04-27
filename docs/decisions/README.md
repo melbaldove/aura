@@ -61,9 +61,10 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [030](030-text-first-concern-tracking.md) | Text-first concern tracking | Accepted |
 | [031](031-cognitive-delivery-dead-letters.md) | Cognitive delivery dead letters | Accepted |
 | [032](032-cognitive-correction-labels.md) | Cognitive correction labels | Accepted |
-| [033](033-natural-cognitive-feedback.md) | Natural cognitive feedback capture | Accepted |
+| [033](033-natural-cognitive-feedback.md) | Natural cognitive feedback capture | Partially superseded by ADR-035 and ADR-036 |
 | [034](034-replay-aware-cognitive-improvement.md) | Replay-aware cognitive improvement proposals | Accepted |
-| [035](035-no-semantic-memory-guard.md) | No semantic memory guard for cognitive feedback | Accepted |
+| [035](035-no-semantic-memory-guard.md) | No semantic memory guard for cognitive feedback | Partially superseded by ADR-036 |
+| [036](036-attention-memory-feedback.md) | Attention memory feedback | Accepted |
 
 ## Adding a new ADR
 

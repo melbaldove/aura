@@ -389,84 +389,7 @@ fn execute_tool_dispatch(
       }
     }
     "track" -> execute_track(ctx, args)
-    "record_cognitive_feedback" -> execute_record_cognitive_feedback(ctx, args)
-    "memory" -> {
-      case require_arg(args, "action") {
-        Error(e) -> TextResult(e)
-        Ok(action) -> {
-          let target = get_arg(args, "target")
-          let key = get_arg(args, "key")
-          let content = get_arg(args, "content")
-          let path_result = case target {
-            "user" -> Ok(xdg.user_path(ctx.paths))
-            "state" -> Ok(xdg.domain_state_path(ctx.paths, ctx.domain_name))
-            "memory" -> Ok(xdg.domain_memory_path(ctx.paths, ctx.domain_name))
-            unknown ->
-              Error(
-                "Error: unknown target '"
-                <> unknown
-                <> "'. Use 'state', 'memory', or 'user'.",
-              )
-          }
-          case path_result {
-            Error(e) -> TextResult(e)
-            Ok(path) -> {
-              case action {
-                "set" -> {
-                  case key {
-                    "" -> TextResult("Error: 'key' is required for set action.")
-                    _ -> {
-                      case structured_memory.set(path, key, content) {
-                        Ok(_) ->
-                          TextResult(
-                            "Saved [" <> key <> "] to " <> target <> ".",
-                          )
-                        Error(e) -> TextResult("Error: " <> e)
-                      }
-                    }
-                  }
-                }
-                "remove" -> {
-                  case key {
-                    "" ->
-                      TextResult("Error: 'key' is required for remove action.")
-                    _ ->
-                      case structured_memory.remove(path, key) {
-                        Ok(_) ->
-                          TextResult(
-                            "Removed [" <> key <> "] from " <> target <> ".",
-                          )
-                        Error(e) -> TextResult("Error: " <> e)
-                      }
-                  }
-                }
-                "read" -> {
-                  let read_domain = case get_arg(args, "domain") {
-                    "" -> ctx.domain_name
-                    d -> d
-                  }
-                  let read_path = case target {
-                    "user" -> xdg.user_path(ctx.paths)
-                    "state" -> xdg.domain_state_path(ctx.paths, read_domain)
-                    _ -> xdg.domain_memory_path(ctx.paths, read_domain)
-                  }
-                  case structured_memory.format_for_display(read_path) {
-                    Ok(display) -> TextResult(display)
-                    Error(e) -> TextResult("Error: " <> e)
-                  }
-                }
-                _ ->
-                  TextResult(
-                    "Error: Unknown action '"
-                    <> action
-                    <> "'. Use set, remove, or read.",
-                  )
-              }
-            }
-          }
-        }
-      }
-    }
+    "memory" -> execute_memory(ctx, args)
     "search_sessions" -> {
       let query = get_arg(args, "query")
       let limit = case int.parse(get_arg(args, "limit")) {
@@ -2099,51 +2022,224 @@ fn execute_track(ctx: ToolContext, args: List(#(String, String))) -> ToolResult 
   }
 }
 
-fn execute_record_cognitive_feedback(
-  ctx: ToolContext,
-  args: List(#(String, String)),
-) -> ToolResult {
-  case require_arg(args, "event_id") {
+fn execute_memory(ctx: ToolContext, args: List(#(String, String))) -> ToolResult {
+  case require_arg(args, "action") {
     Error(e) -> TextResult(e)
-    Ok(event_id) ->
-      case require_arg(args, "label") {
+    Ok(action) -> {
+      let target = get_arg(args, "target")
+      let key = get_arg(args, "key")
+      let content = get_arg(args, "content")
+      let path_result = memory_target_path(ctx, target)
+      case path_result {
         Error(e) -> TextResult(e)
-        Ok(label) -> {
-          case resolve_event_id(ctx, event_id) {
-            Error(e) ->
-              TextResult(
-                "Error: failed to load event for cognitive feedback: " <> e,
-              )
-            Ok(None) -> TextResult("Error: event not found: " <> event_id)
-            Ok(Some(resolved_event_id)) -> {
-              case
-                cognitive_label.capture(
-                  ctx.paths,
-                  resolved_event_id,
-                  label,
-                  get_arg(args, "expected_attention"),
-                  get_arg(args, "note"),
-                )
-              {
-                Error(e) -> TextResult("Error: " <> e)
-                Ok(result) -> {
-                  TextResult(
-                    "Recorded cognitive feedback: event_id="
-                    <> result.event_id
-                    <> " label="
-                    <> result.label
-                    <> " attention_any=["
-                    <> string.join(result.attention_any, ", ")
-                    <> "] path="
-                    <> result.path
-                    <> ". Note: this is replay/evaluation evidence only; it does not update future runtime preferences. If the user expressed a reusable preference, call memory(target=user) next before claiming future behavior changed.",
-                  )
-                }
+        Ok(path) -> {
+          case action {
+            "set" -> {
+              case key {
+                "" -> TextResult("Error: 'key' is required for set action.")
+                _ ->
+                  case target {
+                    "attention" ->
+                      execute_attention_memory_set(
+                        ctx,
+                        args,
+                        path,
+                        key,
+                        content,
+                      )
+                    _ -> execute_plain_memory_set(path, target, key, content)
+                  }
               }
             }
+            "remove" -> {
+              case key {
+                "" -> TextResult("Error: 'key' is required for remove action.")
+                _ ->
+                  case structured_memory.remove(path, key) {
+                    Ok(_) ->
+                      TextResult(
+                        "Removed [" <> key <> "] from " <> target <> ".",
+                      )
+                    Error(e) -> TextResult("Error: " <> e)
+                  }
+              }
+            }
+            "read" -> {
+              let read_domain = case get_arg(args, "domain") {
+                "" -> ctx.domain_name
+                d -> d
+              }
+              let read_path = memory_read_path(ctx, target, read_domain)
+              case structured_memory.format_for_display(read_path) {
+                Ok(display) -> TextResult(display)
+                Error(e) -> TextResult("Error: " <> e)
+              }
+            }
+            _ ->
+              TextResult(
+                "Error: Unknown action '"
+                <> action
+                <> "'. Use set, remove, or read.",
+              )
           }
         }
       }
+    }
+  }
+}
+
+fn execute_plain_memory_set(
+  path: String,
+  target: String,
+  key: String,
+  content: String,
+) -> ToolResult {
+  case structured_memory.set(path, key, content) {
+    Ok(_) -> TextResult("Saved [" <> key <> "] to " <> target <> ".")
+    Error(e) -> TextResult("Error: " <> e)
+  }
+}
+
+fn execute_attention_memory_set(
+  ctx: ToolContext,
+  args: List(#(String, String)),
+  path: String,
+  key: String,
+  content: String,
+) -> ToolResult {
+  case attention_memory_set_result(ctx, args, path, key, content) {
+    Ok(message) -> TextResult(message)
+    Error(e) -> TextResult("Error: " <> e)
+  }
+}
+
+fn attention_memory_set_result(
+  ctx: ToolContext,
+  args: List(#(String, String)),
+  path: String,
+  key: String,
+  content: String,
+) -> Result(String, String) {
+  use _ <- result.try(
+    simplifile.create_directory_all(xdg.cognitive_dir(ctx.paths))
+    |> result.map_error(fn(e) {
+      "failed to create cognitive directory "
+      <> xdg.cognitive_dir(ctx.paths)
+      <> ": "
+      <> string.inspect(e)
+    }),
+  )
+  use _ <- result.try(structured_memory.security_scan(content))
+
+  let event_id = string.trim(get_arg(args, "event_id"))
+  case event_id {
+    "" -> {
+      use _ <- result.try(structured_memory.set(path, key, content))
+      Ok("Saved [" <> key <> "] to attention.")
+    }
+    _ -> {
+      let expected_attention =
+        string.lowercase(string.trim(get_arg(args, "expected_attention")))
+      case expected_attention {
+        "" ->
+          Error(
+            "expected_attention is required when attention memory is grounded in an event",
+          )
+        "record" | "digest" | "surface_now" | "ask_now" -> {
+          use resolved_event_id <- result.try(resolve_required_event_id(
+            ctx,
+            event_id,
+          ))
+          let label = case string.trim(get_arg(args, "label")) {
+            "" -> label_for_attention(expected_attention)
+            explicit -> explicit
+          }
+          let note = case string.trim(get_arg(args, "note")) {
+            "" -> content
+            explicit -> explicit
+          }
+          use capture <- result.try(cognitive_label.capture(
+            ctx.paths,
+            resolved_event_id,
+            label,
+            expected_attention,
+            note,
+          ))
+          use _ <- result.try(structured_memory.set(path, key, content))
+          Ok(
+            "Saved ["
+            <> key
+            <> "] to attention and recorded cognitive feedback: event_id="
+            <> capture.event_id
+            <> " label="
+            <> capture.label
+            <> " attention_any=["
+            <> string.join(capture.attention_any, ", ")
+            <> "] path="
+            <> capture.path
+            <> ".",
+          )
+        }
+        _ -> {
+          Error(
+            "invalid expected attention '"
+            <> expected_attention
+            <> "'. Use record, digest, surface_now, or ask_now.",
+          )
+        }
+      }
+    }
+  }
+}
+
+fn resolve_required_event_id(
+  ctx: ToolContext,
+  event_id: String,
+) -> Result(String, String) {
+  case resolve_event_id(ctx, event_id) {
+    Error(e) -> Error("failed to load event for attention feedback: " <> e)
+    Ok(None) -> Error("event not found: " <> event_id)
+    Ok(Some(resolved)) -> Ok(resolved)
+  }
+}
+
+fn label_for_attention(expected_attention: String) -> String {
+  case expected_attention {
+    "record" -> "false_interrupt"
+    "digest" -> "useful_digest"
+    "surface_now" | "ask_now" -> "missed_important"
+    _ -> ""
+  }
+}
+
+fn memory_target_path(
+  ctx: ToolContext,
+  target: String,
+) -> Result(String, String) {
+  case target {
+    "user" -> Ok(xdg.user_path(ctx.paths))
+    "state" -> Ok(xdg.domain_state_path(ctx.paths, ctx.domain_name))
+    "memory" -> Ok(xdg.domain_memory_path(ctx.paths, ctx.domain_name))
+    "attention" -> Ok(xdg.attention_memory_path(ctx.paths))
+    unknown ->
+      Error(
+        "Error: unknown target '"
+        <> unknown
+        <> "'. Use 'state', 'memory', 'user', or 'attention'.",
+      )
+  }
+}
+
+fn memory_read_path(
+  ctx: ToolContext,
+  target: String,
+  read_domain: String,
+) -> String {
+  case target {
+    "user" -> xdg.user_path(ctx.paths)
+    "state" -> xdg.domain_state_path(ctx.paths, read_domain)
+    "attention" -> xdg.attention_memory_path(ctx.paths)
+    _ -> xdg.domain_memory_path(ctx.paths, read_domain)
   }
 }
 
@@ -2462,38 +2558,8 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
       ],
     ),
     llm.ToolDefinition(
-      name: "record_cognitive_feedback",
-      description: "Record natural-language user correction about a specific Aura cognitive event as a replay label. Use when the user says a notification, digest item, or missed alert was too noisy, too quiet, too late, wrongly matched, or should have asked for authority. For colloquial references, first use search_events with source-neutral concrete content words from the user's message to resolve the recent external event; then pass the exact event_id here. Choose expected_attention from meaning: no future user-facing attention means record; later batch attention means digest; immediate interruption means surface_now or ask_now. Do not ask the user to choose labels, record/digest, or event ids. Ask one clarifying question only if multiple plausible recent events remain.",
-      parameters: [
-        llm.ToolParam(
-          name: "event_id",
-          param_type: "string",
-          description: "Exact Aura event id being corrected, e.g. mail-m1777110979719.",
-          required: True,
-        ),
-        llm.ToolParam(
-          name: "label",
-          param_type: "string",
-          description: "One of: false_interrupt | missed_important | bad_deferral | useful_digest | bad_concern_match | bad_authority_call | verification_burden_reduced | planning_burden_reduced.",
-          required: True,
-        ),
-        llm.ToolParam(
-          name: "expected_attention",
-          param_type: "string",
-          description: "Optional override: record | digest | surface_now | ask_now. Leave empty to use the label default.",
-          required: False,
-        ),
-        llm.ToolParam(
-          name: "note",
-          param_type: "string",
-          description: "The user's correction plus a short interpretation, preserving the reason in ordinary language.",
-          required: False,
-        ),
-      ],
-    ),
-    llm.ToolDefinition(
       name: "memory",
-      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use 'state' for current domain status (active tickets, blockers, PRs). Use 'memory' for durable knowledge (decisions, patterns, conventions). Use 'user' for user profile (always global). State and memory are per-domain when in a domain channel. This is storage, not an audit log; event-level cognitive feedback belongs in record_cognitive_feedback before any reusable preference is saved.",
+      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use target='state' for current domain status, target='memory' for durable domain knowledge, target='user' for user profile, and target='attention' for Aura attention policy: proactive notifications, digests, missed alerts, surfacing, asking, interruptions, and deferrals. For ordinary-language corrections about Aura attention, write target='attention'. If the correction is grounded in a concrete event, include event_id and expected_attention; the tool records replay label evidence internally. Choose expected_attention from meaning: no future user-facing attention means record; later batch attention means digest; immediate interruption means surface_now or ask_now. Do not ask the user to choose labels, event ids, record, digest, or target names.",
       parameters: [
         llm.ToolParam(
           name: "action",
@@ -2504,7 +2570,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         llm.ToolParam(
           name: "target",
           param_type: "string",
-          description: "'state' (current status), 'memory' (durable knowledge), or 'user' (user profile — always global)",
+          description: "'state' (current status), 'memory' (durable knowledge), 'user' (global profile), or 'attention' (Aura notification/digest/surface/ask policy)",
           required: True,
         ),
         llm.ToolParam(
@@ -2523,6 +2589,30 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "domain",
           param_type: "string",
           description: "Domain to read from (for cross-domain read). Omit to use current domain.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "event_id",
+          param_type: "string",
+          description: "For target='attention' when the feedback corrects a concrete external event: exact Event ID from search_events. Omit for general standing attention preferences.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "expected_attention",
+          param_type: "string",
+          description: "For event-grounded target='attention': record | digest | surface_now | ask_now.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "label",
+          param_type: "string",
+          description: "Optional internal replay label. Omit unless a more specific label is needed; the tool infers a default from expected_attention.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "note",
+          param_type: "string",
+          description: "For event-grounded target='attention': the user's correction plus a short interpretation in ordinary language.",
           required: False,
         ),
       ],
@@ -2547,7 +2637,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "search_events",
-      description: "Search events ingested from external sources (email, Linear tickets, etc.). Use this when the user asks about external activity that isn't part of a conversation — e.g. 'any new emails from alice today?' or 'what happened on the login bug ticket?'. Returns matched events with exact Event ID values; pass that Event ID unchanged to tools like record_cognitive_feedback.",
+      description: "Search events ingested from external sources (email, Linear tickets, etc.). Use this when the user asks about external activity that isn't part of a conversation — e.g. 'any new emails from alice today?' or 'what happened on the login bug ticket?'. Returns matched events with exact Event ID values. For attention feedback grounded in one of these events, pass that Event ID unchanged to memory(target='attention').",
       parameters: [
         llm.ToolParam(
           name: "query",

@@ -73,7 +73,7 @@ pub fn build_system_prompt_includes_natural_cognitive_feedback_rule_test() {
     system_prompt.build_system_prompt("You are Aura.", [], [], "", "")
 
   prompt
-  |> string.contains("record_cognitive_feedback")
+  |> string.contains("memory(target='attention')")
   |> should.be_true
   prompt |> string.contains("search_events") |> should.be_true
   prompt

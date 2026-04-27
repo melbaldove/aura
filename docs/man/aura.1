@@ -113,8 +113,9 @@ EXPECTED_ATTENTION, when provided, must be record, digest, surface_now, or
 ask_now and overrides the label's default replay attention expectation.
 .PP
 In normal Discord use, the user should not need this command. The brain can
-record the same labels with the record_cognitive_feedback tool when ordinary
-feedback clearly references a specific event id.
+record the same labels as an internal side effect of
+memory target='attention' when ordinary feedback clearly references a specific
+event id.
 .TP
 .B gleam run \-\- cognitive\-improve propose
 Run labeled cognitive events through the current worker/model/policy path and

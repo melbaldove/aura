@@ -93,6 +93,10 @@ pub fn labels_path(paths: Paths) -> String {
   cognitive_dir(paths) <> "/labels.jsonl"
 }
 
+pub fn attention_memory_path(paths: Paths) -> String {
+  cognitive_dir(paths) <> "/ATTENTION.md"
+}
+
 pub fn concerns_dir(paths: Paths) -> String {
   paths.state <> "/concerns"
 }

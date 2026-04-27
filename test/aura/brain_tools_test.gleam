@@ -169,28 +169,24 @@ pub fn built_in_tools_include_track_test() {
   has_track |> should.be_true
 }
 
-pub fn built_in_tools_include_record_cognitive_feedback_test() {
+pub fn built_in_tools_do_not_expose_record_cognitive_feedback_test() {
   let tools = brain_tools.make_built_in_tools()
   let has_tool =
     list.any(tools, fn(t) {
       case t {
-        llm.ToolDefinition(
-          name: "record_cognitive_feedback",
-          parameters: params,
-          ..,
-        ) -> list.any(params, fn(p) { p.name == "event_id" && p.required })
+        llm.ToolDefinition(name: "record_cognitive_feedback", ..) -> True
         _ -> False
       }
     })
-  has_tool |> should.be_true
+  has_tool |> should.be_false
 }
 
-pub fn record_cognitive_feedback_tool_description_guides_event_resolution_test() {
+pub fn memory_tool_description_guides_attention_feedback_test() {
   let tools = brain_tools.make_built_in_tools()
   let description = case
     list.find(tools, fn(t) {
       case t {
-        llm.ToolDefinition(name: "record_cognitive_feedback", ..) -> True
+        llm.ToolDefinition(name: "memory", ..) -> True
         _ -> False
       }
     })
@@ -199,15 +195,15 @@ pub fn record_cognitive_feedback_tool_description_guides_event_resolution_test()
     Error(_) -> ""
   }
 
-  description |> string.contains("search_events") |> should.be_true
+  description |> string.contains("target='attention'") |> should.be_true
   description
-  |> string.contains("colloquial references")
+  |> string.contains("proactive notifications")
   |> should.be_true
   description
-  |> string.contains("Do not ask the user to choose labels")
+  |> string.contains("event_id")
   |> should.be_true
   description
-  |> string.contains("source-neutral")
+  |> string.contains("expected_attention")
   |> should.be_true
   description
   |> string.contains("no future user-facing attention")
@@ -282,6 +278,27 @@ pub fn memory_tool_has_domain_param_test() {
   }
 }
 
+pub fn memory_tool_has_attention_feedback_params_test() {
+  let tools = brain_tools.make_built_in_tools()
+  let memory_tool =
+    list.find(tools, fn(t) {
+      case t {
+        llm.ToolDefinition(name: "memory", ..) -> True
+        _ -> False
+      }
+    })
+  case memory_tool {
+    Ok(llm.ToolDefinition(parameters: params, ..)) -> {
+      list.any(params, fn(p) { p.name == "event_id" }) |> should.be_true
+      list.any(params, fn(p) { p.name == "expected_attention" })
+      |> should.be_true
+      list.any(params, fn(p) { p.name == "label" }) |> should.be_true
+      list.any(params, fn(p) { p.name == "note" }) |> should.be_true
+    }
+    _ -> should.fail()
+  }
+}
+
 fn memory_ctx(base: String) -> brain_tools.ToolContext {
   let stub = test_harness.standalone_tool_context()
   brain_tools.ToolContext(
@@ -300,20 +317,23 @@ fn run_memory_tool(ctx: brain_tools.ToolContext, args_json: String) -> String {
   }
 }
 
-pub fn memory_tool_saves_notification_suppression_without_keyword_guard_test() {
-  let base = "/tmp/aura-memory-feedback-guard-" <> test_helpers.random_suffix()
+pub fn memory_tool_saves_attention_preference_test() {
+  let base = "/tmp/aura-attention-memory-" <> test_helpers.random_suffix()
   let _ = simplifile.delete_all([base])
   let ctx = memory_ctx(base)
-  let assert Ok(_) = simplifile.create_directory_all(ctx.paths.config)
+  let assert Ok(_) =
+    simplifile.create_directory_all(xdg.cognitive_dir(ctx.paths))
 
   let out =
     run_memory_tool(
       ctx,
-      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for routine package tracker alerts. These should be recorded but never surfaced or digested.\"}",
+      "{\"action\":\"set\",\"target\":\"attention\",\"key\":\"package-tracker\",\"content\":\"Suppress notifications for routine package tracker alerts. These should be recorded but never surfaced or digested.\"}",
     )
 
-  out |> should.equal("Saved [email-suppressions] to user.")
-  let content = simplifile.read(xdg.user_path(ctx.paths)) |> should.be_ok
+  out |> should.equal("Saved [package-tracker] to attention.")
+  let content =
+    simplifile.read(xdg.attention_memory_path(ctx.paths))
+    |> should.be_ok
   content
   |> string.contains("routine package tracker alerts")
   |> should.be_true
@@ -322,23 +342,88 @@ pub fn memory_tool_saves_notification_suppression_without_keyword_guard_test() {
   Nil
 }
 
-pub fn memory_tool_saves_negated_notification_preference_without_keyword_guard_test() {
-  let base =
-    "/tmp/aura-memory-feedback-guard-negation-" <> test_helpers.random_suffix()
+pub fn memory_attention_tool_records_label_for_event_grounded_feedback_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let base = "/tmp/aura-attention-memory-label-" <> test_helpers.random_suffix()
   let _ = simplifile.delete_all([base])
-  let ctx = memory_ctx(base)
-  let assert Ok(_) = simplifile.create_directory_all(ctx.paths.config)
+  let ctx = brain_tools.ToolContext(..memory_ctx(base), db_subject: db_subject)
+  let assert Ok(True) =
+    db.insert_event(
+      db_subject,
+      gmail_event(
+        "ev-package-tracker",
+        "Routine package tracker alert",
+        "alerts@example.invalid",
+        "thread-package-tracker",
+        1_700_000_000_000,
+      ),
+    )
 
   let out =
     run_memory_tool(
       ctx,
-      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"No alerts for routine package tracker events.\"}",
+      "{\"action\":\"set\",\"target\":\"attention\",\"key\":\"package-tracker\",\"content\":\"Suppress routine package tracker alerts.\",\"event_id\":\"ev-package-tracker\",\"expected_attention\":\"record\",\"note\":\"User said this routine package tracker alert should not interrupt.\"}",
     )
 
-  out |> should.equal("Saved [email-suppressions] to user.")
-  let content = simplifile.read(xdg.user_path(ctx.paths)) |> should.be_ok
-  content |> string.contains("No alerts") |> should.be_true
+  out
+  |> string.contains("Saved [package-tracker] to attention")
+  |> should.be_true
+  out |> string.contains("recorded cognitive feedback") |> should.be_true
+  out |> string.contains("event_id=ev-package-tracker") |> should.be_true
+  out |> string.contains("attention_any=[record]") |> should.be_true
 
+  let attention =
+    simplifile.read(xdg.attention_memory_path(ctx.paths))
+    |> should.be_ok
+  attention
+  |> string.contains("Suppress routine package tracker alerts")
+  |> should.be_true
+
+  let labels = simplifile.read(xdg.labels_path(ctx.paths)) |> should.be_ok
+  labels
+  |> string.contains("\"event_id\":\"ev-package-tracker\"")
+  |> should.be_true
+  labels
+  |> string.contains("\"attention_any\":[\"record\"]")
+  |> should.be_true
+
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn memory_attention_tool_rejects_unknown_expected_attention_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let base =
+    "/tmp/aura-attention-memory-invalid-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = brain_tools.ToolContext(..memory_ctx(base), db_subject: db_subject)
+  let assert Ok(True) =
+    db.insert_event(
+      db_subject,
+      gmail_event(
+        "ev-package-tracker-invalid",
+        "Routine package tracker alert",
+        "alerts@example.invalid",
+        "thread-package-tracker-invalid",
+        1_700_000_000_000,
+      ),
+    )
+
+  let out =
+    run_memory_tool(
+      ctx,
+      "{\"action\":\"set\",\"target\":\"attention\",\"key\":\"package-tracker\",\"content\":\"Suppress routine package tracker alerts.\",\"event_id\":\"ev-package-tracker-invalid\",\"expected_attention\":\"later\"}",
+    )
+
+  out
+  |> should.equal(
+    "Error: invalid expected attention 'later'. Use record, digest, surface_now, or ask_now.",
+  )
+  simplifile.read(xdg.attention_memory_path(ctx.paths)) |> should.be_error
+  simplifile.read(xdg.labels_path(ctx.paths)) |> should.be_error
+
+  process.send(db_subject, db.Shutdown)
   let _ = simplifile.delete_all([base])
   Nil
 }
@@ -362,52 +447,6 @@ pub fn memory_tool_allows_neutral_notification_memory_without_feedback_label_tes
   |> string.contains("notification channel preferences")
   |> should.be_true
 
-  let _ = simplifile.delete_all([base])
-  Nil
-}
-
-pub fn memory_tool_can_save_preference_after_feedback_label_test() {
-  let assert Ok(db_subject) = db.start(":memory:")
-  let base =
-    "/tmp/aura-memory-feedback-guard-ok-" <> test_helpers.random_suffix()
-  let _ = simplifile.delete_all([base])
-  let ctx = brain_tools.ToolContext(..memory_ctx(base), db_subject: db_subject)
-  let assert Ok(_) = simplifile.create_directory_all(ctx.paths.config)
-  let assert Ok(True) =
-    db.insert_event(
-      db_subject,
-      gmail_event(
-        "ev-package-tracker",
-        "Routine package tracker alert",
-        "alerts@example.invalid",
-        "thread-package-tracker",
-        1_700_000_000_000,
-      ),
-    )
-
-  let feedback_out =
-    run_cognitive_feedback_tool(
-      ctx,
-      "{\"event_id\":\"ev-package-tracker\",\"label\":\"false_interrupt\",\"expected_attention\":\"record\",\"note\":\"User said routine package tracker alerts are noise.\"}",
-    )
-
-  feedback_out
-  |> string.contains("Recorded cognitive feedback")
-  |> should.be_true
-
-  let out =
-    run_memory_tool(
-      ctx,
-      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for routine package tracker alerts. These should be recorded but never surfaced or digested.\"}",
-    )
-
-  out |> should.equal("Saved [email-suppressions] to user.")
-  let content = simplifile.read(xdg.user_path(ctx.paths)) |> should.be_ok
-  content
-  |> string.contains("routine package tracker alerts")
-  |> should.be_true
-
-  process.send(db_subject, db.Shutdown)
   let _ = simplifile.delete_all([base])
   Nil
 }
@@ -555,147 +594,6 @@ fn run_search_events_tool(
   case result {
     brain_tools.TextResult(s) -> s
   }
-}
-
-fn cognitive_feedback_ctx(
-  base: String,
-  db_subject: process.Subject(db.DbMessage),
-) -> brain_tools.ToolContext {
-  let stub = test_harness.standalone_tool_context()
-  brain_tools.ToolContext(
-    ..stub,
-    paths: xdg.resolve_with_home(base),
-    db_subject: db_subject,
-  )
-}
-
-fn run_cognitive_feedback_tool(
-  ctx: brain_tools.ToolContext,
-  args_json: String,
-) -> String {
-  let call =
-    llm.ToolCall(
-      id: "1",
-      name: "record_cognitive_feedback",
-      arguments: args_json,
-    )
-  let #(result, _) = brain_tools.execute_tool(ctx, call)
-  case result {
-    brain_tools.TextResult(s) -> s
-  }
-}
-
-pub fn record_cognitive_feedback_tool_writes_label_for_existing_event_test() {
-  let assert Ok(db_subject) = db.start(":memory:")
-  let base = "/tmp/aura-feedback-tool-" <> test_helpers.random_suffix()
-  let _ = simplifile.delete_all([base])
-  let ctx = cognitive_feedback_ctx(base, db_subject)
-  let assert Ok(True) =
-    db.insert_event(
-      db_subject,
-      gmail_event(
-        "ev-feedback",
-        "Rollback request",
-        "ops@example.com",
-        "thread-feedback",
-        1_700_000_000_000,
-      ),
-    )
-
-  let out =
-    run_cognitive_feedback_tool(
-      ctx,
-      "{\"event_id\":\"ev-feedback\",\"label\":\"false_interrupt\",\"expected_attention\":\"digest\",\"note\":\"User said this was too noisy; interpret as digest-worthy, not interrupt-worthy.\"}",
-    )
-
-  out
-  |> string.contains("Recorded cognitive feedback")
-  |> should.be_true
-  out |> string.contains("event_id=ev-feedback") |> should.be_true
-  out |> string.contains("label=false_interrupt") |> should.be_true
-  out |> string.contains("attention_any=[digest]") |> should.be_true
-  out
-  |> string.contains("replay/evaluation evidence only")
-  |> should.be_true
-  out
-  |> string.contains("call memory(target=user) next")
-  |> should.be_true
-
-  let content = simplifile.read(xdg.labels_path(ctx.paths)) |> should.be_ok
-  content
-  |> string.contains("\"event_id\":\"ev-feedback\"")
-  |> should.be_true
-  content
-  |> string.contains("\"label\":\"false_interrupt\"")
-  |> should.be_true
-  content
-  |> string.contains("\"attention_any\":[\"digest\"]")
-  |> should.be_true
-
-  process.send(db_subject, db.Shutdown)
-  let _ = simplifile.delete_all([base])
-  Nil
-}
-
-pub fn record_cognitive_feedback_tool_rejects_unknown_event_test() {
-  let assert Ok(db_subject) = db.start(":memory:")
-  let base = "/tmp/aura-feedback-tool-missing-" <> test_helpers.random_suffix()
-  let _ = simplifile.delete_all([base])
-  let ctx = cognitive_feedback_ctx(base, db_subject)
-
-  let out =
-    run_cognitive_feedback_tool(
-      ctx,
-      "{\"event_id\":\"missing\",\"label\":\"false_interrupt\"}",
-    )
-
-  out |> should.equal("Error: event not found: missing")
-  simplifile.is_file(xdg.labels_path(ctx.paths)) |> should.equal(Ok(False))
-
-  process.send(db_subject, db.Shutdown)
-  let _ = simplifile.delete_all([base])
-  Nil
-}
-
-pub fn record_cognitive_feedback_tool_accepts_unbracketed_message_id_test() {
-  let assert Ok(db_subject) = db.start(":memory:")
-  let base =
-    "/tmp/aura-feedback-tool-message-id-" <> test_helpers.random_suffix()
-  let _ = simplifile.delete_all([base])
-  let ctx = cognitive_feedback_ctx(base, db_subject)
-  let assert Ok(True) =
-    db.insert_event(
-      db_subject,
-      gmail_event(
-        "<message-id@example.test>",
-        "Routine package update",
-        "alerts@example.test",
-        "thread-feedback",
-        1_700_000_000_000,
-      ),
-    )
-
-  let out =
-    run_cognitive_feedback_tool(
-      ctx,
-      "{\"event_id\":\"message-id@example.test\",\"label\":\"false_interrupt\",\"expected_attention\":\"record\",\"note\":\"User said this notification should not spend attention.\"}",
-    )
-
-  out
-  |> string.contains("Recorded cognitive feedback")
-  |> should.be_true
-  out
-  |> string.contains("event_id=<message-id@example.test>")
-  |> should.be_true
-
-  let content = simplifile.read(xdg.labels_path(ctx.paths)) |> should.be_ok
-  content
-  |> string.contains("\"event_id\":\"<message-id@example.test>\"")
-  |> should.be_true
-
-  process.send(db_subject, db.Shutdown)
-  let _ = simplifile.delete_all([base])
-  Nil
 }
 
 pub fn search_events_tool_returns_matching_events_test() {
