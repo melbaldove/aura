@@ -2479,10 +2479,48 @@ fn guard_cognitive_feedback_failure(
           {
             True ->
               "I recorded this as cognitive feedback. I have not saved a reusable preference in memory, so future behavior has not been changed yet."
-            False -> content
+            False ->
+              case
+                !has_successful_user_memory_write(messages)
+                && claims_runtime_attention_preference(content)
+              {
+                True ->
+                  "I have not changed that notification preference yet because this turn did not save a user preference. I need to resolve the relevant event, record cognitive feedback, and save user memory before claiming future notification behavior changed."
+                False -> content
+              }
           }
       }
   }
+}
+
+fn claims_runtime_attention_preference(content: String) -> Bool {
+  let lowered = string.lowercase(content)
+  contains_any(lowered, [
+    "alert",
+    "digest",
+    "interrupt",
+    "notification",
+    "notify",
+    "preference",
+    "suppress",
+    "surface",
+  ])
+  && contains_any(lowered, [
+    "already handled",
+    "already saved",
+    "already set",
+    "changed",
+    "going forward",
+    "saved",
+    "updated",
+    "will be",
+    "will not",
+    "won't",
+  ])
+}
+
+fn contains_any(content: String, needles: List(String)) -> Bool {
+  list.any(needles, fn(needle) { string.contains(content, needle) })
 }
 
 fn has_successful_user_memory_write(messages: List(llm.Message)) -> Bool {

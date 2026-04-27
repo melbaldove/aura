@@ -366,6 +366,35 @@ pub fn failed_cognitive_feedback_cannot_finalize_as_saved_test() {
   |> should.be_false
 }
 
+pub fn no_tool_final_cannot_claim_notification_preference_changed_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(_, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete(
+        "Already handled. Routine delivery alerts are suppressed and won't surface again.",
+        "[]",
+        100,
+      ),
+    )
+
+  let final_text =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  final_text
+  |> string.contains("did not save a user preference")
+  |> should.be_true
+  final_text |> string.contains("Already handled") |> should.be_false
+  final_text |> string.contains("won't surface again") |> should.be_false
+}
+
 pub fn cognitive_feedback_without_memory_cannot_claim_future_preference_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
