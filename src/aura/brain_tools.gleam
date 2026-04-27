@@ -2143,8 +2143,31 @@ fn attention_memory_set_result(
       let event_id = string.trim(get_arg(args, "event_id"))
       case event_id {
         "" -> {
-          use _ <- result.try(structured_memory.set(path, key, durable_content))
-          Ok("Saved [" <> key <> "] to attention.")
+          let scope = string.lowercase(string.trim(get_arg(args, "scope")))
+          case scope {
+            "standing" -> {
+              use _ <- result.try(structured_memory.set(
+                path,
+                key,
+                durable_content,
+              ))
+              Ok(
+                "Saved ["
+                <> key
+                <> "] to attention as a standing preference. No replay label was recorded.",
+              )
+            }
+            "" ->
+              Error(
+                "attention memory without event_id is only allowed for explicit standing preferences. If this corrects a concrete event or prior Aura notification, search_events first, then retry with event_id and expected_attention. If it is truly general, retry with scope=standing.",
+              )
+            other ->
+              Error(
+                "invalid attention memory scope '"
+                <> other
+                <> "'. Use scope=standing, or include event_id and expected_attention.",
+              )
+          }
         }
         _ -> {
           let expected_attention =
@@ -2574,7 +2597,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "memory",
-      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use target='state' for current domain status, target='memory' for durable domain knowledge, target='user' for user profile, and target='attention' for Aura attention policy: proactive notifications, digests, missed alerts, surfacing, asking, interruptions, and deferrals. For ordinary-language corrections about Aura attention, write target='attention'. If the correction is grounded in a concrete event, include event_id and expected_attention; the tool records replay label evidence internally. Choose expected_attention from meaning: no future user-facing attention means record; later batch attention means digest; immediate interruption means surface_now or ask_now. Do not ask the user to choose labels, event ids, record, digest, or target names.",
+      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use target='state' for current domain status, target='memory' for durable domain knowledge, target='user' for user profile, and target='attention' for Aura attention policy: proactive notifications, digests, missed alerts, surfacing, asking, interruptions, and deferrals. For ordinary-language corrections about Aura attention, write target='attention'. If the correction is grounded in a concrete event, include event_id and expected_attention; the tool records replay label evidence internally. For a general standing attention preference that is not about a concrete event, include scope='standing'. Choose expected_attention from meaning: no future user-facing attention means record; later batch attention means digest; immediate interruption means surface_now or ask_now. Do not ask the user to choose labels, event ids, record, digest, or target names.",
       parameters: [
         llm.ToolParam(
           name: "action",
@@ -2610,6 +2633,12 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "event_id",
           param_type: "string",
           description: "For target='attention' when the feedback corrects a concrete external event: exact Event ID from search_events. Omit for general standing attention preferences.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "scope",
+          param_type: "string",
+          description: "For target='attention' without event_id: must be standing to confirm this is a general standing preference, not feedback about a concrete event.",
           required: False,
         ),
         llm.ToolParam(

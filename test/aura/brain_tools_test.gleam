@@ -290,6 +290,7 @@ pub fn memory_tool_has_attention_feedback_params_test() {
   case memory_tool {
     Ok(llm.ToolDefinition(parameters: params, ..)) -> {
       list.any(params, fn(p) { p.name == "event_id" }) |> should.be_true
+      list.any(params, fn(p) { p.name == "scope" }) |> should.be_true
       list.any(params, fn(p) { p.name == "expected_attention" })
       |> should.be_true
       list.any(params, fn(p) { p.name == "label" }) |> should.be_true
@@ -327,16 +328,43 @@ pub fn memory_tool_saves_attention_preference_test() {
   let out =
     run_memory_tool(
       ctx,
-      "{\"action\":\"set\",\"target\":\"attention\",\"key\":\"package-tracker\",\"content\":\"Suppress notifications for routine package tracker alerts. These should be recorded but never surfaced or digested.\"}",
+      "{\"action\":\"set\",\"target\":\"attention\",\"key\":\"package-tracker\",\"content\":\"Suppress notifications for routine package tracker alerts. These should be recorded but never surfaced or digested.\",\"scope\":\"standing\"}",
     )
 
-  out |> should.equal("Saved [package-tracker] to attention.")
+  out
+  |> should.equal(
+    "Saved [package-tracker] to attention as a standing preference. No replay label was recorded.",
+  )
   let content =
     simplifile.read(xdg.attention_memory_path(ctx.paths))
     |> should.be_ok
   content
   |> string.contains("routine package tracker alerts")
   |> should.be_true
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn memory_attention_tool_rejects_unscoped_plain_feedback_test() {
+  let base =
+    "/tmp/aura-attention-memory-requires-scope-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = memory_ctx(base)
+  let assert Ok(_) =
+    simplifile.create_directory_all(xdg.cognitive_dir(ctx.paths))
+
+  let out =
+    run_memory_tool(
+      ctx,
+      "{\"action\":\"set\",\"target\":\"attention\",\"key\":\"package-tracker\",\"content\":\"Suppress routine package tracker alerts.\"}",
+    )
+
+  out
+  |> should.equal(
+    "Error: attention memory without event_id is only allowed for explicit standing preferences. If this corrects a concrete event or prior Aura notification, search_events first, then retry with event_id and expected_attention. If it is truly general, retry with scope=standing.",
+  )
+  simplifile.read(xdg.attention_memory_path(ctx.paths)) |> should.be_error
 
   let _ = simplifile.delete_all([base])
   Nil

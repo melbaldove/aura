@@ -119,6 +119,8 @@ event id.
 If Aura saves attention memory without event evidence, it must continue the
 tool loop before claiming completion, because no replay label has been recorded
 yet.
+No-event attention writes must be explicit standing preferences; otherwise the
+tool rejects the write and asks Aura to resolve an event id first.
 .TP
 .B gleam run \-\- cognitive\-improve propose
 Run labeled cognitive events through the current worker/model/policy path and

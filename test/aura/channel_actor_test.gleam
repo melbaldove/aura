@@ -693,7 +693,7 @@ pub fn plain_attention_memory_success_requires_followup_model_step_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
   let memory_calls_json =
-    "[{\"id\":\"c1\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\"}\"}]"
+    "[{\"id\":\"c1\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\",\\\"scope\\\":\\\"standing\\\"}\"}]"
 
   let #(after_memory_request, _) =
     channel_actor.transition(
@@ -705,7 +705,7 @@ pub fn plain_attention_memory_success_requires_followup_model_step_test() {
       after_memory_request,
       channel_actor.ToolResult(
         "c1",
-        "Saved [notification-suppressions] to attention.",
+        "Saved [notification-suppressions] to attention as a standing preference. No replay label was recorded.",
         False,
       ),
     )
