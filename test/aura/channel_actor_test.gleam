@@ -401,6 +401,65 @@ pub fn no_tool_notification_preference_claim_retries_with_tools_test() {
     }
   })
   |> should.be_false
+
+  case retry_state.turn {
+    option.Some(turn) ->
+      list.any(turn.new_messages, fn(message) {
+        case message {
+          llm.SystemMessage(content) ->
+            string.contains(content, "resolve the relevant event")
+          _ -> False
+        }
+      })
+      |> should.be_false
+    option.None -> should.fail()
+  }
+}
+
+pub fn second_no_tool_attention_claim_after_repair_finalizes_honestly_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(retry_state, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete(
+        "Already handled. Routine delivery alerts are suppressed and won't surface again.",
+        "[]",
+        100,
+      ),
+    )
+
+  let #(final_state, effects) =
+    channel_actor.transition(
+      retry_state,
+      channel_actor.StreamComplete(
+        "Notification behavior is updated and will be suppressed going forward.",
+        "[]",
+        100,
+      ),
+    )
+
+  final_state.turn |> should.equal(option.None)
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+
+  let final_text =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  final_text
+  |> string.contains("I have not changed that notification preference yet")
+  |> should.be_true
 }
 
 pub fn cognitive_feedback_without_memory_cannot_claim_future_preference_test() {

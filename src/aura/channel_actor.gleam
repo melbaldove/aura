@@ -2511,6 +2511,7 @@ fn should_repair_runtime_attention_claim(
 ) -> Bool {
   turn.traces == []
   && turn.iteration + 1 < max_tool_iterations
+  && !has_system_message(turn.messages_at_llm_call, runtime_attention_repair_prompt)
   && !has_successful_user_memory_write(turn.new_messages)
   && claims_runtime_attention_preference(content)
 }
@@ -2520,11 +2521,12 @@ fn repair_runtime_attention_claim(
   turn: TurnState,
   content: String,
 ) -> #(ChannelState, List(Effect)) {
-  let repair_messages =
+  let repair_messages_for_llm =
     list.append(turn.new_messages, [
       llm.SystemMessage(runtime_attention_repair_prompt),
     ])
-  let next_llm_messages = list.append(state.conversation, repair_messages)
+  let next_llm_messages =
+    list.append(state.conversation, repair_messages_for_llm)
   let repair_turn =
     TurnState(
       ..turn,
@@ -2532,7 +2534,7 @@ fn repair_runtime_attention_claim(
       accumulated_content: "",
       accumulated_tool_calls: [],
       pending_tool_results: dict.new(),
-      new_messages: repair_messages,
+      new_messages: turn.new_messages,
       messages_at_llm_call: next_llm_messages,
       worker_kind: StreamWorker,
       stream_retry_count: 0,
@@ -2547,6 +2549,15 @@ fn repair_runtime_attention_claim(
     SpawnStreamWorker(next_llm_messages),
     LogStreamSummary(turn.stream_stats, "repair", string.length(content)),
   ])
+}
+
+fn has_system_message(messages: List(llm.Message), target: String) -> Bool {
+  list.any(messages, fn(message) {
+    case message {
+      llm.SystemMessage(content) -> content == target
+      _ -> False
+    }
+  })
 }
 
 fn claims_runtime_attention_preference(content: String) -> Bool {
