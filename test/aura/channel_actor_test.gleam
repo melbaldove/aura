@@ -524,6 +524,167 @@ pub fn cognitive_feedback_with_non_user_memory_cannot_claim_future_preference_te
   final_text |> string.contains("will be suppressed") |> should.be_false
 }
 
+pub fn event_grounded_user_memory_requires_feedback_before_saving_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let search_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"search_events\",\"arguments\":\"{\\\"query\\\":\\\"routine delivery\\\",\\\"limit\\\":\\\"5\\\"}\"}]"
+  let memory_calls_json =
+    "[{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"user\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\"}\"}]"
+
+  let #(after_search_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", search_calls_json, 100),
+    )
+  let #(after_search_result, _) =
+    channel_actor.transition(
+      after_search_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Found 1 event:\n\n1. Event ID: <delivery-event-1>\n   [gmail] Routine delivery alert",
+        False,
+      ),
+    )
+  let #(after_memory_request, effects) =
+    channel_actor.transition(
+      after_search_result,
+      channel_actor.StreamComplete("", memory_calls_json, 100),
+    )
+
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnToolWorker(call) -> call.name == "memory"
+      _ -> False
+    }
+  })
+  |> should.be_false
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+
+  let turn = case after_memory_request.turn {
+    option.Some(turn) -> turn
+    option.None -> panic as "expected tool-loop turn to continue"
+  }
+  let blocked_trace =
+    list.find(turn.traces, fn(trace) { trace.name == "memory" })
+    |> should.be_ok
+  blocked_trace.is_error |> should.be_true
+  blocked_trace.result
+  |> string.contains("record_cognitive_feedback")
+  |> should.be_true
+}
+
+pub fn event_grounded_user_memory_after_feedback_can_save_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let search_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"search_events\",\"arguments\":\"{\\\"query\\\":\\\"routine delivery\\\",\\\"limit\\\":\\\"5\\\"}\"}]"
+  let feedback_calls_json =
+    "[{\"id\":\"c2\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"delivery-event-1\\\",\\\"label\\\":\\\"false_interrupt\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
+  let memory_calls_json =
+    "[{\"id\":\"c3\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"user\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\"}\"}]"
+
+  let #(after_search_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", search_calls_json, 100),
+    )
+  let #(after_search_result, _) =
+    channel_actor.transition(
+      after_search_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Found 1 event:\n\n1. Event ID: <delivery-event-1>\n   [gmail] Routine delivery alert",
+        False,
+      ),
+    )
+  let #(after_feedback_request, _) =
+    channel_actor.transition(
+      after_search_result,
+      channel_actor.StreamComplete("", feedback_calls_json, 100),
+    )
+  let #(after_feedback_result, _) =
+    channel_actor.transition(
+      after_feedback_request,
+      channel_actor.ToolResult(
+        "c2",
+        "Recorded cognitive feedback: event_id=<delivery-event-1> label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl",
+        False,
+      ),
+    )
+  let #(_, effects) =
+    channel_actor.transition(
+      after_feedback_result,
+      channel_actor.StreamComplete("", memory_calls_json, 100),
+    )
+
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnToolWorker(call) -> call.name == "memory"
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
+pub fn blocked_event_grounded_memory_cannot_finalize_as_saved_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let search_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"search_events\",\"arguments\":\"{\\\"query\\\":\\\"routine delivery\\\",\\\"limit\\\":\\\"5\\\"}\"}]"
+  let memory_calls_json =
+    "[{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"user\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\"}\"}]"
+
+  let #(after_search_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", search_calls_json, 100),
+    )
+  let #(after_search_result, _) =
+    channel_actor.transition(
+      after_search_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Found 1 event:\n\n1. Event ID: <delivery-event-1>\n   [gmail] Routine delivery alert",
+        False,
+      ),
+    )
+  let #(after_memory_request, _) =
+    channel_actor.transition(
+      after_search_result,
+      channel_actor.StreamComplete("", memory_calls_json, 100),
+    )
+  let #(_, effects) =
+    channel_actor.transition(
+      after_memory_request,
+      channel_actor.StreamComplete(
+        "Done. Routine delivery alerts are now suppressed.",
+        "[]",
+        100,
+      ),
+    )
+
+  let final_text =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  final_text
+  |> string.contains("I did not save that preference")
+  |> should.be_true
+  final_text |> string.contains("now suppressed") |> should.be_false
+}
+
 // --- Task 13: stream error retry ---------------------------------------------
 
 pub fn stream_error_retries_up_to_max_test() {

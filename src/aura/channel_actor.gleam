@@ -1383,14 +1383,21 @@ pub fn transition(
               pending_tool_results: dict.new(),
               worker_kind: ToolWorker(first_call.name, first_call.id),
             )
-          #(ChannelState(..state, turn: Some(new_turn)), [
-            SpawnToolWorker(first_call),
+          let next_state = ChannelState(..state, turn: Some(new_turn))
+          let summary =
             LogStreamSummary(
               turn.stream_stats,
               "complete",
               string.length(content),
-            ),
-          ])
+            )
+          case blocked_tool_call_result(new_turn, first_call) {
+            Some(error) -> {
+              let #(blocked_state, blocked_effects) =
+                transition(next_state, ToolResult(first_call.id, error, True))
+              #(blocked_state, [summary, ..blocked_effects])
+            }
+            None -> #(next_state, [SpawnToolWorker(first_call), summary])
+          }
         }
       }
     }
@@ -1419,9 +1426,12 @@ pub fn transition(
                   traces: new_traces,
                   worker_kind: ToolWorker(next_call.name, next_call.id),
                 )
-              #(ChannelState(..state, turn: Some(new_turn)), [
-                SpawnToolWorker(next_call),
-              ])
+              let next_state = ChannelState(..state, turn: Some(new_turn))
+              case blocked_tool_call_result(new_turn, next_call) {
+                Some(error) ->
+                  transition(next_state, ToolResult(next_call.id, error, True))
+                None -> #(next_state, [SpawnToolWorker(next_call)])
+              }
             }
             None -> {
               logging.log(
@@ -1804,6 +1814,8 @@ const max_stream_retries = 3
 /// loops that could otherwise only be bounded by the 10-minute turn deadline.
 const max_tool_iterations: Int = 80
 
+const event_grounded_memory_requires_feedback_error = "Error: this turn resolved external Event ID values before a user-memory write, but no record_cognitive_feedback label has succeeded yet. Call record_cognitive_feedback with the exact Event ID first, then retry memory(target=user). If this was not feedback about Aura attention, do not save it as a user preference in this turn."
+
 /// True when every accumulated tool call has a result recorded in `pending`.
 fn all_tool_calls_resolved(
   calls: List(llm.ToolCall),
@@ -1827,6 +1839,38 @@ fn find_tool_name(calls: List(llm.ToolCall), id: String) -> String {
     Ok(c) -> c.name
     Error(_) -> "unknown"
   }
+}
+
+fn blocked_tool_call_result(
+  turn: TurnState,
+  call: llm.ToolCall,
+) -> Option(String) {
+  case
+    is_user_memory_set_call(call)
+    && has_event_search_trace(turn.traces)
+    && !has_recorded_cognitive_feedback_trace(turn.traces)
+  {
+    True -> Some(event_grounded_memory_requires_feedback_error)
+    False -> None
+  }
+}
+
+fn has_event_search_trace(traces: List(conversation.ToolTrace)) -> Bool {
+  list.any(traces, fn(trace) {
+    trace.name == "search_events"
+    && !trace.is_error
+    && string.contains(trace.result, "Event ID:")
+  })
+}
+
+fn has_recorded_cognitive_feedback_trace(
+  traces: List(conversation.ToolTrace),
+) -> Bool {
+  list.any(traces, fn(trace) {
+    trace.name == "record_cognitive_feedback"
+    && !trace.is_error
+    && string.starts_with(trace.result, "Recorded cognitive feedback")
+  })
 }
 
 /// Common failure path: emit user-facing error, optional typing stop,
@@ -2380,9 +2424,12 @@ fn guard_cognitive_feedback_failure(
   let has_failed_feedback =
     list.any(feedback_traces, fn(trace) { trace.is_error })
   let has_recorded_feedback =
-    list.any(feedback_traces, fn(trace) {
-      !trace.is_error
-      && string.starts_with(trace.result, "Recorded cognitive feedback")
+    has_recorded_cognitive_feedback_trace(feedback_traces)
+  let has_blocked_event_grounded_memory =
+    list.any(traces, fn(trace) {
+      trace.name == "memory"
+      && trace.is_error
+      && trace.result == event_grounded_memory_requires_feedback_error
     })
 
   case has_failed_feedback && !has_recorded_feedback {
@@ -2396,12 +2443,17 @@ fn guard_cognitive_feedback_failure(
       <> errors
     }
     False ->
-      case
-        has_recorded_feedback && !has_successful_user_memory_write(messages)
-      {
+      case has_blocked_event_grounded_memory && !has_recorded_feedback {
         True ->
-          "I recorded this as cognitive feedback. I have not saved a reusable preference in memory, so future behavior has not been changed yet."
-        False -> content
+          "I did not save that preference because this turn resolved external events but did not record event-level cognitive feedback first. I need to call record_cognitive_feedback with the resolved Event ID before saving the reusable preference."
+        False ->
+          case
+            has_recorded_feedback && !has_successful_user_memory_write(messages)
+          {
+            True ->
+              "I recorded this as cognitive feedback. I have not saved a reusable preference in memory, so future behavior has not been changed yet."
+            False -> content
+          }
       }
   }
 }
