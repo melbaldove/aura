@@ -48,6 +48,27 @@ erlc -o . ../src/esqlite3.erl ../src/esqlite3_nif.erl
 - tmux (for ACP sessions)
 - agent-browser (npm) — for browser tool. Install: `npm install -g agent-browser && agent-browser install`
 
+## Prompt and policy hygiene
+
+Never copy live user data, vendor names, device names, email subjects, ticket
+ids, or test-case wording into runtime prompts, tool descriptions, policy files,
+or ADR text that shapes production behavior. That is fixture leakage, not
+generalization.
+
+When a live test or user correction exposes a prompt/policy gap:
+
+1. Extract the source-neutral invariant.
+2. Write runtime guidance in semantic terms, not as a concrete example copied
+   from the incident.
+3. Put concrete cases only in replay/eval fixtures, and prefer synthetic names
+   unless the real identifier is essential evidence.
+4. Add a regression that prevents the leaked phrase or source-specific example
+   from reappearing in production-facing prompt text.
+
+If the proposed change says "for example, when the user says ..." using wording
+from the active debugging session, stop and rewrite it as a general rule before
+touching production code.
+
 ## Architecture
 
 ```
