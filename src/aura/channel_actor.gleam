@@ -29,8 +29,10 @@ import aura/validator
 import aura/vision
 import aura/xdg
 import gleam/dict.{type Dict}
+import gleam/dynamic/decode
 import gleam/erlang/process.{type Monitor, type Pid, type Subject, type Timer}
 import gleam/int
+import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -2264,7 +2266,8 @@ fn finalize_turn(
   content: String,
   prompt_tokens: Int,
 ) -> #(ChannelState, List(Effect)) {
-  let final_content = guard_cognitive_feedback_failure(turn.traces, content)
+  let final_content =
+    guard_cognitive_feedback_failure(turn.traces, turn.new_messages, content)
   let final_messages =
     list.append(turn.new_messages, [llm.AssistantMessage(final_content)])
   let #(author_id, author_name) = case turn.kind {
@@ -2368,6 +2371,7 @@ fn finalize_turn(
 
 fn guard_cognitive_feedback_failure(
   traces: List(conversation.ToolTrace),
+  messages: List(llm.Message),
   content: String,
 ) -> String {
   let feedback_traces =
@@ -2382,7 +2386,6 @@ fn guard_cognitive_feedback_failure(
     })
 
   case has_failed_feedback && !has_recorded_feedback {
-    False -> content
     True -> {
       let errors =
         feedback_traces
@@ -2392,6 +2395,55 @@ fn guard_cognitive_feedback_failure(
       "I could not record that cognitive feedback, so I have not saved or changed that preference. The feedback tool failed: "
       <> errors
     }
+    False ->
+      case
+        has_recorded_feedback && !has_successful_user_memory_write(messages)
+      {
+        True ->
+          "I recorded this as cognitive feedback. I have not saved a reusable preference in memory, so future behavior has not been changed yet."
+        False -> content
+      }
+  }
+}
+
+fn has_successful_user_memory_write(messages: List(llm.Message)) -> Bool {
+  let user_memory_call_ids =
+    messages
+    |> list.flat_map(fn(message) {
+      case message {
+        llm.AssistantToolCallMessage(_, calls) ->
+          calls
+          |> list.filter(is_user_memory_set_call)
+          |> list.map(fn(call) { call.id })
+        _ -> []
+      }
+    })
+
+  list.any(messages, fn(message) {
+    case message {
+      llm.ToolResultMessage(id, result) ->
+        list.contains(user_memory_call_ids, id)
+        && string.starts_with(result, "Saved [")
+        && string.ends_with(result, " to user.")
+      _ -> False
+    }
+  })
+}
+
+fn is_user_memory_set_call(call: llm.ToolCall) -> Bool {
+  case call.name {
+    "memory" -> {
+      let decoder = {
+        use action <- decode.field("action", decode.string)
+        use target <- decode.field("target", decode.string)
+        decode.success(#(action, target))
+      }
+      case json.parse(call.arguments, decoder) {
+        Ok(#("set", "user")) -> True
+        _ -> False
+      }
+    }
+    _ -> False
   }
 }
 

@@ -366,6 +366,164 @@ pub fn failed_cognitive_feedback_cannot_finalize_as_saved_test() {
   |> should.be_false
 }
 
+pub fn cognitive_feedback_without_memory_cannot_claim_future_preference_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let tool_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"1\\\",\\\"label\\\":\\\"false_interrupt\\\"}\"}]"
+
+  let #(after_tool_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", tool_calls_json, 100),
+    )
+  let #(after_feedback, _) =
+    channel_actor.transition(
+      after_tool_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Recorded cognitive feedback: event_id=1 label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl",
+        False,
+      ),
+    )
+  let #(_, effects) =
+    channel_actor.transition(
+      after_feedback,
+      channel_actor.StreamComplete(
+        "Done. Routine delivery alerts will be suppressed going forward.",
+        "[]",
+        100,
+      ),
+    )
+
+  let final_text =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  final_text
+  |> string.contains("I recorded this as cognitive feedback")
+  |> should.be_true
+  final_text
+  |> string.contains("have not saved a reusable preference")
+  |> should.be_true
+  final_text |> string.contains("will be suppressed") |> should.be_false
+}
+
+pub fn cognitive_feedback_with_memory_can_claim_future_preference_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let tool_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"1\\\",\\\"label\\\":\\\"false_interrupt\\\"}\"},{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"user\\\",\\\"key\\\":\\\"email-suppressions\\\",\\\"content\\\":\\\"Suppress routine package alerts.\\\"}\"}]"
+
+  let #(after_tool_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", tool_calls_json, 100),
+    )
+  let #(after_feedback, _) =
+    channel_actor.transition(
+      after_tool_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Recorded cognitive feedback: event_id=1 label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl",
+        False,
+      ),
+    )
+  let #(after_memory, _) =
+    channel_actor.transition(
+      after_feedback,
+      channel_actor.ToolResult(
+        "c2",
+        "Saved [email-suppressions] to user.",
+        False,
+      ),
+    )
+  let #(_, effects) =
+    channel_actor.transition(
+      after_memory,
+      channel_actor.StreamComplete(
+        "Done. Routine delivery alerts will be suppressed going forward.",
+        "[]",
+        100,
+      ),
+    )
+
+  let final_text =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  final_text
+  |> string.contains("will be suppressed going forward")
+  |> should.be_true
+  final_text
+  |> string.contains("have not saved a reusable preference")
+  |> should.be_false
+}
+
+pub fn cognitive_feedback_with_non_user_memory_cannot_claim_future_preference_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let tool_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"1\\\",\\\"label\\\":\\\"false_interrupt\\\"}\"},{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"state\\\",\\\"key\\\":\\\"email-suppressions\\\",\\\"content\\\":\\\"Suppress routine package alerts.\\\"}\"}]"
+
+  let #(after_tool_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", tool_calls_json, 100),
+    )
+  let #(after_feedback, _) =
+    channel_actor.transition(
+      after_tool_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Recorded cognitive feedback: event_id=1 label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl",
+        False,
+      ),
+    )
+  let #(after_memory, _) =
+    channel_actor.transition(
+      after_feedback,
+      channel_actor.ToolResult(
+        "c2",
+        "Saved [email-suppressions] to user.",
+        False,
+      ),
+    )
+  let #(_, effects) =
+    channel_actor.transition(
+      after_memory,
+      channel_actor.StreamComplete(
+        "Done. Routine delivery alerts will be suppressed going forward.",
+        "[]",
+        100,
+      ),
+    )
+
+  let final_text =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  final_text
+  |> string.contains("have not saved a reusable preference")
+  |> should.be_true
+  final_text |> string.contains("will be suppressed") |> should.be_false
+}
+
 // --- Task 13: stream error retry ---------------------------------------------
 
 pub fn stream_error_retries_up_to_max_test() {

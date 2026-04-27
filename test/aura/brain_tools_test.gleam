@@ -614,6 +614,12 @@ pub fn record_cognitive_feedback_tool_writes_label_for_existing_event_test() {
   out |> string.contains("event_id=ev-feedback") |> should.be_true
   out |> string.contains("label=false_interrupt") |> should.be_true
   out |> string.contains("attention_any=[digest]") |> should.be_true
+  out
+  |> string.contains("replay/evaluation evidence only")
+  |> should.be_true
+  out
+  |> string.contains("call memory(target=user) next")
+  |> should.be_true
 
   let content = simplifile.read(xdg.labels_path(ctx.paths)) |> should.be_ok
   content

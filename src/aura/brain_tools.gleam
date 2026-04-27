@@ -2135,7 +2135,8 @@ fn execute_record_cognitive_feedback(
                     <> " attention_any=["
                     <> string.join(result.attention_any, ", ")
                     <> "] path="
-                    <> result.path,
+                    <> result.path
+                    <> ". Note: this is replay/evaluation evidence only; it does not update future runtime preferences. If the user expressed a reusable preference, call memory(target=user) next before claiming future behavior changed.",
                   )
                 }
               }
