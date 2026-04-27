@@ -319,9 +319,10 @@ fn run_memory_tool(ctx: brain_tools.ToolContext, args_json: String) -> String {
 }
 
 pub fn memory_tool_saves_attention_preference_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
   let base = "/tmp/aura-attention-memory-" <> test_helpers.random_suffix()
   let _ = simplifile.delete_all([base])
-  let ctx = memory_ctx(base)
+  let ctx = brain_tools.ToolContext(..memory_ctx(base), db_subject: db_subject)
   let assert Ok(_) =
     simplifile.create_directory_all(xdg.cognitive_dir(ctx.paths))
 
@@ -342,6 +343,7 @@ pub fn memory_tool_saves_attention_preference_test() {
   |> string.contains("routine package tracker alerts")
   |> should.be_true
 
+  process.send(db_subject, db.Shutdown)
   let _ = simplifile.delete_all([base])
   Nil
 }
@@ -366,6 +368,43 @@ pub fn memory_attention_tool_rejects_unscoped_plain_feedback_test() {
   )
   simplifile.read(xdg.attention_memory_path(ctx.paths)) |> should.be_error
 
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn memory_attention_tool_rejects_standing_feedback_when_recent_event_matches_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let base =
+    "/tmp/aura-attention-memory-standing-overlap-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = brain_tools.ToolContext(..memory_ctx(base), db_subject: db_subject)
+  let assert Ok(_) =
+    simplifile.create_directory_all(xdg.cognitive_dir(ctx.paths))
+  let assert Ok(True) =
+    db.insert_event(
+      db_subject,
+      gmail_event(
+        "ev-package-tracker",
+        "Package tracker delivery notice",
+        "notice@packageco.test",
+        "thread-package-tracker",
+        1_700_000_000_000,
+      ),
+    )
+
+  let out =
+    run_memory_tool(
+      ctx,
+      "{\"action\":\"set\",\"target\":\"attention\",\"key\":\"package-tracker\",\"content\":\"Suppress package tracker delivery notices.\",\"scope\":\"standing\"}",
+    )
+
+  out
+  |> should.equal(
+    "Error: standing attention preference overlaps recent event ev-package-tracker (Package tracker delivery notice). Include event_id and expected_attention so replay feedback is recorded, or save a standing preference only when it is not grounded in a recent event.",
+  )
+  simplifile.read(xdg.attention_memory_path(ctx.paths)) |> should.be_error
+
+  process.send(db_subject, db.Shutdown)
   let _ = simplifile.delete_all([base])
   Nil
 }

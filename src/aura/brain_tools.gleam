@@ -2146,6 +2146,11 @@ fn attention_memory_set_result(
           let scope = string.lowercase(string.trim(get_arg(args, "scope")))
           case scope {
             "standing" -> {
+              use _ <- result.try(reject_standing_attention_event_overlap(
+                ctx,
+                key,
+                durable_content,
+              ))
               use _ <- result.try(structured_memory.set(
                 path,
                 key,
@@ -2228,6 +2233,142 @@ fn attention_memory_set_result(
       }
     }
   }
+}
+
+fn reject_standing_attention_event_overlap(
+  ctx: ToolContext,
+  key: String,
+  content: String,
+) -> Result(Nil, String) {
+  let tokens = attention_probe_tokens(key <> " " <> content)
+  case list.length(tokens) < 2 {
+    True -> Ok(Nil)
+    False ->
+      case db.search_events(ctx.db_subject, "", None, None, 100) {
+        Error(msg) ->
+          Error(
+            "failed to check standing attention preference against recent events: "
+            <> msg,
+          )
+        Ok(events) ->
+          case list.find(events, fn(e) {
+            event_overlaps_attention_tokens(e, tokens)
+          }) {
+            Error(_) -> Ok(Nil)
+            Ok(e) ->
+              Error(
+                "standing attention preference overlaps recent event "
+                <> e.id
+                <> " ("
+                <> e.subject
+                <> "). Include event_id and expected_attention so replay feedback is recorded, or save a standing preference only when it is not grounded in a recent event.",
+              )
+          }
+      }
+  }
+}
+
+fn event_overlaps_attention_tokens(
+  e: event.AuraEvent,
+  tokens: List(String),
+) -> Bool {
+  let event_tokens = event_probe_tokens(e)
+  let overlap =
+    tokens
+    |> list.filter(fn(token) { list.contains(event_tokens, token) })
+
+  list.length(overlap) >= 2
+  || list.any(overlap, fn(token) { string.length(token) >= 8 })
+}
+
+fn event_probe_tokens(e: event.AuraEvent) -> List(String) {
+  let tag_text =
+    e.tags
+    |> dict.to_list
+    |> list.flat_map(fn(pair) { [pair.0, pair.1] })
+    |> string.join(" ")
+
+  attention_probe_tokens(
+    e.source
+    <> " "
+    <> e.type_
+    <> " "
+    <> e.subject
+    <> " "
+    <> tag_text
+    <> " "
+    <> e.data,
+  )
+}
+
+fn attention_probe_tokens(text: String) -> List(String) {
+  text
+  |> loose_query_tokens
+  |> list.map(string.lowercase)
+  |> list.filter(fn(token) {
+    string.length(token) >= 4 && !is_attention_probe_stopword(token)
+  })
+  |> unique_strings
+}
+
+fn unique_strings(tokens: List(String)) -> List(String) {
+  tokens
+  |> list.fold([], fn(acc, token) {
+    case list.contains(acc, token) {
+      True -> acc
+      False -> [token, ..acc]
+    }
+  })
+  |> list.reverse
+}
+
+fn is_attention_probe_stopword(token: String) -> Bool {
+  is_search_stopword(token)
+  || list.contains(
+    [
+      "alert",
+      "alerts",
+      "attention",
+      "digest",
+      "digests",
+      "doesnt",
+      "dont",
+      "email",
+      "emails",
+      "event",
+      "events",
+      "facing",
+      "future",
+      "general",
+      "mail",
+      "need",
+      "needs",
+      "notification",
+      "notifications",
+      "notified",
+      "notify",
+      "preference",
+      "preferences",
+      "record",
+      "recorded",
+      "routine",
+      "should",
+      "silently",
+      "standing",
+      "surface",
+      "surfaced",
+      "suppress",
+      "suppressed",
+      "that",
+      "these",
+      "this",
+      "those",
+      "transactional",
+      "user",
+      "without",
+    ],
+    token,
+  )
 }
 
 fn resolve_required_event_id(
@@ -2597,7 +2738,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "memory",
-      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use target='state' for current domain status, target='memory' for durable domain knowledge, target='user' for user profile, and target='attention' for Aura attention policy: proactive notifications, digests, missed alerts, surfacing, asking, interruptions, and deferrals. For ordinary-language corrections about Aura attention, write target='attention'. If the correction is grounded in a concrete event, include event_id and expected_attention; the tool records replay label evidence internally. For a general standing attention preference that is not about a concrete event, include scope='standing'. Choose expected_attention from meaning: no future user-facing attention means record; later batch attention means digest; immediate interruption means surface_now or ask_now. Do not ask the user to choose labels, event ids, record, digest, or target names.",
+      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use target='state' for current domain status, target='memory' for durable domain knowledge, target='user' for user profile, and target='attention' for Aura attention policy: proactive notifications, digests, missed alerts, surfacing, asking, interruptions, and deferrals. For ordinary-language corrections about Aura attention, write target='attention'. If the correction is grounded in a concrete event, include event_id and expected_attention; the tool records replay label evidence internally. For a general standing attention preference that is not about a concrete event, include scope='standing'; if it overlaps recent events, the tool rejects it until event_id and expected_attention are provided. Choose expected_attention from meaning: no future user-facing attention means record; later batch attention means digest; immediate interruption means surface_now or ask_now. Do not ask the user to choose labels, event ids, record, digest, or target names.",
       parameters: [
         llm.ToolParam(
           name: "action",

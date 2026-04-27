@@ -74,6 +74,7 @@ pub fn build_system_prompt(
   <> "\nWhen the user corrects Aura's proactive notifications, digests, missed alerts, surfacing, interruptions, or asks in ordinary language, write it with memory(target='attention')."
   <> "\nDo not make the user name labels, event ids, target names, record, digest, or attention actions. You choose the expected attention from the user's meaning."
   <> "\nFor colloquial references to prior proactive output, use search_events with concrete content words from the user's message to resolve the recent external event, then call memory(target='attention') with event_id and expected_attention."
+  <> "\nIf search_events returns a plausible match, do not use scope='standing'; choose the best event and expected_attention so the correction becomes replay evidence."
   <> "\nIf there is no concrete event or prior Aura notification being corrected, save the general preference with memory(target='attention', scope='standing'). Do not use scope='standing' to avoid resolving an event."
   <> "\nChoose expected attention from meaning, not phrase matching: no future user-facing attention means record; later batch attention means digest; immediate interruption means surface_now or ask_now."
   <> "\nIf one recent event is the clear referent, save the attention memory; ask one clarifying question only when multiple plausible recent events remain."

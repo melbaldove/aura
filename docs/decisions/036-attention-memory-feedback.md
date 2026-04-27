@@ -38,7 +38,9 @@ external event, the same memory call instead includes the resolved `event_id`
 and `expected_attention`. The tool validates the event and appends the
 corresponding correction label to replay input before saving the attention
 memory. A no-event attention write without `scope='standing'` fails before
-writing, so event feedback cannot silently degrade into a standing preference.
+writing. A no-event standing write that overlaps recent external events also
+fails before writing, so event feedback cannot silently degrade into a standing
+preference after event search succeeds.
 
 A plain attention-memory save is not treated as completion of an event-feedback
 loop. If the model writes a standing preference without event evidence, the
