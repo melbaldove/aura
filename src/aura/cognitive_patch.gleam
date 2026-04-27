@@ -141,7 +141,7 @@ fn upsert_group(
   }
 }
 
-fn target_path_for_label(label: String) -> String {
+pub fn target_path_for_label(label: String) -> String {
   case string.lowercase(label) {
     "false_interrupt" | "missed_important" | "bad_deferral" | "useful_digest" ->
       "policies/attention.md"
@@ -228,7 +228,7 @@ fn render_case(case_: ProposalCase) -> String {
   <> blank_dash(case_.note)
 }
 
-fn patch_brief(target_path: String, _cases: List(ProposalCase)) -> String {
+pub fn patch_brief_for_target(target_path: String) -> String {
   case target_path {
     "policies/attention.md" ->
       "Calibrate interruption timing using the labeled cases below. Tighten "
@@ -250,6 +250,10 @@ fn patch_brief(target_path: String, _cases: List(ProposalCase)) -> String {
       "Review these labeled cases and decide whether an existing text policy "
       <> "or concern file needs a reusable rule."
   }
+}
+
+fn patch_brief(target_path: String, _cases: List(ProposalCase)) -> String {
+  patch_brief_for_target(target_path)
 }
 
 fn blank_dash(value: String) -> String {

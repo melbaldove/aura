@@ -26,6 +26,11 @@ pub fn parse_args_dispatches_cognitive_replay_propose_patches_test() {
   |> should.equal(aura.CliCtl("cognitive-replay propose-patches"))
 }
 
+pub fn parse_args_dispatches_cognitive_improve_propose_test() {
+  aura.parse_args_for_test(["cognitive-improve", "propose"])
+  |> should.equal(aura.CliCtl("cognitive-improve propose"))
+}
+
 pub fn parse_args_dispatches_cognitive_delivery_probe_test() {
   aura.parse_args_for_test(["cognitive-test", "deliver-now"])
   |> should.equal(aura.CliCtl("cognitive-test deliver-now"))

@@ -62,10 +62,11 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [031](031-cognitive-delivery-dead-letters.md) | Cognitive delivery dead letters | Accepted |
 | [032](032-cognitive-correction-labels.md) | Cognitive correction labels | Accepted |
 | [033](033-natural-cognitive-feedback.md) | Natural cognitive feedback capture | Accepted |
+| [034](034-replay-aware-cognitive-improvement.md) | Replay-aware cognitive improvement proposals | Accepted |
 
 ## Adding a new ADR
 
 1. Copy the template above
-2. Number sequentially (next is 034)
+2. Number sequentially (next is 035)
 3. Add to the index in this README
 4. Commit with the code change it relates to

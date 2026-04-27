@@ -81,14 +81,28 @@ pub fn run_labels(ctx: Context) -> Result(String, String) {
   run_labels_with(ctx, default_timeout_ms, default_poll_ms)
 }
 
+/// Run all labels and return structured case results.
+pub fn run_label_cases(ctx: Context) -> Result(List(CaseResult), String) {
+  run_label_cases_with(ctx, default_timeout_ms, default_poll_ms)
+}
+
+/// Run labels with deterministic timeouts and return structured case results.
+pub fn run_label_cases_with(
+  ctx: Context,
+  timeout_ms: Int,
+  poll_ms: Int,
+) -> Result(List(CaseResult), String) {
+  use labels <- result.try(load_labels(ctx.paths))
+  Ok(replay_label_list(ctx, labels, timeout_ms, poll_ms, []))
+}
+
 /// Run labels with deterministic timeouts. Exposed for behavior tests.
 pub fn run_labels_with(
   ctx: Context,
   timeout_ms: Int,
   poll_ms: Int,
 ) -> Result(String, String) {
-  use labels <- result.try(load_labels(ctx.paths))
-  let results = replay_label_list(ctx, labels, timeout_ms, poll_ms, [])
+  use results <- result.try(run_label_cases_with(ctx, timeout_ms, poll_ms))
   let report = format_report(results)
   case list.any(results, fn(result) { !result.passed && !result.skipped }) {
     True -> Error(report)

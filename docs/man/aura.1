@@ -116,6 +116,13 @@ In normal Discord use, the user should not need this command. The brain can
 record the same labels with the record_cognitive_feedback tool when ordinary
 feedback clearly references a specific event id.
 .TP
+.B gleam run \-\- cognitive\-improve propose
+Run labeled cognitive events through the current worker/model/policy path and
+write a replay-aware improvement report to
+~/.local/share/aura/cognitive/improvement-proposals/.
+The report groups cases by likely policy or concern surface and includes
+current replay pass/fail evidence. It does not apply policy or concern changes.
+.TP
 .B gleam run \-\- cognitive\-delivery retry\-dead\-letter
 Ask the running daemon to retry delivery ledger entries whose latest state is
 dead_letter or legacy failed for digest, surface_now, or ask_now decisions.

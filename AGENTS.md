@@ -58,6 +58,7 @@ supervisor (OneForOne)
 ├── cognitive_delivery Validated attention delivery + digest ledger
 ├── cognitive_replay Label-backed replay checks for cognitive decisions
 ├── cognitive_patch Label-backed policy/concern patch proposal reports
+├── cognitive_improve Replay-aware cognitive improvement proposal reports
 ├── poller      Discord gateway WebSocket
 ├── flare_manager Flare lifecycle actor — roster, dispatch, monitor, SQLite persist
 ├── brain       Routes messages, LLM tool loop, progressive streaming, review
@@ -117,6 +118,7 @@ src/aura/
   cognitive_delivery.gleam Delivery ledger, digest queue, immediate surfacing
   cognitive_replay.gleam Label-backed replay through current model/policy
   cognitive_patch.gleam Label-backed markdown proposal reports
+  cognitive_improve.gleam Replay-aware improvement proposal reports
   cognitive_probe.gleam Operator-triggered live delivery probe
   concern.gleam         Text-first concern tracking writer
   compressor.gleam      Tiered context compression — tool pruning, domain-aware LLM summarization, iterative updates
@@ -389,7 +391,7 @@ When making a change that involves choosing between approaches (e.g., "should we
 
 ADRs are immutable once accepted. If a decision is reversed, write a new ADR that supersedes the old one.
 
-Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression (superseded), ACP manager actor, keyed memory entries, active memory review, tiered runtime compression, ACP protocol for agent dispatch, memory dreaming, text-first concern tracking, and natural cognitive feedback capture.
+Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression (superseded), ACP manager actor, keyed memory entries, active memory review, tiered runtime compression, ACP protocol for agent dispatch, memory dreaming, text-first concern tracking, natural cognitive feedback capture, and replay-aware cognitive improvement proposals.
 
 ## Known limitations
 

@@ -1,5 +1,6 @@
 import aura/cognitive_delivery
 import aura/cognitive_eval
+import aura/cognitive_improve
 import aura/cognitive_label
 import aura/cognitive_patch
 import aura/cognitive_probe
@@ -186,6 +187,39 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
       }
     }
 
+    ["cognitive-improve", "propose"] -> {
+      logging.log(
+        logging.Info,
+        "[ctl] Cognitive improvement proposal triggered",
+      )
+      case
+        cognitive_improve.propose(cognitive_replay.Context(
+          paths: ctx.paths,
+          db_subject: ctx.db_subject,
+          cognitive_subject: ctx.cognitive_subject,
+          delivery_subject: ctx.delivery_subject,
+        ))
+      {
+        Ok(report) -> {
+          case report.proposal_count {
+            0 -> report.markdown
+            _ ->
+              "OK: cognitive-improve propose labels="
+              <> int.to_string(report.label_count)
+              <> " failed="
+              <> int.to_string(report.failed_count)
+              <> " skipped="
+              <> int.to_string(report.skipped_count)
+              <> " proposals="
+              <> int.to_string(report.proposal_count)
+              <> " path="
+              <> report.path
+          }
+        }
+        Error(err) -> "ERROR: cognitive improvement proposal failed: " <> err
+      }
+    }
+
     ["cognitive-test", "deliver-now"] -> {
       logging.log(logging.Info, "[ctl] Cognitive delivery probe triggered")
       case
@@ -247,7 +281,7 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
     _ ->
       "ERROR: unknown command '"
       <> trimmed
-      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-replay labels, cognitive-replay propose-patches, cognitive-test deliver-now, cognitive-digest flush, cognitive-delivery retry-dead-letter, cognitive-label <event_id> <label> [expected_attention] [note]"
+      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-replay labels, cognitive-replay propose-patches, cognitive-improve propose, cognitive-test deliver-now, cognitive-digest flush, cognitive-delivery retry-dead-letter, cognitive-label <event_id> <label> [expected_attention] [note]"
   }
 }
 

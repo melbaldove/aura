@@ -41,10 +41,11 @@ AuraEvent
 -> delivery dead-letter retry for failed send effects
 -> natural correction capture into ~/.local/share/aura/cognitive/labels.jsonl
 -> patch proposal reports in ~/.local/share/aura/cognitive/patch-proposals/
+-> replay-aware improvement reports in ~/.local/share/aura/cognitive/improvement-proposals/
 -> decision_ready log
 -> ctl probes for smoke/eval/replay, operator correction labels,
-   unsuppressed delivery, digest flush, dead-letter retry, and patch proposal
-   generation
+   unsuppressed delivery, digest flush, dead-letter retry, patch proposal
+   generation, and replay-aware improvement proposal generation
 ```
 
 This proves:
@@ -81,13 +82,16 @@ This proves:
 - `cognitive-replay propose-patches` can turn captured labels into a durable
   markdown proposal report grouped by allowed policy or concern surface without
   applying changes
+- `cognitive-improve propose` can rerun labeled events through current policy
+  and write a replay-aware improvement report with pass/fail evidence next to
+  each proposed policy or concern surface
 - the worker does not block ingestion
 
 It does not yet prove proactive surfacing quality at scale, concern matching
 quality, model-written policy diffs, user-preference learning from labels, or
 whether the default policies are good enough.
 
-## Correct Next Cut
+## Current Learning Cut
 
 Use correction labels to propose text-policy and concern-file patches before
 expanding proactive thresholds, autonomy, or cognitive structure.
@@ -96,6 +100,8 @@ Initial implementation:
 
 - `cognitive-replay propose-patches` reads labels and writes
   `~/.local/share/aura/cognitive/patch-proposals/<timestamp>.md`.
+- `cognitive-improve propose` reads labels, runs live replay, and writes
+  `~/.local/share/aura/cognitive/improvement-proposals/<timestamp>.md`.
 - Reports group labeled failures by allowed text target such as
   `policies/attention.md`, `policies/authority.md`, `policies/work.md`, or
   `policies/concerns.md`.

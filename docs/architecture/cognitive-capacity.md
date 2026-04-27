@@ -75,6 +75,7 @@ AuraEvent
 -> natural correction capture (record_cognitive_feedback or cognitive-label)
 -> cognitive_replay over labels.jsonl
 -> cognitive_patch proposal reports
+-> cognitive_improve replay-aware improvement proposals
 -> [cognitive] decision_ready log
 ```
 
@@ -90,8 +91,9 @@ feedback or the operator CLI (`cognitive-label`), force digest delivery
 (`cognitive-digest flush`), and retry failed delivery effects
 (`cognitive-delivery retry-dead-letter`). Correction labels can also be
 converted into reviewable markdown patch proposal reports
-(`cognitive-replay propose-patches`) without mutating policy or concern files.
-These probes let the decision, correction, learning, and delivery paths be
+(`cognitive-replay propose-patches`) or replay-aware improvement reports
+(`cognitive-improve propose`) without mutating policy or concern files. These
+probes let the decision, correction, learning, and delivery paths be
 verified without asking the user to send provider messages.
 
 ## Filesystem Model
@@ -150,6 +152,7 @@ Cognitive logs:
   deliveries.jsonl
   labels.jsonl
   patch-proposals/*.md
+  improvement-proposals/*.md
   evaluations.jsonl
 ```
 
@@ -339,6 +342,9 @@ planning_burden_reduced
 The rule: structure earns its way into code only by reducing replay failures.
 Replay reports should carry the correction label and likely adjustment surface
 so the next move is a text policy or concern-file patch, not a hidden heuristic.
+Improvement reports should additionally include current replay pass/fail
+evidence so the proposed text change has before-proof before any file is
+mutated.
 
 GEPA and DSPy are useful reference designs for this loop. In Aura's version,
 real events are examples, decisions and deliveries are traces, correction
