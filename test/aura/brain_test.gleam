@@ -57,7 +57,13 @@ pub fn build_system_prompt_test() {
 
 pub fn build_system_prompt_includes_soul_content_test() {
   let prompt =
-    system_prompt.build_system_prompt("Custom personality goes here.", [], [], "", "")
+    system_prompt.build_system_prompt(
+      "Custom personality goes here.",
+      [],
+      [],
+      "",
+      "",
+    )
   prompt |> string.contains("Custom personality goes here.") |> should.be_true
   prompt |> string.contains("No domains") |> should.be_true
 }
@@ -72,6 +78,12 @@ pub fn build_system_prompt_includes_natural_cognitive_feedback_rule_test() {
   prompt |> string.contains("search_events") |> should.be_true
   prompt
   |> string.contains("Do not make the user name labels")
+  |> should.be_true
+  prompt
+  |> string.contains("don't notify")
+  |> should.be_true
+  prompt
+  |> string.contains("expected_attention=record")
   |> should.be_true
 }
 

@@ -207,6 +207,15 @@ pub fn record_cognitive_feedback_tool_description_guides_event_resolution_test()
   description
   |> string.contains("Do not ask the user to choose labels")
   |> should.be_true
+  description
+  |> string.contains("don't notify")
+  |> should.be_true
+  description
+  |> string.contains("expected_attention=record")
+  |> should.be_true
+  description
+  |> string.contains("too noisy but still useful")
+  |> should.be_true
 }
 
 // Regression: GLM concatenates calls for different tools without embedding a

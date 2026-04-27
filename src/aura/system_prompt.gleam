@@ -74,6 +74,7 @@ pub fn build_system_prompt(
   <> "\nWhen the user corrects Aura's proactive notifications, digests, or missed alerts in ordinary language, preserve it as learning evidence with record_cognitive_feedback."
   <> "\nDo not make the user name labels, event ids, or attention actions. You choose the label and expected attention."
   <> "\nFor colloquial references like 'that Shopee thing was noisy' or 'don't notify me about Shopee deliveries', use search_events with concrete keywords to resolve the recent external event, then call record_cognitive_feedback."
+  <> "\nIf the user says \"don't notify\", \"do not notify\", \"never notify\", \"stop notifying\", or equivalent, record expected_attention=record. If the user says it was too noisy but still useful later, record expected_attention=digest."
   <> "\nIf one recent event is the clear referent, record the feedback; ask one clarifying question only when multiple plausible recent events remain."
   <> "\nIf the correction also states a reusable preference, save that preference to user memory after recording the feedback."
   <> "\nDo not edit policy files directly for routine feedback. Labels feed replay and improvement proposals; user memory gives the immediate preference."

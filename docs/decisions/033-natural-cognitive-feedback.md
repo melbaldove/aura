@@ -31,8 +31,10 @@ the model should first try to resolve colloquial references through recent event
 search. For example, "don't notify me about Shopee deliveries" should search
 events for Shopee/order/delivery, identify the recent event that produced the
 digest or notification, and then record a `false_interrupt` label with the
-expected attention chosen by the model. It should ask one clarifying question
-only when multiple plausible recent events remain.
+expected attention chosen by the model. In natural language, "don't notify" /
+"do not notify" / "stop notifying" means `expected_attention=record`; "too
+noisy but still useful later" means `expected_attention=digest`. It should ask
+one clarifying question only when multiple plausible recent events remain.
 
 If the feedback also states a reusable preference, the model should save that
 preference to `USER.md` after recording the correction label. Routine feedback
