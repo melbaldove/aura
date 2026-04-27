@@ -392,6 +392,47 @@ pub fn memory_attention_tool_records_label_for_event_grounded_feedback_test() {
   Nil
 }
 
+pub fn memory_attention_tool_uses_note_when_content_is_omitted_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let base =
+    "/tmp/aura-attention-memory-note-fallback-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = brain_tools.ToolContext(..memory_ctx(base), db_subject: db_subject)
+  let assert Ok(True) =
+    db.insert_event(
+      db_subject,
+      gmail_event(
+        "ev-package-tracker-note",
+        "Routine package tracker alert",
+        "alerts@example.invalid",
+        "thread-package-tracker-note",
+        1_700_000_000_000,
+      ),
+    )
+
+  let out =
+    run_memory_tool(
+      ctx,
+      "{\"action\":\"set\",\"target\":\"attention\",\"key\":\"package-tracker\",\"event_id\":\"ev-package-tracker-note\",\"expected_attention\":\"record\",\"note\":\"Routine package tracker alerts should be recorded only and not surfaced.\"}",
+    )
+
+  out
+  |> string.contains("Saved [package-tracker] to attention")
+  |> should.be_true
+  let attention =
+    simplifile.read(xdg.attention_memory_path(ctx.paths))
+    |> should.be_ok
+  attention
+  |> string.contains(
+    "Routine package tracker alerts should be recorded only and not surfaced.",
+  )
+  |> should.be_true
+
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
 pub fn memory_attention_tool_rejects_unknown_expected_attention_test() {
   let assert Ok(db_subject) = db.start(":memory:")
   let base =

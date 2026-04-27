@@ -2129,63 +2129,78 @@ fn attention_memory_set_result(
       <> string.inspect(e)
     }),
   )
-  use _ <- result.try(structured_memory.security_scan(content))
-
-  let event_id = string.trim(get_arg(args, "event_id"))
-  case event_id {
-    "" -> {
-      use _ <- result.try(structured_memory.set(path, key, content))
-      Ok("Saved [" <> key <> "] to attention.")
-    }
+  let note_arg = string.trim(get_arg(args, "note"))
+  let durable_content = case string.trim(content) {
+    "" -> note_arg
+    _ -> content
+  }
+  case string.trim(durable_content) {
+    "" ->
+      Error("content is required for attention memory; use content or note")
     _ -> {
-      let expected_attention =
-        string.lowercase(string.trim(get_arg(args, "expected_attention")))
-      case expected_attention {
-        "" ->
-          Error(
-            "expected_attention is required when attention memory is grounded in an event",
-          )
-        "record" | "digest" | "surface_now" | "ask_now" -> {
-          use resolved_event_id <- result.try(resolve_required_event_id(
-            ctx,
-            event_id,
-          ))
-          let label = case string.trim(get_arg(args, "label")) {
-            "" -> label_for_attention(expected_attention)
-            explicit -> explicit
-          }
-          let note = case string.trim(get_arg(args, "note")) {
-            "" -> content
-            explicit -> explicit
-          }
-          use capture <- result.try(cognitive_label.capture(
-            ctx.paths,
-            resolved_event_id,
-            label,
-            expected_attention,
-            note,
-          ))
-          use _ <- result.try(structured_memory.set(path, key, content))
-          Ok(
-            "Saved ["
-            <> key
-            <> "] to attention and recorded cognitive feedback: event_id="
-            <> capture.event_id
-            <> " label="
-            <> capture.label
-            <> " attention_any=["
-            <> string.join(capture.attention_any, ", ")
-            <> "] path="
-            <> capture.path
-            <> ".",
-          )
+      use _ <- result.try(structured_memory.security_scan(durable_content))
+
+      let event_id = string.trim(get_arg(args, "event_id"))
+      case event_id {
+        "" -> {
+          use _ <- result.try(structured_memory.set(path, key, durable_content))
+          Ok("Saved [" <> key <> "] to attention.")
         }
         _ -> {
-          Error(
-            "invalid expected attention '"
-            <> expected_attention
-            <> "'. Use record, digest, surface_now, or ask_now.",
-          )
+          let expected_attention =
+            string.lowercase(string.trim(get_arg(args, "expected_attention")))
+          case expected_attention {
+            "" ->
+              Error(
+                "expected_attention is required when attention memory is grounded in an event",
+              )
+            "record" | "digest" | "surface_now" | "ask_now" -> {
+              use resolved_event_id <- result.try(resolve_required_event_id(
+                ctx,
+                event_id,
+              ))
+              let label = case string.trim(get_arg(args, "label")) {
+                "" -> label_for_attention(expected_attention)
+                explicit -> explicit
+              }
+              let note = case note_arg {
+                "" -> durable_content
+                explicit -> explicit
+              }
+              use capture <- result.try(cognitive_label.capture(
+                ctx.paths,
+                resolved_event_id,
+                label,
+                expected_attention,
+                note,
+              ))
+              use _ <- result.try(structured_memory.set(
+                path,
+                key,
+                durable_content,
+              ))
+              Ok(
+                "Saved ["
+                <> key
+                <> "] to attention and recorded cognitive feedback: event_id="
+                <> capture.event_id
+                <> " label="
+                <> capture.label
+                <> " attention_any=["
+                <> string.join(capture.attention_any, ", ")
+                <> "] path="
+                <> capture.path
+                <> ".",
+              )
+            }
+            _ -> {
+              Error(
+                "invalid expected attention '"
+                <> expected_attention
+                <> "'. Use record, digest, surface_now, or ask_now.",
+              )
+            }
+          }
         }
       }
     }
