@@ -680,6 +680,47 @@ pub fn record_cognitive_feedback_tool_rejects_unknown_event_test() {
   Nil
 }
 
+pub fn record_cognitive_feedback_tool_accepts_unbracketed_message_id_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let base =
+    "/tmp/aura-feedback-tool-message-id-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = cognitive_feedback_ctx(base, db_subject)
+  let assert Ok(True) =
+    db.insert_event(
+      db_subject,
+      gmail_event(
+        "<message-id@example.test>",
+        "Routine package update",
+        "alerts@example.test",
+        "thread-feedback",
+        1_700_000_000_000,
+      ),
+    )
+
+  let out =
+    run_cognitive_feedback_tool(
+      ctx,
+      "{\"event_id\":\"message-id@example.test\",\"label\":\"false_interrupt\",\"expected_attention\":\"record\",\"note\":\"User said this notification should not spend attention.\"}",
+    )
+
+  out
+  |> string.contains("Recorded cognitive feedback")
+  |> should.be_true
+  out
+  |> string.contains("event_id=<message-id@example.test>")
+  |> should.be_true
+
+  let content = simplifile.read(xdg.labels_path(ctx.paths)) |> should.be_ok
+  content
+  |> string.contains("\"event_id\":\"<message-id@example.test>\"")
+  |> should.be_true
+
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
 pub fn search_events_tool_returns_matching_events_test() {
   let assert Ok(db_subject) = db.start(":memory:")
   let ctx = search_events_ctx(db_subject)
@@ -711,6 +752,30 @@ pub fn search_events_tool_returns_matching_events_test() {
   string.contains(out, "alice@acme.com") |> should.be_true
   string.contains(out, "t-abc-123") |> should.be_true
   string.contains(out, "In Progress") |> should.be_true
+
+  process.send(db_subject, db.Shutdown)
+}
+
+pub fn search_events_tool_falls_back_to_loose_keywords_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let ctx = search_events_ctx(db_subject)
+  let assert Ok(True) =
+    db.insert_event(
+      db_subject,
+      gmail_event(
+        "pkg-1",
+        "Have you received order #123?",
+        "notice@packageco.test",
+        "thread-packageco",
+        1_700_000_000_000,
+      ),
+    )
+
+  let out = run_search_events_tool(ctx, "{\"query\":\"PackageCo delivery\"}")
+
+  string.contains(out, "No exact phrase match") |> should.be_true
+  string.contains(out, "Event ID: pkg-1") |> should.be_true
+  string.contains(out, "notice@packageco.test") |> should.be_true
 
   process.send(db_subject, db.Shutdown)
 }

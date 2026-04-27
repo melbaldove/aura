@@ -1830,13 +1830,119 @@ fn execute_search_events(
 
   case db.search_events(ctx.db_subject, query, time_range, source, limit) {
     Ok([]) ->
-      case query {
-        "" -> TextResult("No events found.")
-        q -> TextResult("No events matching \"" <> q <> "\".")
+      case loose_search_events(ctx, query, time_range, source, limit) {
+        Error(msg) -> TextResult("search_events failed: " <> msg)
+        Ok([]) ->
+          case query {
+            "" -> TextResult("No events found.")
+            q -> TextResult("No events matching \"" <> q <> "\".")
+          }
+        Ok(events) -> TextResult(format_loose_events(query, events))
       }
     Ok(events) -> TextResult(format_events(query, events))
     Error(msg) -> TextResult("search_events failed: " <> msg)
   }
+}
+
+fn loose_search_events(
+  ctx: ToolContext,
+  query: String,
+  time_range: Option(#(Int, Int)),
+  source: Option(String),
+  limit: Int,
+) -> Result(List(event.AuraEvent), String) {
+  let tokens = loose_query_tokens(query)
+  case tokens {
+    [] -> Ok([])
+    [_] -> Ok([])
+    many -> search_loose_event_tokens(ctx, many, time_range, source, limit, [])
+  }
+}
+
+fn search_loose_event_tokens(
+  ctx: ToolContext,
+  tokens: List(String),
+  time_range: Option(#(Int, Int)),
+  source: Option(String),
+  limit: Int,
+  acc: List(event.AuraEvent),
+) -> Result(List(event.AuraEvent), String) {
+  case tokens {
+    [] -> Ok(list.reverse(acc) |> list.take(limit))
+    [token, ..rest] ->
+      case db.search_events(ctx.db_subject, token, time_range, source, limit) {
+        Error(msg) -> Error(msg)
+        Ok(matches) ->
+          search_loose_event_tokens(
+            ctx,
+            rest,
+            time_range,
+            source,
+            limit,
+            add_new_events(matches, acc),
+          )
+      }
+  }
+}
+
+fn add_new_events(
+  matches: List(event.AuraEvent),
+  acc: List(event.AuraEvent),
+) -> List(event.AuraEvent) {
+  list.fold(matches, acc, fn(current_acc, candidate) {
+    case list.any(current_acc, fn(existing) { existing.id == candidate.id }) {
+      True -> current_acc
+      False -> [candidate, ..current_acc]
+    }
+  })
+}
+
+fn loose_query_tokens(query: String) -> List(String) {
+  query
+  |> string.replace("\n", " ")
+  |> string.replace("\t", " ")
+  |> string.replace(".", " ")
+  |> string.replace(",", " ")
+  |> string.replace("!", " ")
+  |> string.replace("?", " ")
+  |> string.replace(":", " ")
+  |> string.replace(";", " ")
+  |> string.replace("(", " ")
+  |> string.replace(")", " ")
+  |> string.replace("[", " ")
+  |> string.replace("]", " ")
+  |> string.replace("/", " ")
+  |> string.replace("-", " ")
+  |> string.replace("_", " ")
+  |> string.replace("'", "")
+  |> string.split(" ")
+  |> list.filter(fn(token) {
+    let clean = string.trim(token)
+    clean != "" && !is_search_stopword(string.lowercase(clean))
+  })
+}
+
+fn is_search_stopword(token: String) -> Bool {
+  list.contains(
+    [
+      "a",
+      "an",
+      "and",
+      "about",
+      "for",
+      "from",
+      "in",
+      "me",
+      "my",
+      "of",
+      "on",
+      "or",
+      "the",
+      "to",
+      "with",
+    ],
+    token,
+  )
 }
 
 fn format_events(query: String, events: List(event.AuraEvent)) -> String {
@@ -1845,6 +1951,20 @@ fn format_events(query: String, events: List(event.AuraEvent)) -> String {
     "" -> "Found " <> int.to_string(count) <> " recent events:"
     q -> "Found " <> int.to_string(count) <> " events matching \"" <> q <> "\":"
   }
+  let body =
+    list.index_map(events, fn(e, i) { format_event(i + 1, e) })
+    |> string.join("\n\n")
+  header <> "\n\n" <> body
+}
+
+fn format_loose_events(query: String, events: List(event.AuraEvent)) -> String {
+  let count = list.length(events)
+  let header =
+    "No exact phrase match for \""
+    <> query
+    <> "\". Found "
+    <> int.to_string(count)
+    <> " loose keyword matches:"
   let body =
     list.index_map(events, fn(e, i) { format_event(i + 1, e) })
     |> string.join("\n\n")
@@ -2003,17 +2123,17 @@ fn execute_record_cognitive_feedback(
       case require_arg(args, "label") {
         Error(e) -> TextResult(e)
         Ok(label) -> {
-          case db.get_event(ctx.db_subject, event_id) {
+          case resolve_event_id(ctx, event_id) {
             Error(e) ->
               TextResult(
                 "Error: failed to load event for cognitive feedback: " <> e,
               )
             Ok(None) -> TextResult("Error: event not found: " <> event_id)
-            Ok(Some(_)) -> {
+            Ok(Some(resolved_event_id)) -> {
               case
                 cognitive_label.capture(
                   ctx.paths,
-                  event_id,
+                  resolved_event_id,
                   label,
                   get_arg(args, "expected_attention"),
                   get_arg(args, "note"),
@@ -2048,6 +2168,63 @@ fn execute_record_cognitive_feedback(
           }
         }
       }
+  }
+}
+
+fn resolve_event_id(
+  ctx: ToolContext,
+  raw_event_id: String,
+) -> Result(Option(String), String) {
+  try_event_id_candidates(ctx, event_id_candidates(raw_event_id))
+}
+
+fn try_event_id_candidates(
+  ctx: ToolContext,
+  candidates: List(String),
+) -> Result(Option(String), String) {
+  case candidates {
+    [] -> Ok(None)
+    [candidate, ..rest] ->
+      case db.get_event(ctx.db_subject, candidate) {
+        Error(e) -> Error(e)
+        Ok(Some(_)) -> Ok(Some(candidate))
+        Ok(None) -> try_event_id_candidates(ctx, rest)
+      }
+  }
+}
+
+fn event_id_candidates(raw_event_id: String) -> List(String) {
+  let trimmed = string.trim(raw_event_id)
+  let unquoted =
+    strip_wrapping(
+      strip_wrapping(strip_wrapping(trimmed, "`", "`"), "\"", "\""),
+      "'",
+      "'",
+    )
+  let angle_variant = case
+    string.starts_with(unquoted, "<") && string.ends_with(unquoted, ">")
+  {
+    True -> string.drop_end(string.drop_start(unquoted, 1), 1)
+    False -> "<" <> unquoted <> ">"
+  }
+
+  case angle_variant == unquoted {
+    True -> [unquoted]
+    False -> [unquoted, angle_variant]
+  }
+}
+
+fn strip_wrapping(value: String, prefix: String, suffix: String) -> String {
+  case
+    string.starts_with(value, prefix)
+    && string.ends_with(value, suffix)
+    && string.length(value) >= string.length(prefix) + string.length(suffix)
+  {
+    True ->
+      value
+      |> string.drop_start(string.length(prefix))
+      |> string.drop_end(string.length(suffix))
+    False -> value
   }
 }
 
