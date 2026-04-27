@@ -1373,8 +1373,18 @@ pub fn transition(
     // --- stream complete (terminal vs tool-call) -------------------
     StreamComplete(content, tool_calls_json, prompt_tokens), Some(turn) -> {
       case llm.parse_flat_tool_calls_json(tool_calls_json) {
-        Ok([]) -> finalize_turn(state, turn, content, prompt_tokens)
-        Error(_) -> finalize_turn(state, turn, content, prompt_tokens)
+        Ok([]) -> {
+          case should_repair_runtime_attention_claim(turn, content) {
+            True -> repair_runtime_attention_claim(state, turn, content)
+            False -> finalize_turn(state, turn, content, prompt_tokens)
+          }
+        }
+        Error(_) -> {
+          case should_repair_runtime_attention_claim(turn, content) {
+            True -> repair_runtime_attention_claim(state, turn, content)
+            False -> finalize_turn(state, turn, content, prompt_tokens)
+          }
+        }
         Ok([first_call, ..rest]) -> {
           let new_turn =
             TurnState(
@@ -2491,6 +2501,52 @@ fn guard_cognitive_feedback_failure(
           }
       }
   }
+}
+
+const runtime_attention_repair_prompt = "Your previous draft claimed that a future notification, digest, or surfacing preference had already changed, but this turn has not saved user memory. Do not answer the user yet. Continue the same turn with tools: resolve the relevant event, record event-level cognitive feedback, then save the reusable user preference before claiming future notification behavior changed. If no relevant event can be resolved, say exactly what is missing instead of claiming success."
+
+fn should_repair_runtime_attention_claim(
+  turn: TurnState,
+  content: String,
+) -> Bool {
+  turn.traces == []
+  && turn.iteration + 1 < max_tool_iterations
+  && !has_successful_user_memory_write(turn.new_messages)
+  && claims_runtime_attention_preference(content)
+}
+
+fn repair_runtime_attention_claim(
+  state: ChannelState,
+  turn: TurnState,
+  content: String,
+) -> #(ChannelState, List(Effect)) {
+  let repair_messages =
+    list.append(turn.new_messages, [
+      llm.SystemMessage(runtime_attention_repair_prompt),
+    ])
+  let next_llm_messages = list.append(state.conversation, repair_messages)
+  let repair_turn =
+    TurnState(
+      ..turn,
+      iteration: turn.iteration + 1,
+      accumulated_content: "",
+      accumulated_tool_calls: [],
+      pending_tool_results: dict.new(),
+      new_messages: repair_messages,
+      messages_at_llm_call: next_llm_messages,
+      worker_kind: StreamWorker,
+      stream_retry_count: 0,
+      stream_stats: StreamStats(
+        start_ms: 0,
+        reasoning_count: 0,
+        delta_count: 0,
+        last_heartbeat_ms: 0,
+      ),
+    )
+  #(ChannelState(..state, turn: Some(repair_turn)), [
+    SpawnStreamWorker(next_llm_messages),
+    LogStreamSummary(turn.stream_stats, "repair", string.length(content)),
+  ])
 }
 
 fn claims_runtime_attention_preference(content: String) -> Bool {
