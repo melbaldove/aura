@@ -39,6 +39,13 @@ preference to `USER.md` after recording the correction label. Routine feedback
 should not directly edit policy files; labels feed replay and improvement
 proposals, while user memory gives the immediate preference.
 
+The `memory` tool enforces this order for notification and digest corrections.
+If the model tries to save a user-level notification suppression preference
+before a recent cognitive feedback label exists, the tool returns a visible
+error directing the model to resolve the event with `search_events`, call
+`record_cognitive_feedback`, and only then save the reusable preference. This
+keeps "don't notify me about X" from silently bypassing replay evidence.
+
 The CLI `cognitive-label` remains as an operator escape hatch and test surface,
 not the primary user experience.
 
@@ -52,3 +59,8 @@ policy/concern patch proposals.
 The model now performs the semantic mapping from user phrasing to label. That
 is intentional under the Bitter Lesson principle, but it means ambiguous
 feedback must be clarified rather than deterministically guessed.
+
+Tool-boundary validation is still necessary. Prompt guidance alone is not a
+reliable invariant: when a natural correction looks like a preference, the model
+may choose memory first. The harness must reject that route until the auditable
+feedback event exists.

@@ -46,6 +46,8 @@ import simplifile
 // Types
 // ---------------------------------------------------------------------------
 
+const recent_cognitive_feedback_window_ms: Int = 600_000
+
 /// Result of executing a tool.
 pub type ToolResult {
   TextResult(String)
@@ -415,14 +417,27 @@ fn execute_tool_dispatch(
                 "set" -> {
                   case key {
                     "" -> TextResult("Error: 'key' is required for set action.")
-                    _ ->
-                      case structured_memory.set(path, key, content) {
-                        Ok(_) ->
-                          TextResult(
-                            "Saved [" <> key <> "] to " <> target <> ".",
-                          )
-                        Error(e) -> TextResult("Error: " <> e)
+                    _ -> {
+                      case
+                        notification_feedback_needs_label(
+                          ctx,
+                          target,
+                          key,
+                          content,
+                        )
+                      {
+                        True ->
+                          TextResult(notification_feedback_label_required_msg())
+                        False ->
+                          case structured_memory.set(path, key, content) {
+                            Ok(_) ->
+                              TextResult(
+                                "Saved [" <> key <> "] to " <> target <> ".",
+                              )
+                            Error(e) -> TextResult("Error: " <> e)
+                          }
                       }
+                    }
                   }
                 }
                 "remove" -> {
@@ -2022,6 +2037,75 @@ fn execute_record_cognitive_feedback(
   }
 }
 
+fn notification_feedback_needs_label(
+  ctx: ToolContext,
+  target: String,
+  key: String,
+  content: String,
+) -> Bool {
+  case target == "user"
+    && looks_like_notification_suppression(key <> "\n" <> content)
+  {
+    False -> False
+    True ->
+      case has_recent_cognitive_feedback_label(ctx.paths) {
+        True -> False
+        False -> True
+      }
+  }
+}
+
+fn looks_like_notification_suppression(text: String) -> Bool {
+  let lower = string.lowercase(text)
+  contains_any(lower, [
+    "notify",
+    "notification",
+    "alert",
+    "digest",
+    "surface",
+    "surfaced",
+    "interrupt",
+    "noisy",
+  ])
+  && contains_any(lower, [
+    "suppress",
+    "dont notify",
+    "don't notify",
+    "do not notify",
+    "never surfaced",
+    "never surface",
+    "not notify",
+    "silently recorded",
+    "too noisy",
+  ])
+}
+
+fn contains_any(text: String, needles: List(String)) -> Bool {
+  list.any(needles, fn(needle) { string.contains(text, needle) })
+}
+
+fn has_recent_cognitive_feedback_label(paths: xdg.Paths) -> Bool {
+  let cutoff = time.now_ms() - recent_cognitive_feedback_window_ms
+  case simplifile.read(xdg.labels_path(paths)) {
+    Error(_) -> False
+    Ok(raw) ->
+      raw
+      |> string.split("\n")
+      |> list.any(fn(line) { label_line_is_recent(line, cutoff) })
+  }
+}
+
+fn label_line_is_recent(line: String, cutoff: Int) -> Bool {
+  case json.parse(line, decode.at(["timestamp_ms"], decode.int)) {
+    Ok(timestamp_ms) -> timestamp_ms >= cutoff
+    Error(_) -> False
+  }
+}
+
+fn notification_feedback_label_required_msg() -> String {
+  "Error: this looks like user feedback about Aura notifications or digest delivery. First resolve the recent event with search_events, then call record_cognitive_feedback with the inferred label and expected attention. After that label is recorded, save the reusable user preference with memory if still needed. Do not ask the user for event ids, labels, record, or digest unless multiple plausible recent events remain."
+}
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -2311,7 +2395,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "memory",
-      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use 'state' for current domain status (active tickets, blockers, PRs). Use 'memory' for durable knowledge (decisions, patterns, conventions). Use 'user' for user profile (always global). State and memory are per-domain when in a domain channel.",
+      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use 'state' for current domain status (active tickets, blockers, PRs). Use 'memory' for durable knowledge (decisions, patterns, conventions). Use 'user' for user profile (always global). State and memory are per-domain when in a domain channel. If the user is correcting Aura notifications, digests, interruptions, or missed alerts, call record_cognitive_feedback first; memory is only for the reusable preference after feedback evidence is recorded.",
       parameters: [
         llm.ToolParam(
           name: "action",

@@ -1,4 +1,5 @@
 import aura/brain_tools
+import aura/cognitive_label
 import aura/db
 import aura/event
 import aura/llm
@@ -268,6 +269,75 @@ pub fn memory_tool_has_domain_param_test() {
     }
     _ -> should.fail()
   }
+}
+
+fn memory_ctx(base: String) -> brain_tools.ToolContext {
+  let stub = test_harness.standalone_tool_context()
+  brain_tools.ToolContext(
+    ..stub,
+    paths: xdg.resolve_with_home(base),
+    domain_name: "aura",
+  )
+}
+
+fn run_memory_tool(ctx: brain_tools.ToolContext, args_json: String) -> String {
+  let call = llm.ToolCall(id: "1", name: "memory", arguments: args_json)
+  let #(result, _) = brain_tools.execute_tool(ctx, call)
+  case result {
+    brain_tools.TextResult(s) -> s
+  }
+}
+
+pub fn memory_tool_rejects_notification_suppression_without_feedback_label_test() {
+  let base =
+    "/tmp/aura-memory-feedback-guard-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = memory_ctx(base)
+
+  let out =
+    run_memory_tool(
+      ctx,
+      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for Find My iPhone alerts. These should be recorded but never surfaced or digested.\"}",
+    )
+
+  out
+  |> string.contains("record_cognitive_feedback")
+  |> should.be_true
+  simplifile.is_file(xdg.user_path(ctx.paths)) |> should.equal(Ok(False))
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn memory_tool_allows_notification_suppression_after_feedback_label_test() {
+  let base =
+    "/tmp/aura-memory-feedback-guard-ok-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = memory_ctx(base)
+  let assert Ok(_) = simplifile.create_directory_all(ctx.paths.config)
+  let assert Ok(_) =
+    cognitive_label.capture(
+      ctx.paths,
+      "ev-find-my",
+      "false_interrupt",
+      "record",
+      "User said Find My iPhone alerts are noise.",
+    )
+
+  let out =
+    run_memory_tool(
+      ctx,
+      "{\"action\":\"set\",\"target\":\"user\",\"key\":\"email-suppressions\",\"content\":\"Suppress notifications for Find My iPhone alerts. These should be recorded but never surfaced or digested.\"}",
+    )
+
+  out |> should.equal("Saved [email-suppressions] to user.")
+  let content = simplifile.read(xdg.user_path(ctx.paths)) |> should.be_ok
+  content
+  |> string.contains("Find My iPhone alerts")
+  |> should.be_true
+
+  let _ = simplifile.delete_all([base])
+  Nil
 }
 
 fn track_ctx(base: String) -> brain_tools.ToolContext {
