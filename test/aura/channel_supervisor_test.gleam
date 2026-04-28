@@ -26,3 +26,12 @@ pub fn supervisor_returns_distinct_subjects_for_distinct_channels_test() {
     )
   should.not_equal(sub_a, sub_b)
 }
+
+pub fn supervisor_uses_platform_qualified_keys_test() {
+  let sup = channel_supervisor.start() |> should.be_ok
+  let deps = channel_actor.test_deps("shared", "fake-token")
+  let discord_sub = channel_supervisor.get_or_start(sup, "discord:shared", deps)
+  let blather_sub = channel_supervisor.get_or_start(sup, "blather:shared", deps)
+
+  should.not_equal(discord_sub, blather_sub)
+}

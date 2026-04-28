@@ -1,3 +1,4 @@
+import aura/blather/thread_channel
 import aura/blather/types
 import gleam/list
 import gleam/option
@@ -30,6 +31,24 @@ pub fn parse_message_created_event_test() {
       msg.is_bot |> should.equal(False)
       msg.channel_name |> should.equal(option.None)
       msg.attachments |> should.equal([])
+    }
+    _ -> should.fail()
+  }
+}
+
+pub fn parse_thread_reply_uses_synthetic_thread_channel_id_test() {
+  let frame =
+    "{\"id\":\"evt-thread\",\"type\":\"message.created\","
+    <> "\"data\":{\"id\":\"reply-9\",\"channelId\":\"ch-1\","
+    <> "\"threadId\":\"parent-7\",\"userId\":\"u-7\","
+    <> "\"content\":\"thread reply\",\"user\":{\"displayName\":\"Alice\","
+    <> "\"isAgent\":false}}}"
+  let event = types.parse_event(frame) |> should.be_ok
+  case event {
+    types.MessageCreated(msg) -> {
+      msg.message_id |> should.equal("reply-9")
+      msg.channel_id
+      |> should.equal(thread_channel.make("ch-1", "parent-7"))
     }
     _ -> should.fail()
   }
@@ -154,5 +173,3 @@ pub fn parse_message_created_with_attachments_test() {
 pub fn platform_name_is_blather_test() {
   types.platform_name |> should.equal("blather")
 }
-
-

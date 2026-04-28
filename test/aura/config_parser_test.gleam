@@ -51,9 +51,7 @@ pub fn parse_empty_mcp_returns_empty_servers_test() {
 }
 
 pub fn parse_single_stdio_server_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [mcp.servers.gmail-work]
 transport = \"stdio\"
 command = \"gmail-mcp\"
@@ -71,9 +69,7 @@ args = [\"--accept-insecure\"]
 }
 
 pub fn parse_multiple_servers_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [mcp.servers.gmail]
 transport = \"stdio\"
 command = \"gmail-mcp\"
@@ -95,9 +91,7 @@ command = \"linear-mcp\"
 
 pub fn parse_server_with_env_expansion_test() {
   set_env("TEST_GMAIL_TOKEN", "gmail-xyz")
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [mcp.servers.gmail]
 transport = \"stdio\"
 command = \"gmail-mcp\"
@@ -113,9 +107,7 @@ GMAIL_TOKEN = \"${TEST_GMAIL_TOKEN}\"
 }
 
 pub fn parse_server_without_transport_defaults_to_stdio_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [mcp.servers.gmail]
 command = \"gmail-mcp\"
 "
@@ -127,9 +119,7 @@ command = \"gmail-mcp\"
 }
 
 pub fn parse_server_with_unsupported_transport_returns_error_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [mcp.servers.gmail]
 transport = \"sse\"
 command = \"gmail-mcp\"
@@ -145,9 +135,7 @@ command = \"gmail-mcp\"
 }
 
 pub fn parse_server_missing_command_returns_error_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [mcp.servers.gmail]
 transport = \"stdio\"
 "
@@ -171,9 +159,7 @@ pub fn parse_empty_integrations_returns_empty_list_test() {
 pub fn parse_gmail_integration_test() {
   set_env("TEST_GMAIL_CID", "client-abc")
   set_env("TEST_GMAIL_SECRET", "secret-xyz")
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [[integrations]]
 type = \"gmail\"
 name = \"gmail-work\"
@@ -196,9 +182,7 @@ oauth_client_secret = \"${TEST_GMAIL_SECRET}\"
 }
 
 pub fn parse_multiple_gmail_integrations_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [[integrations]]
 type = \"gmail\"
 name = \"gmail-work\"
@@ -221,9 +205,7 @@ oauth_client_secret = \"secret\"
 }
 
 pub fn parse_unsupported_integration_type_returns_error_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [[integrations]]
 type = \"telegram\"
 name = \"tg\"
@@ -239,9 +221,7 @@ name = \"tg\"
 }
 
 pub fn parse_integration_missing_type_returns_error_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [[integrations]]
 name = \"foo\"
 "
@@ -255,9 +235,7 @@ name = \"foo\"
 }
 
 pub fn parse_gmail_missing_name_returns_error_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [[integrations]]
 type = \"gmail\"
 user_email = \"alice@example.com\"
@@ -280,9 +258,7 @@ pub fn parse_gmail_uses_oauth_gmail_section_as_fallback_test() {
   // behavior required the per-integration keys and left env-var
   // placeholders resolving to empty strings when the vars weren't set,
   // which caused Google to return 400 "Could not determine client ID".
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [oauth.gmail]
 client_id = \"top-level-cid\"
 client_secret = \"top-level-secret\"
@@ -301,9 +277,7 @@ token_path = \"/tmp/gmail-work.json\"
 }
 
 pub fn parse_gmail_per_integration_overrides_oauth_gmail_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [oauth.gmail]
 client_id = \"top-level-cid\"
 client_secret = \"top-level-secret\"
@@ -324,9 +298,7 @@ oauth_client_secret = \"override-secret\"
 }
 
 pub fn parse_gmail_missing_oauth_anywhere_returns_error_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [[integrations]]
 type = \"gmail\"
 name = \"gmail-work\"
@@ -350,9 +322,7 @@ pub fn parse_without_blather_section_returns_none_test() {
 }
 
 pub fn parse_with_blather_section_returns_some_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [blather]
 url = \"http://10.0.0.2:18100\"
 api_key = \"blather_abc123\"
@@ -369,10 +339,24 @@ api_key = \"blather_abc123\"
   }
 }
 
+pub fn parse_blather_section_expands_api_key_env_test() {
+  set_env("TEST_BLATHER_API_KEY", "blather_from_env")
+  let toml = base_global_toml() <> "
+[blather]
+url = \"http://10.0.0.2:18100/api\"
+api_key = \"${TEST_BLATHER_API_KEY}\"
+"
+  let result = config.parse_global(toml)
+  result |> should.be_ok
+  let cfg = result |> result.unwrap(config.default_global())
+  case cfg.blather {
+    option.Some(b) -> b.api_key |> should.equal("blather_from_env")
+    option.None -> should.fail()
+  }
+}
+
 pub fn parse_blather_section_missing_url_returns_error_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [blather]
 api_key = \"blather_abc123\"
 "
@@ -384,9 +368,7 @@ api_key = \"blather_abc123\"
 }
 
 pub fn parse_blather_section_empty_api_key_returns_error_test() {
-  let toml =
-    base_global_toml()
-    <> "
+  let toml = base_global_toml() <> "
 [blather]
 url = \"http://10.0.0.2:18100\"
 api_key = \"\"

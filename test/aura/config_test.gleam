@@ -1,4 +1,5 @@
 import aura/config
+import gleam/option
 import gleam/result
 import gleeunit/should
 
@@ -64,6 +65,28 @@ max_concurrent = 2
   ws.name |> should.equal("CM2")
   ws.tools |> should.equal(["jira", "google", "slack"])
   ws.acp_timeout |> should.equal(1800)
+}
+
+pub fn parse_domain_config_with_blather_channel_test() {
+  let toml =
+    "
+name = \"local-accounts\"
+description = \"Local accounting\"
+cwd = \".\"
+tools = [\"discord\"]
+
+[discord]
+channel = \"local-accounts\"
+
+[blather]
+channel = \"blather-local-accounts\"
+"
+
+  let result = config.parse_domain(toml)
+  result |> should.be_ok
+
+  let cfg = result |> result.unwrap(config.default_domain())
+  cfg.blather_channel |> should.equal(option.Some("blather-local-accounts"))
 }
 
 pub fn parse_global_config_with_vision_test() {

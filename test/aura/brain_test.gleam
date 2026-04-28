@@ -7,33 +7,54 @@ import gleeunit/should
 
 pub fn route_domain_channel_test() {
   let domains = [
-    brain.DomainInfo(name: "cm2", channel_id: "chan-cm2"),
-    brain.DomainInfo(name: "hy", channel_id: "chan-hy"),
+    brain.DomainInfo(name: "cm2", platform: "discord", channel_id: "chan-cm2"),
+    brain.DomainInfo(name: "hy", platform: "discord", channel_id: "chan-hy"),
   ]
-  brain.route_message("chan-cm2", domains)
+  brain.route_message("discord", "chan-cm2", domains)
   |> should.equal(brain.DirectRoute("cm2"))
 }
 
 pub fn route_domain_channel_second_test() {
   let domains = [
-    brain.DomainInfo(name: "cm2", channel_id: "chan-cm2"),
-    brain.DomainInfo(name: "hy", channel_id: "chan-hy"),
+    brain.DomainInfo(name: "cm2", platform: "discord", channel_id: "chan-cm2"),
+    brain.DomainInfo(name: "hy", platform: "discord", channel_id: "chan-hy"),
   ]
-  brain.route_message("chan-hy", domains)
+  brain.route_message("discord", "chan-hy", domains)
   |> should.equal(brain.DirectRoute("hy"))
 }
 
 pub fn route_unknown_channel_test() {
   let domains = [
-    brain.DomainInfo(name: "cm2", channel_id: "chan-cm2"),
+    brain.DomainInfo(name: "cm2", platform: "discord", channel_id: "chan-cm2"),
   ]
-  brain.route_message("chan-unknown", domains)
+  brain.route_message("discord", "chan-unknown", domains)
   |> should.equal(brain.NeedsClassification)
 }
 
 pub fn route_empty_domains_test() {
-  brain.route_message("chan-cm2", [])
+  brain.route_message("discord", "chan-cm2", [])
   |> should.equal(brain.NeedsClassification)
+}
+
+pub fn route_same_channel_id_is_scoped_by_platform_test() {
+  let domains = [
+    brain.DomainInfo(
+      name: "discord-cm2",
+      platform: "discord",
+      channel_id: "shared",
+    ),
+    brain.DomainInfo(
+      name: "blather-cm2",
+      platform: "blather",
+      channel_id: "shared",
+    ),
+  ]
+
+  brain.route_message("discord", "shared", domains)
+  |> should.equal(brain.DirectRoute("discord-cm2"))
+
+  brain.route_message("blather", "shared", domains)
+  |> should.equal(brain.DirectRoute("blather-cm2"))
 }
 
 pub fn build_system_prompt_test() {
@@ -57,7 +78,13 @@ pub fn build_system_prompt_test() {
 
 pub fn build_system_prompt_includes_soul_content_test() {
   let prompt =
-    system_prompt.build_system_prompt("Custom personality goes here.", [], [], "", "")
+    system_prompt.build_system_prompt(
+      "Custom personality goes here.",
+      [],
+      [],
+      "",
+      "",
+    )
   prompt |> string.contains("Custom personality goes here.") |> should.be_true
   prompt |> string.contains("No domains") |> should.be_true
 }

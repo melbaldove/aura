@@ -1,3 +1,4 @@
+import aura/blather/thread_channel
 import aura/clients/blather
 import aura/config
 import gleeunit/should
@@ -13,12 +14,12 @@ pub fn production_returns_transport_wired_to_config_test() {
     Error(_) -> Nil
     Ok(_) -> should.fail()
   }
+  t.get_channel_parent(thread_channel.make("ch", "msg"))
+  |> should.equal(Ok("ch"))
   case t.send_message_with_attachment("ch", "body", "/tmp/file") {
     Error(_) -> Nil
     Ok(_) -> should.fail()
   }
-  case t.create_thread_from_message("ch", "msg", "name") {
-    Error(_) -> Nil
-    Ok(_) -> should.fail()
-  }
+  t.create_thread_from_message("ch", "msg", "name")
+  |> should.equal(Ok(thread_channel.make("ch", "msg")))
 }

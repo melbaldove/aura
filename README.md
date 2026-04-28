@@ -91,6 +91,10 @@ token = "${AURA_DISCORD_TOKEN}"
 guild = "your-guild-id"
 default_channel = "aura"
 
+[blather]
+url = "http://10.0.0.2:18100/api"
+api_key = "${BLATHER_API_KEY}"
+
 [models]
 brain = "zai/glm-5.1"
 domain = "zai/glm-5.1"
@@ -122,6 +126,9 @@ tools = ["linear", "google"]
 
 [discord]
 channel = "my-project"
+
+[blather]
+channel = "blather-channel-id"
 ```
 
 ## Flares ([Agent Communication Protocol](https://agentcommunicationprotocol.dev))

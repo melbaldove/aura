@@ -12,6 +12,7 @@
 //// other events are captured as `Unknown(type)` so adding handlers
 //// later is non-breaking.
 
+import aura/blather/thread_channel
 import aura/message
 import gleam/dynamic/decode
 import gleam/json
@@ -60,6 +61,11 @@ fn event_decoder() -> decode.Decoder(GatewayEvent) {
 fn message_data_decoder() -> decode.Decoder(message.IncomingMessage) {
   use id <- decode.field("id", decode.string)
   use channel_id <- decode.field("channelId", decode.string)
+  use thread_id <- decode.optional_field(
+    "threadId",
+    None,
+    decode.optional(decode.string),
+  )
   use user_id <- decode.field("userId", decode.string)
   use content <- decode.optional_field("content", "", decode.string)
   use user <- decode.optional_field(
@@ -80,10 +86,14 @@ fn message_data_decoder() -> decode.Decoder(message.IncomingMessage) {
       }
     None -> #(user_id, False)
   }
+  let routed_channel_id = case thread_id {
+    Some(id) -> thread_channel.make(channel_id, id)
+    None -> channel_id
+  }
   decode.success(message.IncomingMessage(
     platform: platform_name,
     message_id: id,
-    channel_id: channel_id,
+    channel_id: routed_channel_id,
     channel_name: None,
     guild_id: "",
     author_id: user_id,
@@ -114,4 +124,3 @@ fn attachment_decoder() -> decode.Decoder(message.Attachment) {
     filename: filename,
   ))
 }
-

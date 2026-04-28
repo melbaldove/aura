@@ -12,6 +12,13 @@
 | `guild` | string | yes | Discord server (guild) ID. |
 | `default_channel` | string | yes | Default channel name for #aura. |
 
+### [blather] (optional)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | yes if section present | Blather API base URL. Include reverse-proxy prefixes, e.g. `http://10.0.0.2:18100/api`. |
+| `api_key` | string | yes if section present | Blather agent API key. Use `${BLATHER_API_KEY}` to read from env. |
+
 ### [models]
 
 | Field | Type | Required | Default | Description |
@@ -75,6 +82,12 @@
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `channel` | string | yes | Discord channel name for this domain. |
+
+### [blather] (optional)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `channel` | string | yes if section present | Blather channel ID for this domain. Messages from this channel use the same domain context as the Discord binding. |
 
 ### [model] (optional overrides)
 
@@ -153,6 +166,7 @@ Each schedule is a `[[schedule]]` entry:
 | Variable | Description |
 |----------|-------------|
 | `AURA_DISCORD_TOKEN` | Discord bot token. |
+| `BLATHER_API_KEY` | Blather agent API key. |
 | `ZAI_API_KEY` | Zhipu/Z.AI API key. |
 | `ANTHROPIC_API_KEY` | Anthropic API key (optional if using `CLAUDE_CODE_OAUTH_TOKEN`). |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code auth token for headless ACP sessions (from `claude setup-token`). |

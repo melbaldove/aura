@@ -1,8 +1,8 @@
 //// Dynamic per-channel actor supervisor.
 ////
-//// Owns a `Dict(channel_id, Subject(ChannelMessage))`. On `get_or_start`,
-//// returns the existing actor subject if one is alive for the channel, or
-//// spawns a new one and caches it.
+//// Owns a `Dict(channel_key, Subject(ChannelMessage))`. Callers pass a
+//// platform-qualified key (for example, `discord:123`) so two transports can
+//// reuse native channel IDs without sharing actor state.
 
 import aura/channel_actor
 import gleam/dict.{type Dict}
@@ -16,11 +16,11 @@ import gleam/result
 
 pub opaque type SupervisorMessage {
   GetOrStart(
-    channel_id: String,
+    channel_key: String,
     deps: channel_actor.Deps,
     reply: Subject(Subject(channel_actor.ChannelMessage)),
   )
-  ChildDown(channel_id: String)
+  ChildDown(channel_key: String)
 }
 
 type SupervisorState {
@@ -45,16 +45,16 @@ pub fn start() -> Result(Subject(SupervisorMessage), actor.StartError) {
   |> result.map(fn(started) { started.data })
 }
 
-/// Return the existing actor subject for `channel_id`, or start a new one
-/// using `deps` and cache it. Same channel_id always returns the same subject
-/// as long as the child is alive.
+/// Return the existing actor subject for `channel_key`, or start a new one
+/// using `deps` and cache it. Same key always returns the same subject while
+/// the child is alive.
 pub fn get_or_start(
   sup: Subject(SupervisorMessage),
-  channel_id: String,
+  channel_key: String,
   deps: channel_actor.Deps,
 ) -> Subject(channel_actor.ChannelMessage) {
   process.call(sup, 5000, fn(reply) {
-    GetOrStart(channel_id: channel_id, deps: deps, reply: reply)
+    GetOrStart(channel_key: channel_key, deps: deps, reply: reply)
   })
 }
 
@@ -67,8 +67,8 @@ fn handle_message(
   message: SupervisorMessage,
 ) -> actor.Next(SupervisorState, SupervisorMessage) {
   case message {
-    GetOrStart(channel_id:, deps:, reply:) -> {
-      case dict.get(state.children, channel_id) {
+    GetOrStart(channel_key:, deps:, reply:) -> {
+      case dict.get(state.children, channel_key) {
         Ok(existing) -> {
           process.send(reply, existing)
           actor.continue(state)
@@ -77,7 +77,7 @@ fn handle_message(
           case channel_actor.start(deps) {
             Ok(child_subject) -> {
               let children =
-                dict.insert(state.children, channel_id, child_subject)
+                dict.insert(state.children, channel_key, child_subject)
               process.send(reply, child_subject)
               actor.continue(SupervisorState(..state, children: children))
             }
@@ -94,11 +94,11 @@ fn handle_message(
       }
     }
 
-    ChildDown(channel_id:) -> {
+    ChildDown(channel_key:) -> {
       // Remove the entry so the next get_or_start spawns a fresh actor.
       // Process monitoring is wired in Task 4+; this arm is here for forward
       // compatibility.
-      let children = dict.delete(state.children, channel_id)
+      let children = dict.delete(state.children, channel_key)
       actor.continue(SupervisorState(..state, children: children))
     }
   }

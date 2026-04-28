@@ -49,9 +49,9 @@ import logging
 // Types
 // ---------------------------------------------------------------------------
 
-/// Maps a domain name to its Discord channel ID for routing.
+/// Maps a domain name to a platform channel ID for routing.
 pub type DomainInfo {
-  DomainInfo(name: String, channel_id: String)
+  DomainInfo(name: String, platform: String, channel_id: String)
 }
 
 /// Outcome of routing a Discord message. `DirectRoute` means the channel
@@ -70,7 +70,7 @@ pub type BrainMessage {
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
   PostWelcome(channel_id: String)
-  RegisterThread(thread_id: String, domain_name: String)
+  RegisterThread(platform: String, thread_id: String, domain_name: String)
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
   HandleInteraction(
     interaction_id: String,
@@ -143,15 +143,24 @@ pub type BrainState {
 // Pure functions (testable)
 // ---------------------------------------------------------------------------
 
-/// Route based on channel_id matching known domains
+/// Route based on platform + channel_id matching known domains.
 pub fn route_message(
+  platform: String,
   channel_id: String,
   domains: List(DomainInfo),
 ) -> RouteDecision {
-  case list.find(domains, fn(d) { d.channel_id == channel_id }) {
+  case
+    list.find(domains, fn(d) {
+      d.platform == platform && d.channel_id == channel_id
+    })
+  {
     Ok(d) -> DirectRoute(d.name)
     Error(_) -> NeedsClassification
   }
+}
+
+fn thread_key(platform: String, channel_id: String) -> String {
+  platform <> ":" <> channel_id
 }
 
 // ---------------------------------------------------------------------------
@@ -230,14 +239,21 @@ fn handle_message(
 ) -> actor.Next(BrainState, BrainMessage) {
   case message {
     HandleMessage(msg) -> {
-      let domain_name = case route_message(msg.channel_id, state.domains) {
+      let domain_name = case
+        route_message(msg.platform, msg.channel_id, state.domains)
+      {
         DirectRoute(name) -> {
           logging.log(logging.Info, "[brain] Route: " <> name)
           Some(name)
         }
         NeedsClassification -> {
-          // Check cache first, then Discord API for parent channel
-          case dict.get(state.thread_domains, msg.channel_id) {
+          // Check cache first, then ask the platform transport for parent channel.
+          case
+            dict.get(
+              state.thread_domains,
+              thread_key(msg.platform, msg.channel_id),
+            )
+          {
             Ok(name) -> {
               logging.log(
                 logging.Info,
@@ -246,15 +262,18 @@ fn handle_message(
               Some(name)
             }
             Error(_) -> {
-              // Look up parent channel from Discord — is this a thread?
-              case state.discord.get_channel_parent(msg.channel_id) {
+              let msg_transport =
+                dict.get(state.transports, msg.platform)
+                |> result.unwrap(state.discord)
+              // Look up parent channel from the platform — is this a thread?
+              case msg_transport.get_channel_parent(msg.channel_id) {
                 Ok("") -> {
                   logging.log(logging.Info, "[brain] Route: #aura")
                   None
                 }
                 Ok(parent_id) -> {
                   // Check if parent is a domain channel
-                  case route_message(parent_id, state.domains) {
+                  case route_message(msg.platform, parent_id, state.domains) {
                     DirectRoute(name) -> {
                       logging.log(
                         logging.Info,
@@ -266,6 +285,7 @@ fn handle_message(
                           process.send(
                             subj,
                             RegisterThread(
+                              platform: msg.platform,
                               thread_id: msg.channel_id,
                               domain_name: name,
                             ),
@@ -291,15 +311,20 @@ fn handle_message(
       }
       // Thread creation for top-level domain channels
       let is_top_level_domain =
-        list.any(state.domains, fn(d) { d.channel_id == msg.channel_id })
+        list.any(state.domains, fn(d) {
+          d.platform == msg.platform && d.channel_id == msg.channel_id
+        })
       let #(routed_channel_id, new_state) = case
         is_top_level_domain,
         domain_name
       {
         True, Some(name) -> {
           let thread_name = string.slice(msg.content, 0, 50)
+          let msg_transport =
+            dict.get(state.transports, msg.platform)
+            |> result.unwrap(state.discord)
           case
-            state.discord.create_thread_from_message(
+            msg_transport.create_thread_from_message(
               msg.channel_id,
               msg.message_id,
               thread_name,
@@ -315,7 +340,7 @@ fn handle_message(
                   ..state,
                   thread_domains: dict.insert(
                     state.thread_domains,
-                    thread_id,
+                    thread_key(msg.platform, thread_id),
                     name,
                   ),
                 )
@@ -347,7 +372,7 @@ fn handle_message(
       let subject =
         channel_supervisor.get_or_start(
           new_state.channel_supervisor,
-          routed_channel_id,
+          thread_key(msg.platform, routed_channel_id),
           deps,
         )
       process.send(subject, channel_actor.HandleIncoming(routed_msg))
@@ -425,9 +450,13 @@ fn handle_message(
       }
     }
     AcpEvent(event) -> handle_acp_event(state, event)
-    RegisterThread(thread_id:, domain_name:) -> {
+    RegisterThread(platform:, thread_id:, domain_name:) -> {
       let new_threads =
-        dict.insert(state.thread_domains, thread_id, domain_name)
+        dict.insert(
+          state.thread_domains,
+          thread_key(platform, thread_id),
+          domain_name,
+        )
       actor.continue(BrainState(..state, thread_domains: new_threads))
     }
     SetScheduler(subject) -> {
@@ -455,11 +484,17 @@ fn handle_message(
       // Parse three-part custom_id: "{action}:{channel_id}:{approval_id}"
       case string.split(custom_id, ":") {
         [action, ch, approval_id] -> {
-          let domain_name = case dict.get(state.thread_domains, ch) {
+          let domain_name = case
+            dict.get(
+              state.thread_domains,
+              thread_key(discord.platform_name, ch),
+            )
+          {
             Ok(d) -> Some(d)
             Error(_) -> None
           }
           // Discord interactions are platform-native; no cross-platform channel here.
+          let actor_key = thread_key(discord.platform_name, ch)
           let deps =
             build_channel_actor_deps(
               state,
@@ -468,7 +503,11 @@ fn handle_message(
               domain_name,
             )
           let subject =
-            channel_supervisor.get_or_start(state.channel_supervisor, ch, deps)
+            channel_supervisor.get_or_start(
+              state.channel_supervisor,
+              actor_key,
+              deps,
+            )
           process.send(
             subject,
             channel_actor.HandleInteractionResolve(action, approval_id),
@@ -859,7 +898,7 @@ fn build_channel_actor_deps(
     None -> #("claude-code", "", True, "", "")
   }
 
-  let domain_names = list.map(state.domains, fn(d) { d.name })
+  let domain_names = list.map(state.domain_configs, fn(dc) { dc.0 })
   let transport =
     dict.get(state.transports, platform)
     |> result.unwrap(state.discord)
@@ -906,9 +945,17 @@ fn build_channel_actor_deps(
 }
 
 fn resolve_domain_channel(state: BrainState, domain: String) -> String {
-  case list.find(state.domains, fn(d) { d.name == domain }) {
+  case
+    list.find(state.domains, fn(d) {
+      d.name == domain && d.platform == discord.platform_name
+    })
+  {
     Ok(d) -> d.channel_id
-    Error(_) -> state.aura_channel_id
+    Error(_) ->
+      case list.find(state.domains, fn(d) { d.name == domain }) {
+        Ok(d) -> d.channel_id
+        Error(_) -> state.aura_channel_id
+      }
   }
 }
 
@@ -956,7 +1003,7 @@ fn route_handback_to_channel_actor(
       let subject =
         channel_supervisor.get_or_start(
           state.channel_supervisor,
-          flare.thread_id,
+          thread_key(discord.platform_name, flare.thread_id),
           deps,
         )
       process.send(

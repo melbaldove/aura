@@ -16,10 +16,13 @@ import gleam/http/request
 import gleam/httpc
 import gleam/int
 import gleam/json
+import gleam/option
 import gleam/result
 import gleam/string
 import gleam/uri
 import logging
+
+import aura/blather/thread_channel
 
 // ---------------------------------------------------------------------------
 // Pure request builders (testable)
@@ -31,9 +34,20 @@ pub fn build_send_request(
   channel_id: String,
   content: String,
 ) -> Result(request.Request(String), String) {
-  let url = base_url <> "/channels/" <> channel_id <> "/messages"
+  let url =
+    base_url
+    <> "/channels/"
+    <> thread_channel.api_channel_id(channel_id)
+    <> "/messages"
+  let fields = case thread_channel.thread_id(channel_id) {
+    option.Some(thread_id) -> [
+      #("content", json.string(content)),
+      #("threadId", json.string(thread_id)),
+    ]
+    option.None -> [#("content", json.string(content))]
+  }
   let body =
-    json.object([#("content", json.string(content))])
+    json.object(fields)
     |> json.to_string()
   use req <- result.try(authed_request(url, http.Post, api_key))
   Ok(
@@ -51,7 +65,11 @@ pub fn build_edit_request(
   content: String,
 ) -> Result(request.Request(String), String) {
   let url =
-    base_url <> "/channels/" <> channel_id <> "/messages/" <> message_id
+    base_url
+    <> "/channels/"
+    <> thread_channel.api_channel_id(channel_id)
+    <> "/messages/"
+    <> message_id
   let body =
     json.object([#("content", json.string(content))])
     |> json.to_string()
@@ -68,7 +86,11 @@ pub fn build_typing_request(
   api_key: String,
   channel_id: String,
 ) -> Result(request.Request(String), String) {
-  let url = base_url <> "/channels/" <> channel_id <> "/typing"
+  let url =
+    base_url
+    <> "/channels/"
+    <> thread_channel.api_channel_id(channel_id)
+    <> "/typing"
   authed_request(url, http.Post, api_key)
 }
 

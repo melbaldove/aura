@@ -1,4 +1,5 @@
 import aura/blather/rest
+import aura/blather/thread_channel
 import gleam/http
 import gleam/http/request
 import gleam/list
@@ -37,6 +38,25 @@ pub fn build_send_request_escapes_content_json_test() {
   string.contains(req.body, "\\\\") |> should.be_true
 }
 
+pub fn build_send_request_for_thread_channel_sets_thread_id_test() {
+  let req =
+    rest.build_send_request(
+      "http://10.0.0.2:18100/api",
+      "blather_abc",
+      thread_channel.make("ch-42", "msg-parent"),
+      "thread reply",
+    )
+    |> should.be_ok
+
+  req.method |> should.equal(http.Post)
+  req.path
+  |> should.equal("/api/channels/ch-42/messages")
+  string.contains(req.body, "\"content\"") |> should.be_true
+  string.contains(req.body, "thread reply") |> should.be_true
+  string.contains(req.body, "\"threadId\"") |> should.be_true
+  string.contains(req.body, "msg-parent") |> should.be_true
+}
+
 pub fn build_edit_request_shape_test() {
   let req =
     rest.build_edit_request("http://host", "k", "ch-1", "msg-7", "new text")
@@ -45,6 +65,22 @@ pub fn build_edit_request_shape_test() {
   req.method |> should.equal(http.Patch)
   req.path |> should.equal("/channels/ch-1/messages/msg-7")
   header_value(req, "x-api-key") |> should.equal("k")
+  string.contains(req.body, "new text") |> should.be_true
+}
+
+pub fn build_edit_request_for_thread_channel_uses_parent_path_test() {
+  let req =
+    rest.build_edit_request(
+      "http://host",
+      "k",
+      thread_channel.make("ch-1", "parent-msg"),
+      "reply-msg",
+      "new text",
+    )
+    |> should.be_ok
+
+  req.method |> should.equal(http.Patch)
+  req.path |> should.equal("/channels/ch-1/messages/reply-msg")
   string.contains(req.body, "new text") |> should.be_true
 }
 
@@ -57,6 +93,19 @@ pub fn build_typing_request_shape_test() {
   req.path |> should.equal("/channels/ch-42/typing")
   header_value(req, "x-api-key") |> should.equal("k")
   req.body |> should.equal("")
+}
+
+pub fn build_typing_request_for_thread_channel_uses_parent_path_test() {
+  let req =
+    rest.build_typing_request(
+      "http://host",
+      "k",
+      thread_channel.make("ch-42", "msg-parent"),
+    )
+    |> should.be_ok
+
+  req.method |> should.equal(http.Post)
+  req.path |> should.equal("/channels/ch-42/typing")
 }
 
 pub fn build_send_request_malformed_url_returns_error_test() {

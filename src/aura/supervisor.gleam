@@ -132,18 +132,31 @@ pub fn start(
               case config.parse_domain(toml_content) {
                 Ok(cfg) -> {
                   // Resolve channel name → ID. If the config value is already numeric, use it directly.
-                  let channel_id = case
+                  let discord_channel_id = case
                     list.find(channel_map, fn(c) { c.0 == cfg.discord_channel })
                   {
                     Ok(#(_, id)) -> id
                     Error(_) -> cfg.discord_channel
                   }
-                  Ok(
-                    #(brain.DomainInfo(name: name, channel_id: channel_id), #(
-                      name,
-                      cfg,
-                    )),
-                  )
+                  let domain_channels =
+                    [
+                      brain.DomainInfo(
+                        name: name,
+                        platform: discord.platform_name,
+                        channel_id: discord_channel_id,
+                      ),
+                    ]
+                    |> list.append(case cfg.blather_channel {
+                      option.Some(channel_id) -> [
+                        brain.DomainInfo(
+                          name: name,
+                          platform: blather_types.platform_name,
+                          channel_id: channel_id,
+                        ),
+                      ]
+                      option.None -> []
+                    })
+                  Ok(#(domain_channels, #(name, cfg)))
                 }
                 Error(e) -> {
                   logging.log(
@@ -163,7 +176,7 @@ pub fn start(
             }
           }
         })
-      let domains = list.map(results, fn(r) { r.0 })
+      let domains = list.flat_map(results, fn(r) { r.0 })
       let configs = list.map(results, fn(r) { r.1 })
       #(domains, configs)
     }
@@ -172,7 +185,7 @@ pub fn start(
   logging.log(
     logging.Info,
     "[supervisor] Domains: "
-      <> string.join(list.map(brain_domains, fn(d) { d.name }), ", "),
+      <> string.join(list.map(domain_configs, fn(dc) { dc.0 }), ", "),
   )
 
   // 5. Load validation rules
@@ -309,7 +322,7 @@ pub fn start(
           model_spec: global_config.models.dream,
           paths: paths,
           db_subject: db_subject,
-          domains: list.map(brain_domains, fn(d) { d.name }),
+          domains: list.map(domain_configs, fn(dc) { dc.0 }),
           budget_percent: global_config.dreaming_budget_percent,
           brain_context: global_config.brain_context,
         )
@@ -329,7 +342,7 @@ pub fn start(
     ctl.start(ctl.CtlContext(
       paths: paths,
       db_subject: db_subject,
-      domains: list.map(brain_domains, fn(d) { d.name }),
+      domains: list.map(domain_configs, fn(dc) { dc.0 }),
       dream_model: global_config.models.dream,
       dream_budget_percent: global_config.dreaming_budget_percent,
       brain_context: global_config.brain_context,

@@ -15,7 +15,7 @@ const meta_md = "# META.md - What Goes Where
 - SOUL.md: Core identity, personality, behavioral boundaries
 - USER.md: User profile, preferences, timezone
 - config.toml: Global config (models, discord, ACP limits)
-- domains/<name>/config.toml: Per-domain config (cwd, tools, discord channel)
+- domains/<name>/config.toml: Per-domain config (cwd, tools, platform channels)
 - domains/<name>/AGENTS.md: Domain instructions and expertise
 
 ## Data (~/.local/share/aura/)

@@ -15,6 +15,10 @@ token = "${AURA_DISCORD_TOKEN}"    # Discord bot token
 guild = "916608356586778655"       # Discord server ID
 default_channel = "aura"          # Fallback channel name
 
+[blather]
+url = "http://10.0.0.2:18100/api"  # Blather API base URL
+api_key = "${BLATHER_API_KEY}"     # Blather agent key
+
 [models]
 brain = "zai/glm\-5.1"             # Orchestrator model
 acp = "claude/opus"               # Flare coding model
@@ -66,7 +70,12 @@ Location: ~/.config/aura/domains/<name>/config.toml
 name = "cm2"
 description = "CM2 project"
 cwd = "/path/to/repos"
+
+[discord]
 channel = "1234567890"
+
+[blather]
+channel = "blather\-channel\-id"
 
 [acp]
 provider = "claude\-code"    # "claude\-code" | "generic"
@@ -76,6 +85,9 @@ worktree = true             # Use git worktrees for flares
 .TP
 .B AURA_DISCORD_TOKEN
 Discord bot token.
+.TP
+.B BLATHER_API_KEY
+Blather agent API key.
 .TP
 .B ZAI_API_KEY
 z.ai/GLM API key.

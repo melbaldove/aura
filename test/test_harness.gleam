@@ -278,7 +278,12 @@ pub fn fresh_system_with_domain(
       brain_context: 128_000,
     )
 
-  let domain_info = brain.DomainInfo(name: domain_name, channel_id: channel_id)
+  let domain_info =
+    brain.DomainInfo(
+      name: domain_name,
+      platform: discord.platform_name,
+      channel_id: channel_id,
+    )
 
   // Seed the same default jira skill as fresh_system/0 so domain-scoped
   // tests can also exercise run_skill without extra setup steps.

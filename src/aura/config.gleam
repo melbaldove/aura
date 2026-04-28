@@ -16,8 +16,8 @@ pub type DiscordConfig {
   DiscordConfig(token: String, guild: String, default_channel: String)
 }
 
-/// Blather connection settings. `url` is the base HTTP URL of the
-/// Blather server (e.g. `http://10.0.0.2:18100`); `api_key` is a
+/// Blather connection settings. `url` is the API base HTTP URL of the
+/// Blather server (e.g. `http://10.0.0.2:18100/api`); `api_key` is a
 /// `blather_<hex>` agent key. Both required if the section is present.
 pub type BlatherConfig {
   BlatherConfig(url: String, api_key: String)
@@ -128,6 +128,7 @@ pub type DomainConfig {
     cwd: String,
     tools: List(String),
     discord_channel: String,
+    blather_channel: Option(String),
     model_domain: String,
     acp_timeout: Int,
     acp_max_concurrent: Int,
@@ -187,6 +188,7 @@ pub fn default_domain() -> DomainConfig {
     cwd: "",
     tools: [],
     discord_channel: "",
+    blather_channel: None,
     model_domain: "",
     acp_timeout: 0,
     acp_max_concurrent: 0,
@@ -402,10 +404,11 @@ fn parse_blather(
         tom.get_string(doc, ["blather", "api_key"])
         |> result.map_error(fn(_) { "Missing blather.api_key" }),
       )
-      case url, api_key {
+      use expanded_api_key <- result.try(expand_env(api_key, "blather.api_key"))
+      case url, expanded_api_key {
         "", _ -> Error("blather.url must not be empty")
         _, "" -> Error("blather.api_key must not be empty")
-        _, _ -> Ok(Some(BlatherConfig(url: url, api_key: api_key)))
+        _, _ -> Ok(Some(BlatherConfig(url: url, api_key: expanded_api_key)))
       }
     }
   }
@@ -520,10 +523,7 @@ fn parse_mcp_env(
         let #(key, value) = entry
         case value {
           tom.String(s) -> {
-            use expanded <- result.try(expand_env(
-              s,
-              prefix <> " env." <> key,
-            ))
+            use expanded <- result.try(expand_env(s, prefix <> " env." <> key))
             Ok(#(key, expanded))
           }
           _ -> Error(prefix <> " env." <> key <> " must be a string")
@@ -583,8 +583,7 @@ fn parse_integrations(
       use integrations <- result.try(
         list.try_map(entries, fn(entry) {
           case entry {
-            tom.Table(fields) ->
-              parse_integration(fields, gmail_oauth_defaults)
+            tom.Table(fields) -> parse_integration(fields, gmail_oauth_defaults)
             tom.InlineTable(fields) ->
               parse_integration(fields, gmail_oauth_defaults)
             _ -> Error("[[integrations]] entry must be a table")
@@ -745,6 +744,7 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     tom.get_string(doc, ["discord", "channel"])
     |> result.map_error(fn(_) { "Missing discord.channel" }),
   )
+  use blather_channel <- result.try(parse_domain_blather(doc))
 
   let model_domain =
     tom.get_string(doc, ["model", "domain"])
@@ -793,6 +793,7 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     cwd: cwd,
     tools: extract_toml_strings(tools_raw),
     discord_channel: discord_channel,
+    blather_channel: blather_channel,
     model_domain: model_domain,
     acp_timeout: acp_timeout,
     acp_max_concurrent: acp_max_concurrent,
@@ -804,6 +805,24 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     acp_server_url: acp_server_url,
     acp_agent_name: acp_agent_name,
   ))
+}
+
+fn parse_domain_blather(
+  doc: dict.Dict(String, tom.Toml),
+) -> Result(Option(String), String) {
+  case tom.get_table(doc, ["blather"]) {
+    Error(_) -> Ok(None)
+    Ok(_) -> {
+      use channel <- result.try(
+        tom.get_string(doc, ["blather", "channel"])
+        |> result.map_error(fn(_) { "Missing blather.channel" }),
+      )
+      case channel {
+        "" -> Error("blather.channel must not be empty")
+        _ -> Ok(Some(channel))
+      }
+    }
+  }
 }
 
 pub fn format_parse_error(e: tom.ParseError) -> String {
