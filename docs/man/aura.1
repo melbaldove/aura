@@ -123,6 +123,9 @@ No-event attention writes must be explicit standing preferences; otherwise the
 tool rejects the write and asks Aura to resolve an event id first.
 Standing attention writes that overlap recent external events are also rejected
 until the write includes event evidence.
+If search_events has already returned event ids in the same turn, later
+standing attention writes are rejected; Aura must use a returned event id with
+expected_attention or ask a clarifying question.
 .TP
 .B gleam run \-\- cognitive\-improve propose
 Run labeled cognitive events through the current worker/model/policy path and

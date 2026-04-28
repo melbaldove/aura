@@ -1508,9 +1508,9 @@ pub fn transition(
                     0,
                   )
                 False -> {
-                  let new_messages = case needs_attention_memory_followup(
-                    new_messages,
-                  ) {
+                  let new_messages = case
+                    needs_attention_memory_followup(new_messages)
+                  {
                     True ->
                       list.append(new_messages, [
                         llm.SystemMessage(attention_memory_followup_prompt),
@@ -1850,6 +1850,8 @@ const max_tool_iterations: Int = 80
 
 const record_cognitive_feedback_is_internal_error = "Error: record_cognitive_feedback is internal. Use memory(target='attention') for user feedback about Aura notifications, digests, surfacing, asks, or missed alerts."
 
+const standing_attention_after_event_search_error = "Error: You already found plausible recent events with search_events in this turn. Use one returned Event ID with memory(target='attention', event_id=..., expected_attention=...), or ask one clarifying question if multiple matches remain. Do not use scope='standing' after search_events found event matches."
+
 /// True when every accumulated tool call has a result recorded in `pending`.
 fn all_tool_calls_resolved(
   calls: List(llm.ToolCall),
@@ -1879,12 +1881,32 @@ fn blocked_tool_call_result(
   turn: TurnState,
   call: llm.ToolCall,
 ) -> Option(String) {
-  let _ = turn
   case call.name {
     "record_cognitive_feedback" ->
       Some(record_cognitive_feedback_is_internal_error)
+    "memory" -> {
+      case
+        is_standing_attention_memory_set_call(call)
+        && has_prior_search_events_match(turn)
+      {
+        True -> Some(standing_attention_after_event_search_error)
+        False -> None
+      }
+    }
     _ -> None
   }
+}
+
+fn has_prior_search_events_match(turn: TurnState) -> Bool {
+  list.any(turn.traces, fn(trace) {
+    trace.name == "search_events"
+    && !trace.is_error
+    && search_events_result_has_event_id(trace.result)
+  })
+}
+
+fn search_events_result_has_event_id(result: String) -> Bool {
+  string.contains(result, "Event ID:")
 }
 
 fn has_recorded_cognitive_feedback_trace(
@@ -2597,7 +2619,9 @@ fn has_successful_attention_memory_write(messages: List(llm.Message)) -> Bool {
   || has_successful_event_grounded_attention_memory_write(messages)
 }
 
-fn has_successful_plain_attention_memory_write(messages: List(llm.Message)) -> Bool {
+fn has_successful_plain_attention_memory_write(
+  messages: List(llm.Message),
+) -> Bool {
   has_successful_attention_memory_write_matching(messages, fn(result) {
     !string.contains(result, "recorded cognitive feedback")
   })
@@ -2649,6 +2673,29 @@ fn is_attention_memory_set_call(call: llm.ToolCall) -> Bool {
       }
       case json.parse(call.arguments, decoder) {
         Ok(#("set", "attention")) -> True
+        _ -> False
+      }
+    }
+    _ -> False
+  }
+}
+
+fn is_standing_attention_memory_set_call(call: llm.ToolCall) -> Bool {
+  case call.name {
+    "memory" -> {
+      let decoder = {
+        use action <- decode.field("action", decode.string)
+        use target <- decode.field("target", decode.string)
+        use scope <- decode.optional_field("scope", "", decode.string)
+        use event_id <- decode.optional_field("event_id", "", decode.string)
+        decode.success(#(action, target, scope, event_id))
+      }
+      case json.parse(call.arguments, decoder) {
+        Ok(#(action, target, scope, event_id)) ->
+          string.lowercase(string.trim(action)) == "set"
+          && string.lowercase(string.trim(target)) == "attention"
+          && string.lowercase(string.trim(scope)) == "standing"
+          && string.trim(event_id) == ""
         _ -> False
       }
     }

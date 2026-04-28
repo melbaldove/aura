@@ -621,6 +621,63 @@ pub fn event_grounded_attention_memory_can_save_test() {
   |> should.be_true
 }
 
+pub fn standing_attention_memory_blocked_after_event_search_match_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let search_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"search_events\",\"arguments\":\"{\\\"query\\\":\\\"routine delivery\\\",\\\"limit\\\":\\\"5\\\"}\"}]"
+  let standing_memory_calls_json =
+    "[{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\",\\\"scope\\\":\\\"standing\\\"}\"}]"
+
+  let #(after_search_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", search_calls_json, 100),
+    )
+  let #(after_search_result, _) =
+    channel_actor.transition(
+      after_search_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Found 1 event:\n\n1. Event ID: <delivery-event-1>\n   [gmail] Routine delivery alert",
+        False,
+      ),
+    )
+  let #(after_memory_request, effects) =
+    channel_actor.transition(
+      after_search_result,
+      channel_actor.StreamComplete("", standing_memory_calls_json, 100),
+    )
+
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnToolWorker(call) -> call.name == "memory"
+      _ -> False
+    }
+  })
+  |> should.be_false
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+
+  let turn = case after_memory_request.turn {
+    option.Some(turn) -> turn
+    option.None ->
+      panic as "expected tool loop to continue after blocked memory"
+  }
+  let blocked_trace =
+    list.find(turn.traces, fn(trace) { trace.name == "memory" })
+    |> should.be_ok
+  blocked_trace.is_error |> should.be_true
+  blocked_trace.result
+  |> string.contains("You already found plausible recent events")
+  |> should.be_true
+}
+
 pub fn event_grounded_feedback_memory_success_finalizes_without_extra_stream_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)
