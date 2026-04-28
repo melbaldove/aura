@@ -16,6 +16,7 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Every 
 - **Concern tracking** — Aura can internally track durable objects of care, work, watch, or risk from natural conversation and ambient events using ordinary markdown state files.
 - **Skills** — language-agnostic CLI tools. Drop a script in a directory, it becomes a capability the LLM can call.
 - **Self-diagnosis** — ships with man pages plus live cognitive smoke/eval/replay, natural correction capture, replay-aware improvement proposals, delivery probe, digest flush, and delivery dead-letter retry commands. The brain reads them via the shell tool when it needs to understand its own behavior.
+- **Attention feedback** — ordinary feedback about recent Aura notifications is grounded in the messages Aura actually sent, then saved through attention memory with replay evidence when a concrete event is resolved.
 - **Shell approvals** — dangerous shell commands require Discord button approval; unresolved approvals are invalidated visibly after actor restart.
 - **Pluggable gateways and ACP transports** — Discord first; multi-platform conversation schema from day one.
 

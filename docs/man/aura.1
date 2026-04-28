@@ -116,6 +116,12 @@ In normal Discord use, the user should not need this command. The brain can
 record the same labels as an internal side effect of
 memory target='attention' when ordinary feedback clearly references a specific
 event id.
+For feedback about recent Aura notifications, the brain first sees a bounded
+Recent Aura Attention Outputs prompt section built from delivered cognitive
+delivery ledger entries and the exact assistant messages persisted in that
+channel's conversation history. It should use search_events only when that
+recent output context does not identify the corrected event or remains
+ambiguous.
 If Aura saves attention memory without event evidence, it must continue the
 tool loop before claiming completion, because no replay label has been recorded
 yet.

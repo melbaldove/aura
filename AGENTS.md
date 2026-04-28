@@ -137,6 +137,7 @@ src/aura/
   db_migration.gleam    One-time JSONL → SQLite migration
   cognitive_worker.gleam Async model-backed cognitive decisions for events
   cognitive_delivery.gleam Delivery ledger, digest queue, immediate surfacing, conversation history writes
+  cognitive_episode_context.gleam Prompt context from recent user-facing cognitive attention outputs
   cognitive_replay.gleam Label-backed replay through current model/policy
   cognitive_patch.gleam Label-backed markdown proposal reports
   cognitive_improve.gleam Replay-aware improvement proposal reports
@@ -412,7 +413,7 @@ When making a change that involves choosing between approaches (e.g., "should we
 
 ADRs are immutable once accepted. If a decision is reversed, write a new ADR that supersedes the old one.
 
-Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression (superseded), ACP manager actor, keyed memory entries, active memory review, tiered runtime compression, ACP protocol for agent dispatch, memory dreaming, text-first concern tracking, natural cognitive feedback capture, attention memory feedback, and replay-aware cognitive improvement proposals.
+Current ADRs cover: BEAM over Node.js, raw WebSocket FFI, SQLite over JSONL, multi-platform schema, DB actor pattern, streaming with tool calls, Hermes learning loop, token estimation, no Honcho, context compression (superseded), ACP manager actor, keyed memory entries, active memory review, tiered runtime compression, ACP protocol for agent dispatch, memory dreaming, text-first concern tracking, natural cognitive feedback capture, attention memory feedback, replay-aware cognitive improvement proposals, and recent attention output context.
 
 ## Known limitations
 

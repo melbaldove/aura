@@ -74,6 +74,10 @@ decisions flow through `cognitive_delivery`: `record` stays ledger-only,
 `digest` queues until a digest window, and `surface_now` / `ask_now` send to
 Discord immediately. Any successful user-facing cognitive delivery also appends
 the exact sent message to the matching Discord conversation history.
+On later turns in that channel, the brain renders recent successful
+user-facing attention outputs from the delivery ledger plus conversation
+history into prompt context so natural feedback can refer to what Aura actually
+showed before falling back to raw event search.
 Content-bearing integrations must persist decision-sufficient payloads. For
 Gmail, this means the `AuraEvent.data_json` includes envelope fields plus
 bounded `body_text`; subject-only email events are not sufficient for cognitive

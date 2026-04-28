@@ -8,6 +8,7 @@ import aura/clients/browser_runner
 import aura/clients/discord_client
 import aura/clients/llm_client
 import aura/clients/skill_runner
+import aura/cognitive_episode_context
 import aura/compressor
 import aura/conversation
 import aura/db
@@ -2078,6 +2079,17 @@ fn build_base_system_prompt(state: ChannelState) -> String {
     "" | "(empty)" -> ""
     content -> "\n\n## Attention Memory\n" <> content
   }
+  let recent_attention_section = case
+    cognitive_episode_context.render(
+      state.paths,
+      state.tool_ctx.db_subject,
+      state.tool_ctx.channel_id,
+      8,
+    )
+  {
+    Ok(content) -> content
+    Error(err) -> "\n\n## Recent Aura Attention Outputs\nUnavailable: " <> err
+  }
   let system_prompt_text =
     system_prompt.build_system_prompt(
       state.soul,
@@ -2087,6 +2099,7 @@ fn build_base_system_prompt(state: ChannelState) -> String {
       user_content,
     )
     <> attention_section
+    <> recent_attention_section
 
   let domain_prompt = case state.domain {
     Some(name) -> {

@@ -72,6 +72,7 @@ AuraEvent
 -> cognitive_delivery
 -> deliveries.jsonl
 -> record | digest queue | Discord surface_now/ask_now
+-> delivered attention outputs rendered into future channel prompt context
 -> natural correction capture (memory target='attention' or cognitive-label)
 -> cognitive_replay over labels.jsonl
 -> cognitive_patch proposal reports
@@ -95,6 +96,12 @@ converted into reviewable markdown patch proposal reports
 (`cognitive-improve propose`) without mutating policy or concern files. These
 probes let the decision, correction, learning, and delivery paths be
 verified without asking the user to send provider messages.
+
+Natural attention feedback is grounded in what Aura actually showed the user.
+For each channel turn, the brain receives a bounded Recent Aura Attention
+Outputs section from the delivery ledger and persisted conversation history.
+The model resolves ordinary feedback against that context first, and falls back
+to `search_events` only when the corrected output is absent or ambiguous.
 
 ## Filesystem Model
 
@@ -372,6 +379,8 @@ optimization once enough labeled failures exist.
    why-not-digest proof.
 9. The model sees delivery timing, including local digest windows, before it
    decides that digest is insufficient.
+10. The brain sees recent successful user-facing attention outputs before it
+    interprets ordinary attention feedback in the same channel.
 10. Many gaps may be observed; few should interrupt.
 11. World-state awareness is concern-indexed, not an unbounded feed of
    interesting facts.

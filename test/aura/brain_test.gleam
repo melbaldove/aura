@@ -83,6 +83,12 @@ pub fn build_system_prompt_includes_natural_cognitive_feedback_rule_test() {
   |> string.contains("ordinary language")
   |> should.be_true
   prompt
+  |> string.contains("Recent Aura Attention Outputs")
+  |> should.be_true
+  prompt
+  |> string.contains("before calling search_events")
+  |> should.be_true
+  prompt
   |> string.contains("no future user-facing attention")
   |> should.be_true
   prompt |> string.contains("like '") |> should.be_false

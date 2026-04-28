@@ -1553,6 +1553,54 @@ pub fn system_prompt_includes_user_memory_content_test() {
   test_harness.teardown(sys)
 }
 
+pub fn system_prompt_includes_recent_attention_outputs_test() {
+  let sys = test_harness.fresh_system()
+  let channel_id = "attention-context-channel"
+  let event_id = "checkout-rollback-1"
+  let now = time.now_ms()
+  let assert Ok(convo_id) =
+    db.resolve_conversation(sys.db_subject, "discord", channel_id, now)
+  let assert Ok(Nil) =
+    db.append_message(
+      sys.db_subject,
+      convo_id,
+      "assistant",
+      "**Aura needs a decision**\n\nCheckout rollback needs approval.\nEvent: "
+        <> event_id,
+      "aura",
+      "Aura",
+      now,
+    )
+  let assert Ok(Nil) =
+    simplifile.create_directory_all(xdg.cognitive_dir(sys.paths))
+  let assert Ok(Nil) =
+    simplifile.write(
+      xdg.deliveries_path(sys.paths),
+      "{\"timestamp_ms\":1,\"event_id\":\""
+        <> event_id
+        <> "\",\"status\":\"delivered\",\"attention_action\":\"ask_now\",\"target\":\"default\",\"channel_id\":\""
+        <> channel_id
+        <> "\",\"summary\":\"Checkout rollback needs attention.\",\"rationale\":\"The model saw material timing and risk.\",\"authority_required\":\"human_judgment\",\"citations\":[\"e1\"],\"gaps\":[],\"error\":\"\"}\n",
+    )
+
+  fake_llm.script_text_response(sys.fake_llm, "ok")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming(channel_id, "hi")),
+  )
+  let _ = poll.poll_until(fn() { fake_llm.calls(sys.fake_llm) != [] }, 2000)
+  let prompts = combined_system_prompts(sys.fake_llm)
+  prompts
+  |> string.contains("## Recent Aura Attention Outputs")
+  |> should.be_true
+  prompts |> string.contains("event_id: " <> event_id) |> should.be_true
+  prompts
+  |> string.contains("Checkout rollback needs attention.")
+  |> should.be_true
+  prompts |> string.contains("Aura needs a decision") |> should.be_true
+  test_harness.teardown(sys)
+}
+
 /// Regression: guild_id, scheduler_subject, and ACP fields were stubbed as
 /// empty defaults in build_initial_state; now threaded from Deps.
 /// Passes a Deps with guild_id="g99" and asserts it flows into tool_ctx.

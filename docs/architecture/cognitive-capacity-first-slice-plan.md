@@ -74,6 +74,9 @@ This proves:
   a wall-clock window
 - ordinary Discord feedback can be recorded as correction labels when it names
   or clearly references a specific event id
+- recent delivered attention outputs are rendered into the channel prompt so
+  ordinary feedback can resolve against what Aura actually showed before
+  falling back to raw event search
 - `cognitive-label <event_id> <label> [expected_attention] [note...]` can
   attach correction labels to existing persisted events
 - `cognitive-replay labels` can rerun labeled persisted events through the
