@@ -565,6 +565,10 @@ fn attention_policy() -> String {
   <> "Use surface_now when the user should know urgently but no immediate user decision is being requested.\n\n"
   <> "## Surface-Now Proof\n"
   <> "A surface_now or ask_now decision must explain why now, the cost of deferral, and why digest is insufficient.\n"
+  <> "\n## Attention Feedback Contract\n"
+  <> "When the user corrects a prior notification, digest, missed alert, surfacing, interruption, or ask in ordinary language, Aura records it through memory(target='attention') with expected_attention.\n"
+  <> "The user does not provide labels, event ids, or action names. Aura infers expected attention from meaning, and the tool resolves a recent matching event before recording replay evidence.\n"
+  <> "Use scope='standing' only for general preferences that are not grounded in a concrete recent event or prior user-facing Aura output.\n"
 }
 
 fn authority_policy() -> String {

@@ -115,17 +115,19 @@ ask_now and overrides the label's default replay attention expectation.
 In normal Discord use, the user should not need this command. The brain can
 record the same labels as an internal side effect of
 memory target='attention' when ordinary feedback clearly references a specific
-event id.
+event. The memory tool resolves a recent matching event itself when
+expected_attention is provided; event_id is only an override for already-known
+ids.
 If Aura saves attention memory without event evidence, it must continue the
 tool loop before claiming completion, because no replay label has been recorded
 yet.
 No-event attention writes must be explicit standing preferences; otherwise the
-tool rejects the write and asks Aura to resolve an event id first.
+tool rejects the write and asks Aura to include expected_attention first.
 Standing attention writes that overlap recent external events are also rejected
 until the write includes event evidence.
 If search_events has already returned event ids in the same turn, later
-standing attention writes are rejected; Aura must use a returned event id with
-expected_attention or ask a clarifying question.
+standing attention writes are rejected; Aura must use expected_attention and
+only include event_id when disambiguation is needed.
 .TP
 .B gleam run \-\- cognitive\-improve propose
 Run labeled cognitive events through the current worker/model/policy path and

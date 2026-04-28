@@ -1850,7 +1850,7 @@ const max_tool_iterations: Int = 80
 
 const record_cognitive_feedback_is_internal_error = "Error: record_cognitive_feedback is internal. Use memory(target='attention') for user feedback about Aura notifications, digests, surfacing, asks, or missed alerts."
 
-const standing_attention_after_event_search_error = "Error: You already found plausible recent events with search_events in this turn. Use one returned Event ID with memory(target='attention', event_id=..., expected_attention=...), or ask one clarifying question if multiple matches remain. Do not use scope='standing' after search_events found event matches."
+const standing_attention_after_event_search_error = "Error: You already found plausible recent events with search_events in this turn. Use memory(target='attention', expected_attention=...) and include event_id only if needed to disambiguate, or ask one clarifying question if multiple matches remain. Do not use scope='standing' after search_events found event matches."
 
 /// True when every accumulated tool call has a result recorded in `pending`.
 fn all_tool_calls_resolved(
@@ -1923,7 +1923,7 @@ fn should_finalize_after_attention_memory(messages: List(llm.Message)) -> Bool {
   has_successful_event_grounded_attention_memory_write(messages)
 }
 
-const attention_memory_followup_prompt = "An attention memory entry was saved as a standing preference. No replay label was recorded because the write had no event_id and expected_attention. Do not claim the full feedback loop is complete yet. First decide whether the user's correction was about a concrete recent external event or prior Aura notification. If yes, call search_events with content words from the user's latest message, then call memory(target='attention') again with event_id and expected_attention. If no concrete event can be resolved, answer that the standing attention preference was saved and no event label was recorded."
+const attention_memory_followup_prompt = "An attention memory entry was saved as a standing preference. No replay label was recorded because the write had no expected_attention. Do not claim the full feedback loop is complete yet. First decide whether the user's correction was about a concrete recent external event or prior Aura notification. If yes, call memory(target='attention') again with expected_attention and ordinary content; the tool will resolve the recent event. If no concrete event can be resolved, answer that the standing attention preference was saved and no event label was recorded."
 
 fn needs_attention_memory_followup(messages: List(llm.Message)) -> Bool {
   has_successful_plain_attention_memory_write(messages)
@@ -2523,7 +2523,7 @@ fn guard_cognitive_feedback_failure(
   }
 }
 
-const runtime_attention_repair_prompt = "Your previous draft claimed that a future notification, digest, surfacing, or ask preference had already changed, but this turn has not saved attention memory. Do not answer the user yet. Continue the same turn with tools: if the user is correcting Aura attention behavior, call memory(target='attention'). If the correction is grounded in a concrete external event, first resolve the event, then include event_id and expected_attention in the attention memory write. If no relevant event can be resolved, say exactly what is missing instead of claiming success."
+const runtime_attention_repair_prompt = "Your previous draft claimed that a future notification, digest, surfacing, or ask preference had already changed, but this turn has not saved attention memory. Do not answer the user yet. Continue the same turn with tools: if the user is correcting Aura attention behavior, call memory(target='attention'). If the correction is grounded in a concrete external event, include expected_attention so the tool can resolve and label the recent event. If no relevant event can be resolved, say exactly what is missing instead of claiming success."
 
 fn should_repair_runtime_attention_claim(
   turn: TurnState,

@@ -364,7 +364,7 @@ pub fn memory_attention_tool_rejects_unscoped_plain_feedback_test() {
 
   out
   |> should.equal(
-    "Error: attention memory without event_id is only allowed for explicit standing preferences. If this corrects a concrete event or prior Aura notification, search_events first, then retry with event_id and expected_attention. If it is truly general, retry with scope=standing.",
+    "Error: attention memory without event evidence is only allowed for explicit standing preferences. If this corrects a concrete event or prior Aura notification, include expected_attention and the tool will resolve the recent event. If it is truly general, retry with scope=standing.",
   )
   simplifile.read(xdg.attention_memory_path(ctx.paths)) |> should.be_error
 
@@ -375,7 +375,8 @@ pub fn memory_attention_tool_rejects_unscoped_plain_feedback_test() {
 pub fn memory_attention_tool_rejects_standing_feedback_when_recent_event_matches_test() {
   let assert Ok(db_subject) = db.start(":memory:")
   let base =
-    "/tmp/aura-attention-memory-standing-overlap-" <> test_helpers.random_suffix()
+    "/tmp/aura-attention-memory-standing-overlap-"
+    <> test_helpers.random_suffix()
   let _ = simplifile.delete_all([base])
   let ctx = brain_tools.ToolContext(..memory_ctx(base), db_subject: db_subject)
   let assert Ok(_) =
@@ -400,7 +401,7 @@ pub fn memory_attention_tool_rejects_standing_feedback_when_recent_event_matches
 
   out
   |> should.equal(
-    "Error: standing attention preference overlaps recent event ev-package-tracker (Package tracker delivery notice). Include event_id and expected_attention so replay feedback is recorded, or save a standing preference only when it is not grounded in a recent event.",
+    "Error: standing attention preference overlaps a recent event (Package tracker delivery notice). Include expected_attention so the tool can resolve the event and record replay feedback, or save a standing preference only when it is not grounded in a recent event.",
   )
   simplifile.read(xdg.attention_memory_path(ctx.paths)) |> should.be_error
 
@@ -437,9 +438,107 @@ pub fn memory_attention_tool_rejects_standing_feedback_on_single_source_token_te
 
   out
   |> should.equal(
-    "Error: standing attention preference overlaps recent event ev-vendorco (Your order has been delivered). Include event_id and expected_attention so replay feedback is recorded, or save a standing preference only when it is not grounded in a recent event.",
+    "Error: standing attention preference overlaps a recent event (Your order has been delivered). Include expected_attention so the tool can resolve the event and record replay feedback, or save a standing preference only when it is not grounded in a recent event.",
   )
   simplifile.read(xdg.attention_memory_path(ctx.paths)) |> should.be_error
+
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn memory_attention_tool_resolves_single_event_for_attention_feedback_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let base =
+    "/tmp/aura-attention-memory-auto-event-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = brain_tools.ToolContext(..memory_ctx(base), db_subject: db_subject)
+  let assert Ok(True) =
+    db.insert_event(
+      db_subject,
+      gmail_event(
+        "ev-package-tracker-auto",
+        "Package tracker delivery notice",
+        "notice@packageco.test",
+        "thread-package-tracker-auto",
+        1_700_000_000_000,
+      ),
+    )
+
+  let out =
+    run_memory_tool(
+      ctx,
+      "{\"action\":\"set\",\"target\":\"attention\",\"key\":\"package-tracker\",\"content\":\"Suppress package tracker delivery notices.\",\"expected_attention\":\"record\",\"note\":\"The user said package tracker delivery notices should not interrupt.\"}",
+    )
+
+  out
+  |> string.contains("Saved [package-tracker] to attention")
+  |> should.be_true
+  out |> string.contains("recorded cognitive feedback") |> should.be_true
+  out
+  |> string.contains("event_id=ev-package-tracker-auto")
+  |> should.be_true
+  out |> string.contains("attention_any=[record]") |> should.be_true
+
+  let attention =
+    simplifile.read(xdg.attention_memory_path(ctx.paths))
+    |> should.be_ok
+  attention
+  |> string.contains("Suppress package tracker delivery notices")
+  |> should.be_true
+
+  let labels = simplifile.read(xdg.labels_path(ctx.paths)) |> should.be_ok
+  labels
+  |> string.contains("\"event_id\":\"ev-package-tracker-auto\"")
+  |> should.be_true
+
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn memory_attention_tool_rejects_ambiguous_auto_event_resolution_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let base =
+    "/tmp/aura-attention-memory-auto-ambiguous-" <> test_helpers.random_suffix()
+  let _ = simplifile.delete_all([base])
+  let ctx = brain_tools.ToolContext(..memory_ctx(base), db_subject: db_subject)
+  let assert Ok(True) =
+    db.insert_event(
+      db_subject,
+      gmail_event(
+        "ev-delivery-a",
+        "Delivery notice",
+        "notice@packageco.test",
+        "thread-delivery-a",
+        1_700_000_000_000,
+      ),
+    )
+  let assert Ok(True) =
+    db.insert_event(
+      db_subject,
+      gmail_event(
+        "ev-delivery-b",
+        "Delivery notice",
+        "notice@warehouseco.test",
+        "thread-delivery-b",
+        1_700_000_000_001,
+      ),
+    )
+
+  let out =
+    run_memory_tool(
+      ctx,
+      "{\"action\":\"set\",\"target\":\"attention\",\"key\":\"delivery\",\"content\":\"Suppress delivery notices.\",\"expected_attention\":\"record\",\"note\":\"The user said delivery notices should not interrupt.\"}",
+    )
+
+  out
+  |> string.contains("Error: attention feedback matched multiple recent events")
+  |> should.be_true
+  out |> string.contains("ev-delivery-a") |> should.be_true
+  out |> string.contains("ev-delivery-b") |> should.be_true
+  simplifile.read(xdg.attention_memory_path(ctx.paths)) |> should.be_error
+  simplifile.read(xdg.labels_path(ctx.paths)) |> should.be_error
 
   process.send(db_subject, db.Shutdown)
   let _ = simplifile.delete_all([base])

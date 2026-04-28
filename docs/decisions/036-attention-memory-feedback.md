@@ -1,6 +1,6 @@
 # ADR-036: Attention memory feedback
 
-**Status:** Accepted
+**Status:** Partially superseded by ADR-037
 **Date:** 2026-04-27
 
 ## Context
