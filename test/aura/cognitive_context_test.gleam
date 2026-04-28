@@ -60,12 +60,6 @@ pub fn build_creates_and_loads_default_policies_test() {
   rendered |> string.contains("evidence:e1") |> should.be_true
   rendered |> string.contains("gmail:msg-1") |> should.be_true
   rendered |> string.contains("Delivery Targets") |> should.be_true
-  rendered
-  |> string.contains("Attention Feedback Contract")
-  |> should.be_true
-  rendered
-  |> string.contains("memory(target='attention')")
-  |> should.be_true
 
   let _ = simplifile.delete_all([base])
   Nil

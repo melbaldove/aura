@@ -2136,72 +2136,48 @@ fn attention_memory_set_result(
     _ -> content
   }
   case string.trim(durable_content) {
-    "" -> Error("content is required for attention memory; use content or note")
+    "" ->
+      Error("content is required for attention memory; use content or note")
     _ -> {
       use _ <- result.try(structured_memory.security_scan(durable_content))
 
       let event_id = string.trim(get_arg(args, "event_id"))
-      let expected_attention =
-        string.lowercase(string.trim(get_arg(args, "expected_attention")))
       case event_id {
         "" -> {
-          case expected_attention {
-            "record" | "digest" | "surface_now" | "ask_now" -> {
-              use resolved_event_id <- result.try(
-                resolve_attention_feedback_event(
-                  ctx,
-                  key,
-                  durable_content,
-                  note_arg,
-                ),
-              )
-              persist_event_grounded_attention_memory(
+          let scope = string.lowercase(string.trim(get_arg(args, "scope")))
+          case scope {
+            "standing" -> {
+              use _ <- result.try(reject_standing_attention_event_overlap(
                 ctx,
-                args,
+                key,
+                durable_content,
+              ))
+              use _ <- result.try(structured_memory.set(
                 path,
                 key,
                 durable_content,
-                resolved_event_id,
-                expected_attention,
-                note_arg,
+              ))
+              Ok(
+                "Saved ["
+                <> key
+                <> "] to attention as a standing preference. No replay label was recorded.",
               )
             }
-            "" -> {
-              let scope = string.lowercase(string.trim(get_arg(args, "scope")))
-              case scope {
-                "standing" -> {
-                  use _ <- result.try(reject_standing_attention_event_overlap(
-                    ctx,
-                    key,
-                    durable_content,
-                  ))
-                  use _ <- result.try(structured_memory.set(
-                    path,
-                    key,
-                    durable_content,
-                  ))
-                  Ok(
-                    "Saved ["
-                    <> key
-                    <> "] to attention as a standing preference. No replay label was recorded.",
-                  )
-                }
-                "" ->
-                  Error(
-                    "attention memory without event evidence is only allowed for explicit standing preferences. If this corrects a concrete event or prior Aura notification, include expected_attention and the tool will resolve the recent event. If it is truly general, retry with scope=standing.",
-                  )
-                other ->
-                  Error(
-                    "invalid attention memory scope '"
-                    <> other
-                    <> "'. Use scope=standing, or include expected_attention.",
-                  )
-              }
-            }
-            _ -> Error(invalid_expected_attention_message(expected_attention))
+            "" ->
+              Error(
+                "attention memory without event_id is only allowed for explicit standing preferences. If this corrects a concrete event or prior Aura notification, search_events first, then retry with event_id and expected_attention. If it is truly general, retry with scope=standing.",
+              )
+            other ->
+              Error(
+                "invalid attention memory scope '"
+                <> other
+                <> "'. Use scope=standing, or include event_id and expected_attention.",
+              )
           }
         }
         _ -> {
+          let expected_attention =
+            string.lowercase(string.trim(get_arg(args, "expected_attention")))
           case expected_attention {
             "" ->
               Error(
@@ -2212,159 +2188,52 @@ fn attention_memory_set_result(
                 ctx,
                 event_id,
               ))
-              persist_event_grounded_attention_memory(
-                ctx,
-                args,
+              let label = case string.trim(get_arg(args, "label")) {
+                "" -> label_for_attention(expected_attention)
+                explicit -> explicit
+              }
+              let note = case note_arg {
+                "" -> durable_content
+                explicit -> explicit
+              }
+              use capture <- result.try(cognitive_label.capture(
+                ctx.paths,
+                resolved_event_id,
+                label,
+                expected_attention,
+                note,
+              ))
+              use _ <- result.try(structured_memory.set(
                 path,
                 key,
                 durable_content,
-                resolved_event_id,
-                expected_attention,
-                note_arg,
+              ))
+              Ok(
+                "Saved ["
+                <> key
+                <> "] to attention and recorded cognitive feedback: event_id="
+                <> capture.event_id
+                <> " label="
+                <> capture.label
+                <> " attention_any=["
+                <> string.join(capture.attention_any, ", ")
+                <> "] path="
+                <> capture.path
+                <> ".",
               )
             }
-            _ -> Error(invalid_expected_attention_message(expected_attention))
+            _ -> {
+              Error(
+                "invalid expected attention '"
+                <> expected_attention
+                <> "'. Use record, digest, surface_now, or ask_now.",
+              )
+            }
           }
         }
       }
     }
   }
-}
-
-fn persist_event_grounded_attention_memory(
-  ctx: ToolContext,
-  args: List(#(String, String)),
-  path: String,
-  key: String,
-  durable_content: String,
-  resolved_event_id: String,
-  expected_attention: String,
-  note_arg: String,
-) -> Result(String, String) {
-  let label = case string.trim(get_arg(args, "label")) {
-    "" -> label_for_attention(expected_attention)
-    explicit -> explicit
-  }
-  let note = case note_arg {
-    "" -> durable_content
-    explicit -> explicit
-  }
-  use capture <- result.try(cognitive_label.capture(
-    ctx.paths,
-    resolved_event_id,
-    label,
-    expected_attention,
-    note,
-  ))
-  use _ <- result.try(structured_memory.set(path, key, durable_content))
-  Ok(
-    "Saved ["
-    <> key
-    <> "] to attention and recorded cognitive feedback: event_id="
-    <> capture.event_id
-    <> " label="
-    <> capture.label
-    <> " attention_any=["
-    <> string.join(capture.attention_any, ", ")
-    <> "] path="
-    <> capture.path
-    <> ".",
-  )
-}
-
-fn resolve_attention_feedback_event(
-  ctx: ToolContext,
-  key: String,
-  content: String,
-  note: String,
-) -> Result(String, String) {
-  let tokens = attention_probe_tokens(key <> " " <> content <> " " <> note)
-  case tokens == [] {
-    True ->
-      Error(
-        "attention feedback could not be grounded in a recent event because it has no distinctive content words",
-      )
-    False -> {
-      use events <- result.try(db.search_events(
-        ctx.db_subject,
-        "",
-        None,
-        None,
-        100,
-      ))
-      events
-      |> list.filter(fn(e) { event_overlaps_attention_tokens(e, tokens) })
-      |> choose_attention_feedback_event
-    }
-  }
-}
-
-fn choose_attention_feedback_event(
-  matches: List(event.AuraEvent),
-) -> Result(String, String) {
-  case matches {
-    [] ->
-      Error(
-        "attention feedback did not match a recent event. Include event_id, or use scope=standing only for a general preference.",
-      )
-    [only] -> Ok(only.id)
-    [first, ..rest] -> {
-      let first_origin = event_attention_origin_key(first)
-      let same_origin =
-        !list.any(rest, fn(e) { event_attention_origin_key(e) != first_origin })
-      case same_origin {
-        True -> Ok(first.id)
-        False ->
-          Error(
-            "attention feedback matched multiple recent events: "
-            <> format_attention_event_choices(take_events(matches, 5))
-            <> ". Ask one clarifying question or retry with event_id.",
-          )
-      }
-    }
-  }
-}
-
-fn event_attention_origin_key(e: event.AuraEvent) -> String {
-  let actor = case tag_or_empty(e.tags, "from") {
-    "" ->
-      case tag_or_empty(e.tags, "author") {
-        "" -> ""
-        author -> "author:" <> string.lowercase(author)
-      }
-    from -> "from:" <> string.lowercase(from)
-  }
-
-  case actor {
-    "" -> e.source <> ":" <> e.type_
-    _ -> e.source <> ":" <> e.type_ <> ":" <> actor
-  }
-}
-
-fn format_attention_event_choices(events: List(event.AuraEvent)) -> String {
-  events
-  |> list.map(fn(e) { e.id <> " (" <> e.subject <> ")" })
-  |> string.join("; ")
-}
-
-fn take_events(
-  events: List(event.AuraEvent),
-  count: Int,
-) -> List(event.AuraEvent) {
-  case count <= 0 {
-    True -> []
-    False ->
-      case events {
-        [] -> []
-        [first, ..rest] -> [first, ..take_events(rest, count - 1)]
-      }
-  }
-}
-
-fn invalid_expected_attention_message(expected_attention: String) -> String {
-  "invalid expected attention '"
-  <> expected_attention
-  <> "'. Use record, digest, surface_now, or ask_now."
 }
 
 fn reject_standing_attention_event_overlap(
@@ -2383,17 +2252,17 @@ fn reject_standing_attention_event_overlap(
             <> msg,
           )
         Ok(events) ->
-          case
-            list.find(events, fn(e) {
-              event_overlaps_attention_tokens(e, tokens)
-            })
-          {
+          case list.find(events, fn(e) {
+            event_overlaps_attention_tokens(e, tokens)
+          }) {
             Error(_) -> Ok(Nil)
             Ok(e) ->
               Error(
-                "standing attention preference overlaps a recent event ("
+                "standing attention preference overlaps recent event "
+                <> e.id
+                <> " ("
                 <> e.subject
-                <> "). Include expected_attention so the tool can resolve the event and record replay feedback, or save a standing preference only when it is not grounded in a recent event.",
+                <> "). Include event_id and expected_attention so replay feedback is recorded, or save a standing preference only when it is not grounded in a recent event.",
               )
           }
       }
@@ -2870,7 +2739,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "memory",
-      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use target='state' for current domain status, target='memory' for durable domain knowledge, target='user' for user profile, and target='attention' for Aura attention policy: proactive notifications, digests, missed alerts, surfacing, asking, interruptions, and deferrals. For ordinary-language corrections about Aura attention, write target='attention' with expected_attention; the tool resolves a matching recent event and records replay label evidence internally. Use event_id only as an override when the event is already known. For a general standing attention preference that is not about a concrete event, include scope='standing'; if it overlaps recent events, the tool rejects it until expected_attention is provided. Choose expected_attention from meaning: no future user-facing attention means record; later batch attention means digest; immediate interruption means surface_now or ask_now. Do not ask the user to choose labels, event ids, record, digest, or target names.",
+      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use target='state' for current domain status, target='memory' for durable domain knowledge, target='user' for user profile, and target='attention' for Aura attention policy: proactive notifications, digests, missed alerts, surfacing, asking, interruptions, and deferrals. For ordinary-language corrections about Aura attention, write target='attention'. If the correction is grounded in a concrete event, include event_id and expected_attention; the tool records replay label evidence internally. For a general standing attention preference that is not about a concrete event, include scope='standing'; if it overlaps recent events, the tool rejects it until event_id and expected_attention are provided. Choose expected_attention from meaning: no future user-facing attention means record; later batch attention means digest; immediate interruption means surface_now or ask_now. Do not ask the user to choose labels, event ids, record, digest, or target names.",
       parameters: [
         llm.ToolParam(
           name: "action",
@@ -2905,19 +2774,19 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         llm.ToolParam(
           name: "event_id",
           param_type: "string",
-          description: "Optional override for target='attention' when the exact concrete external event is already known. Omit for normal attention feedback; the tool resolves recent events from the content.",
+          description: "For target='attention' when the feedback corrects a concrete external event: exact Event ID from search_events. Omit for general standing attention preferences.",
           required: False,
         ),
         llm.ToolParam(
           name: "scope",
           param_type: "string",
-          description: "For target='attention' without expected_attention: must be standing to confirm this is a general standing preference, not feedback about a concrete event.",
+          description: "For target='attention' without event_id: must be standing to confirm this is a general standing preference, not feedback about a concrete event.",
           required: False,
         ),
         llm.ToolParam(
           name: "expected_attention",
           param_type: "string",
-          description: "For ordinary attention feedback: record | digest | surface_now | ask_now. The tool resolves a recent matching event when event_id is omitted.",
+          description: "For event-grounded target='attention': record | digest | surface_now | ask_now.",
           required: False,
         ),
         llm.ToolParam(
@@ -2929,7 +2798,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         llm.ToolParam(
           name: "note",
           param_type: "string",
-          description: "For target='attention': the user's correction plus a short interpretation in ordinary language.",
+          description: "For event-grounded target='attention': the user's correction plus a short interpretation in ordinary language.",
           required: False,
         ),
       ],
@@ -2954,7 +2823,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "search_events",
-      description: "Search events ingested from external sources (email, Linear tickets, etc.). Use this when the user asks about external activity that isn't part of a conversation — e.g. 'any new emails from alice today?' or 'what happened on the login bug ticket?'. Returns matched events with exact Event ID values. Normal attention feedback should go directly through memory(target='attention', expected_attention=...), which resolves recent events itself.",
+      description: "Search events ingested from external sources (email, Linear tickets, etc.). Use this when the user asks about external activity that isn't part of a conversation — e.g. 'any new emails from alice today?' or 'what happened on the login bug ticket?'. Returns matched events with exact Event ID values. For attention feedback grounded in one of these events, pass that Event ID unchanged to memory(target='attention').",
       parameters: [
         llm.ToolParam(
           name: "query",

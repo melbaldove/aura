@@ -75,9 +75,7 @@ pub fn build_system_prompt_includes_natural_cognitive_feedback_rule_test() {
   prompt
   |> string.contains("memory(target='attention')")
   |> should.be_true
-  prompt
-  |> string.contains("tool resolves a recent matching event")
-  |> should.be_true
+  prompt |> string.contains("search_events") |> should.be_true
   prompt
   |> string.contains("Do not make the user name labels")
   |> should.be_true
