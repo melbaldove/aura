@@ -11,9 +11,11 @@ import aura/skill
 import aura/time
 import aura/tools
 import aura/xdg
-import gleam/dict
-import gleam/erlang/process
+import gleam/dict.{type Dict}
+import gleam/dynamic/decode
+import gleam/erlang/process.{type Down, type Monitor}
 import gleam/int
+import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -65,6 +67,12 @@ pub type SchedulerMessage {
     params: List(#(String, String)),
     reply_to: process.Subject(String),
   )
+  ScheduleFinished(
+    name: String,
+    started_at_ms: Int,
+    result: Result(Nil, String),
+  )
+  ScheduleWorkerDown(Down)
   ReloadSchedules
   SetFlareSubject(subject: process.Subject(flare_manager.FlareMsg))
   SetDreamConfig(config: DreamScheduleConfig)
@@ -78,10 +86,20 @@ pub type SchedulerState {
     on_rekindle: fn(String, String) -> Nil,
     config_path: String,
     self_subject: process.Subject(SchedulerMessage),
+    running: Dict(String, RunningSchedule),
     flare_subject: Option(process.Subject(flare_manager.FlareMsg)),
     dream_config: Option(DreamScheduleConfig),
     last_dream_ms: Int,
   )
+}
+
+type FlareTrigger {
+  DelayTrigger(rekindle_at_ms: Int)
+  ScheduleTrigger(cron: String)
+}
+
+pub type RunningSchedule {
+  RunningSchedule(started_at_ms: Int, monitor: Monitor)
 }
 
 // ---------------------------------------------------------------------------
@@ -316,54 +334,61 @@ pub fn is_dream_due(cron_str: String, now_ms: Int, last_dream_ms: Int) -> Bool {
 ///   {"type":"delay","rekindle_at_ms":TIMESTAMP}
 ///   {"type":"schedule","cron":"CRON_EXPR"}
 pub fn is_flare_trigger_due(triggers_json: String, now_ms: Int) -> Bool {
-  case string.contains(triggers_json, "\"delay\"") {
-    True -> {
-      case string.split(triggers_json, "\"rekindle_at_ms\":") {
-        [_, rest] -> {
-          let num_str =
-            string.trim(rest)
-            |> string.replace("}", "")
-            |> string.replace(",", "")
-            |> string.trim
-          case int.parse(num_str) {
-            Ok(ts) -> now_ms >= ts
-            Error(_) -> False
-          }
+  case parse_flare_trigger(triggers_json) {
+    Ok(DelayTrigger(rekindle_at_ms)) -> now_ms >= rekindle_at_ms
+    Ok(ScheduleTrigger(cron_str)) ->
+      case cron.parse(cron_str) {
+        Ok(expr) -> {
+          let #(minute, hour, day, month, weekday) = ms_to_time_parts(now_ms)
+          cron.matches(
+            expr,
+            minute: minute,
+            hour: hour,
+            day: day,
+            month: month,
+            weekday: weekday,
+          )
         }
-        _ -> False
+        Error(_) -> False
       }
+    Error(_) -> False
+  }
+}
+
+/// Mark a schedule as having completed successfully at `ran_at_ms`.
+pub fn mark_schedule_run_completed(
+  entries: List(ScheduleEntry),
+  name: String,
+  ran_at_ms: Int,
+) -> List(ScheduleEntry) {
+  list.map(entries, fn(entry) {
+    case entry.config.name == name {
+      True -> ScheduleEntry(..entry, last_run_ms: ran_at_ms)
+      False -> entry
     }
-    False ->
-      case string.contains(triggers_json, "\"schedule\"") {
-        True -> {
-          case string.split(triggers_json, "\"cron\":\"") {
-            [_, rest] -> {
-              case string.split(rest, "\"") {
-                [cron_str, ..] -> {
-                  case cron.parse(cron_str) {
-                    Ok(expr) -> {
-                      let #(minute, hour, day, month, weekday) =
-                        ms_to_time_parts(now_ms)
-                      cron.matches(
-                        expr,
-                        minute: minute,
-                        hour: hour,
-                        day: day,
-                        month: month,
-                        weekday: weekday,
-                      )
-                    }
-                    Error(_) -> False
-                  }
-                }
-                _ -> False
-              }
-            }
-            _ -> False
-          }
-        }
-        False -> False
-      }
+  })
+}
+
+fn parse_flare_trigger(triggers_json: String) -> Result(FlareTrigger, String) {
+  let decoder = {
+    use trigger_type <- decode.field("type", decode.string)
+    use cron <- decode.optional_field("cron", "", decode.string)
+    use rekindle_at_ms <- decode.optional_field(
+      "rekindle_at_ms",
+      -1,
+      decode.int,
+    )
+    decode.success(#(trigger_type, cron, rekindle_at_ms))
+  }
+
+  case json.parse(triggers_json, decoder) {
+    Ok(#("delay", _, rekindle_at_ms)) if rekindle_at_ms >= 0 ->
+      Ok(DelayTrigger(rekindle_at_ms))
+    Ok(#("schedule", cron_str, _)) if cron_str != "" ->
+      Ok(ScheduleTrigger(cron_str))
+    Ok(#(trigger_type, _, _)) ->
+      Error("invalid flare trigger payload: " <> trigger_type)
+    Error(err) -> Error("invalid flare trigger JSON: " <> string.inspect(err))
   }
 }
 
@@ -454,6 +479,7 @@ pub fn start(
           on_rekindle: on_rekindle,
           config_path: config_path,
           self_subject: subject,
+          running: dict.new(),
           flare_subject: None,
           dream_config: None,
           last_dream_ms: 0,
@@ -462,7 +488,16 @@ pub fn start(
       // Schedule first tick after 60 seconds
       process.send_after(subject, 60_000, Tick)
 
-      Ok(actor.initialised(state) |> actor.returning(subject))
+      let selector =
+        process.new_selector()
+        |> process.select(subject)
+        |> process.select_monitors(ScheduleWorkerDown)
+
+      Ok(
+        actor.initialised(state)
+        |> actor.selecting(selector)
+        |> actor.returning(subject),
+      )
     })
     |> actor.on_message(handle_message)
 
@@ -488,21 +523,39 @@ fn handle_message(
   case message {
     Tick -> {
       let now_ms = time.now_ms()
-      let new_entries =
-        list.map(state.entries, fn(entry) {
-          case is_due(entry, now_ms) {
-            True -> {
-              // Spawn execution in a separate process
-              let skills = state.skills
-              let on_finding = state.on_finding
-              let config = entry.config
-              process.spawn_unlinked(fn() {
-                execute_schedule(config, skills, on_finding)
-              })
-              ScheduleEntry(..entry, last_run_ms: now_ms)
-            }
-            False -> entry
-          }
+      let due_entries =
+        list.filter(state.entries, fn(entry) {
+          is_due(entry, now_ms)
+          && !dict.has_key(state.running, entry.config.name)
+        })
+      let spawned =
+        list.map(due_entries, fn(entry) {
+          let skills = state.skills
+          let on_finding = state.on_finding
+          let config = entry.config
+          let reply_to = state.self_subject
+          let pid =
+            process.spawn_unlinked(fn() {
+              let result = execute_schedule(config, skills, on_finding)
+              process.send(
+                reply_to,
+                ScheduleFinished(
+                  name: config.name,
+                  started_at_ms: now_ms,
+                  result: result,
+                ),
+              )
+            })
+          #(entry, process.monitor(pid))
+        })
+      let new_running =
+        list.fold(spawned, state.running, fn(running, item) {
+          let #(entry, monitor) = item
+          dict.insert(
+            running,
+            entry.config.name,
+            RunningSchedule(started_at_ms: now_ms, monitor: monitor),
+          )
         })
 
       // Check flare triggers
@@ -552,10 +605,60 @@ fn handle_message(
       actor.continue(
         SchedulerState(
           ..state,
-          entries: new_entries,
+          running: new_running,
           last_dream_ms: new_last_dream_ms,
         ),
       )
+    }
+
+    ScheduleFinished(name:, started_at_ms:, result:) -> {
+      case dict.get(state.running, name) {
+        Ok(RunningSchedule(started_at_ms: running_started, monitor: monitor))
+          if running_started == started_at_ms
+        -> {
+          process.demonitor_process(monitor)
+          let running = dict.delete(state.running, name)
+          case result {
+            Ok(_) -> {
+              logging.log(
+                logging.Info,
+                "[scheduler] Completed schedule: " <> name,
+              )
+              actor.continue(
+                SchedulerState(
+                  ..state,
+                  entries: mark_schedule_run_completed(
+                    state.entries,
+                    name,
+                    started_at_ms,
+                  ),
+                  running: running,
+                ),
+              )
+            }
+            Error(e) -> {
+              logging.log(
+                logging.Error,
+                "[scheduler] Schedule failed, not advancing last_run_ms for "
+                  <> name
+                  <> ": "
+                  <> e,
+              )
+              actor.continue(SchedulerState(..state, running: running))
+            }
+          }
+        }
+        _ -> actor.continue(state)
+      }
+    }
+
+    ScheduleWorkerDown(down) -> {
+      let next_state = case down {
+        process.ProcessDown(monitor:, reason:, ..) ->
+          clear_crashed_schedule(state, monitor, reason)
+        process.PortDown(..) -> state
+      }
+      actor.continue(next_state)
     }
 
     ReloadSchedules -> {
@@ -623,11 +726,46 @@ fn handle_message(
 // Schedule execution
 // ---------------------------------------------------------------------------
 
+fn clear_crashed_schedule(
+  state: SchedulerState,
+  monitor: Monitor,
+  reason: process.ExitReason,
+) -> SchedulerState {
+  case find_running_schedule_by_monitor(state.running, monitor) {
+    Error(Nil) -> state
+    Ok(name) -> {
+      logging.log(
+        logging.Error,
+        "[scheduler] Schedule worker exited before completion for "
+          <> name
+          <> ": "
+          <> string.inspect(reason),
+      )
+      SchedulerState(..state, running: dict.delete(state.running, name))
+    }
+  }
+}
+
+fn find_running_schedule_by_monitor(
+  running: Dict(String, RunningSchedule),
+  monitor: Monitor,
+) -> Result(String, Nil) {
+  running
+  |> dict.to_list
+  |> list.find_map(fn(entry) {
+    case entry {
+      #(name, RunningSchedule(monitor: existing, ..)) if existing == monitor ->
+        Ok(name)
+      _ -> Error(Nil)
+    }
+  })
+}
+
 fn execute_schedule(
   config: ScheduleConfig,
   skills: List(skill.SkillInfo),
   on_finding: fn(notification.Finding) -> Nil,
-) -> Nil {
+) -> Result(Nil, String) {
   logging.log(logging.Info, "[scheduler] Executing schedule: " <> config.name)
   case
     tools.run_skill(
@@ -640,13 +778,14 @@ fn execute_schedule(
     Ok(output) -> {
       let urgency = classify_urgency(config, output)
       emit_findings(config, output, urgency, on_finding)
+      Ok(Nil)
     }
     Error(e) -> {
       logging.log(
         logging.Error,
         "[scheduler] " <> config.name <> " failed: " <> e,
       )
-      Nil
+      Error(e)
     }
   }
 }

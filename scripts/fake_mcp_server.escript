@@ -43,7 +43,7 @@
 
 main([ScriptPath]) ->
     {ok, Lines} = read_script(ScriptPath),
-    loop(Lines, undefined),
+    loop(Lines, undefined, ScriptPath),
     halt(0);
 main(_) ->
     io:format(standard_error, "usage: fake_mcp_server.escript <script>~n", []),
@@ -62,15 +62,15 @@ starts_with(Bin, Prefix) ->
     PLen = byte_size(Prefix),
     byte_size(Bin) >= PLen andalso binary:part(Bin, 0, PLen) == Prefix.
 
-loop([], _LastId) ->
+loop([], _LastId, _ScriptPath) ->
     ok;
-loop([Step | Rest], LastId) ->
+loop([Step | Rest], LastId, ScriptPath) ->
     case parse_step(Step) of
         {expect_request, Method} ->
             Line = read_stdin_line(),
             {ReqMethod, Id} = parse_incoming(Line),
             assert_eq(ReqMethod, Method, Line),
-            loop(Rest, Id);
+            loop(Rest, Id, ScriptPath);
         {expect_notification, Method} ->
             Line = read_stdin_line(),
             {NotifMethod, Id} = parse_incoming(Line),
@@ -81,26 +81,34 @@ loop([Step | Rest], LastId) ->
                          to_list(Method) ++ ", got line: " ++ to_list(Line))
             end,
             assert_eq(NotifMethod, Method, Line),
-            loop(Rest, LastId);
+            maybe_mark_ready(NotifMethod, ScriptPath),
+            loop(Rest, LastId, ScriptPath);
         {respond_result, ResultJson} ->
             emit_response(LastId, ResultJson),
-            loop(Rest, LastId);
+            loop(Rest, LastId, ScriptPath);
         {respond_error, Code, Message} ->
             emit_error(LastId, Code, Message),
-            loop(Rest, LastId);
+            loop(Rest, LastId, ScriptPath);
         {emit_notification, Method, ParamsJson} ->
             emit_notification(Method, ParamsJson),
-            loop(Rest, LastId);
+            loop(Rest, LastId, ScriptPath);
         {emit_raw, Raw} ->
             io:put_chars([Raw, <<"\n">>]),
-            loop(Rest, LastId);
+            loop(Rest, LastId, ScriptPath);
         exit_now ->
             halt(0);
         {exit_with_code, Code} ->
             halt(Code);
         skip ->
-            loop(Rest, LastId)
+            loop(Rest, LastId, ScriptPath)
     end.
+
+maybe_mark_ready(<<"notifications/initialized">>, ScriptPath) ->
+    %% Test-only readiness sentinel. The Gleam tests use this to avoid fixed
+    %% sleeps before issuing the first tools/call.
+    file:write_file(ScriptPath ++ ".ready", <<"ready\n">>);
+maybe_mark_ready(_, _) ->
+    ok.
 
 parse_step(<<"EXPECT_REQUEST ", Rest/binary>>) ->
     {expect_request, trim(Rest)};

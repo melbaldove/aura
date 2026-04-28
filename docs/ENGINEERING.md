@@ -1,5 +1,10 @@
 # Engineering Practice
 
+This document describes how we build Aura. Product-level constraints on what
+Aura is for live in [`PRODUCT_PRINCIPLES.md`](PRODUCT_PRINCIPLES.md). Current
+architecture models live under `docs/architecture/` until they are accepted as
+ADRs.
+
 ## Philosophy
 
 Aura's design draws from two battle-tested traditions. **Unix philosophy** governs interfaces — how Aura touches the world, presents information, and composes capabilities. **OTP philosophy** governs the runtime — how Aura stays alive, manages state, and recovers from failure.
@@ -60,6 +65,13 @@ Applies to: user experience, observability, policy, learning surfaces.
 
 **The gap is the event.** Every site where Aura could silently default deserves a gap-detection hook. Design reviews ask "what does Aura do when this state is missing, stale, or ambiguous?" before asking "what does it do when valid?"
 
+**Precise help over generic failure.** When Aura cannot responsibly proceed, it
+should say what is missing, what it already tried, what the impact is, and what
+the next useful options are. "I failed" is not enough. Tool gaps, permission
+gaps, credential gaps, context gaps, preference gaps, verification gaps,
+authority gaps, and confidence gaps are different states with different
+resolution paths.
+
 **When not to apply.** Don't surface truly ambiguous signals conversation can't resolve (delete-vs-archive spam). Batch high-frequency gaps to avoid noise. Safety-critical defaults should act first and disclose, not ask.
 
 ## Principles
@@ -92,6 +104,8 @@ What Unix, OTP, and metacognition don't cover — Aura-specific constraints and 
 
 10. **Verification is non-negotiable. Every feature ships with a behavior test.** Code is cheap to write; parallelize test authoring via subagents when the surface is wide. A feature without a test is an untested assumption, not a feature. The bar: there is a test that *fails without your change and passes with it*. "It compiled" and "I tried it once in Discord" are not verification. Without this rule, coverage always loses to velocity, and velocity compounds into regression debt that eventually stops the system from being changeable at all. Tautological or empty tests (asserting literals, no assertions, mocks asserting their own return values) are the same as no test — the trivial-test hook exists to catch them.
 
+11. **Respect the Bitter Lesson.** Rich Sutton's [Bitter Lesson](http://www.incompleteideas.net/IncIdeas/BitterLesson.html) applies to agent architecture: general methods that leverage computation, search, learning, and replay beat hand-built theories of how intelligence should work. Do not encode a human-designed cognitive ontology in code unless replayed examples prove the structure is necessary. Prefer a minimal harness that captures events, builds context, calls models, validates safety/provenance, records outcomes, and evaluates behavior over time. Put policy and state in ordinary text files first; promote structure only when evaluation shows text and model judgment are not enough.
+
 ## System invariants
 
 Properties that must hold at all times. Violations are bugs.
@@ -103,6 +117,9 @@ Properties that must hold at all times. Violations are bugs.
 5. **A session that stops is always accounted for.** If a tmux session disappears, the monitor detects it and reports why — completed with report, failed without report. No silent disappearances.
 6. **Active flare ↔ active monitor.** A dispatch creates exactly one session and one monitor actor. The monitor lives as long as the flare is active — it never stops itself. The monitor is stopped explicitly when the flare is killed, parked, or archived via the session handle. On rekindle, a fresh monitor is created with the new session. No orphaned monitors, no zombie sessions.
 7. **Handback is never silent.** When an ACP session completes with `end_turn`, the brain always processes the result through the tool loop. If the tool loop fails, the raw result is posted to Discord as a fallback. No completion goes unacknowledged.
+8. **Gaps are explicit.** Missing tools, access, credentials, context, specs, preferences, verification paths, authority, or confidence must be represented as visible gap states with a resolution path. Aura must not continue low-value motion when the next responsible action is to ask, defer, delegate verification, or stop.
+9. **Front-facing output is conversation state.** Anything Aura successfully sends to a user-facing surface, including proactive delivery, digests, progress messages, and direct replies, must be persisted to that surface's conversation history as the content the user saw. Aura cannot reason about user feedback if its own prior notifications are only present in side ledgers or logs.
+10. **Front-facing claims must match tool outcomes.** Aura may only claim that a preference, policy, task state, or future runtime behavior changed when the corresponding tool call succeeded and its target matches the claim. Attention-routing feedback is live runtime state, so it must be written with `memory(target=attention)`. When that feedback is grounded in an external event, the same attention-memory write must include the resolved Event ID and expected attention action so replay labels are recorded internally. `memory(target=user)` may store user-profile facts, but it must not be treated as proof that notification, digest, surfacing, or ask behavior changed.
 
 ## Domain model
 

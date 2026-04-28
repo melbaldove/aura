@@ -212,6 +212,42 @@ pub fn is_due_disabled_test() {
   scheduler.is_due(entry, 1_000_000) |> should.be_false
 }
 
+pub fn mark_schedule_run_completed_updates_only_finished_schedule_test() {
+  let config_a =
+    scheduler.ScheduleConfig(
+      name: "a",
+      schedule_type: "interval",
+      every: "15m",
+      cron: "",
+      skill: "check-a",
+      args: "",
+      domains: ["x"],
+      model: "zai/glm-5-turbo",
+      enabled: True,
+    )
+  let config_b =
+    scheduler.ScheduleConfig(
+      name: "b",
+      schedule_type: "interval",
+      every: "15m",
+      cron: "",
+      skill: "check-b",
+      args: "",
+      domains: ["x"],
+      model: "zai/glm-5-turbo",
+      enabled: True,
+    )
+  let entries = [
+    scheduler.ScheduleEntry(config: config_a, last_run_ms: 100),
+    scheduler.ScheduleEntry(config: config_b, last_run_ms: 200),
+  ]
+
+  let updated = scheduler.mark_schedule_run_completed(entries, "b", 900)
+
+  list.map(updated, fn(entry) { #(entry.config.name, entry.last_run_ms) })
+  |> should.equal([#("a", 100), #("b", 900)])
+}
+
 // ---------------------------------------------------------------------------
 // is_flare_trigger_due
 // ---------------------------------------------------------------------------
@@ -240,6 +276,32 @@ pub fn flare_empty_trigger_not_due_test() {
 pub fn flare_invalid_trigger_not_due_test() {
   scheduler.is_flare_trigger_due("not json", 2000)
   |> should.be_false
+}
+
+pub fn flare_schedule_trigger_due_with_whitespace_test() {
+  let now_ms = 1_713_232_800_000
+  let #(minute, hour, _day, _month, _weekday) =
+    scheduler.ms_to_time_parts(now_ms)
+  let cron_str = int.to_string(minute) <> " " <> int.to_string(hour) <> " * * *"
+
+  scheduler.is_flare_trigger_due(
+    "{ \"type\": \"schedule\", \"cron\": \"" <> cron_str <> "\" }",
+    now_ms,
+  )
+  |> should.be_true
+}
+
+pub fn flare_schedule_trigger_due_with_reordered_fields_test() {
+  let now_ms = 1_713_232_800_000
+  let #(minute, hour, _day, _month, _weekday) =
+    scheduler.ms_to_time_parts(now_ms)
+  let cron_str = int.to_string(minute) <> " " <> int.to_string(hour) <> " * * *"
+
+  scheduler.is_flare_trigger_due(
+    "{\"cron\":\"" <> cron_str <> "\",\"type\":\"schedule\"}",
+    now_ms,
+  )
+  |> should.be_true
 }
 
 // ---------------------------------------------------------------------------

@@ -369,13 +369,33 @@ fn handle_message(
           routed_channel_id,
           domain_name,
         )
-      let subject =
+      case
         channel_supervisor.get_or_start(
           new_state.channel_supervisor,
           thread_key(msg.platform, routed_channel_id),
           deps,
         )
-      process.send(subject, channel_actor.HandleIncoming(routed_msg))
+      {
+        Ok(subject) ->
+          process.send(subject, channel_actor.HandleIncoming(routed_msg))
+        Error(e) -> {
+          logging.log(
+            logging.Error,
+            "[brain] Failed to route channel message: " <> e,
+          )
+          process.spawn_unlinked(fn() {
+            let transport =
+              dict.get(new_state.transports, msg.platform)
+              |> result.unwrap(new_state.discord)
+            send_discord_response(
+              transport,
+              routed_channel_id,
+              "Internal error: could not start this channel worker. Check Aura logs.",
+            )
+          })
+          Nil
+        }
+      }
       actor.continue(new_state)
     }
     UpdateDomains(domains) -> {
@@ -508,10 +528,27 @@ fn handle_message(
               actor_key,
               deps,
             )
-          process.send(
-            subject,
-            channel_actor.HandleInteractionResolve(action, approval_id),
-          )
+          case subject {
+            Ok(subject) ->
+              process.send(
+                subject,
+                channel_actor.HandleInteractionResolve(action, approval_id),
+              )
+            Error(e) -> {
+              logging.log(
+                logging.Error,
+                "[brain] Failed to route interaction: " <> e,
+              )
+              process.spawn_unlinked(fn() {
+                send_discord_response(
+                  state.discord,
+                  ch,
+                  "Internal error: could not process that approval. Check Aura logs.",
+                )
+              })
+              Nil
+            }
+          }
           actor.continue(state)
         }
         _ -> {
@@ -1000,16 +1037,31 @@ fn route_handback_to_channel_actor(
           flare.thread_id,
           domain_name,
         )
-      let subject =
+      case
         channel_supervisor.get_or_start(
           state.channel_supervisor,
           thread_key(discord.platform_name, flare.thread_id),
           deps,
         )
-      process.send(
-        subject,
-        channel_actor.HandleHandback(flare.id, flare.session_name, text),
-      )
+      {
+        Ok(subject) ->
+          process.send(
+            subject,
+            channel_actor.HandleHandback(flare.id, flare.session_name, text),
+          )
+        Error(e) -> {
+          logging.log(logging.Error, "[brain] Failed to route handback: " <> e)
+          process.spawn_unlinked(fn() {
+            send_discord_response(
+              state.discord,
+              flare.thread_id,
+              "**ACP handback could not be routed through the channel worker. Raw result:**\n\n"
+                <> text,
+            )
+          })
+          Nil
+        }
+      }
     }
     Error(_) ->
       logging.log(

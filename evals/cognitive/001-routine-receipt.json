@@ -1,0 +1,22 @@
+{
+  "id": "routine-receipt",
+  "event_key": "m4107",
+  "description": "Routine transactional email should be recorded without spending attention.",
+  "subject": "Receipt from Northstar Cloud",
+  "tags": {
+    "from": "billing@northstarcloud.example",
+    "to": "melbournebaldove@gmail.com"
+  },
+  "data": {
+    "from": "billing@northstarcloud.example",
+    "to": "melbournebaldove@gmail.com",
+    "body_text": "Hi, receipt #260421DEU4419T is attached. Northstar Cloud charged card ending 4242 for 18.00 USD on Apr 25. The invoice PDF is available in the billing portal.",
+    "subject": "Receipt from Northstar Cloud"
+  },
+  "expect": {
+    "attention_any": ["record"],
+    "work_any": ["none"],
+    "authority_any": ["none"],
+    "min_citations": 2
+  }
+}

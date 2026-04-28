@@ -329,6 +329,538 @@ pub fn tool_result_all_resolved_spawns_next_stream_test() {
   |> should.be_true
 }
 
+pub fn failed_attention_memory_cannot_finalize_as_saved_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let tool_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"package-tracker\\\",\\\"content\\\":\\\"Suppress routine package tracker alerts.\\\",\\\"event_id\\\":\\\"1\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
+
+  let #(after_tool_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", tool_calls_json, 100),
+    )
+  let #(after_tool_error, _) =
+    channel_actor.transition(
+      after_tool_request,
+      channel_actor.ToolResult("c1", "Error: event not found: 1", True),
+    )
+  let #(_, effects) =
+    channel_actor.transition(
+      after_tool_error,
+      channel_actor.StreamComplete(
+        "Got it — the preference is already saved in your profile.",
+        "[]",
+        100,
+      ),
+    )
+
+  let final_text =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  final_text
+  |> string.contains("I have not changed that attention preference yet")
+  |> should.be_true
+  final_text
+  |> string.contains("preference is already saved")
+  |> should.be_false
+}
+
+pub fn no_tool_notification_preference_claim_retries_with_tools_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(retry_state, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete(
+        "Already handled. Routine delivery alerts are suppressed and won't surface again.",
+        "[]",
+        100,
+      ),
+    )
+
+  retry_state.turn |> should.not_equal(option.None)
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnStreamWorker(messages) ->
+        list.any(messages, fn(message) {
+          case message {
+            llm.SystemMessage(content) ->
+              string.contains(content, "memory(target='attention')")
+            _ -> False
+          }
+        })
+      _ -> False
+    }
+  })
+  |> should.be_true
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.DiscordEdit(_, _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+
+  case retry_state.turn {
+    option.Some(turn) ->
+      list.any(turn.new_messages, fn(message) {
+        case message {
+          llm.SystemMessage(content) ->
+            string.contains(content, "memory(target='attention')")
+          _ -> False
+        }
+      })
+      |> should.be_false
+    option.None -> should.fail()
+  }
+}
+
+pub fn second_no_tool_attention_claim_after_repair_finalizes_honestly_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(retry_state, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete(
+        "Already handled. Routine delivery alerts are suppressed and won't surface again.",
+        "[]",
+        100,
+      ),
+    )
+
+  let #(final_state, effects) =
+    channel_actor.transition(
+      retry_state,
+      channel_actor.StreamComplete(
+        "Notification behavior is updated and will be suppressed going forward.",
+        "[]",
+        100,
+      ),
+    )
+
+  final_state.turn |> should.equal(option.None)
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+
+  let final_text =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  final_text
+  |> string.contains("I have not changed that attention preference yet")
+  |> should.be_true
+}
+
+pub fn event_grounded_attention_memory_can_claim_future_preference_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let tool_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"package-tracker\\\",\\\"content\\\":\\\"Suppress routine package alerts.\\\",\\\"event_id\\\":\\\"package-event-1\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
+
+  let #(after_tool_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", tool_calls_json, 100),
+    )
+  let #(final_state, effects) =
+    channel_actor.transition(
+      after_tool_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Saved [package-tracker] to attention and recorded cognitive feedback: event_id=<package-event-1> label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl.",
+        False,
+      ),
+    )
+
+  final_state.turn |> should.equal(option.None)
+  let final_text =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  final_text
+  |> string.contains("Saved the attention preference")
+  |> should.be_true
+  final_text
+  |> string.contains("have not changed")
+  |> should.be_false
+}
+
+pub fn non_attention_memory_cannot_claim_future_preference_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let tool_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"state\\\",\\\"key\\\":\\\"package-tracker\\\",\\\"content\\\":\\\"Suppress routine package alerts.\\\"}\"}]"
+
+  let #(after_tool_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", tool_calls_json, 100),
+    )
+  let #(after_memory, _) =
+    channel_actor.transition(
+      after_tool_request,
+      channel_actor.ToolResult("c1", "Saved [package-tracker] to state.", False),
+    )
+  let #(_, effects) =
+    channel_actor.transition(
+      after_memory,
+      channel_actor.StreamComplete(
+        "Done. Routine delivery alerts will be suppressed going forward.",
+        "[]",
+        100,
+      ),
+    )
+
+  let final_text =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  final_text
+  |> string.contains("have not changed that attention preference")
+  |> should.be_true
+  final_text |> string.contains("will be suppressed") |> should.be_false
+}
+
+pub fn record_cognitive_feedback_tool_call_is_blocked_as_internal_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let feedback_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"record_cognitive_feedback\",\"arguments\":\"{\\\"event_id\\\":\\\"delivery-event-1\\\",\\\"label\\\":\\\"false_interrupt\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
+
+  let #(after_feedback_request, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", feedback_calls_json, 100),
+    )
+
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnToolWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+
+  let turn = case after_feedback_request.turn {
+    option.Some(turn) -> turn
+    option.None -> panic as "expected tool-loop turn to continue"
+  }
+  let blocked_trace =
+    list.find(turn.traces, fn(trace) {
+      trace.name == "record_cognitive_feedback"
+    })
+    |> should.be_ok
+  blocked_trace.is_error |> should.be_true
+  blocked_trace.result
+  |> string.contains("memory(target='attention')")
+  |> should.be_true
+}
+
+pub fn event_grounded_attention_memory_can_save_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let search_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"search_events\",\"arguments\":\"{\\\"query\\\":\\\"routine delivery\\\",\\\"limit\\\":\\\"5\\\"}\"}]"
+  let memory_calls_json =
+    "[{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\",\\\"event_id\\\":\\\"delivery-event-1\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
+
+  let #(after_search_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", search_calls_json, 100),
+    )
+  let #(after_search_result, _) =
+    channel_actor.transition(
+      after_search_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Found 1 event:\n\n1. Event ID: <delivery-event-1>\n   [gmail] Routine delivery alert",
+        False,
+      ),
+    )
+  let #(_, effects) =
+    channel_actor.transition(
+      after_search_result,
+      channel_actor.StreamComplete("", memory_calls_json, 100),
+    )
+
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnToolWorker(call) -> call.name == "memory"
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
+pub fn standing_attention_memory_blocked_after_event_search_match_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let search_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"search_events\",\"arguments\":\"{\\\"query\\\":\\\"routine delivery\\\",\\\"limit\\\":\\\"5\\\"}\"}]"
+  let standing_memory_calls_json =
+    "[{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\",\\\"scope\\\":\\\"standing\\\"}\"}]"
+
+  let #(after_search_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", search_calls_json, 100),
+    )
+  let #(after_search_result, _) =
+    channel_actor.transition(
+      after_search_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Found 1 event:\n\n1. Event ID: <delivery-event-1>\n   [gmail] Routine delivery alert",
+        False,
+      ),
+    )
+  let #(after_memory_request, effects) =
+    channel_actor.transition(
+      after_search_result,
+      channel_actor.StreamComplete("", standing_memory_calls_json, 100),
+    )
+
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnToolWorker(call) -> call.name == "memory"
+      _ -> False
+    }
+  })
+  |> should.be_false
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+
+  let turn = case after_memory_request.turn {
+    option.Some(turn) -> turn
+    option.None ->
+      panic as "expected tool loop to continue after blocked memory"
+  }
+  let blocked_trace =
+    list.find(turn.traces, fn(trace) { trace.name == "memory" })
+    |> should.be_ok
+  blocked_trace.is_error |> should.be_true
+  blocked_trace.result
+  |> string.contains("You already found plausible recent events")
+  |> should.be_true
+}
+
+pub fn event_grounded_feedback_memory_success_finalizes_without_extra_stream_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let search_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"search_events\",\"arguments\":\"{\\\"query\\\":\\\"routine delivery\\\",\\\"limit\\\":\\\"5\\\"}\"}]"
+  let memory_calls_json =
+    "[{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\",\\\"event_id\\\":\\\"delivery-event-1\\\",\\\"expected_attention\\\":\\\"record\\\"}\"}]"
+
+  let #(after_search_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", search_calls_json, 100),
+    )
+  let #(after_search_result, _) =
+    channel_actor.transition(
+      after_search_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Found 1 event:\n\n1. Event ID: <delivery-event-1>\n   [gmail] Routine delivery alert",
+        False,
+      ),
+    )
+  let #(after_memory_request, _) =
+    channel_actor.transition(
+      after_search_result,
+      channel_actor.StreamComplete("", memory_calls_json, 100),
+    )
+  let #(final_state, effects) =
+    channel_actor.transition(
+      after_memory_request,
+      channel_actor.ToolResult(
+        "c2",
+        "Saved [notification-suppressions] to attention and recorded cognitive feedback: event_id=<delivery-event-1> label=false_interrupt attention_any=[record] path=/tmp/labels.jsonl.",
+        False,
+      ),
+    )
+
+  case final_state.turn {
+    option.None -> Nil
+    option.Some(_) -> should.fail()
+  }
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnStreamWorker(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.DbSaveExchange(_, _, _, _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+  let final_edit =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+  final_edit
+  |> string.contains("Saved the attention preference")
+  |> should.be_true
+}
+
+pub fn plain_attention_memory_success_requires_followup_model_step_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let memory_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"attention\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\",\\\"scope\\\":\\\"standing\\\"}\"}]"
+
+  let #(after_memory_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", memory_calls_json, 100),
+    )
+  let #(next_state, effects) =
+    channel_actor.transition(
+      after_memory_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Saved [notification-suppressions] to attention as a standing preference. No replay label was recorded.",
+        False,
+      ),
+    )
+
+  case next_state.turn {
+    option.Some(_) -> Nil
+    option.None -> should.fail()
+  }
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.DiscordEdit(_, _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.SpawnStreamWorker(messages) ->
+        list.any(messages, fn(message) {
+          case message {
+            llm.SystemMessage(content) ->
+              string.contains(content, "No replay label was recorded")
+            _ -> False
+          }
+        })
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
+pub fn blocked_event_grounded_memory_cannot_finalize_as_saved_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let search_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"search_events\",\"arguments\":\"{\\\"query\\\":\\\"routine delivery\\\",\\\"limit\\\":\\\"5\\\"}\"}]"
+  let memory_calls_json =
+    "[{\"id\":\"c2\",\"name\":\"memory\",\"arguments\":\"{\\\"action\\\":\\\"set\\\",\\\"target\\\":\\\"user\\\",\\\"key\\\":\\\"notification-suppressions\\\",\\\"content\\\":\\\"Suppress routine delivery alerts.\\\"}\"}]"
+
+  let #(after_search_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", search_calls_json, 100),
+    )
+  let #(after_search_result, _) =
+    channel_actor.transition(
+      after_search_request,
+      channel_actor.ToolResult(
+        "c1",
+        "Found 1 event:\n\n1. Event ID: <delivery-event-1>\n   [gmail] Routine delivery alert",
+        False,
+      ),
+    )
+  let #(after_memory_request, _) =
+    channel_actor.transition(
+      after_search_result,
+      channel_actor.StreamComplete("", memory_calls_json, 100),
+    )
+  let #(after_memory_result, _) =
+    channel_actor.transition(
+      after_memory_request,
+      channel_actor.ToolResult(
+        "c2",
+        "Saved [notification-suppressions] to user.",
+        False,
+      ),
+    )
+  let #(_, effects) =
+    channel_actor.transition(
+      after_memory_result,
+      channel_actor.StreamComplete(
+        "Done. Routine delivery alerts are now suppressed.",
+        "[]",
+        100,
+      ),
+    )
+
+  let final_text =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  final_text
+  |> string.contains("I have not changed that attention preference")
+  |> should.be_true
+  final_text |> string.contains("now suppressed") |> should.be_false
+}
+
 // --- Task 13: stream error retry ---------------------------------------------
 
 pub fn stream_error_retries_up_to_max_test() {
@@ -1025,6 +1557,54 @@ pub fn system_prompt_includes_user_memory_content_test() {
 
   // Cleanup
   let _ = simplifile.delete(user_file_path)
+  test_harness.teardown(sys)
+}
+
+pub fn system_prompt_includes_recent_attention_outputs_test() {
+  let sys = test_harness.fresh_system()
+  let channel_id = "attention-context-channel"
+  let event_id = "checkout-rollback-1"
+  let now = time.now_ms()
+  let assert Ok(convo_id) =
+    db.resolve_conversation(sys.db_subject, "discord", channel_id, now)
+  let assert Ok(Nil) =
+    db.append_message(
+      sys.db_subject,
+      convo_id,
+      "assistant",
+      "**Aura needs a decision**\n\nCheckout rollback needs approval.\nEvent: "
+        <> event_id,
+      "aura",
+      "Aura",
+      now,
+    )
+  let assert Ok(Nil) =
+    simplifile.create_directory_all(xdg.cognitive_dir(sys.paths))
+  let assert Ok(Nil) =
+    simplifile.write(
+      xdg.deliveries_path(sys.paths),
+      "{\"timestamp_ms\":1,\"event_id\":\""
+        <> event_id
+        <> "\",\"status\":\"delivered\",\"attention_action\":\"ask_now\",\"target\":\"default\",\"channel_id\":\""
+        <> channel_id
+        <> "\",\"summary\":\"Checkout rollback needs attention.\",\"rationale\":\"The model saw material timing and risk.\",\"authority_required\":\"human_judgment\",\"citations\":[\"e1\"],\"gaps\":[],\"error\":\"\"}\n",
+    )
+
+  fake_llm.script_text_response(sys.fake_llm, "ok")
+  process.send(
+    sys.brain_subject,
+    brain.HandleMessage(test_harness.incoming(channel_id, "hi")),
+  )
+  let _ = poll.poll_until(fn() { fake_llm.calls(sys.fake_llm) != [] }, 2000)
+  let prompts = combined_system_prompts(sys.fake_llm)
+  prompts
+  |> string.contains("## Recent Aura Attention Outputs")
+  |> should.be_true
+  prompts |> string.contains("event_id: " <> event_id) |> should.be_true
+  prompts
+  |> string.contains("Checkout rollback needs attention.")
+  |> should.be_true
+  prompts |> string.contains("Aura needs a decision") |> should.be_true
   test_harness.teardown(sys)
 }
 

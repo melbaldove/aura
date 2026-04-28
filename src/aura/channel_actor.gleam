@@ -8,6 +8,7 @@ import aura/clients/browser_runner
 import aura/clients/discord as discord_client
 import aura/clients/llm_client
 import aura/clients/skill_runner
+import aura/cognitive_episode_context
 import aura/compressor
 import aura/conversation
 import aura/db
@@ -31,8 +32,10 @@ import aura/validator
 import aura/vision
 import aura/xdg
 import gleam/dict.{type Dict}
+import gleam/dynamic/decode
 import gleam/erlang/process.{type Monitor, type Pid, type Subject, type Timer}
 import gleam/int
+import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -77,6 +80,7 @@ pub type ChannelMessage {
   HandleIncoming(message.IncomingMessage)
   HandleHandback(flare_id: String, session_name: String, result: String)
   Cancel
+  CancelRestartedShellApprovals
 
   VisionComplete(filename: String, description: String)
   VisionError(reason: String)
@@ -243,6 +247,7 @@ pub type Deps {
 pub fn start(deps: Deps) -> Result(Subject(ChannelMessage), actor.StartError) {
   actor.new_with_initialiser(5000, fn(self_subject) {
     let state = build_initial_state(deps, self_subject)
+    process.send(self_subject, CancelRestartedShellApprovals)
     Ok(actor.initialised(state) |> actor.returning(self_subject))
   })
   |> actor.on_message(handle_message)
@@ -732,6 +737,9 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
         )
       ChannelState(..state, review_counts: #(new_count, state.review_counts.1))
     }
+    CancelPendingShellApprovals -> cancel_pending_shell_approvals(state)
+    PersistShellApprovalStatus(id, status) ->
+      persist_shell_approval_status(state, id, status, time.now_ms())
     ResolveProposal(proposal, action) ->
       resolve_approval(
         state,
@@ -761,22 +769,7 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
         fn() { "**Rejected**" },
       )
     ResolveShellApproval(approval, action) ->
-      resolve_approval(
-        state,
-        approval.requested_at_ms,
-        approval.channel_id,
-        approval.message_id,
-        approval.reply_to,
-        action,
-        "**Expired** -- approval timed out after 15 minutes.",
-        fn() {
-          #(
-            brain_tools.Approved,
-            ":white_check_mark: **Approved** -- `" <> approval.command <> "`",
-          )
-        },
-        fn() { ":x: **Rejected**" },
-      )
+      resolve_shell_approval(state, approval, action)
     UpdateCompressorTokens(prompt_tokens) -> {
       case prompt_tokens > 0 {
         True -> {
@@ -874,9 +867,144 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
   }
 }
 
-/// Resolve a pending approval (proposal or shell). Handles the 15-minute
-/// expiry check, dispatches to the caller's approve/reject callbacks, and
-/// emits the appropriate Discord edit. Returns an updated ChannelState.
+/// Cancel shell approvals left pending by a previous channel actor instance.
+/// The waiting tool continuation cannot survive the actor crash, so the
+/// durable Discord button is explicitly invalidated instead of being resumed.
+fn cancel_pending_shell_approvals(state: ChannelState) -> ChannelState {
+  let now = time.now_ms()
+  case
+    db.load_pending_shell_approvals_for_channel(
+      state.tool_ctx.db_subject,
+      state.channel_id,
+    )
+  {
+    Ok(approvals) -> {
+      list.each(approvals, fn(approval) {
+        case
+          state.tool_ctx.discord.edit_message(
+            approval.channel_id,
+            approval.message_id,
+            "**Cancelled** -- Aura restarted before this shell approval was resolved. Rerun the command if it is still needed.",
+          )
+        {
+          Ok(_) ->
+            persist_shell_approval_status(
+              state,
+              approval.id,
+              "restart_cancelled",
+              now,
+            )
+          Error(e) -> {
+            logging.log(
+              logging.Error,
+              "[channel_actor] Failed to edit restarted shell approval "
+                <> approval.id
+                <> ": "
+                <> e,
+            )
+            state
+          }
+        }
+      })
+      state
+    }
+    Error(e) -> {
+      logging.log(
+        logging.Error,
+        "[channel_actor] Failed to cancel restarted shell approvals for "
+          <> state.channel_id
+          <> ": "
+          <> e,
+      )
+      state
+    }
+  }
+}
+
+fn persist_shell_approval_status(
+  state: ChannelState,
+  id: String,
+  status: String,
+  now: Int,
+) -> ChannelState {
+  case persist_shell_approval_status_result(state, id, status, now) {
+    Ok(Nil) -> state
+    Error(e) -> {
+      logging.log(
+        logging.Error,
+        "[channel_actor] Failed to mark shell approval "
+          <> id
+          <> " "
+          <> status
+          <> ": "
+          <> e,
+      )
+      state
+    }
+  }
+}
+
+fn persist_shell_approval_status_result(
+  state: ChannelState,
+  id: String,
+  status: String,
+  now: Int,
+) -> Result(Nil, String) {
+  db.update_shell_approval_status(state.tool_ctx.db_subject, id, status, now)
+}
+
+fn resolve_shell_approval(
+  state: ChannelState,
+  approval: brain_tools.PendingShellApproval,
+  action: String,
+) -> ChannelState {
+  let now = time.now_ms()
+  let expired = now - approval.requested_at_ms > approval_expiry_ms
+  let #(result, status, body) = case expired {
+    True -> #(
+      brain_tools.Expired,
+      "expired",
+      "**Expired** -- approval timed out after 15 minutes.",
+    )
+    False ->
+      case action {
+        "approve" -> #(
+          brain_tools.Approved,
+          "approved",
+          ":white_check_mark: **Approved** -- `" <> approval.command <> "`",
+        )
+        _ -> #(brain_tools.Rejected, "rejected", ":x: **Rejected**")
+      }
+  }
+
+  case persist_shell_approval_status_result(state, approval.id, status, now) {
+    Ok(Nil) -> {
+      process.send(approval.reply_to, result)
+      let _ =
+        state.tool_ctx.discord.edit_message(
+          approval.channel_id,
+          approval.message_id,
+          body,
+        )
+      state
+    }
+    Error(e) -> {
+      process.send(approval.reply_to, brain_tools.Rejected)
+      let _ =
+        state.tool_ctx.discord.edit_message(
+          approval.channel_id,
+          approval.message_id,
+          "**Failed** -- approval could not be recorded, so the command was not run: "
+            <> e,
+        )
+      state
+    }
+  }
+}
+
+/// Resolve a pending write proposal. Handles the 15-minute expiry check,
+/// dispatches to the caller's approve/reject callbacks, and emits the
+/// appropriate Discord edit. Returns an updated ChannelState.
 fn resolve_approval(
   state: ChannelState,
   requested_at_ms: Int,
@@ -969,7 +1097,12 @@ fn execute_spawn_tool_worker(
   state: ChannelState,
   call: llm.ToolCall,
 ) -> ChannelState {
-  let pid = state.tool_spawn(state.tool_ctx, call, state.self_subject)
+  let pid =
+    state.tool_spawn(
+      tool_context_for_current_turn(state),
+      call,
+      state.self_subject,
+    )
   let monitor = process.monitor(pid)
   update_turn_with_worker(
     state,
@@ -977,6 +1110,14 @@ fn execute_spawn_tool_worker(
     Some(monitor),
     ToolWorker(call.name, call.id),
   )
+}
+
+fn tool_context_for_current_turn(state: ChannelState) -> brain_tools.ToolContext {
+  case state.turn {
+    Some(TurnState(kind: UserTurn(message_id: message_id, ..), ..)) ->
+      brain_tools.ToolContext(..state.tool_ctx, message_id: message_id)
+    _ -> state.tool_ctx
+  }
 }
 
 fn execute_spawn_vision_worker(
@@ -1120,6 +1261,8 @@ pub type Effect {
     current_count: Int,
   )
   SpawnMemoryReview(history: List(llm.Message))
+  CancelPendingShellApprovals
+  PersistShellApprovalStatus(id: String, status: String)
   ResolveProposal(proposal: brain_tools.PendingProposal, action: String)
   ResolveShellApproval(
     approval: brain_tools.PendingShellApproval,
@@ -1143,6 +1286,8 @@ pub fn transition(
   message: ChannelMessage,
 ) -> #(ChannelState, List(Effect)) {
   case message, state.turn {
+    CancelRestartedShellApprovals, _ -> #(state, [CancelPendingShellApprovals])
+
     HandleIncoming(msg), None -> start_turn(state, PendingUserMessage(msg))
     HandleIncoming(msg), Some(_) -> {
       let new_queue = list.append(state.queue, [PendingUserMessage(msg)])
@@ -1236,8 +1381,18 @@ pub fn transition(
     // --- stream complete (terminal vs tool-call) -------------------
     StreamComplete(content, tool_calls_json, prompt_tokens), Some(turn) -> {
       case llm.parse_flat_tool_calls_json(tool_calls_json) {
-        Ok([]) -> finalize_turn(state, turn, content, prompt_tokens)
-        Error(_) -> finalize_turn(state, turn, content, prompt_tokens)
+        Ok([]) -> {
+          case should_repair_runtime_attention_claim(turn, content) {
+            True -> repair_runtime_attention_claim(state, turn, content)
+            False -> finalize_turn(state, turn, content, prompt_tokens)
+          }
+        }
+        Error(_) -> {
+          case should_repair_runtime_attention_claim(turn, content) {
+            True -> repair_runtime_attention_claim(state, turn, content)
+            False -> finalize_turn(state, turn, content, prompt_tokens)
+          }
+        }
         Ok([first_call, ..rest]) -> {
           let new_turn =
             TurnState(
@@ -1246,14 +1401,21 @@ pub fn transition(
               pending_tool_results: dict.new(),
               worker_kind: ToolWorker(first_call.name, first_call.id),
             )
-          #(ChannelState(..state, turn: Some(new_turn)), [
-            SpawnToolWorker(first_call),
+          let next_state = ChannelState(..state, turn: Some(new_turn))
+          let summary =
             LogStreamSummary(
               turn.stream_stats,
               "complete",
               string.length(content),
-            ),
-          ])
+            )
+          case blocked_tool_call_result(new_turn, first_call) {
+            Some(error) -> {
+              let #(blocked_state, blocked_effects) =
+                transition(next_state, ToolResult(first_call.id, error, True))
+              #(blocked_state, [summary, ..blocked_effects])
+            }
+            None -> #(next_state, [SpawnToolWorker(first_call), summary])
+          }
         }
       }
     }
@@ -1282,9 +1444,12 @@ pub fn transition(
                   traces: new_traces,
                   worker_kind: ToolWorker(next_call.name, next_call.id),
                 )
-              #(ChannelState(..state, turn: Some(new_turn)), [
-                SpawnToolWorker(next_call),
-              ])
+              let next_state = ChannelState(..state, turn: Some(new_turn))
+              case blocked_tool_call_result(new_turn, next_call) {
+                Some(error) ->
+                  transition(next_state, ToolResult(next_call.id, error, True))
+                None -> #(next_state, [SpawnToolWorker(next_call)])
+              }
             }
             None -> {
               logging.log(
@@ -1325,8 +1490,6 @@ pub fn transition(
                   ],
                   tool_result_messages,
                 ])
-              let next_llm_messages =
-                list.append(state.conversation, new_messages)
               let new_turn =
                 TurnState(
                   ..turn,
@@ -1336,7 +1499,6 @@ pub fn transition(
                   pending_tool_results: dict.new(),
                   new_messages: new_messages,
                   traces: new_traces,
-                  messages_at_llm_call: next_llm_messages,
                   stream_retry_count: 0,
                   stream_stats: StreamStats(
                     start_ms: 0,
@@ -1344,11 +1506,38 @@ pub fn transition(
                     delta_count: 0,
                     last_heartbeat_ms: 0,
                   ),
-                  worker_kind: StreamWorker,
                 )
-              #(ChannelState(..state, turn: Some(new_turn)), [
-                SpawnStreamWorker(next_llm_messages),
-              ])
+              case should_finalize_after_attention_memory(new_messages) {
+                True ->
+                  finalize_turn(
+                    state,
+                    new_turn,
+                    "Saved the attention preference.",
+                    0,
+                  )
+                False -> {
+                  let new_messages = case
+                    needs_attention_memory_followup(new_messages)
+                  {
+                    True ->
+                      list.append(new_messages, [
+                        llm.SystemMessage(attention_memory_followup_prompt),
+                      ])
+                    False -> new_messages
+                  }
+                  let next_llm_messages =
+                    list.append(state.conversation, new_messages)
+                  let stream_turn =
+                    TurnState(
+                      ..new_turn,
+                      messages_at_llm_call: next_llm_messages,
+                      worker_kind: StreamWorker,
+                    )
+                  #(ChannelState(..state, turn: Some(stream_turn)), [
+                    SpawnStreamWorker(next_llm_messages),
+                  ])
+                }
+              }
             }
           }
         }
@@ -1606,7 +1795,10 @@ pub fn transition(
       {
         Ok(old) -> {
           process.send(old.reply_to, brain_tools.Expired)
-          let effects = [DiscordEdit(old.message_id, "~~Superseded~~")]
+          let effects = [
+            DiscordEdit(old.message_id, "~~Superseded~~"),
+            PersistShellApprovalStatus(old.id, "superseded"),
+          ]
           let pruned =
             list.filter(state.pending_shell_approvals, fn(a) { a.id != old.id })
           #(pruned, effects)
@@ -1664,6 +1856,10 @@ const max_stream_retries = 3
 /// loops that could otherwise only be bounded by the 10-minute turn deadline.
 const max_tool_iterations: Int = 80
 
+const record_cognitive_feedback_is_internal_error = "Error: record_cognitive_feedback is internal. Use memory(target='attention') for user feedback about Aura notifications, digests, surfacing, asks, or missed alerts."
+
+const standing_attention_after_event_search_error = "Error: You already found plausible recent events with search_events in this turn. Use one returned Event ID with memory(target='attention', event_id=..., expected_attention=...), or ask one clarifying question if multiple matches remain. Do not use scope='standing' after search_events found event matches."
+
 /// True when every accumulated tool call has a result recorded in `pending`.
 fn all_tool_calls_resolved(
   calls: List(llm.ToolCall),
@@ -1687,6 +1883,58 @@ fn find_tool_name(calls: List(llm.ToolCall), id: String) -> String {
     Ok(c) -> c.name
     Error(_) -> "unknown"
   }
+}
+
+fn blocked_tool_call_result(
+  turn: TurnState,
+  call: llm.ToolCall,
+) -> Option(String) {
+  case call.name {
+    "record_cognitive_feedback" ->
+      Some(record_cognitive_feedback_is_internal_error)
+    "memory" -> {
+      case
+        is_standing_attention_memory_set_call(call)
+        && has_prior_search_events_match(turn)
+      {
+        True -> Some(standing_attention_after_event_search_error)
+        False -> None
+      }
+    }
+    _ -> None
+  }
+}
+
+fn has_prior_search_events_match(turn: TurnState) -> Bool {
+  list.any(turn.traces, fn(trace) {
+    trace.name == "search_events"
+    && !trace.is_error
+    && search_events_result_has_event_id(trace.result)
+  })
+}
+
+fn search_events_result_has_event_id(result: String) -> Bool {
+  string.contains(result, "Event ID:")
+}
+
+fn has_recorded_cognitive_feedback_trace(
+  traces: List(conversation.ToolTrace),
+) -> Bool {
+  list.any(traces, fn(trace) {
+    trace.name == "record_cognitive_feedback"
+    && !trace.is_error
+    && string.starts_with(trace.result, "Recorded cognitive feedback")
+  })
+}
+
+fn should_finalize_after_attention_memory(messages: List(llm.Message)) -> Bool {
+  has_successful_event_grounded_attention_memory_write(messages)
+}
+
+const attention_memory_followup_prompt = "An attention memory entry was saved as a standing preference. No replay label was recorded because the write had no event_id and expected_attention. Do not claim the full feedback loop is complete yet. First decide whether the user's correction was about a concrete recent external event or prior Aura notification. If yes, call search_events with content words from the user's latest message, then call memory(target='attention') again with event_id and expected_attention. If no concrete event can be resolved, answer that the standing attention preference was saved and no event label was recorded."
+
+fn needs_attention_memory_followup(messages: List(llm.Message)) -> Bool {
+  has_successful_plain_attention_memory_write(messages)
 }
 
 /// Common failure path: emit user-facing error, optional typing stop,
@@ -1828,6 +2076,27 @@ fn build_base_system_prompt(state: ChannelState) -> String {
     Ok(c) -> c
     Error(_) -> ""
   }
+  let attention_content = case
+    structured_memory.format_for_display(xdg.attention_memory_path(state.paths))
+  {
+    Ok(c) -> c
+    Error(_) -> ""
+  }
+  let attention_section = case attention_content {
+    "" | "(empty)" -> ""
+    content -> "\n\n## Attention Memory\n" <> content
+  }
+  let recent_attention_section = case
+    cognitive_episode_context.render(
+      state.paths,
+      state.tool_ctx.db_subject,
+      state.tool_ctx.channel_id,
+      8,
+    )
+  {
+    Ok(content) -> content
+    Error(err) -> "\n\n## Recent Aura Attention Outputs\nUnavailable: " <> err
+  }
   let system_prompt_text =
     system_prompt.build_system_prompt(
       state.soul,
@@ -1836,6 +2105,8 @@ fn build_base_system_prompt(state: ChannelState) -> String {
       memory_content,
       user_content,
     )
+    <> attention_section
+    <> recent_attention_section
 
   let domain_prompt = case state.domain {
     Some(name) -> {
@@ -2122,8 +2393,10 @@ fn finalize_turn(
   content: String,
   prompt_tokens: Int,
 ) -> #(ChannelState, List(Effect)) {
+  let final_content =
+    guard_cognitive_feedback_failure(turn.traces, turn.new_messages, content)
   let final_messages =
-    list.append(turn.new_messages, [llm.AssistantMessage(content)])
+    list.append(turn.new_messages, [llm.AssistantMessage(final_content)])
   let #(author_id, author_name) = case turn.kind {
     UserTurn(_, aid, aname) -> #(aid, aname)
     HandbackTurn(_, _) -> #("aura", "Aura")
@@ -2180,7 +2453,7 @@ fn finalize_turn(
   let base_effects = [
     DiscordEdit(
       turn.discord_msg_id,
-      conversation.format_full_message(turn.traces, content),
+      conversation.format_full_message(turn.traces, final_content),
     ),
     DbSaveExchange(final_messages, author_id, author_name, prompt_tokens),
     UpdateCompressorTokens(prompt_tokens),
@@ -2190,7 +2463,11 @@ fn finalize_turn(
     list.append(base_effects, [
       SpawnMemoryReview(full_history),
       SpawnSkillReview(full_history, new_skill_iterations, skill_review_count),
-      LogStreamSummary(turn.stream_stats, "complete", string.length(content)),
+      LogStreamSummary(
+        turn.stream_stats,
+        "complete",
+        string.length(final_content),
+      ),
     ])
   // Stop the typing indicator before the final Discord edit so the user sees
   // the typing indicator disappear before the message is updated.
@@ -2216,6 +2493,229 @@ fn finalize_turn(
         start_turn(ChannelState(..cleared, queue: rest), next)
       #(new_state, list.append(with_deadline, start_effects))
     }
+  }
+}
+
+fn guard_cognitive_feedback_failure(
+  traces: List(conversation.ToolTrace),
+  messages: List(llm.Message),
+  content: String,
+) -> String {
+  let feedback_traces =
+    traces
+    |> list.filter(fn(trace) { trace.name == "record_cognitive_feedback" })
+  let has_failed_feedback =
+    list.any(feedback_traces, fn(trace) { trace.is_error })
+  let has_recorded_feedback =
+    has_recorded_cognitive_feedback_trace(feedback_traces)
+
+  case has_failed_feedback && !has_recorded_feedback {
+    True -> {
+      let errors =
+        feedback_traces
+        |> list.filter(fn(trace) { trace.is_error })
+        |> list.map(fn(trace) { trace.result })
+        |> string.join("; ")
+      "I could not record that cognitive feedback, so I have not saved or changed that preference. The feedback tool failed: "
+      <> errors
+    }
+    False ->
+      case
+        has_recorded_feedback
+        && !has_successful_attention_memory_write(messages)
+      {
+        True ->
+          "I recorded this as cognitive feedback. I have not saved attention memory, so future attention behavior has not been changed yet."
+        False ->
+          case
+            !has_successful_attention_memory_write(messages)
+            && claims_runtime_attention_preference(content)
+          {
+            True ->
+              "I have not changed that attention preference yet because this turn did not save attention memory. I need to use memory(target='attention') before claiming future notification behavior changed."
+            False -> content
+          }
+      }
+  }
+}
+
+const runtime_attention_repair_prompt = "Your previous draft claimed that a future notification, digest, surfacing, or ask preference had already changed, but this turn has not saved attention memory. Do not answer the user yet. Continue the same turn with tools: if the user is correcting Aura attention behavior, call memory(target='attention'). If the correction is grounded in a concrete external event, first resolve the event, then include event_id and expected_attention in the attention memory write. If no relevant event can be resolved, say exactly what is missing instead of claiming success."
+
+fn should_repair_runtime_attention_claim(
+  turn: TurnState,
+  content: String,
+) -> Bool {
+  turn.traces == []
+  && turn.iteration + 1 < max_tool_iterations
+  && !has_system_message(
+    turn.messages_at_llm_call,
+    runtime_attention_repair_prompt,
+  )
+  && !has_successful_attention_memory_write(turn.new_messages)
+  && claims_runtime_attention_preference(content)
+}
+
+fn repair_runtime_attention_claim(
+  state: ChannelState,
+  turn: TurnState,
+  content: String,
+) -> #(ChannelState, List(Effect)) {
+  let repair_messages_for_llm =
+    list.append(turn.new_messages, [
+      llm.SystemMessage(runtime_attention_repair_prompt),
+    ])
+  let next_llm_messages =
+    list.append(state.conversation, repair_messages_for_llm)
+  let repair_turn =
+    TurnState(
+      ..turn,
+      iteration: turn.iteration + 1,
+      accumulated_content: "",
+      accumulated_tool_calls: [],
+      pending_tool_results: dict.new(),
+      new_messages: turn.new_messages,
+      messages_at_llm_call: next_llm_messages,
+      worker_kind: StreamWorker,
+      stream_retry_count: 0,
+      stream_stats: StreamStats(
+        start_ms: 0,
+        reasoning_count: 0,
+        delta_count: 0,
+        last_heartbeat_ms: 0,
+      ),
+    )
+  #(ChannelState(..state, turn: Some(repair_turn)), [
+    SpawnStreamWorker(next_llm_messages),
+    LogStreamSummary(turn.stream_stats, "repair", string.length(content)),
+  ])
+}
+
+fn has_system_message(messages: List(llm.Message), target: String) -> Bool {
+  list.any(messages, fn(message) {
+    case message {
+      llm.SystemMessage(content) -> content == target
+      _ -> False
+    }
+  })
+}
+
+fn claims_runtime_attention_preference(content: String) -> Bool {
+  let lowered = string.lowercase(content)
+  contains_any(lowered, [
+    "alert",
+    "digest",
+    "interrupt",
+    "notification",
+    "notify",
+    "preference",
+    "suppress",
+    "surface",
+  ])
+  && contains_any(lowered, [
+    "already handled",
+    "already saved",
+    "already set",
+    "changed",
+    "going forward",
+    "now suppressed",
+    "saved",
+    "updated",
+    "will be",
+    "will not",
+    "won't",
+  ])
+}
+
+fn contains_any(content: String, needles: List(String)) -> Bool {
+  list.any(needles, fn(needle) { string.contains(content, needle) })
+}
+
+fn has_successful_attention_memory_write(messages: List(llm.Message)) -> Bool {
+  has_successful_plain_attention_memory_write(messages)
+  || has_successful_event_grounded_attention_memory_write(messages)
+}
+
+fn has_successful_plain_attention_memory_write(
+  messages: List(llm.Message),
+) -> Bool {
+  has_successful_attention_memory_write_matching(messages, fn(result) {
+    !string.contains(result, "recorded cognitive feedback")
+  })
+}
+
+fn has_successful_event_grounded_attention_memory_write(
+  messages: List(llm.Message),
+) -> Bool {
+  has_successful_attention_memory_write_matching(messages, fn(result) {
+    string.contains(result, "recorded cognitive feedback")
+  })
+}
+
+fn has_successful_attention_memory_write_matching(
+  messages: List(llm.Message),
+  result_matches: fn(String) -> Bool,
+) -> Bool {
+  let attention_memory_call_ids =
+    messages
+    |> list.flat_map(fn(message) {
+      case message {
+        llm.AssistantToolCallMessage(_, calls) ->
+          calls
+          |> list.filter(is_attention_memory_set_call)
+          |> list.map(fn(call) { call.id })
+        _ -> []
+      }
+    })
+
+  list.any(messages, fn(message) {
+    case message {
+      llm.ToolResultMessage(id, result) ->
+        list.contains(attention_memory_call_ids, id)
+        && string.starts_with(result, "Saved [")
+        && string.contains(result, "] to attention")
+        && result_matches(result)
+      _ -> False
+    }
+  })
+}
+
+fn is_attention_memory_set_call(call: llm.ToolCall) -> Bool {
+  case call.name {
+    "memory" -> {
+      let decoder = {
+        use action <- decode.field("action", decode.string)
+        use target <- decode.field("target", decode.string)
+        decode.success(#(action, target))
+      }
+      case json.parse(call.arguments, decoder) {
+        Ok(#("set", "attention")) -> True
+        _ -> False
+      }
+    }
+    _ -> False
+  }
+}
+
+fn is_standing_attention_memory_set_call(call: llm.ToolCall) -> Bool {
+  case call.name {
+    "memory" -> {
+      let decoder = {
+        use action <- decode.field("action", decode.string)
+        use target <- decode.field("target", decode.string)
+        use scope <- decode.optional_field("scope", "", decode.string)
+        use event_id <- decode.optional_field("event_id", "", decode.string)
+        decode.success(#(action, target, scope, event_id))
+      }
+      case json.parse(call.arguments, decoder) {
+        Ok(#(action, target, scope, event_id)) ->
+          string.lowercase(string.trim(action)) == "set"
+          && string.lowercase(string.trim(target)) == "attention"
+          && string.lowercase(string.trim(scope)) == "standing"
+          && string.trim(event_id) == ""
+        _ -> False
+      }
+    }
+    _ -> False
   }
 }
 

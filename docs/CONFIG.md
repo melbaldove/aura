@@ -10,7 +10,7 @@
 |-------|------|----------|-------------|
 | `token` | string | yes | Discord bot token. Use `${AURA_DISCORD_TOKEN}` to read from env. |
 | `guild` | string | yes | Discord server (guild) ID. |
-| `default_channel` | string | yes | Default channel name for #aura. |
+| `default_channel` | string | yes | Existing Discord text channel name or numeric channel ID for cross-domain messages and digest delivery. Startup fails if this cannot be resolved. |
 
 ### [blather] (optional)
 
@@ -43,7 +43,7 @@
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `digest_windows` | array of strings | yes | Times to deliver digest (e.g., `["07:35", "09:10"]`). |
+| `digest_windows` | array of strings | yes | Local times to deliver queued digests, including cognitive `attention=digest` items (e.g., `["07:35", "09:10"]`). |
 | `timezone` | string | yes | IANA timezone (e.g., `Asia/Manila`). |
 | `urgent_bypass` | bool | yes | Whether urgent findings skip the digest schedule. |
 
@@ -81,7 +81,7 @@
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `channel` | string | yes | Discord channel name for this domain. |
+| `channel` | string | yes | Existing Discord text channel name or numeric channel ID for this domain. |
 
 ### [blather] (optional)
 

@@ -89,6 +89,34 @@ pub fn build_system_prompt_includes_soul_content_test() {
   prompt |> string.contains("No domains") |> should.be_true
 }
 
+pub fn build_system_prompt_includes_natural_cognitive_feedback_rule_test() {
+  let prompt =
+    system_prompt.build_system_prompt("You are Aura.", [], [], "", "")
+
+  prompt
+  |> string.contains("memory(target='attention')")
+  |> should.be_true
+  prompt |> string.contains("search_events") |> should.be_true
+  prompt
+  |> string.contains("Do not make the user name labels")
+  |> should.be_true
+  prompt
+  |> string.contains("ordinary language")
+  |> should.be_true
+  prompt
+  |> string.contains("Recent Aura Attention Outputs")
+  |> should.be_true
+  prompt
+  |> string.contains("before calling search_events")
+  |> should.be_true
+  prompt
+  |> string.contains("no future user-facing attention")
+  |> should.be_true
+  prompt |> string.contains("like '") |> should.be_false
+  prompt |> string.contains("If the user says \"") |> should.be_false
+  prompt |> string.contains("expected_attention=") |> should.be_false
+}
+
 pub fn resolve_model_name_test() {
   models.resolve_model_name("zai/glm-5-turbo")
   |> should.equal("glm-5-turbo")

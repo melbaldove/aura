@@ -9,6 +9,8 @@ import aura/clients/browser_runner
 import aura/clients/discord as discord_client
 import aura/clients/llm_client
 import aura/clients/skill_runner
+import aura/cognitive_delivery
+import aura/cognitive_worker
 import aura/config
 import aura/ctl
 import aura/db
@@ -19,6 +21,7 @@ import aura/event_ingest
 import aura/integrations/supervisor as integrations_supervisor
 import aura/mcp/pool as mcp_pool
 import aura/memory
+import aura/models
 import aura/notification
 import aura/poller
 import aura/review_runner
@@ -32,7 +35,7 @@ import gleam/dict
 import gleam/erlang/process
 import gleam/int
 import gleam/list
-import gleam/option
+import gleam/option.{None, Some}
 import gleam/otp/static_supervisor
 import gleam/result
 import gleam/string
@@ -87,13 +90,6 @@ pub fn start(
       logging.log(logging.Error, "[supervisor] JSONL migration error: " <> e)
   }
 
-  // 3b. Start event_ingest actor (required — panics on failure).
-  // Starts after db (which it depends on) and before flare/brain so the
-  // supervisor log reads top-down in dependency order.
-  let assert Ok(event_ingest_started) = event_ingest.start(db_subject)
-  let event_ingest_subject = event_ingest_started.data
-  logging.log(logging.Info, "[supervisor] Event ingest started")
-
   // 4. Resolve Discord channel name → ID mapping
   let channel_map = case
     rest.list_channels(global_config.discord.token, global_config.discord.guild)
@@ -109,84 +105,70 @@ pub fn start(
   }
 
   // 5. Load domain configs (no actors — brain handles all channels directly)
-  let #(brain_domains, domain_configs) = case scaffold.list_domains(paths) {
-    Ok(names) -> {
-      let results =
-        list.filter_map(names, fn(name) {
-          let config_path = xdg.domain_config_path(paths, name)
-          // Ensure AGENTS.md exists for this domain
-          let agents_path = xdg.domain_config_dir(paths, name) <> "/AGENTS.md"
-          case simplifile.is_file(agents_path) {
-            Ok(True) -> Nil
-            _ -> {
-              let _ =
-                simplifile.write(
-                  agents_path,
-                  "# " <> name <> "\n\nDomain-specific instructions go here.\n",
-                )
-              Nil
-            }
-          }
-          case simplifile.read(config_path) {
-            Ok(toml_content) -> {
-              case config.parse_domain(toml_content) {
-                Ok(cfg) -> {
-                  // Resolve channel name → ID. If the config value is already numeric, use it directly.
-                  let discord_channel_id = case
-                    list.find(channel_map, fn(c) { c.0 == cfg.discord_channel })
-                  {
-                    Ok(#(_, id)) -> id
-                    Error(_) -> cfg.discord_channel
-                  }
-                  let domain_channels =
-                    [
-                      brain.DomainInfo(
-                        name: name,
-                        platform: discord.platform_name,
-                        channel_id: discord_channel_id,
-                      ),
-                    ]
-                    |> list.append(case cfg.blather_channel {
-                      option.Some(channel_id) -> [
-                        brain.DomainInfo(
-                          name: name,
-                          platform: blather_types.platform_name,
-                          channel_id: channel_id,
-                        ),
-                      ]
-                      option.None -> []
-                    })
-                  Ok(#(domain_channels, #(name, cfg)))
-                }
-                Error(e) -> {
-                  logging.log(
-                    logging.Error,
-                    "[supervisor] Failed to parse domain " <> name <> ": " <> e,
-                  )
-                  Error(Nil)
-                }
-              }
-            }
-            Error(_) -> {
-              logging.log(
-                logging.Error,
-                "[supervisor] Failed to read config for domain " <> name,
-              )
-              Error(Nil)
-            }
-          }
-        })
-      let domains = list.flat_map(results, fn(r) { r.0 })
-      let configs = list.map(results, fn(r) { r.1 })
-      #(domains, configs)
-    }
-    Error(_) -> #([], [])
-  }
+  use domain_info <- result.try(load_domain_configs(paths, channel_map))
+  let #(brain_domains, domain_configs) = domain_info
+  let discord_domains =
+    list.filter(brain_domains, fn(d) { d.platform == discord.platform_name })
   logging.log(
     logging.Info,
     "[supervisor] Domains: "
       <> string.join(list.map(domain_configs, fn(dc) { dc.0 }), ", "),
   )
+
+  let discord_client_val =
+    discord_client.production(global_config.discord.token)
+
+  // 5a. Start cognitive delivery, worker, and event_ingest actors.
+  // event_ingest remains fire-and-forget; the cognitive worker observes only
+  // successfully persisted event IDs, and delivery only sees validated
+  // decisions after they are appended to the decision log.
+  use default_channel_id <- result.try(resolve_channel_id(
+    "discord.default_channel",
+    global_config.discord.default_channel,
+    channel_map,
+  ))
+  let delivery_targets = [
+    cognitive_delivery.default_target(default_channel_id),
+    ..list.map(discord_domains, fn(d) {
+      cognitive_delivery.domain_target(d.name, d.channel_id)
+    })
+  ]
+  let delivery_target_ids =
+    cognitive_delivery.allowed_target_ids(delivery_targets)
+  let assert Ok(delivery_started) =
+    cognitive_delivery.start_with_history(
+      paths,
+      discord_client_val,
+      delivery_targets,
+      global_config.notifications.digest_windows,
+      db_subject,
+      None,
+    )
+  let delivery_subject = delivery_started.data
+  logging.log(logging.Info, "[supervisor] Cognitive delivery started")
+
+  use cognitive_llm_config <- result.try(
+    models.build_llm_config(global_config.models.brain)
+    |> result.map_error(fn(e) {
+      "Failed to configure cognitive worker model: " <> e
+    }),
+  )
+  let assert Ok(cognitive_started) =
+    cognitive_worker.start_with_delivery(
+      db_subject,
+      paths,
+      cognitive_llm_config,
+      delivery_subject,
+      delivery_target_ids,
+      global_config.notifications.digest_windows,
+    )
+  let cognitive_subject = cognitive_started.data
+  logging.log(logging.Info, "[supervisor] Cognitive worker started")
+
+  let assert Ok(event_ingest_started) =
+    event_ingest.start_with_cognitive(db_subject, Some(cognitive_subject))
+  let event_ingest_subject = event_ingest_started.data
+  logging.log(logging.Info, "[supervisor] Event ingest started")
 
   // 5. Load validation rules
   let validation_rules = case
@@ -243,8 +225,6 @@ pub fn start(
   logging.log(logging.Info, "[supervisor] Channel supervisor started")
 
   // 6. Start brain (with flare_subject and channel_supervisor)
-  let discord_client_val =
-    discord_client.production(global_config.discord.token)
   let llm_client_val = llm_client.production()
   let skill_runner_val = skill_runner.production()
   let browser_runner_val = browser_runner.production()
@@ -252,13 +232,12 @@ pub fn start(
   // Platform-keyed transport registry. Discord is always present;
   // Blather joins when the optional `[blather]` config block is set.
   let transports = case global_config.blather {
-    option.Some(b) ->
+    Some(b) ->
       dict.from_list([
         #(discord.platform_name, discord_client_val),
         #(blather_types.platform_name, blather_client.production(b)),
       ])
-    option.None ->
-      dict.from_list([#(discord.platform_name, discord_client_val)])
+    None -> dict.from_list([#(discord.platform_name, discord_client_val)])
   }
   use brain_subject <- result.try(
     brain.start(brain.BrainConfig(
@@ -342,6 +321,9 @@ pub fn start(
     ctl.start(ctl.CtlContext(
       paths: paths,
       db_subject: db_subject,
+      event_ingest_subject: event_ingest_subject,
+      cognitive_subject: cognitive_subject,
+      delivery_subject: Some(delivery_subject),
       domains: list.map(domain_configs, fn(dc) { dc.0 }),
       dream_model: global_config.models.dream,
       dream_budget_percent: global_config.dreaming_budget_percent,
@@ -368,7 +350,7 @@ pub fn start(
     ))
 
   let with_blather = case global_config.blather {
-    option.Some(b) -> {
+    Some(b) -> {
       logging.log(
         logging.Info,
         "[supervisor] Starting Blather poller: " <> b.url,
@@ -378,7 +360,7 @@ pub fn start(
         blather_poller.supervised(b, brain_subject),
       )
     }
-    option.None -> base_tree
+    None -> base_tree
   }
 
   let result = static_supervisor.start(with_blather)
@@ -402,6 +384,143 @@ fn migrate_directories(paths: xdg.Paths) -> Nil {
     "config",
   )
   migrate_dir(paths.data <> "/workstreams", paths.data <> "/domains", "data")
+}
+
+fn load_domain_configs(
+  paths: xdg.Paths,
+  channel_map: List(#(String, String)),
+) -> Result(
+  #(List(brain.DomainInfo), List(#(String, config.DomainConfig))),
+  String,
+) {
+  case scaffold.list_domains(paths) {
+    Error(_) -> Ok(#([], []))
+    Ok(names) -> {
+      use results <- result.try(
+        names
+        |> list.try_map(fn(name) {
+          load_domain_config(paths, channel_map, name)
+        }),
+      )
+      Ok(#(
+        list.flat_map(results, fn(r) { r.0 }),
+        list.map(results, fn(r) { r.1 }),
+      ))
+    }
+  }
+}
+
+fn load_domain_config(
+  paths: xdg.Paths,
+  channel_map: List(#(String, String)),
+  name: String,
+) -> Result(#(List(brain.DomainInfo), #(String, config.DomainConfig)), String) {
+  let config_path = xdg.domain_config_path(paths, name)
+  let agents_path = xdg.domain_config_dir(paths, name) <> "/AGENTS.md"
+  case simplifile.is_file(agents_path) {
+    Ok(True) -> Nil
+    _ -> {
+      let _ =
+        simplifile.write(
+          agents_path,
+          "# " <> name <> "\n\nDomain-specific instructions go here.\n",
+        )
+      Nil
+    }
+  }
+
+  use toml_content <- result.try(
+    simplifile.read(config_path)
+    |> result.map_error(fn(_) {
+      "[supervisor] Failed to read config for domain " <> name
+    }),
+  )
+  use cfg <- result.try(
+    config.parse_domain(toml_content)
+    |> result.map_error(fn(e) {
+      "[supervisor] Failed to parse domain " <> name <> ": " <> e
+    }),
+  )
+  use channel_id <- result.try(resolve_channel_id(
+    "domain " <> name <> " discord.channel",
+    cfg.discord_channel,
+    channel_map,
+  ))
+  let domains =
+    [
+      brain.DomainInfo(
+        name: name,
+        platform: discord.platform_name,
+        channel_id: channel_id,
+      ),
+    ]
+    |> list.append(case cfg.blather_channel {
+      Some(channel_id) -> [
+        brain.DomainInfo(
+          name: name,
+          platform: blather_types.platform_name,
+          channel_id: channel_id,
+        ),
+      ]
+      None -> []
+    })
+  Ok(#(domains, #(name, cfg)))
+}
+
+/// Resolve a configured Discord channel name to a numeric channel ID.
+///
+/// Numeric IDs are accepted directly. Names must be present in the channel map;
+/// silently falling back to the unresolved name causes Discord sends to fail
+/// later with opaque 400s.
+pub fn resolve_channel_id(
+  label: String,
+  name_or_id: String,
+  channel_map: List(#(String, String)),
+) -> Result(String, String) {
+  let raw = string.trim(name_or_id)
+  let name = case string.starts_with(raw, "#") {
+    True -> string.drop_start(raw, 1)
+    False -> raw
+  }
+
+  case is_discord_snowflake(raw) {
+    True -> Ok(raw)
+    False ->
+      case list.find(channel_map, fn(channel) { channel.0 == name }) {
+        Ok(#(_, id)) -> Ok(id)
+        Error(_) ->
+          Error(
+            "Configured Discord channel for "
+            <> label
+            <> " was not found: '"
+            <> name_or_id
+            <> "'. Use an existing text channel name or numeric channel ID. Available text channels: "
+            <> available_channel_names(channel_map),
+          )
+      }
+  }
+}
+
+fn is_discord_snowflake(value: String) -> Bool {
+  let chars = string.to_graphemes(value)
+  string.length(value) >= 17
+  && string.length(value) <= 22
+  && list.all(chars, is_digit)
+}
+
+fn is_digit(char: String) -> Bool {
+  list.contains(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], char)
+}
+
+fn available_channel_names(channel_map: List(#(String, String))) -> String {
+  case channel_map {
+    [] -> "(none discovered)"
+    _ ->
+      channel_map
+      |> list.map(fn(channel) { channel.0 })
+      |> list.sort(string.compare)
+      |> string.join(", ")
+  }
 }
 
 fn migrate_dir(from: String, to: String, label: String) -> Nil {

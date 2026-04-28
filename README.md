@@ -13,8 +13,11 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Every 
 - **Domains** — isolated knowledge partitions, one per area of your life. Each has its own instructions, memory, state, and Discord channel. The brain sees across all of them.
 - **Flares** — long-running coding-agent sessions dispatched via ACP. Active / parked / failed lifecycle with SQLite persistence, recovery on restart, and rekindle on schedule.
 - **Memory** — active review persists state and knowledge every N turns; nightly dreaming consolidates the archive offline, promotes durable facts, and enforces a token budget.
+- **Concern tracking** — Aura can internally track durable objects of care, work, watch, or risk from natural conversation and ambient events using ordinary markdown state files.
 - **Skills** — language-agnostic CLI tools. Drop a script in a directory, it becomes a capability the LLM can call.
-- **Self-diagnosis** — ships with man pages. The brain reads them via the shell tool when it needs to understand its own behavior.
+- **Self-diagnosis** — ships with man pages plus live cognitive smoke/eval/replay, natural correction capture, replay-aware improvement proposals, delivery probe, digest flush, and delivery dead-letter retry commands. The brain reads them via the shell tool when it needs to understand its own behavior.
+- **Attention feedback** — ordinary feedback about recent Aura notifications is grounded in the messages Aura actually sent, then saved through attention memory with replay evidence when a concrete event is resolved.
+- **Shell approvals** — dangerous shell commands require Discord button approval; unresolved approvals are invalidated visibly after actor restart.
 - **Pluggable gateways and ACP transports** — Discord first; multi-platform conversation schema from day one.
 
 ## Requirements
@@ -25,6 +28,22 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Every 
 - A Discord bot token ([create one here](https://discord.com/developers/applications))
 - An LLM API key (ZAI/GLM or Anthropic/Claude)
 - agent-browser (npm) for the browser tool: `npm install -g agent-browser && agent-browser install`
+
+### Nix Dev Shell
+
+Aura includes a flake for a reproducible contributor toolchain:
+
+```bash
+nix develop
+gleam test
+```
+
+The shell provides Gleam, Erlang/OTP 27, rebar3, a C toolchain, tmux, SQLite,
+and Node.js. If `esqlite` reports `corrupt atom table` after `gleam clean`, run:
+
+```bash
+aura-fix-esqlite-nif
+```
 
 ## Quick Start
 
@@ -46,6 +65,9 @@ gleam run -- start
 ```
 supervisor (OneForOne)
 ├── db                   SQLite actor — serializes all DB reads/writes
+├── event_ingest         Normalizes, tags, and persists integration events
+├── cognitive_worker     Async model-backed decision harness for events
+├── cognitive_delivery   Validated attention delivery, digest queue, ledger, history writes
 ├── poller               Gateway WebSocket (Discord first, pluggable)
 ├── flare_manager        Flare lifecycle — roster, dispatch, monitor, persist
 ├── channel_supervisor   Hosts one actor per Discord channel
@@ -64,18 +86,25 @@ A.U.R.A. follows the XDG Base Directory specification:
   config.toml                        # Global settings
   SOUL.md                            # Personality and boundaries
   USER.md                            # User profile
+  policies/*.md                      # Cognitive policies
   schedules.toml                     # Scheduled tasks
   domains/<name>/config.toml         # Per-domain settings
   domains/<name>/AGENTS.md           # Domain instructions
 
 ~/.local/share/aura/               # Data
   aura.db                            # Conversations (SQLite)
+  cognitive/decisions.jsonl          # Validated cognitive decisions
+  cognitive/deliveries.jsonl         # Cognitive delivery ledger and dead letters
+  cognitive/labels.jsonl             # Human replay labels
+  cognitive/patch-proposals/*.md     # Reviewable policy/concern patch briefs
+  cognitive/improvement-proposals/*.md # Replay-backed improvement reports
   skills/<name>/SKILL.md             # Skills
   domains/<name>/MEMORY.md           # Durable domain knowledge
   domains/<name>/repos/              # Project repositories
 
 ~/.local/state/aura/               # Runtime state
   MEMORY.md                          # Global cross-domain memory
+  concerns/*.md                      # Cognitive concern files
   domains/<name>/STATE.md            # Current domain status
 ```
 
@@ -89,7 +118,7 @@ See [docs/CONFIG.md](docs/CONFIG.md) for the full reference.
 [discord]
 token = "${AURA_DISCORD_TOKEN}"
 guild = "your-guild-id"
-default_channel = "aura"
+default_channel = "general"
 
 [blather]
 url = "http://10.0.0.2:18100/api"

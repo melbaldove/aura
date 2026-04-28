@@ -13,26 +13,24 @@ import gleam/string
 import logging
 import simplifile
 
+pub type CliCommand {
+  CliStart
+  CliDoctor
+  CliCtl(command: String)
+  CliOauthGmail(email: String)
+}
+
 pub fn main() {
-  let args = get_args()
-  case args {
-    ["doctor"] -> {
+  case parse_args(get_args()) {
+    CliDoctor -> {
       doctor.run()
       halt(0)
     }
-    ["dream"] -> {
-      run_ctl("dream")
+    CliCtl(command) -> {
+      run_ctl(command)
       halt(0)
     }
-    ["status"] -> {
-      run_ctl("status")
-      halt(0)
-    }
-    ["ping"] -> {
-      run_ctl("ping")
-      halt(0)
-    }
-    ["oauth", "gmail", email] -> {
+    CliOauthGmail(email) -> {
       logging.configure()
       case oauth_cli.run_gmail(email) {
         Ok(path) -> {
@@ -45,8 +43,57 @@ pub fn main() {
         }
       }
     }
-    _ -> run_start()
+    CliStart -> run_start()
   }
+}
+
+fn parse_args(args: List(String)) -> CliCommand {
+  case drop_leading_dash_dash(args) {
+    [] -> CliStart
+    ["start"] -> CliStart
+    ["doctor"] -> CliDoctor
+    ["dream"] -> CliCtl("dream")
+    ["status"] -> CliCtl("status")
+    ["ping"] -> CliCtl("ping")
+    ["cognitive-smoke", "gmail-rel42"] -> CliCtl("cognitive-smoke gmail-rel42")
+    ["cognitive-eval", "fixtures"] -> CliCtl("cognitive-eval fixtures")
+    ["cognitive-replay", "labels"] -> CliCtl("cognitive-replay labels")
+    ["cognitive-replay", "propose-patches"] ->
+      CliCtl("cognitive-replay propose-patches")
+    ["cognitive-improve", "propose"] -> CliCtl("cognitive-improve propose")
+    ["cognitive-test", "deliver-now"] -> CliCtl("cognitive-test deliver-now")
+    ["cognitive-digest", "flush"] -> CliCtl("cognitive-digest flush")
+    ["cognitive-delivery", "retry-dead-letter"] ->
+      CliCtl("cognitive-delivery retry-dead-letter")
+    ["cognitive-label", event_id, label] ->
+      CliCtl("cognitive-label " <> event_id <> " " <> label)
+    ["cognitive-label", event_id, label, expected_attention, ..note_words] ->
+      CliCtl(
+        "cognitive-label "
+        <> event_id
+        <> " "
+        <> label
+        <> " "
+        <> expected_attention
+        <> case string.join(note_words, " ") {
+          "" -> ""
+          note -> " " <> note
+        },
+      )
+    ["oauth", "gmail", email] -> CliOauthGmail(email)
+    _ -> CliStart
+  }
+}
+
+fn drop_leading_dash_dash(args: List(String)) -> List(String) {
+  case args {
+    ["--", ..rest] -> rest
+    _ -> args
+  }
+}
+
+pub fn parse_args_for_test(args: List(String)) -> CliCommand {
+  parse_args(args)
 }
 
 fn run_start() {
@@ -100,7 +147,13 @@ fn run_start() {
 fn run_ctl(command: String) {
   let paths = xdg.resolve()
   case ctl.send(paths, command) {
-    Ok(response) -> io.println(response)
+    Ok(response) -> {
+      io.println(response)
+      case string.starts_with(response, "ERROR:") {
+        True -> halt(1)
+        False -> Nil
+      }
+    }
     Error(e) -> {
       io.println("ERROR: " <> e)
       halt(1)
@@ -135,5 +188,5 @@ fn halt(code: Int) -> Nil
 @external(erlang, "aura_runtime_ffi", "sleep_forever")
 fn sleep_forever() -> Nil
 
-@external(erlang, "init", "get_plain_arguments")
+@external(erlang, "aura_runtime_ffi", "get_plain_arguments")
 fn get_args() -> List(String)

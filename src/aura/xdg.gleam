@@ -73,6 +73,34 @@ pub fn events_path(paths: Paths) -> String {
   paths.data <> "/events.jsonl"
 }
 
+pub fn policy_dir(paths: Paths) -> String {
+  paths.config <> "/policies"
+}
+
+pub fn cognitive_dir(paths: Paths) -> String {
+  paths.data <> "/cognitive"
+}
+
+pub fn decisions_path(paths: Paths) -> String {
+  cognitive_dir(paths) <> "/decisions.jsonl"
+}
+
+pub fn deliveries_path(paths: Paths) -> String {
+  cognitive_dir(paths) <> "/deliveries.jsonl"
+}
+
+pub fn labels_path(paths: Paths) -> String {
+  cognitive_dir(paths) <> "/labels.jsonl"
+}
+
+pub fn attention_memory_path(paths: Paths) -> String {
+  cognitive_dir(paths) <> "/ATTENTION.md"
+}
+
+pub fn concerns_dir(paths: Paths) -> String {
+  paths.state <> "/concerns"
+}
+
 pub fn db_path(paths: Paths) -> String {
   paths.data <> "/aura.db"
 }

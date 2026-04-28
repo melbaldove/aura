@@ -3,7 +3,7 @@ import gleam/result
 import gleam/string
 import sqlight
 
-const current_version = 6
+const current_version = 7
 
 /// Create all tables, indexes, FTS5 virtual table, and triggers if they do not
 /// already exist, then run any pending schema migrations.
@@ -275,6 +275,26 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
   ",
   ))
 
+  use _ <- result.try(exec(
+    conn,
+    "
+    CREATE TABLE IF NOT EXISTS shell_approvals (
+      id TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      command TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL,
+      requested_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    )
+  ",
+  ))
+  use _ <- result.try(exec(
+    conn,
+    "CREATE INDEX IF NOT EXISTS idx_shell_approvals_channel_status ON shell_approvals(channel_id, status)",
+  ))
+
   // Set or migrate schema version
   migrate_version(conn)
 }
@@ -516,6 +536,30 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
             )
           ",
           )
+        False -> Ok(Nil)
+      })
+      use _ <- result.try(case v < 7 {
+        True -> {
+          use _ <- result.try(exec(
+            conn,
+            "
+            CREATE TABLE IF NOT EXISTS shell_approvals (
+              id TEXT PRIMARY KEY,
+              channel_id TEXT NOT NULL,
+              message_id TEXT NOT NULL,
+              command TEXT NOT NULL,
+              reason TEXT NOT NULL,
+              status TEXT NOT NULL,
+              requested_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            )
+          ",
+          ))
+          exec(
+            conn,
+            "CREATE INDEX IF NOT EXISTS idx_shell_approvals_channel_status ON shell_approvals(channel_id, status)",
+          )
+        }
         False -> Ok(Nil)
       })
       exec(

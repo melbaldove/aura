@@ -6,6 +6,7 @@ import gleam/option.{None}
 import gleam/string
 import gleeunit
 import gleeunit/should
+import simplifile
 
 pub fn main() {
   gleeunit.main()
@@ -16,10 +17,7 @@ pub fn main() {
 // ---------------------------------------------------------------------------
 
 /// Build a default client config pointing at the given fake server.
-fn make_config(
-  server: fake.FakeMcpServer,
-  name: String,
-) -> client.ClientConfig {
+fn make_config(server: fake.FakeMcpServer, name: String) -> client.ClientConfig {
   client.new_config(
     name: name,
     command: fake.command(server),
@@ -53,9 +51,7 @@ fn start_unlinked(config: client.ClientConfig) -> Subject(client.ClientMessage) 
   started.data
 }
 
-fn monitor_subject(
-  subject: Subject(client.ClientMessage),
-) -> process.Monitor {
+fn monitor_subject(subject: Subject(client.ClientMessage)) -> process.Monitor {
   let assert Ok(pid) = process.subject_owner(subject)
   process.monitor(pid)
 }
@@ -115,6 +111,20 @@ fn await_down_abnormal_reason(
   }
 }
 
+fn await_ready(server: fake.FakeMcpServer, timeout_ms: Int) -> Bool {
+  case simplifile.is_file(fake.ready_path(server)) {
+    Ok(True) -> True
+    _ ->
+      case timeout_ms <= 0 {
+        True -> False
+        False -> {
+          process.sleep(25)
+          await_ready(server, timeout_ms - 25)
+        }
+      }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -133,11 +143,13 @@ pub fn client_reaches_ready_after_handshake_test() {
     ])
   let subject =
     start_unlinked(
-      client.ClientConfig(..make_config(server, "inbox"), handshake_timeout_ms: 1000),
+      client.ClientConfig(
+        ..make_config(server, "inbox"),
+        handshake_timeout_ms: 1000,
+      ),
     )
 
-  // Give the handshake a moment to complete.
-  process.sleep(200)
+  await_ready(server, 5000) |> should.be_true
 
   let assert Ok(pid) = process.subject_owner(subject)
   process.is_alive(pid) |> should.be_true
@@ -227,8 +239,7 @@ pub fn client_handshake_deadline_stops_actor_test() {
       // silent, tripping the client's handshake deadline.
       fake.ExpectRequest("__never_sent__"),
     ])
-  let subject =
-    start_unlinked(make_config_with_deadline(server, "inbox", 100))
+  let subject = start_unlinked(make_config_with_deadline(server, "inbox", 100))
   let monitor = monitor_subject(subject)
 
   let reason = await_down_abnormal_reason(monitor, 3000)
@@ -274,8 +285,7 @@ pub fn client_call_tool_returns_server_result_test() {
     ])
   let subject = start_unlinked(make_config(server, "inbox"))
 
-  // Give the handshake a moment to complete before calling the tool.
-  process.sleep(500)
+  await_ready(server, 5000) |> should.be_true
 
   let result =
     client.call_tool(
@@ -304,15 +314,9 @@ pub fn client_call_tool_surfaces_server_error_test() {
     ])
   let subject = start_unlinked(make_config(server, "inbox"))
 
-  process.sleep(500)
+  await_ready(server, 5000) |> should.be_true
 
-  let result =
-    client.call_tool(
-      subject,
-      "missing",
-      json.object([]),
-      5000,
-    )
+  let result = client.call_tool(subject, "missing", json.object([]), 5000)
   case result {
     Error(msg) -> {
       string.contains(msg, "mcp tool error") |> should.be_true
@@ -368,11 +372,10 @@ pub fn client_call_tool_timeout_cleans_up_pending_test() {
     ])
   let subject = start_unlinked(make_config(server, "inbox"))
 
-  process.sleep(500)
+  await_ready(server, 5000) |> should.be_true
 
   // First call times out. Error message must name the tool.
-  let first =
-    client.call_tool(subject, "slow_tool", json.object([]), 200)
+  let first = client.call_tool(subject, "slow_tool", json.object([]), 200)
   case first {
     Error(msg) -> {
       string.contains(msg, "timed out") |> should.be_true
@@ -386,8 +389,7 @@ pub fn client_call_tool_timeout_cleans_up_pending_test() {
 
   // Second call must succeed end-to-end — the actor isn't wedged and
   // the abandoned pending entry didn't swallow the new correlation id.
-  let second =
-    client.call_tool(subject, "fast_tool", json.object([]), 5000)
+  let second = client.call_tool(subject, "fast_tool", json.object([]), 5000)
   second |> should.be_ok
 
   client.stop(subject)
@@ -410,13 +412,7 @@ pub fn client_call_tool_before_ready_returns_error_test() {
   let subject =
     start_unlinked(make_config_with_deadline(server, "inbox", 10_000))
 
-  let result =
-    client.call_tool(
-      subject,
-      "echo",
-      json.object([]),
-      1000,
-    )
+  let result = client.call_tool(subject, "echo", json.object([]), 1000)
   case result {
     Error(msg) -> msg |> should.equal("mcp client not ready")
     Ok(_) -> should.fail()

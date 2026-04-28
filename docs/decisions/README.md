@@ -55,10 +55,21 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [024](024-dual-framework-testing.md) | Dual-framework testing (gleeunit + dream_test) | Accepted |
 | [025](025-ambient-awareness-via-mcp.md) | Ambient awareness via MCP and generalized flares | Superseded by ADR-026 |
 | [026](026-native-integrations-no-public-endpoint.md) | Native integrations — no public endpoint, no MCP subscribe | Accepted |
+| [027](027-shell-approval-restart-cancellation.md) | Restart-cancel shell approvals | Accepted |
+| [028](028-cognitive-attention-delivery.md) | Cognitive attention delivery | Accepted |
+| [029](029-cognitive-replay-labels.md) | Cognitive replay labels | Accepted |
+| [030](030-text-first-concern-tracking.md) | Text-first concern tracking | Accepted |
+| [031](031-cognitive-delivery-dead-letters.md) | Cognitive delivery dead letters | Accepted |
+| [032](032-cognitive-correction-labels.md) | Cognitive correction labels | Accepted |
+| [033](033-natural-cognitive-feedback.md) | Natural cognitive feedback capture | Partially superseded by ADR-035 and ADR-036 |
+| [034](034-replay-aware-cognitive-improvement.md) | Replay-aware cognitive improvement proposals | Accepted |
+| [035](035-no-semantic-memory-guard.md) | No semantic memory guard for cognitive feedback | Partially superseded by ADR-036 |
+| [036](036-attention-memory-feedback.md) | Attention memory feedback | Accepted |
+| [037](037-recent-attention-output-context.md) | Recent attention output context | Accepted |
 
 ## Adding a new ADR
 
 1. Copy the template above
-2. Number sequentially (next is 027)
+2. Number sequentially (next is 038)
 3. Add to the index in this README
 4. Commit with the code change it relates to

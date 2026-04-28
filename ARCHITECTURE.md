@@ -7,6 +7,8 @@ Aura is an OTP application where every component is a supervised actor. Actors c
 ```
 supervisor (OneForOne, 3 restarts / 5s)
 ├── db              SQLite actor — single writer, serialized via mailbox
+├── event_ingest    Normalizes, tags, dedupes, and persists integration events
+├── cognitive_worker Async model-backed decision harness for persisted events
 ├── poller          Discord WebSocket — reconnects with exponential backoff
 ├── brain           Routes messages, runs LLM tool loop with streaming
 ├── workstream_sup  Factory — one actor per configured workstream
@@ -43,6 +45,44 @@ supervisor (OneForOne, 3 restarts / 5s)
 
 Brain routes by `channel_id`. Each workstream has a dedicated Discord channel. Messages in a workstream's channel go directly to that workstream actor — no LLM classification needed. Messages in unmatched channels (like #aura) are handled by the brain directly.
 
+### Ambient Event Flow
+
+```
+Integration actor
+-> event_ingest
+-> db.events
+-> cognitive_worker
+-> Observation + EvidenceBundle
+-> text policy + concern ContextPacket
+-> LLM DecisionEnvelope
+-> validator
+-> ~/.local/share/aura/cognitive/decisions.jsonl
+-> cognitive_delivery
+-> Discord + db.messages
+-> [cognitive] decision_ready log summary
+```
+
+`event_ingest` remains fire-and-forget for producers. It normalizes, tags, and
+persists `AuraEvent`s; only successfully inserted events notify the
+`cognitive_worker`, so duplicate `(source, external_id)` events are not handled
+twice. The cognitive worker loads the persisted event by ID, extracts citable
+evidence, loads ordinary markdown policy/concern context, calls the configured
+brain model for one decision envelope, validates citations/attention proof/
+authority gates/patch paths, and appends accepted decisions to JSONL. It does
+not mutate memory, update `STATE.md`, or dispatch flares. Validated delivery
+decisions flow through `cognitive_delivery`: `record` stays ledger-only,
+`digest` queues until a digest window, and `surface_now` / `ask_now` send to
+Discord immediately. Any successful user-facing cognitive delivery also appends
+the exact sent message to the matching Discord conversation history.
+On later turns in that channel, the brain renders recent successful
+user-facing attention outputs from the delivery ledger plus conversation
+history into prompt context so natural feedback can refer to what Aura actually
+showed before falling back to raw event search.
+Content-bearing integrations must persist decision-sufficient payloads. For
+Gmail, this means the `AuraEvent.data_json` includes envelope fields plus
+bounded `body_text`; subject-only email events are not sufficient for cognitive
+judgment.
+
 ## Data model
 
 ### SQLite (primary persistence)
@@ -74,6 +114,26 @@ messages
 messages_fts (FTS5 virtual table)
 └── content                      -- auto-synced via triggers
     tokenize='porter unicode61'
+
+shell_approvals
+├── id TEXT PRIMARY KEY          -- Discord button approval id
+├── channel_id TEXT              -- Discord channel containing the request
+├── message_id TEXT              -- approval message to edit
+├── command TEXT                 -- command awaiting approval
+├── reason TEXT                  -- shell scanner rationale
+├── status TEXT                  -- pending/approved/rejected/expired/superseded/restart_cancelled
+├── requested_at_ms INTEGER
+└── updated_at_ms INTEGER
+
+events
+├── id TEXT PRIMARY KEY
+├── source TEXT                  -- gmail, linear, calendar, github, etc.
+├── type TEXT                    -- source event type
+├── subject TEXT                 -- human-readable summary
+├── time_ms INTEGER
+├── tags_json TEXT
+├── external_id TEXT
+└── data_json TEXT               -- raw source payload
 ```
 
 ### In-memory (hot cache)
@@ -90,10 +150,13 @@ Key is `platform:platform_id`. Loaded from SQLite on first access, written throu
 ~/.config/aura/config.toml       Global settings
 ~/.config/aura/SOUL.md           Agent personality
 ~/.config/aura/USER.md           User profile
+~/.config/aura/policies/*.md     Cognitive policy text
 ~/.config/aura/.env              Credentials
 ~/.local/share/aura/aura.db      SQLite database
+~/.local/share/aura/cognitive/   Cognitive decision/evaluation logs
 ~/.local/share/aura/skills/      Skill definitions
 ~/.local/state/aura/MEMORY.md    Agent long-term memory
+~/.local/state/aura/concerns/*.md Cognitive concern text
 ```
 
 ## LLM integration

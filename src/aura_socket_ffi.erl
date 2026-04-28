@@ -77,16 +77,24 @@ connect_and_send(SocketPath, Command) ->
     ], 5000) of
         {ok, Sock} ->
             ok = gen_tcp:send(Sock, [Command, <<"\n">>]),
-            Result = case gen_tcp:recv(Sock, 0, 30000) of
-                {ok, Data} -> {ok, string:trim(Data)};
-                {error, Reason} -> {error, iolist_to_binary(io_lib:format("~p", [Reason]))}
-            end,
+            %% Cognitive eval commands run multiple sequential live model calls.
+            Result = recv_all(Sock, [], 900000),
             gen_tcp:close(Sock),
             Result;
         {error, enoent} ->
             {error, <<"Aura is not running (socket not found)">>};
         {error, econnrefused} ->
             {error, <<"Aura is not running (connection refused)">>};
+        {error, Reason} ->
+            {error, iolist_to_binary(io_lib:format("~p", [Reason]))}
+    end.
+
+recv_all(Sock, Acc, Timeout) ->
+    case gen_tcp:recv(Sock, 0, Timeout) of
+        {ok, Data} ->
+            recv_all(Sock, [Data | Acc], Timeout);
+        {error, closed} ->
+            {ok, string:trim(iolist_to_binary(lists:reverse(Acc)))};
         {error, Reason} ->
             {error, iolist_to_binary(io_lib:format("~p", [Reason]))}
     end.

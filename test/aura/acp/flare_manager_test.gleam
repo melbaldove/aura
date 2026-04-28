@@ -1,4 +1,8 @@
 import aura/acp/flare_manager
+import aura/acp/provider
+import aura/acp/transport
+import aura/acp/types
+import gleam/option.{type Option, None}
 import gleeunit/should
 
 // ---------------------------------------------------------------------------
@@ -156,4 +160,164 @@ pub fn resolve_prompt_archived_rejects_test() {
     flare_manager.RejectPrompt(_) -> Nil
     _ -> should.fail()
   }
+}
+
+// ---------------------------------------------------------------------------
+// execution persistence + recovery helpers
+// ---------------------------------------------------------------------------
+
+pub fn execution_roundtrip_preserves_provider_binary_worktree_and_timeout_test() {
+  let execution =
+    flare_manager.FlareExecution(
+      provider: "generic",
+      binary: "codex",
+      worktree: False,
+      timeout_ms: 45 * 60_000,
+      transport: flare_manager.HttpTransport(
+        server_url: "https://acp.example.test",
+        agent_name: "codex",
+      ),
+    )
+
+  let json = flare_manager.execution_to_json(execution)
+
+  flare_manager.execution_from_json(json)
+  |> should.equal(Ok(execution))
+}
+
+pub fn execution_from_legacy_payload_uses_defaults_test() {
+  flare_manager.execution_from_json("{}")
+  |> should.equal(Ok(flare_manager.default_execution()))
+}
+
+pub fn execution_from_malformed_payload_fails_test() {
+  flare_manager.execution_from_json("{not-json")
+  |> should.be_error
+}
+
+pub fn control_handle_for_flare_recovers_http_handle_from_session_id_test() {
+  let flare =
+    sample_flare(
+      session_id: "run-123",
+      execution_json: "{}",
+      handle: None,
+      workspace: "/tmp/repo",
+    )
+
+  flare_manager.control_handle_for_flare(
+    transport.Http("https://example.test", "codex"),
+    flare,
+  )
+  |> should.equal(Ok(transport.HttpHandle(run_id: "run-123")))
+}
+
+pub fn task_spec_for_rekindle_preserves_execution_settings_test() {
+  let execution_json =
+    flare_manager.execution_to_json(flare_manager.FlareExecution(
+      provider: "generic",
+      binary: "codex",
+      worktree: False,
+      timeout_ms: 45 * 60_000,
+      transport: flare_manager.LegacyTransport,
+    ))
+  let flare =
+    sample_flare(
+      session_id: "run-123",
+      execution_json: execution_json,
+      handle: None,
+      workspace: "/tmp/repo",
+    )
+
+  flare_manager.task_spec_for_rekindle(flare, "continue")
+  |> should.equal(
+    Ok(types.TaskSpec(
+      id: "f-123",
+      domain: "demo",
+      prompt: "continue",
+      cwd: "/tmp/repo",
+      timeout_ms: 45 * 60_000,
+      acceptance_criteria: [],
+      provider: provider.Generic("codex"),
+      worktree: False,
+    )),
+  )
+}
+
+pub fn task_spec_for_rekindle_uses_legacy_defaults_test() {
+  let flare =
+    sample_flare(
+      session_id: "run-123",
+      execution_json: "{}",
+      handle: None,
+      workspace: "",
+    )
+
+  flare_manager.task_spec_for_rekindle(flare, "continue")
+  |> should.equal(
+    Ok(types.TaskSpec(
+      id: "f-123",
+      domain: "demo",
+      prompt: "continue",
+      cwd: ".",
+      timeout_ms: 30 * 60_000,
+      acceptance_criteria: [],
+      provider: provider.ClaudeCode,
+      worktree: True,
+    )),
+  )
+}
+
+pub fn control_session_for_flare_uses_persisted_http_transport_test() {
+  let execution_json =
+    flare_manager.execution_to_json(flare_manager.FlareExecution(
+      provider: "generic",
+      binary: "codex",
+      worktree: False,
+      timeout_ms: 45 * 60_000,
+      transport: flare_manager.HttpTransport(
+        server_url: "https://original.example.test",
+        agent_name: "codex",
+      ),
+    ))
+  let flare =
+    sample_flare(
+      session_id: "run-123",
+      execution_json: execution_json,
+      handle: None,
+      workspace: "/tmp/repo",
+    )
+
+  flare_manager.control_session_for_flare(transport.Tmux, flare)
+  |> should.equal(
+    Ok(flare_manager.ControlSession(
+      transport: transport.Http("https://original.example.test", "codex"),
+      handle: transport.HttpHandle(run_id: "run-123"),
+    )),
+  )
+}
+
+fn sample_flare(
+  session_id session_id: String,
+  execution_json execution_json: String,
+  handle handle: Option(transport.SessionHandle),
+  workspace workspace: String,
+) -> flare_manager.FlareRecord {
+  flare_manager.FlareRecord(
+    id: "f-123",
+    label: "demo",
+    status: flare_manager.Active,
+    domain: "demo",
+    thread_id: "thread-1",
+    original_prompt: "fix it",
+    execution_json: execution_json,
+    triggers_json: "{}",
+    tools_json: "{}",
+    workspace: workspace,
+    session_id: session_id,
+    session_name: "demo-f-123",
+    handle: handle,
+    started_at_ms: 0,
+    updated_at_ms: 0,
+    awaiting_response: False,
+  )
 }

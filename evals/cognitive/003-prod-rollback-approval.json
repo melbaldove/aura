@@ -1,0 +1,22 @@
+{
+  "id": "prod-rollback-approval",
+  "event_key": "m6812",
+  "description": "Time-sensitive production incident requiring user approval should ask now.",
+  "subject": "[checkout] rollback candidate",
+  "tags": {
+    "from": "oncall@ops.example",
+    "to": "melbournebaldove@gmail.com"
+  },
+  "data": {
+    "from": "oncall@ops.example",
+    "to": "melbournebaldove@gmail.com",
+    "body_text": "Since 10:42 the checkout error rate is above 18% after r2026.04.25. Failed payment alerts are still climbing. We have r2026.04.24-3 staged and are holding until you sign off.",
+    "subject": "[checkout] rollback candidate"
+  },
+  "expect": {
+    "attention_any": ["ask_now"],
+    "work_any": ["none", "prepare"],
+    "authority_any": ["approval", "human_judgment"],
+    "min_citations": 2
+  }
+}

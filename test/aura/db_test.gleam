@@ -1084,6 +1084,22 @@ pub fn insert_event_duplicate_returns_false_test() {
   process.send(subject, db.Shutdown)
 }
 
+pub fn get_event_returns_inserted_event_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let e = sample_event("e1", "gmail", "msg-1", "hello world", 1000)
+  let assert Ok(True) = db.insert_event(subject, e)
+
+  let assert Ok(Some(stored)) = db.get_event(subject, "e1")
+  stored.id |> should.equal("e1")
+  stored.source |> should.equal("gmail")
+  stored.external_id |> should.equal("msg-1")
+
+  let assert Ok(None) = db.get_event(subject, "missing")
+
+  process.send(subject, db.Shutdown)
+}
+
 pub fn search_events_finds_by_subject_fts_test() {
   let assert Ok(subject) = db.start(":memory:")
 
@@ -1092,8 +1108,7 @@ pub fn search_events_finds_by_subject_fts_test() {
   let assert Ok(True) = db.insert_event(subject, e1)
   let assert Ok(True) = db.insert_event(subject, e2)
 
-  let assert Ok(results) =
-    db.search_events(subject, "invoice", None, None, 10)
+  let assert Ok(results) = db.search_events(subject, "invoice", None, None, 10)
   list.length(results) |> should.equal(1)
   let assert [hit] = results
   hit.id |> should.equal("e1")
@@ -1242,11 +1257,11 @@ pub fn integration_checkpoint_upsert_test() {
   let assert Ok(subject) = db.start(":memory:")
 
   let assert Ok(_) =
-    db.save_integration_checkpoint(subject, "gmail-x", 100, 1, 1_000)
+    db.save_integration_checkpoint(subject, "gmail-x", 100, 1, 1000)
   let assert Ok(_) =
-    db.save_integration_checkpoint(subject, "gmail-x", 100, 2, 2_000)
+    db.save_integration_checkpoint(subject, "gmail-x", 100, 2, 2000)
   let assert Ok(_) =
-    db.save_integration_checkpoint(subject, "gmail-x", 100, 3, 3_000)
+    db.save_integration_checkpoint(subject, "gmail-x", 100, 3, 3000)
 
   db.get_integration_checkpoint(subject, "gmail-x")
   |> should.be_ok
@@ -1259,9 +1274,9 @@ pub fn integration_checkpoint_separate_names_test() {
   let assert Ok(subject) = db.start(":memory:")
 
   let assert Ok(_) =
-    db.save_integration_checkpoint(subject, "gmail-a", 100, 5, 1_000)
+    db.save_integration_checkpoint(subject, "gmail-a", 100, 5, 1000)
   let assert Ok(_) =
-    db.save_integration_checkpoint(subject, "gmail-b", 200, 7, 1_000)
+    db.save_integration_checkpoint(subject, "gmail-b", 200, 7, 1000)
 
   db.get_integration_checkpoint(subject, "gmail-a")
   |> should.be_ok
@@ -1270,6 +1285,70 @@ pub fn integration_checkpoint_separate_names_test() {
   db.get_integration_checkpoint(subject, "gmail-b")
   |> should.be_ok
   |> should.equal(Some(#(200, 7)))
+
+  process.send(subject, db.Shutdown)
+}
+
+fn sample_shell_approval(
+  id: String,
+  channel_id: String,
+) -> db.StoredShellApproval {
+  db.StoredShellApproval(
+    id: id,
+    channel_id: channel_id,
+    message_id: "msg-" <> id,
+    command: "rm -rf /tmp/nope",
+    reason: "dangerous command",
+    status: "pending",
+    requested_at_ms: 1000,
+    updated_at_ms: 1000,
+  )
+}
+
+pub fn shell_approval_load_pending_and_status_transition_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(_) =
+    db.save_shell_approval(subject, sample_shell_approval("sh1", "ch1"))
+  let assert Ok(_) =
+    db.save_shell_approval(subject, sample_shell_approval("sh2", "ch2"))
+
+  let assert Ok(cancelled) =
+    db.load_pending_shell_approvals_for_channel(subject, "ch1")
+  cancelled |> list.length |> should.equal(1)
+  let assert [approval] = cancelled
+  approval.id |> should.equal("sh1")
+  approval.status |> should.equal("pending")
+
+  let assert Ok(_) =
+    db.update_shell_approval_status(subject, "sh1", "restart_cancelled", 2000)
+
+  db.load_pending_shell_approvals_for_channel(subject, "ch1")
+  |> should.be_ok
+  |> should.equal([])
+
+  let assert Ok(cancelled_other_channel) =
+    db.load_pending_shell_approvals_for_channel(subject, "ch2")
+  cancelled_other_channel |> list.length |> should.equal(1)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn shell_approval_status_update_is_pending_only_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(_) =
+    db.save_shell_approval(subject, sample_shell_approval("sh1", "ch1"))
+
+  let assert Ok(_) =
+    db.update_shell_approval_status(subject, "sh1", "rejected", 2000)
+  case db.update_shell_approval_status(subject, "sh1", "expired", 3000) {
+    Ok(_) -> should.fail()
+    Error(e) ->
+      string.starts_with(e, "Shell approval is not pending") |> should.be_true
+  }
+
+  db.load_pending_shell_approvals_for_channel(subject, "ch1")
+  |> should.be_ok
+  |> should.equal([])
 
   process.send(subject, db.Shutdown)
 }

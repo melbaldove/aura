@@ -6,6 +6,8 @@ import aura/clients/browser_runner.{type BrowserRunner}
 import aura/clients/discord as discord_client
 import aura/clients/llm_client.{type LLMClient}
 import aura/clients/skill_runner.{type SkillRunner}
+import aura/cognitive_label
+import aura/concern
 import aura/db
 import aura/discord/rest
 import aura/discord/types as discord_types
@@ -390,82 +392,8 @@ fn execute_tool_dispatch(
         Error(e) -> TextResult("Error: " <> e)
       }
     }
-    "memory" -> {
-      case require_arg(args, "action") {
-        Error(e) -> TextResult(e)
-        Ok(action) -> {
-          let target = get_arg(args, "target")
-          let key = get_arg(args, "key")
-          let content = get_arg(args, "content")
-          let path_result = case target {
-            "user" -> Ok(xdg.user_path(ctx.paths))
-            "state" -> Ok(xdg.domain_state_path(ctx.paths, ctx.domain_name))
-            "memory" -> Ok(xdg.domain_memory_path(ctx.paths, ctx.domain_name))
-            unknown ->
-              Error(
-                "Error: unknown target '"
-                <> unknown
-                <> "'. Use 'state', 'memory', or 'user'.",
-              )
-          }
-          case path_result {
-            Error(e) -> TextResult(e)
-            Ok(path) -> {
-              case action {
-                "set" -> {
-                  case key {
-                    "" -> TextResult("Error: 'key' is required for set action.")
-                    _ ->
-                      case structured_memory.set(path, key, content) {
-                        Ok(_) ->
-                          TextResult(
-                            "Saved [" <> key <> "] to " <> target <> ".",
-                          )
-                        Error(e) -> TextResult("Error: " <> e)
-                      }
-                  }
-                }
-                "remove" -> {
-                  case key {
-                    "" ->
-                      TextResult("Error: 'key' is required for remove action.")
-                    _ ->
-                      case structured_memory.remove(path, key) {
-                        Ok(_) ->
-                          TextResult(
-                            "Removed [" <> key <> "] from " <> target <> ".",
-                          )
-                        Error(e) -> TextResult("Error: " <> e)
-                      }
-                  }
-                }
-                "read" -> {
-                  let read_domain = case get_arg(args, "domain") {
-                    "" -> ctx.domain_name
-                    d -> d
-                  }
-                  let read_path = case target {
-                    "user" -> xdg.user_path(ctx.paths)
-                    "state" -> xdg.domain_state_path(ctx.paths, read_domain)
-                    _ -> xdg.domain_memory_path(ctx.paths, read_domain)
-                  }
-                  case structured_memory.format_for_display(read_path) {
-                    Ok(display) -> TextResult(display)
-                    Error(e) -> TextResult("Error: " <> e)
-                  }
-                }
-                _ ->
-                  TextResult(
-                    "Error: Unknown action '"
-                    <> action
-                    <> "'. Use set, remove, or read.",
-                  )
-              }
-            }
-          }
-        }
-      }
-    }
+    "track" -> execute_track(ctx, args)
+    "memory" -> execute_memory(ctx, args)
     "search_sessions" -> {
       let query = get_arg(args, "query")
       let limit = case int.parse(get_arg(args, "limit")) {
@@ -582,7 +510,6 @@ fn execute_tool_dispatch(
               case require_arg(args, "repo") {
                 Error(e) -> TextResult(e)
                 Ok(repo) -> {
-                  let task_id = "t" <> int.to_string(time.now_ms())
                   let cwd = ctx.domain_cwd <> "/" <> repo
                   let timeout_ms = case
                     int.parse(get_arg(args, "timeout_minutes"))
@@ -600,7 +527,15 @@ fn execute_tool_dispatch(
                       ctx.domain_name,
                       thread_id,
                       prompt,
-                      "{}",
+                      flare_manager.execution_to_json(
+                        flare_manager.FlareExecution(
+                          provider: ctx.acp_provider,
+                          binary: ctx.acp_binary,
+                          worktree: ctx.acp_worktree,
+                          timeout_ms: timeout_ms,
+                          transport: flare_manager.LegacyTransport,
+                        ),
+                      ),
                       "{}",
                       "{}",
                       cwd,
@@ -609,7 +544,7 @@ fn execute_tool_dispatch(
                     Ok(flare_id) -> {
                       let task_spec =
                         acp_types.TaskSpec(
-                          id: task_id,
+                          id: flare_id,
                           domain: ctx.domain_name,
                           prompt: prompt,
                           cwd: cwd,
@@ -1020,7 +955,9 @@ fn request_shell_approval(
   timeout_ms: Int,
   cwd: String,
 ) -> ToolResult {
-  let approval_id = "sh" <> int.to_string(time.now_ms())
+  let requested_at_ms = time.now_ms()
+  let approval_id =
+    "sh" <> ctx.channel_id <> "-" <> int.to_string(requested_at_ms)
   let msg_content =
     ":warning: **Shell command flagged:** `"
     <> command
@@ -1045,20 +982,67 @@ fn request_shell_approval(
           reason: description,
           channel_id: ctx.channel_id,
           message_id: message_id,
-          requested_at_ms: time.now_ms(),
+          requested_at_ms: requested_at_ms,
           reply_to: reply_subject,
         )
-      ctx.on_shell_approve(approval)
-      // Block until user clicks approve/reject (15 min timeout)
-      case process.receive(reply_subject, 900_000) {
-        Ok(Approved) -> execute_shell(command, timeout_ms, cwd)
-        Ok(Rejected) -> TextResult("Command rejected by user.")
-        Ok(Expired) -> TextResult("Approval expired.")
-        Error(_) -> TextResult("Approval timed out.")
+      case persist_shell_approval(ctx, approval) {
+        Ok(Nil) -> {
+          ctx.on_shell_approve(approval)
+          // Block until user clicks approve/reject (15 min timeout)
+          case process.receive(reply_subject, 900_000) {
+            Ok(Approved) -> execute_shell(command, timeout_ms, cwd)
+            Ok(Rejected) -> TextResult("Command rejected by user.")
+            Ok(Expired) -> TextResult("Approval expired.")
+            Error(_) -> {
+              let _ =
+                db.update_shell_approval_status(
+                  ctx.db_subject,
+                  approval_id,
+                  "expired",
+                  time.now_ms(),
+                )
+              let _ =
+                ctx.discord.edit_message(
+                  ctx.channel_id,
+                  message_id,
+                  "**Expired** -- approval timed out after 15 minutes.",
+                )
+              TextResult("Approval timed out.")
+            }
+          }
+        }
+        Error(e) -> {
+          let _ =
+            ctx.discord.edit_message(
+              ctx.channel_id,
+              message_id,
+              "**Failed** -- could not record shell approval: " <> e,
+            )
+          TextResult("Error recording approval request: " <> e)
+        }
       }
     }
     Error(e) -> TextResult("Error posting approval request: " <> e)
   }
+}
+
+fn persist_shell_approval(
+  ctx: ToolContext,
+  approval: PendingShellApproval,
+) -> Result(Nil, String) {
+  db.save_shell_approval(
+    ctx.db_subject,
+    db.StoredShellApproval(
+      id: approval.id,
+      channel_id: approval.channel_id,
+      message_id: approval.message_id,
+      command: approval.command,
+      reason: approval.reason,
+      status: "pending",
+      requested_at_ms: approval.requested_at_ms,
+      updated_at_ms: approval.requested_at_ms,
+    ),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -1414,12 +1398,14 @@ fn finish_gmail_setup(
           token_endpoint: "https://oauth2.googleapis.com/token",
         )
       let now = time.now_ms()
-      case oauth.exchange_authorization_code(
-        cfg,
-        code,
-        "http://localhost/",
-        now_ms: now,
-      ) {
+      case
+        oauth.exchange_authorization_code(
+          cfg,
+          code,
+          "http://localhost/",
+          now_ms: now,
+        )
+      {
         Error(err) ->
           TextResult(
             "OAuth token exchange failed: "
@@ -1439,7 +1425,10 @@ fn finish_gmail_setup(
 fn resolve_gmail_oauth_credentials(
   ctx: ToolContext,
 ) -> Result(#(String, String), Nil) {
-  case env.get_env("GMAIL_OAUTH_CLIENT_ID"), env.get_env("GMAIL_OAUTH_CLIENT_SECRET") {
+  case
+    env.get_env("GMAIL_OAUTH_CLIENT_ID"),
+    env.get_env("GMAIL_OAUTH_CLIENT_SECRET")
+  {
     Ok(cid), Ok(secret) if cid != "" && secret != "" -> Ok(#(cid, secret))
     _, _ -> read_gmail_oauth_from_config(ctx)
   }
@@ -1532,12 +1521,7 @@ fn write_oauth_gmail_section(
   let new_contents = append_config_block(stripped, section)
   case simplifile.write(path, new_contents) {
     Error(err) ->
-      TextResult(
-        "Failed to write "
-        <> path
-        <> ": "
-        <> string.inspect(err),
-      )
+      TextResult("Failed to write " <> path <> ": " <> string.inspect(err))
     Ok(_) ->
       TextResult(
         "Gmail OAuth app credentials saved to `"
@@ -1759,13 +1743,120 @@ fn execute_search_events(
 
   case db.search_events(ctx.db_subject, query, time_range, source, limit) {
     Ok([]) ->
-      case query {
-        "" -> TextResult("No events found.")
-        q -> TextResult("No events matching \"" <> q <> "\".")
+      case loose_search_events(ctx, query, time_range, source, limit) {
+        Error(msg) -> TextResult("search_events failed: " <> msg)
+        Ok([]) ->
+          case query {
+            "" -> TextResult("No events found.")
+            q -> TextResult("No events matching \"" <> q <> "\".")
+          }
+        Ok(events) -> TextResult(format_loose_events(query, events))
       }
     Ok(events) -> TextResult(format_events(query, events))
     Error(msg) -> TextResult("search_events failed: " <> msg)
   }
+}
+
+fn loose_search_events(
+  ctx: ToolContext,
+  query: String,
+  time_range: Option(#(Int, Int)),
+  source: Option(String),
+  limit: Int,
+) -> Result(List(event.AuraEvent), String) {
+  let tokens = loose_query_tokens(query)
+  case tokens {
+    [] -> Ok([])
+    [_] -> Ok([])
+    many -> search_loose_event_tokens(ctx, many, time_range, source, limit, [])
+  }
+}
+
+fn search_loose_event_tokens(
+  ctx: ToolContext,
+  tokens: List(String),
+  time_range: Option(#(Int, Int)),
+  source: Option(String),
+  limit: Int,
+  acc: List(event.AuraEvent),
+) -> Result(List(event.AuraEvent), String) {
+  case tokens {
+    [] -> Ok(list.reverse(acc) |> list.take(limit))
+    [token, ..rest] ->
+      case db.search_events(ctx.db_subject, token, time_range, source, limit) {
+        Error(msg) -> Error(msg)
+        Ok(matches) ->
+          search_loose_event_tokens(
+            ctx,
+            rest,
+            time_range,
+            source,
+            limit,
+            add_new_events(matches, acc),
+          )
+      }
+  }
+}
+
+fn add_new_events(
+  matches: List(event.AuraEvent),
+  acc: List(event.AuraEvent),
+) -> List(event.AuraEvent) {
+  list.fold(matches, acc, fn(current_acc, candidate) {
+    case list.any(current_acc, fn(existing) { existing.id == candidate.id }) {
+      True -> current_acc
+      False -> [candidate, ..current_acc]
+    }
+  })
+}
+
+fn loose_query_tokens(query: String) -> List(String) {
+  query
+  |> string.replace("\n", " ")
+  |> string.replace("\t", " ")
+  |> string.replace(".", " ")
+  |> string.replace(",", " ")
+  |> string.replace("!", " ")
+  |> string.replace("?", " ")
+  |> string.replace(":", " ")
+  |> string.replace(";", " ")
+  |> string.replace("(", " ")
+  |> string.replace(")", " ")
+  |> string.replace("[", " ")
+  |> string.replace("]", " ")
+  |> string.replace("/", " ")
+  |> string.replace("@", " ")
+  |> string.replace("-", " ")
+  |> string.replace("_", " ")
+  |> string.replace("'", "")
+  |> string.split(" ")
+  |> list.filter(fn(token) {
+    let clean = string.trim(token)
+    clean != "" && !is_search_stopword(string.lowercase(clean))
+  })
+}
+
+fn is_search_stopword(token: String) -> Bool {
+  list.contains(
+    [
+      "a",
+      "an",
+      "and",
+      "about",
+      "for",
+      "from",
+      "in",
+      "me",
+      "my",
+      "of",
+      "on",
+      "or",
+      "the",
+      "to",
+      "with",
+    ],
+    token,
+  )
 }
 
 fn format_events(query: String, events: List(event.AuraEvent)) -> String {
@@ -1780,11 +1871,27 @@ fn format_events(query: String, events: List(event.AuraEvent)) -> String {
   header <> "\n\n" <> body
 }
 
+fn format_loose_events(query: String, events: List(event.AuraEvent)) -> String {
+  let count = list.length(events)
+  let header =
+    "No exact phrase match for \""
+    <> query
+    <> "\". Found "
+    <> int.to_string(count)
+    <> " loose keyword matches:"
+  let body =
+    list.index_map(events, fn(e, i) { format_event(i + 1, e) })
+    |> string.join("\n\n")
+  header <> "\n\n" <> body
+}
+
 fn format_event(index: Int, e: event.AuraEvent) -> String {
   let date = time.format_ms_utc(e.time_ms)
   let head =
     int.to_string(index)
-    <> ". ["
+    <> ". Event ID: "
+    <> e.id
+    <> "\n   ["
     <> e.source
     <> "] "
     <> date
@@ -1875,6 +1982,505 @@ fn tag_or_empty(tags: dict.Dict(String, String), key: String) -> String {
   case dict.get(tags, key) {
     Ok(v) -> v
     Error(_) -> ""
+  }
+}
+
+fn execute_track(ctx: ToolContext, args: List(#(String, String))) -> ToolResult {
+  case require_arg(args, "action") {
+    Error(e) -> TextResult(e)
+    Ok(action) ->
+      case require_arg(args, "slug") {
+        Error(e) -> TextResult(e)
+        Ok(slug) -> {
+          let request =
+            concern.TrackRequest(
+              action: action,
+              slug: slug,
+              title: get_arg(args, "title"),
+              summary: get_arg(args, "summary"),
+              why: get_arg(args, "why"),
+              current_state: get_arg(args, "current_state"),
+              watch_signals: get_arg(args, "watch_signals"),
+              evidence: get_arg(args, "evidence"),
+              authority: get_arg(args, "authority"),
+              gaps: get_arg(args, "gaps"),
+              note: get_arg(args, "note"),
+            )
+
+          case concern.apply(ctx.paths, request) {
+            Ok(result) ->
+              TextResult(
+                "Tracking "
+                <> result.action
+                <> ": "
+                <> result.title
+                <> " ("
+                <> result.source_ref
+                <> ", status="
+                <> result.status
+                <> ").",
+              )
+            Error(e) -> TextResult(e)
+          }
+        }
+      }
+  }
+}
+
+fn execute_memory(ctx: ToolContext, args: List(#(String, String))) -> ToolResult {
+  case require_arg(args, "action") {
+    Error(e) -> TextResult(e)
+    Ok(action) -> {
+      let target = get_arg(args, "target")
+      let key = get_arg(args, "key")
+      let content = get_arg(args, "content")
+      let path_result = memory_target_path(ctx, target)
+      case path_result {
+        Error(e) -> TextResult(e)
+        Ok(path) -> {
+          case action {
+            "set" -> {
+              case key {
+                "" -> TextResult("Error: 'key' is required for set action.")
+                _ ->
+                  case target {
+                    "attention" ->
+                      execute_attention_memory_set(
+                        ctx,
+                        args,
+                        path,
+                        key,
+                        content,
+                      )
+                    _ -> execute_plain_memory_set(path, target, key, content)
+                  }
+              }
+            }
+            "remove" -> {
+              case key {
+                "" -> TextResult("Error: 'key' is required for remove action.")
+                _ ->
+                  case structured_memory.remove(path, key) {
+                    Ok(_) ->
+                      TextResult(
+                        "Removed [" <> key <> "] from " <> target <> ".",
+                      )
+                    Error(e) -> TextResult("Error: " <> e)
+                  }
+              }
+            }
+            "read" -> {
+              let read_domain = case get_arg(args, "domain") {
+                "" -> ctx.domain_name
+                d -> d
+              }
+              let read_path = memory_read_path(ctx, target, read_domain)
+              case structured_memory.format_for_display(read_path) {
+                Ok(display) -> TextResult(display)
+                Error(e) -> TextResult("Error: " <> e)
+              }
+            }
+            _ ->
+              TextResult(
+                "Error: Unknown action '"
+                <> action
+                <> "'. Use set, remove, or read.",
+              )
+          }
+        }
+      }
+    }
+  }
+}
+
+fn execute_plain_memory_set(
+  path: String,
+  target: String,
+  key: String,
+  content: String,
+) -> ToolResult {
+  case structured_memory.set(path, key, content) {
+    Ok(_) -> TextResult("Saved [" <> key <> "] to " <> target <> ".")
+    Error(e) -> TextResult("Error: " <> e)
+  }
+}
+
+fn execute_attention_memory_set(
+  ctx: ToolContext,
+  args: List(#(String, String)),
+  path: String,
+  key: String,
+  content: String,
+) -> ToolResult {
+  case attention_memory_set_result(ctx, args, path, key, content) {
+    Ok(message) -> TextResult(message)
+    Error(e) -> TextResult("Error: " <> e)
+  }
+}
+
+fn attention_memory_set_result(
+  ctx: ToolContext,
+  args: List(#(String, String)),
+  path: String,
+  key: String,
+  content: String,
+) -> Result(String, String) {
+  use _ <- result.try(
+    simplifile.create_directory_all(xdg.cognitive_dir(ctx.paths))
+    |> result.map_error(fn(e) {
+      "failed to create cognitive directory "
+      <> xdg.cognitive_dir(ctx.paths)
+      <> ": "
+      <> string.inspect(e)
+    }),
+  )
+  let note_arg = string.trim(get_arg(args, "note"))
+  let durable_content = case string.trim(content) {
+    "" -> note_arg
+    _ -> content
+  }
+  case string.trim(durable_content) {
+    "" ->
+      Error("content is required for attention memory; use content or note")
+    _ -> {
+      use _ <- result.try(structured_memory.security_scan(durable_content))
+
+      let event_id = string.trim(get_arg(args, "event_id"))
+      case event_id {
+        "" -> {
+          let scope = string.lowercase(string.trim(get_arg(args, "scope")))
+          case scope {
+            "standing" -> {
+              use _ <- result.try(reject_standing_attention_event_overlap(
+                ctx,
+                key,
+                durable_content,
+              ))
+              use _ <- result.try(structured_memory.set(
+                path,
+                key,
+                durable_content,
+              ))
+              Ok(
+                "Saved ["
+                <> key
+                <> "] to attention as a standing preference. No replay label was recorded.",
+              )
+            }
+            "" ->
+              Error(
+                "attention memory without event_id is only allowed for explicit standing preferences. If this corrects a concrete event or prior Aura notification, search_events first, then retry with event_id and expected_attention. If it is truly general, retry with scope=standing.",
+              )
+            other ->
+              Error(
+                "invalid attention memory scope '"
+                <> other
+                <> "'. Use scope=standing, or include event_id and expected_attention.",
+              )
+          }
+        }
+        _ -> {
+          let expected_attention =
+            string.lowercase(string.trim(get_arg(args, "expected_attention")))
+          case expected_attention {
+            "" ->
+              Error(
+                "expected_attention is required when attention memory is grounded in an event",
+              )
+            "record" | "digest" | "surface_now" | "ask_now" -> {
+              use resolved_event_id <- result.try(resolve_required_event_id(
+                ctx,
+                event_id,
+              ))
+              let label = case string.trim(get_arg(args, "label")) {
+                "" -> label_for_attention(expected_attention)
+                explicit -> explicit
+              }
+              let note = case note_arg {
+                "" -> durable_content
+                explicit -> explicit
+              }
+              use capture <- result.try(cognitive_label.capture(
+                ctx.paths,
+                resolved_event_id,
+                label,
+                expected_attention,
+                note,
+              ))
+              use _ <- result.try(structured_memory.set(
+                path,
+                key,
+                durable_content,
+              ))
+              Ok(
+                "Saved ["
+                <> key
+                <> "] to attention and recorded cognitive feedback: event_id="
+                <> capture.event_id
+                <> " label="
+                <> capture.label
+                <> " attention_any=["
+                <> string.join(capture.attention_any, ", ")
+                <> "] path="
+                <> capture.path
+                <> ".",
+              )
+            }
+            _ -> {
+              Error(
+                "invalid expected attention '"
+                <> expected_attention
+                <> "'. Use record, digest, surface_now, or ask_now.",
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fn reject_standing_attention_event_overlap(
+  ctx: ToolContext,
+  key: String,
+  content: String,
+) -> Result(Nil, String) {
+  let tokens = attention_probe_tokens(key <> " " <> content)
+  case tokens == [] {
+    True -> Ok(Nil)
+    False ->
+      case db.search_events(ctx.db_subject, "", None, None, 100) {
+        Error(msg) ->
+          Error(
+            "failed to check standing attention preference against recent events: "
+            <> msg,
+          )
+        Ok(events) ->
+          case list.find(events, fn(e) {
+            event_overlaps_attention_tokens(e, tokens)
+          }) {
+            Error(_) -> Ok(Nil)
+            Ok(e) ->
+              Error(
+                "standing attention preference overlaps recent event "
+                <> e.id
+                <> " ("
+                <> e.subject
+                <> "). Include event_id and expected_attention so replay feedback is recorded, or save a standing preference only when it is not grounded in a recent event.",
+              )
+          }
+      }
+  }
+}
+
+fn event_overlaps_attention_tokens(
+  e: event.AuraEvent,
+  tokens: List(String),
+) -> Bool {
+  let event_tokens = event_probe_tokens(e)
+  let overlap =
+    tokens
+    |> list.filter(fn(token) { list.contains(event_tokens, token) })
+
+  list.length(overlap) >= 2
+  || list.any(overlap, fn(token) { string.length(token) >= 5 })
+}
+
+fn event_probe_tokens(e: event.AuraEvent) -> List(String) {
+  let tag_text =
+    e.tags
+    |> dict.to_list
+    |> list.flat_map(fn(pair) { [pair.0, pair.1] })
+    |> string.join(" ")
+
+  attention_probe_tokens(
+    e.source
+    <> " "
+    <> e.type_
+    <> " "
+    <> e.subject
+    <> " "
+    <> tag_text
+    <> " "
+    <> e.data,
+  )
+}
+
+fn attention_probe_tokens(text: String) -> List(String) {
+  text
+  |> loose_query_tokens
+  |> list.map(string.lowercase)
+  |> list.filter(fn(token) {
+    string.length(token) >= 4 && !is_attention_probe_stopword(token)
+  })
+  |> unique_strings
+}
+
+fn unique_strings(tokens: List(String)) -> List(String) {
+  tokens
+  |> list.fold([], fn(acc, token) {
+    case list.contains(acc, token) {
+      True -> acc
+      False -> [token, ..acc]
+    }
+  })
+  |> list.reverse
+}
+
+fn is_attention_probe_stopword(token: String) -> Bool {
+  is_search_stopword(token)
+  || list.contains(
+    [
+      "alert",
+      "alerts",
+      "attention",
+      "digest",
+      "digests",
+      "doesnt",
+      "dont",
+      "email",
+      "emails",
+      "event",
+      "events",
+      "facing",
+      "future",
+      "general",
+      "mail",
+      "need",
+      "needs",
+      "notification",
+      "notifications",
+      "notified",
+      "notify",
+      "preference",
+      "preferences",
+      "record",
+      "recorded",
+      "routine",
+      "should",
+      "silently",
+      "standing",
+      "surface",
+      "surfaced",
+      "suppress",
+      "suppressed",
+      "that",
+      "these",
+      "this",
+      "those",
+      "transactional",
+      "user",
+      "without",
+    ],
+    token,
+  )
+}
+
+fn resolve_required_event_id(
+  ctx: ToolContext,
+  event_id: String,
+) -> Result(String, String) {
+  case resolve_event_id(ctx, event_id) {
+    Error(e) -> Error("failed to load event for attention feedback: " <> e)
+    Ok(None) -> Error("event not found: " <> event_id)
+    Ok(Some(resolved)) -> Ok(resolved)
+  }
+}
+
+fn label_for_attention(expected_attention: String) -> String {
+  case expected_attention {
+    "record" -> "false_interrupt"
+    "digest" -> "useful_digest"
+    "surface_now" | "ask_now" -> "missed_important"
+    _ -> ""
+  }
+}
+
+fn memory_target_path(
+  ctx: ToolContext,
+  target: String,
+) -> Result(String, String) {
+  case target {
+    "user" -> Ok(xdg.user_path(ctx.paths))
+    "state" -> Ok(xdg.domain_state_path(ctx.paths, ctx.domain_name))
+    "memory" -> Ok(xdg.domain_memory_path(ctx.paths, ctx.domain_name))
+    "attention" -> Ok(xdg.attention_memory_path(ctx.paths))
+    unknown ->
+      Error(
+        "Error: unknown target '"
+        <> unknown
+        <> "'. Use 'state', 'memory', 'user', or 'attention'.",
+      )
+  }
+}
+
+fn memory_read_path(
+  ctx: ToolContext,
+  target: String,
+  read_domain: String,
+) -> String {
+  case target {
+    "user" -> xdg.user_path(ctx.paths)
+    "state" -> xdg.domain_state_path(ctx.paths, read_domain)
+    "attention" -> xdg.attention_memory_path(ctx.paths)
+    _ -> xdg.domain_memory_path(ctx.paths, read_domain)
+  }
+}
+
+fn resolve_event_id(
+  ctx: ToolContext,
+  raw_event_id: String,
+) -> Result(Option(String), String) {
+  try_event_id_candidates(ctx, event_id_candidates(raw_event_id))
+}
+
+fn try_event_id_candidates(
+  ctx: ToolContext,
+  candidates: List(String),
+) -> Result(Option(String), String) {
+  case candidates {
+    [] -> Ok(None)
+    [candidate, ..rest] ->
+      case db.get_event(ctx.db_subject, candidate) {
+        Error(e) -> Error(e)
+        Ok(Some(_)) -> Ok(Some(candidate))
+        Ok(None) -> try_event_id_candidates(ctx, rest)
+      }
+  }
+}
+
+fn event_id_candidates(raw_event_id: String) -> List(String) {
+  let trimmed = string.trim(raw_event_id)
+  let unquoted =
+    strip_wrapping(
+      strip_wrapping(strip_wrapping(trimmed, "`", "`"), "\"", "\""),
+      "'",
+      "'",
+    )
+  let angle_variant = case
+    string.starts_with(unquoted, "<") && string.ends_with(unquoted, ">")
+  {
+    True -> string.drop_end(string.drop_start(unquoted, 1), 1)
+    False -> "<" <> unquoted <> ">"
+  }
+
+  case angle_variant == unquoted {
+    True -> [unquoted]
+    False -> [unquoted, angle_variant]
+  }
+}
+
+fn strip_wrapping(value: String, prefix: String, suffix: String) -> String {
+  case
+    string.starts_with(value, prefix)
+    && string.ends_with(value, suffix)
+    && string.length(value) >= string.length(prefix) + string.length(suffix)
+  {
+    True ->
+      value
+      |> string.drop_start(string.length(prefix))
+      |> string.drop_end(string.length(suffix))
+    False -> value
   }
 }
 
@@ -2064,8 +2670,80 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
       parameters: [],
     ),
     llm.ToolDefinition(
+      name: "track",
+      description: "Track a durable object of care, work, watch, or risk as an ordinary concern markdown file. Use after enough context shows the thing is durably alive, or when the user explicitly asks Aura to watch or keep track. Do not use for one-off lookups, transient facts, or generic preferences; use memory or state instead.",
+      parameters: [
+        llm.ToolParam(
+          name: "action",
+          param_type: "string",
+          description: "One of: start | update | pause | close",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "slug",
+          param_type: "string",
+          description: "Stable lowercase kebab-case tracking key, e.g. rel-42-release or vc-sourcing-thesis.",
+          required: True,
+        ),
+        llm.ToolParam(
+          name: "title",
+          param_type: "string",
+          description: "Human-readable title for the tracked object.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "summary",
+          param_type: "string",
+          description: "Short summary of what is being tracked.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "why",
+          param_type: "string",
+          description: "Why this matters to the user or future Aura judgment.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "current_state",
+          param_type: "string",
+          description: "Current known state, including what is active, blocked, decided, or unresolved.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "watch_signals",
+          param_type: "string",
+          description: "Signals future observations should be matched against.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "evidence",
+          param_type: "string",
+          description: "Relevant resource links, ids, citations, or source refs.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "authority",
+          param_type: "string",
+          description: "Standing authority boundaries, preferences, or decision rules known so far.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "gaps",
+          param_type: "string",
+          description: "Open questions or missing context that should be surfaced later if relevant.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "note",
+          param_type: "string",
+          description: "Append-only update note for existing tracked objects.",
+          required: False,
+        ),
+      ],
+    ),
+    llm.ToolDefinition(
       name: "memory",
-      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use 'state' for current domain status (active tickets, blockers, PRs). Use 'memory' for durable knowledge (decisions, patterns, conventions). Use 'user' for user profile (always global). State and memory are per-domain when in a domain channel.",
+      description: "Keyed persistent memory. Entries are upserted by key — no need to read before writing. Use target='state' for current domain status, target='memory' for durable domain knowledge, target='user' for user profile, and target='attention' for Aura attention policy: proactive notifications, digests, missed alerts, surfacing, asking, interruptions, and deferrals. For ordinary-language corrections about Aura attention, write target='attention'. If the correction is grounded in a concrete event, include event_id and expected_attention; the tool records replay label evidence internally. For a general standing attention preference that is not about a concrete event, include scope='standing'; if it overlaps recent events, the tool rejects it until event_id and expected_attention are provided. Choose expected_attention from meaning: no future user-facing attention means record; later batch attention means digest; immediate interruption means surface_now or ask_now. Do not ask the user to choose labels, event ids, record, digest, or target names.",
       parameters: [
         llm.ToolParam(
           name: "action",
@@ -2076,7 +2754,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         llm.ToolParam(
           name: "target",
           param_type: "string",
-          description: "'state' (current status), 'memory' (durable knowledge), or 'user' (user profile — always global)",
+          description: "'state' (current status), 'memory' (durable knowledge), 'user' (global profile), or 'attention' (Aura notification/digest/surface/ask policy)",
           required: True,
         ),
         llm.ToolParam(
@@ -2095,6 +2773,36 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           name: "domain",
           param_type: "string",
           description: "Domain to read from (for cross-domain read). Omit to use current domain.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "event_id",
+          param_type: "string",
+          description: "For target='attention' when the feedback corrects a concrete external event: exact Event ID from search_events. Omit for general standing attention preferences.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "scope",
+          param_type: "string",
+          description: "For target='attention' without event_id: must be standing to confirm this is a general standing preference, not feedback about a concrete event.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "expected_attention",
+          param_type: "string",
+          description: "For event-grounded target='attention': record | digest | surface_now | ask_now.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "label",
+          param_type: "string",
+          description: "Optional internal replay label. Omit unless a more specific label is needed; the tool infers a default from expected_attention.",
+          required: False,
+        ),
+        llm.ToolParam(
+          name: "note",
+          param_type: "string",
+          description: "For event-grounded target='attention': the user's correction plus a short interpretation in ordinary language.",
           required: False,
         ),
       ],
@@ -2119,7 +2827,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "search_events",
-      description: "Search events ingested from external sources (email, Linear tickets, etc.). Use this when the user asks about external activity that isn't part of a conversation — e.g. 'any new emails from alice today?' or 'what happened on the login bug ticket?'. Returns matched events with their source, subject, and a short snippet.",
+      description: "Search events ingested from external sources (email, Linear tickets, etc.). Use this when the user asks about external activity that isn't part of a conversation — e.g. 'any new emails from alice today?' or 'what happened on the login bug ticket?'. Returns matched events with exact Event ID values. For attention feedback grounded in one of these events, pass that Event ID unchanged to memory(target='attention').",
       parameters: [
         llm.ToolParam(
           name: "query",
