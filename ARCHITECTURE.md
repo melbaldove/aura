@@ -178,7 +178,7 @@ The brain's `tool_loop_progressive` function:
 
 1. Spawns a streaming LLM call with tool definitions
 2. Collects the response (content + tool calls) via `collect_stream_loop`
-3. If tool calls: executes them, builds traces, edits Discord with progress, loops
+3. If tool calls: executes them, builds compact call/argument traces for Discord, keeps successful raw results out of the user-facing message, and loops
 4. If text only: returns the response for final Discord edit
 5. Max 20 iterations per user message
 

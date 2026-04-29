@@ -329,6 +329,34 @@ pub fn tool_result_all_resolved_spawns_next_stream_test() {
   |> should.be_true
 }
 
+pub fn tool_result_trace_keeps_tool_call_arguments_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let tool_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"src/aura/channel_actor.gleam\\\"}\"}]"
+  let #(after_tool_request, _) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", tool_calls_json, 100),
+    )
+  let #(after_tool_result, _) =
+    channel_actor.transition(
+      after_tool_request,
+      channel_actor.ToolResult("c1", "file contents", False),
+    )
+
+  case after_tool_result.turn {
+    option.Some(turn) -> {
+      let trace =
+        list.find(turn.traces, fn(trace) { trace.name == "read_file" })
+        |> should.be_ok
+      trace.args
+      |> should.equal("{\"path\":\"src/aura/channel_actor.gleam\"}")
+    }
+    option.None -> should.fail()
+  }
+}
+
 pub fn failed_attention_memory_cannot_finalize_as_saved_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let with_stream = channel_actor.with_fake_stream_turn(state)

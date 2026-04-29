@@ -1428,7 +1428,7 @@ pub fn transition(
       let trace =
         conversation.ToolTrace(
           name: find_tool_name(turn.accumulated_tool_calls, call_id),
-          args: "",
+          args: find_tool_args(turn.accumulated_tool_calls, call_id),
           result: result,
           is_error: is_error,
         )
@@ -1882,6 +1882,14 @@ fn find_tool_name(calls: List(llm.ToolCall), id: String) -> String {
   case list.find(calls, fn(c) { c.id == id }) {
     Ok(c) -> c.name
     Error(_) -> "unknown"
+  }
+}
+
+/// Look up the original tool-call arguments by call id.
+fn find_tool_args(calls: List(llm.ToolCall), id: String) -> String {
+  case list.find(calls, fn(c) { c.id == id }) {
+    Ok(c) -> c.arguments
+    Error(_) -> ""
   }
 }
 

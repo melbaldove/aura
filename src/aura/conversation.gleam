@@ -3,6 +3,7 @@ import aura/db
 import aura/llm
 import aura/time
 import gleam/dict
+import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
 import gleam/json
@@ -15,6 +16,14 @@ import logging
 const protect_tail_count = 20
 
 const compression_cooldown_ms = 600_000
+
+const discord_message_budget = 1990
+
+const max_trace_line_chars = 220
+
+const max_trace_value_chars = 90
+
+const max_trace_error_chars = 120
 
 /// Conversation buffers keyed by channel_id
 pub type Buffers =
@@ -483,10 +492,8 @@ pub fn compress_history(
   }
 }
 
-const max_trace_field_chars = 1500
-
-/// Safety cap against a single trace field (args or result) overflowing
-/// Discord's 2000-char message limit. Appends `…[N more chars]` when cut.
+/// Safety cap against a single trace field overflowing Discord's message
+/// budget. User-facing tool traces need only the gist of a call.
 fn cap_field(text: String, max: Int) -> String {
   let len = string.length(text)
   case len > max {
@@ -499,43 +506,167 @@ fn cap_field(text: String, max: Int) -> String {
   }
 }
 
-/// Format tool traces for Discord display. Shows the full call (name +
-/// args) and the full result verbatim — no truncation, no spoilers. If
-/// either field is pathologically long, caps at max_trace_field_chars to
-/// protect the 2000-char message limit.
+fn one_line(text: String) -> String {
+  text
+  |> string.trim
+  |> string.replace(each: "\r", with: " ")
+  |> string.replace(each: "\n", with: " ")
+}
+
+fn quote_value(text: String, max: Int) -> String {
+  "\""
+  <> cap_field(one_line(text), max)
+  |> string.replace(each: "\"", with: "\\\"")
+  <> "\""
+}
+
+fn dynamic_to_json(value) -> json.Json {
+  case decode.run(value, decode.string) {
+    Ok(s) -> json.string(s)
+    Error(_) ->
+      case decode.run(value, decode.int) {
+        Ok(n) -> json.int(n)
+        Error(_) ->
+          case decode.run(value, decode.float) {
+            Ok(f) -> json.float(f)
+            Error(_) ->
+              case decode.run(value, decode.bool) {
+                Ok(b) -> json.bool(b)
+                Error(_) ->
+                  case decode.run(value, decode.list(decode.dynamic)) {
+                    Ok(items) ->
+                      json.preprocessed_array(list.map(items, dynamic_to_json))
+                    Error(_) ->
+                      case
+                        decode.run(
+                          value,
+                          decode.dict(decode.string, decode.dynamic),
+                        )
+                      {
+                        Ok(d) ->
+                          json.object(
+                            dict.to_list(d)
+                            |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
+                            |> list.map(fn(pair) {
+                              #(pair.0, dynamic_to_json(pair.1))
+                            }),
+                          )
+                        Error(_) -> json.null()
+                      }
+                  }
+              }
+          }
+      }
+  }
+}
+
+fn format_arg_value(value) -> String {
+  case decode.run(value, decode.string) {
+    Ok(s) -> quote_value(s, max_trace_value_chars)
+    Error(_) ->
+      dynamic_to_json(value)
+      |> json.to_string
+      |> one_line
+      |> cap_field(max_trace_value_chars)
+  }
+}
+
+fn format_args(args: String) -> String {
+  let trimmed = string.trim(args)
+  case trimmed {
+    "" | "{}" -> ""
+    _ ->
+      case json.parse(trimmed, decode.dict(decode.string, decode.dynamic)) {
+        Ok(fields) ->
+          fields
+          |> dict.to_list
+          |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
+          |> list.map(fn(pair) { pair.0 <> "=" <> format_arg_value(pair.1) })
+          |> string.join(" ")
+        Error(_) -> cap_field(one_line(trimmed), max_trace_value_chars)
+      }
+  }
+}
+
+fn format_trace_line(trace: ToolTrace) -> String {
+  let args = format_args(trace.args)
+  let base = case args {
+    "" -> "> " <> trace.name
+    _ -> "> " <> trace.name <> " " <> args
+  }
+  let line = case trace.is_error {
+    False -> base
+    True ->
+      base <> " error=" <> quote_value(trace.result, max_trace_error_chars)
+  }
+  cap_field(line, max_trace_line_chars)
+}
+
+fn fit_tool_lines(
+  lines: List(String),
+  budget: Int,
+  used: Int,
+  selected: List(String),
+) -> #(List(String), Int) {
+  case lines {
+    [] -> #(list.reverse(selected), 0)
+    [line, ..rest] -> {
+      let separator = case selected {
+        [] -> 0
+        _ -> 1
+      }
+      let needed = separator + string.length(line)
+      case used + needed <= budget {
+        True -> fit_tool_lines(rest, budget, used + needed, [line, ..selected])
+        False -> #(list.reverse(selected), list.length([line, ..rest]))
+      }
+    }
+  }
+}
+
+fn append_omission_marker(
+  selected: List(String),
+  omitted: Int,
+  budget: Int,
+) -> List(String) {
+  case omitted > 0 {
+    False -> selected
+    True -> {
+      let marker = "> ... " <> int.to_string(omitted) <> " more tool calls"
+      let current = string.join(selected, "\n")
+      let separator = case selected {
+        [] -> 0
+        _ -> 1
+      }
+      case
+        string.length(current) + separator + string.length(marker) <= budget
+      {
+        True -> list.append(selected, [marker])
+        False ->
+          case selected {
+            [] ->
+              case string.length(marker) <= budget {
+                True -> [marker]
+                False -> []
+              }
+            _ -> selected
+          }
+      }
+    }
+  }
+}
+
+fn fit_tool_section(lines: List(String), budget: Int) -> String {
+  let #(selected, omitted) = fit_tool_lines(lines, budget, 0, [])
+  append_omission_marker(selected, omitted, budget)
+  |> string.join("\n")
+}
+
+/// Format tool traces for Discord display. Each trace is a compact call line:
+/// `> tool key="value"`. Successful results stay out of the message; short
+/// errors stay visible.
 pub fn format_traces(traces: List(ToolTrace)) -> String {
-  list.map(traces, fn(trace) {
-    let icon = case trace.is_error {
-      True -> "\u{274C}"
-      False -> "\u{1F527}"
-    }
-    let args = cap_field(trace.args, max_trace_field_chars)
-    let result = cap_field(trace.result, max_trace_field_chars)
-    // Keep newlines in the result but reflow into Discord's quote-block
-    // continuation by prefixing with `> `.
-    let result_indented = string.replace(result, each: "\n", with: "\n> ")
-    let args_has_newlines = string.contains(args, "\n")
-    case args_has_newlines {
-      False ->
-        "> "
-        <> icon
-        <> " `"
-        <> trace.name
-        <> "("
-        <> args
-        <> ")` → "
-        <> result_indented
-      True ->
-        "> "
-        <> icon
-        <> " ```\n"
-        <> trace.name
-        <> "("
-        <> args
-        <> ")```\n> → "
-        <> result_indented
-    }
-  })
+  list.map(traces, format_trace_line)
   |> string.join("\n")
 }
 
@@ -544,6 +675,27 @@ pub fn format_traces(traces: List(ToolTrace)) -> String {
 pub fn format_full_message(traces: List(ToolTrace), response: String) -> String {
   case traces {
     [] -> response
-    _ -> format_traces(traces) <> "\n\n" <> response
+    _ -> {
+      let response_len = string.length(response)
+      case response_len >= discord_message_budget {
+        True -> response
+        False -> {
+          let tool_budget = discord_message_budget - response_len - 2
+          case tool_budget <= 0 {
+            True -> response
+            False -> {
+              let tool_section =
+                traces
+                |> list.map(format_trace_line)
+                |> fit_tool_section(tool_budget)
+              case tool_section {
+                "" -> response
+                _ -> tool_section <> "\n\n" <> response
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }
