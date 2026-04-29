@@ -216,6 +216,26 @@ pub fn memory_tool_description_guides_attention_feedback_test() {
   description |> string.contains("expected_attention=") |> should.be_false
 }
 
+pub fn proposal_rejection_result_guides_user_strategy_check_test() {
+  let message = brain_tools.proposal_rejected_tool_result()
+
+  message |> string.contains("rejected by user") |> should.be_true
+  message |> string.contains("strategy/authority gap") |> should.be_true
+  message |> string.contains("Do not immediately attempt another write")
+  |> should.be_true
+  message |> string.contains("Ask the user") |> should.be_true
+}
+
+pub fn shell_rejection_result_guides_user_strategy_check_test() {
+  let message = brain_tools.shell_rejected_tool_result()
+
+  message |> string.contains("rejected by user") |> should.be_true
+  message |> string.contains("strategy/authority gap") |> should.be_true
+  message |> string.contains("Do not run alternative commands")
+  |> should.be_true
+  message |> string.contains("Ask the user") |> should.be_true
+}
+
 // Regression: GLM concatenates calls for different tools without embedding a
 // "name" key.  expand_tool_calls must infer the tool name from the parameter
 // keys so each part targets the correct tool.

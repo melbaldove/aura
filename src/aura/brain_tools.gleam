@@ -86,6 +86,16 @@ pub type PendingShellApproval {
   )
 }
 
+/// LLM-facing result when the user rejects a write proposal.
+pub fn proposal_rejected_tool_result() -> String {
+  "Proposal rejected by user. The proposed file was not changed. Treat this as a strategy/authority gap, not permission to keep trying autonomously. Do not immediately attempt another write, proposal, or workaround. Ask the user what they want changed and offer different strategies."
+}
+
+/// LLM-facing result when the user rejects a shell command approval.
+pub fn shell_rejected_tool_result() -> String {
+  "Shell command rejected by user. The command was not run. Treat this as a strategy/authority gap, not permission to keep trying autonomously. Do not run alternative commands or workarounds. Ask the user what they want to do instead and offer safer strategies."
+}
+
 /// Subset of BrainState fields needed for tool execution.
 /// Avoids a circular dependency between brain and brain_tools.
 pub type ToolContext {
@@ -329,7 +339,7 @@ fn execute_tool_dispatch(
                   case process.receive(reply_subject, 900_000) {
                     Ok(Approved) ->
                       TextResult("Approved. File written to `" <> path <> "`.")
-                    Ok(Rejected) -> TextResult("Rejected by user.")
+                    Ok(Rejected) -> TextResult(proposal_rejected_tool_result())
                     Ok(Expired) ->
                       TextResult("Proposal expired (15 minute timeout).")
                     Error(_) ->
@@ -991,7 +1001,7 @@ fn request_shell_approval(
           // Block until user clicks approve/reject (15 min timeout)
           case process.receive(reply_subject, 900_000) {
             Ok(Approved) -> execute_shell(command, timeout_ms, cwd)
-            Ok(Rejected) -> TextResult("Command rejected by user.")
+            Ok(Rejected) -> TextResult(shell_rejected_tool_result())
             Ok(Expired) -> TextResult("Approval expired.")
             Error(_) -> {
               let _ =
