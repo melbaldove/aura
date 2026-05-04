@@ -30,6 +30,7 @@
 | `monitor` | string | yes | — | LLM for ACP session monitoring and memory review. |
 | `vision` | string | no | `""` | Vision model for image description. |
 | `brain_context` | int | no | `0` | Override context window size (tokens). `0` = use built-in lookup table. |
+| `codex_reasoning_effort` | string | no | `"medium"` | Reasoning effort for `openai-codex/*` Responses calls. Supported values: `"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`. |
 
 **Runtime providers:** `zai/`, `claude/`, `openai-codex/`
 

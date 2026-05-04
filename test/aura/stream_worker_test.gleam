@@ -6,7 +6,12 @@ import gleam/erlang/process.{type Pid}
 import gleeunit/should
 
 fn fake_config() -> llm.LlmConfig {
-  llm.LlmConfig(model: "fake", api_key: "fake", base_url: "http://127.0.0.1:1")
+  llm.LlmConfig(
+    model: "fake",
+    api_key: "fake",
+    base_url: "http://127.0.0.1:1",
+    codex_reasoning_effort: "medium",
+  )
 }
 
 pub fn stream_worker_forwards_delta_then_complete_test() {

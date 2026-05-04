@@ -10,6 +10,7 @@ fn fake_config() -> llm.LlmConfig {
     base_url: "http://127.0.0.1:1",
     api_key: "fake",
     model: "fake-model",
+    codex_reasoning_effort: "medium",
   )
 }
 

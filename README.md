@@ -134,6 +134,7 @@ vision = "zai/glm-5v-turbo"
 dream = "zai/glm-5.1"
 heartbeat = "zai/glm-5-turbo"
 monitor = "zai/glm-5-turbo"
+codex_reasoning_effort = "medium"
 
 # Experimental: use Codex OAuth subscription auth for Aura's orchestrator.
 # Run `codex login` first. File-backed Codex CLI auth is refreshed by Aura.

@@ -157,7 +157,7 @@ pub fn build_codex_responses_body_with_tools_test() {
   body |> string.contains("\"model\":\"gpt-5.5\"") |> should.be_true
   body |> string.contains("\"instructions\":\"You are Aura.\"") |> should.be_true
   body |> string.contains("\"reasoning\"") |> should.be_true
-  body |> string.contains("\"effort\":\"low\"") |> should.be_true
+  body |> string.contains("\"effort\":\"medium\"") |> should.be_true
   body |> string.contains("\"summary\":\"auto\"") |> should.be_true
   body |> string.contains("\"text\"") |> should.be_true
   body |> string.contains("\"verbosity\":\"low\"") |> should.be_true
@@ -172,6 +172,23 @@ pub fn build_codex_responses_body_with_tools_test() {
   body |> string.contains("\"name\":\"read_file\"") |> should.be_true
   body |> string.contains("\"function\":{\"name\"") |> should.be_false
   body |> string.contains("\"stream\":true") |> should.be_true
+}
+
+pub fn build_codex_responses_body_uses_configured_reasoning_effort_test() {
+  let body =
+    llm.build_codex_responses_body_with_reasoning_effort(
+      "gpt-5.5",
+      [
+        llm.SystemMessage("You are Aura."),
+        llm.UserMessage("Think carefully."),
+      ],
+      [],
+      True,
+      "high",
+    )
+    |> json.to_string
+
+  body |> string.contains("\"effort\":\"high\"") |> should.be_true
 }
 
 pub fn build_codex_responses_body_omits_orphan_tool_outputs_test() {

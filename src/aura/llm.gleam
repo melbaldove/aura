@@ -1,4 +1,5 @@
 import aura/codex_auth
+import aura/codex_reasoning
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http
@@ -51,7 +52,12 @@ type ParsedCodexOutput {
 }
 
 pub type LlmConfig {
-  LlmConfig(base_url: String, api_key: String, model: String)
+  LlmConfig(
+    base_url: String,
+    api_key: String,
+    model: String,
+    codex_reasoning_effort: String,
+  )
 }
 
 pub const openai_codex_base_url = "https://chatgpt.com/backend-api/codex"
@@ -176,7 +182,14 @@ pub fn chat_with_options(
   temperature: Option(Float),
 ) -> Result(String, String) {
   let body = case is_openai_codex_config(config) {
-    True -> build_codex_responses_body(config.model, messages, [], False)
+    True ->
+      build_codex_responses_body_with_reasoning_effort(
+        config.model,
+        messages,
+        [],
+        False,
+        config.codex_reasoning_effort,
+      )
     False -> build_request_body(config.model, messages, temperature)
   } |> json.to_string
   use resp <- result.try(post_chat(config, body, ""))
@@ -196,7 +209,14 @@ pub fn chat_with_tools(
   tools: List(ToolDefinition),
 ) -> Result(LlmResponse, String) {
   let body = case is_openai_codex_config(config) {
-    True -> build_codex_responses_body(config.model, messages, tools, False)
+    True ->
+      build_codex_responses_body_with_reasoning_effort(
+        config.model,
+        messages,
+        tools,
+        False,
+        config.codex_reasoning_effort,
+      )
     False -> build_request_body_with_tools(config.model, messages, tools, None)
   } |> json.to_string
   use resp <- result.try(post_chat(config, body, " (with tools)"))
@@ -519,9 +539,9 @@ fn codex_instructions(messages: List(Message)) -> String {
   }
 }
 
-fn codex_reasoning_config() -> json.Json {
+fn codex_reasoning_config(effort: String) -> json.Json {
   json.object([
-    #("effort", json.string("low")),
+    #("effort", json.string(codex_reasoning.normalize(effort))),
     #("summary", json.string("auto")),
   ])
 }
@@ -537,6 +557,22 @@ pub fn build_codex_responses_body(
   tools: List(ToolDefinition),
   stream: Bool,
 ) -> json.Json {
+  build_codex_responses_body_with_reasoning_effort(
+    model,
+    messages,
+    tools,
+    stream,
+    codex_reasoning.default_effort,
+  )
+}
+
+pub fn build_codex_responses_body_with_reasoning_effort(
+  model: String,
+  messages: List(Message),
+  tools: List(ToolDefinition),
+  stream: Bool,
+  reasoning_effort: String,
+) -> json.Json {
   let input_items = codex_input_items(messages)
   let base_fields = [
     #("model", json.string(model)),
@@ -544,7 +580,7 @@ pub fn build_codex_responses_body(
     #("input", json.preprocessed_array(input_items)),
     #("store", json.bool(False)),
     #("stream", json.bool(stream)),
-    #("reasoning", codex_reasoning_config()),
+    #("reasoning", codex_reasoning_config(reasoning_effort)),
     #("text", codex_text_config()),
   ]
   let fields = case tools {
@@ -703,13 +739,26 @@ pub fn chat_streaming_with_tools(
     True -> config.base_url <> "/responses"
     False -> config.base_url <> "/chat/completions"
   }
+  let stream_label = case is_openai_codex_config(config) {
+    True ->
+      " (with tools, reasoning="
+      <> codex_reasoning.normalize(config.codex_reasoning_effort)
+      <> ")"
+    False -> " (with tools)"
+  }
   logging.log(
     logging.Info,
-    "[llm] Streaming " <> config.model <> " at " <> url <> " (with tools)",
+    "[llm] Streaming " <> config.model <> " at " <> url <> stream_label,
   )
   let body_str = case is_openai_codex_config(config) {
     True ->
-      build_codex_responses_body(config.model, messages, tools, True)
+      build_codex_responses_body_with_reasoning_effort(
+        config.model,
+        messages,
+        tools,
+        True,
+        config.codex_reasoning_effort,
+      )
       |> json.to_string
     False -> {
       let base_fields = [

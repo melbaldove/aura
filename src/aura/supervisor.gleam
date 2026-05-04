@@ -148,7 +148,10 @@ pub fn start(
   logging.log(logging.Info, "[supervisor] Cognitive delivery started")
 
   use cognitive_llm_config <- result.try(
-    models.build_llm_config(global_config.models.brain)
+    models.build_llm_config_with_codex_reasoning_effort(
+      global_config.models.brain,
+      global_config.models.codex_reasoning_effort,
+    )
     |> result.map_error(fn(e) {
       "Failed to configure cognitive worker model: " <> e
     }),

@@ -11,6 +11,7 @@ fn fake_config() -> llm.LlmConfig {
     model: "fake-vision",
     api_key: "fake",
     base_url: "http://127.0.0.1:1",
+    codex_reasoning_effort: "medium",
   )
 }
 

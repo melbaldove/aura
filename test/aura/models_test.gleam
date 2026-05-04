@@ -67,6 +67,7 @@ pub fn build_llm_config_with_key_zai_test() {
       base_url: "https://api.z.ai/api/coding/paas/v4",
       api_key: "test-key-123",
       model: "glm-5-turbo",
+      codex_reasoning_effort: "medium",
     )),
   )
 }
@@ -78,6 +79,7 @@ pub fn build_llm_config_with_key_claude_test() {
       base_url: "https://api.anthropic.com/v1",
       api_key: "sk-ant-abc",
       model: "haiku",
+      codex_reasoning_effort: "medium",
     )),
   )
 }
@@ -89,6 +91,23 @@ pub fn build_llm_config_with_key_openai_codex_test() {
       base_url: "https://chatgpt.com/backend-api/codex",
       api_key: "access\nacct",
       model: "gpt-5.5",
+      codex_reasoning_effort: "medium",
+    )),
+  )
+}
+
+pub fn build_llm_config_with_key_and_codex_reasoning_effort_test() {
+  models.build_llm_config_with_key_and_codex_reasoning_effort(
+    "openai-codex/gpt-5.5",
+    "access\nacct",
+    "high",
+  )
+  |> should.equal(
+    Ok(llm.LlmConfig(
+      base_url: "https://chatgpt.com/backend-api/codex",
+      api_key: "access\nacct",
+      model: "gpt-5.5",
+      codex_reasoning_effort: "high",
     )),
   )
 }

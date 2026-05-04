@@ -459,7 +459,12 @@ fn dummy_vision_spawn(
 /// Dummy LLM config for tests. Never reaches the network because smoke
 /// tests never drive the actor through a real stream/vision spawn path.
 fn dummy_llm_config() -> llm.LlmConfig {
-  llm.LlmConfig(base_url: "", api_key: "", model: "")
+  llm.LlmConfig(
+    base_url: "",
+    api_key: "",
+    model: "",
+    codex_reasoning_effort: "medium",
+  )
 }
 
 /// Start a channel actor with stubbed deps for smoke tests.
@@ -1150,7 +1155,13 @@ fn execute_spawn_vision_worker(
     models.build_llm_config(state.resolved_vision_config.model_spec)
   {
     Ok(cfg) -> cfg
-    Error(_) -> llm.LlmConfig(base_url: "", api_key: "", model: "")
+    Error(_) ->
+      llm.LlmConfig(
+        base_url: "",
+        api_key: "",
+        model: "",
+        codex_reasoning_effort: "medium",
+      )
   }
   let pid =
     state.vision_spawn(

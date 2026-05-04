@@ -172,7 +172,12 @@ pub fn start(
 ) -> Result(process.Subject(BrainMessage), String) {
   let config = brain_config.global
   // Build LLM config from brain model spec
-  use llm_config <- result.try(models.build_llm_config(config.models.brain))
+  use llm_config <- result.try(
+    models.build_llm_config_with_codex_reasoning_effort(
+      config.models.brain,
+      config.models.codex_reasoning_effort,
+    ),
+  )
 
   // Resolve context length for compression thresholds
   let brain_context = case

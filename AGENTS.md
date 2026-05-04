@@ -116,6 +116,8 @@ User sends image → Gateway parses attachments → Brain detects image
 
 Two-model pipeline: vision model as preprocessor, orchestrator model for tool loop. Config is tiered: domain overrides global overrides built-in defaults. Vision model and prompt configurable per domain via `[models] vision` and `[vision] prompt` in config.toml.
 
+Codex Responses reasoning effort for `openai-codex/*` model specs is configured globally with `[models] codex_reasoning_effort` and defaults to `"medium"`.
+
 ### Key abstractions
 
 - **Domain** — a knowledge partition representing an area of the user's life (job, project, responsibility). Has its own config, AGENTS.md, anchors, logs, skills, conversation history. One Discord channel per domain.

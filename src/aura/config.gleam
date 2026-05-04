@@ -1,4 +1,5 @@
 import aura/cron
+import aura/codex_reasoning
 import aura/env
 import aura/integrations/gmail
 import aura/oauth
@@ -33,6 +34,7 @@ pub type ModelsConfig {
     monitor: String,
     vision: String,
     dream: String,
+    codex_reasoning_effort: String,
   )
 }
 
@@ -155,6 +157,7 @@ pub fn default_global() -> GlobalConfig {
       monitor: "",
       vision: "",
       dream: "",
+      codex_reasoning_effort: codex_reasoning.default_effort,
     ),
     notifications: NotificationsConfig(
       digest_windows: [],
@@ -256,6 +259,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     tom.get_string(doc, ["models", "monitor"])
     |> result.map_error(fn(_) { "Missing models.monitor" }),
   )
+  use codex_reasoning_effort <- result.try(parse_codex_reasoning_effort(doc))
 
   use digest_windows_raw <- result.try(
     tom.get_array(doc, ["notifications", "digest_windows"])
@@ -361,6 +365,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
       monitor: monitor,
       vision: vision_model,
       dream: dream_model,
+      codex_reasoning_effort: codex_reasoning_effort,
     ),
     notifications: NotificationsConfig(
       digest_windows: extract_toml_strings(digest_windows_raw),
@@ -384,6 +389,25 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     mcp: mcp,
     integrations: integrations,
   ))
+}
+
+fn parse_codex_reasoning_effort(
+  doc: dict.Dict(String, tom.Toml),
+) -> Result(String, String) {
+  let effort =
+    tom.get_string(doc, ["models", "codex_reasoning_effort"])
+    |> result.unwrap(codex_reasoning.default_effort)
+    |> codex_reasoning.normalize
+  case codex_reasoning.is_supported(effort) {
+    True -> Ok(effort)
+    False ->
+      Error(
+        "models.codex_reasoning_effort unsupported value: "
+        <> effort
+        <> ". Expected one of: "
+        <> string.join(codex_reasoning.supported_efforts(), ", "),
+      )
+  }
 }
 
 /// Parse the optional `[blather]` section. Returns `None` if the section is

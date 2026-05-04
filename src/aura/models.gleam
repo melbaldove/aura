@@ -1,4 +1,5 @@
 import aura/codex_auth
+import aura/codex_reasoning
 import aura/env
 import aura/llm
 import gleam/option.{type Option, None, Some}
@@ -16,7 +17,19 @@ pub fn resolve_model_name(model_spec: String) -> String {
 /// Build an LlmConfig from a model spec string
 /// Supports "zai/", "claude/", and experimental "openai-codex/" prefixes.
 pub fn build_llm_config(model_spec: String) -> Result(llm.LlmConfig, String) {
+  build_llm_config_with_codex_reasoning_effort(
+    model_spec,
+    codex_reasoning.default_effort,
+  )
+}
+
+pub fn build_llm_config_with_codex_reasoning_effort(
+  model_spec: String,
+  codex_reasoning_effort: String,
+) -> Result(llm.LlmConfig, String) {
   let model = resolve_model_name(model_spec)
+  let codex_reasoning_effort =
+    codex_reasoning.normalize(codex_reasoning_effort)
   case string.split_once(model_spec, "/") {
     Ok(#("zai", _)) -> {
       case env.get_env("ZAI_API_KEY") {
@@ -25,6 +38,7 @@ pub fn build_llm_config(model_spec: String) -> Result(llm.LlmConfig, String) {
             base_url: "https://api.z.ai/api/coding/paas/v4",
             api_key: key,
             model: model,
+            codex_reasoning_effort: codex_reasoning_effort,
           ))
         Error(_) -> Error("ZAI_API_KEY environment variable not set")
       }
@@ -36,6 +50,7 @@ pub fn build_llm_config(model_spec: String) -> Result(llm.LlmConfig, String) {
             base_url: "https://api.anthropic.com/v1",
             api_key: key,
             model: model,
+            codex_reasoning_effort: codex_reasoning_effort,
           ))
         Error(_) -> Error("ANTHROPIC_API_KEY environment variable not set")
       }
@@ -46,6 +61,7 @@ pub fn build_llm_config(model_spec: String) -> Result(llm.LlmConfig, String) {
         base_url: llm.openai_codex_base_url,
         api_key: codex_auth.encode(auth),
         model: model,
+        codex_reasoning_effort: codex_reasoning_effort,
       ))
     }
     _ -> Error("Unknown model provider in spec: " <> model_spec)
@@ -164,7 +180,21 @@ pub fn build_llm_config_with_key(
   model_spec: String,
   api_key: String,
 ) -> Result(llm.LlmConfig, String) {
+  build_llm_config_with_key_and_codex_reasoning_effort(
+    model_spec,
+    api_key,
+    codex_reasoning.default_effort,
+  )
+}
+
+pub fn build_llm_config_with_key_and_codex_reasoning_effort(
+  model_spec: String,
+  api_key: String,
+  codex_reasoning_effort: String,
+) -> Result(llm.LlmConfig, String) {
   let model = resolve_model_name(model_spec)
+  let codex_reasoning_effort =
+    codex_reasoning.normalize(codex_reasoning_effort)
   use base_url <- result.try(case string.starts_with(model_spec, "zai/") {
     True -> Ok("https://api.z.ai/api/coding/paas/v4")
     False ->
@@ -177,5 +207,10 @@ pub fn build_llm_config_with_key(
           }
       }
   })
-  Ok(llm.LlmConfig(base_url: base_url, api_key: api_key, model: model))
+  Ok(llm.LlmConfig(
+    base_url: base_url,
+    api_key: api_key,
+    model: model,
+    codex_reasoning_effort: codex_reasoning_effort,
+  ))
 }

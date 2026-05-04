@@ -104,7 +104,12 @@ pub fn flush_before_compression_skips_short_history_test() {
     llm.AssistantMessage("hi there"),
   ]
   review.flush_before_compression(
-    llm.LlmConfig(api_key: "", base_url: "", model: ""),
+    llm.LlmConfig(
+      api_key: "",
+      base_url: "",
+      model: "",
+      codex_reasoning_effort: "medium",
+    ),
     short_history,
     "test-domain",
     xdg.resolve_with_home("/tmp/aura-flush-test"),

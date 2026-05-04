@@ -149,6 +149,7 @@ pub fn fresh_system() -> TestSystem {
         monitor: "",
         vision: "zai/glm-5v-turbo",
         dream: "",
+        codex_reasoning_effort: "medium",
       ),
       brain_context: 128_000,
     )
@@ -274,6 +275,7 @@ pub fn fresh_system_with_domain(
         monitor: "",
         vision: "zai/glm-5v-turbo",
         dream: "",
+        codex_reasoning_effort: "medium",
       ),
       brain_context: 128_000,
     )
@@ -402,6 +404,7 @@ pub fn fresh_system_with_review_interval(review_interval: Int) -> TestSystem {
         monitor: "",
         vision: "zai/glm-5v-turbo",
         dream: "",
+        codex_reasoning_effort: "medium",
       ),
       brain_context: 128_000,
       memory: config.MemoryConfig(
@@ -510,6 +513,7 @@ pub fn fresh_system_with_skill_review_interval(
         monitor: "",
         vision: "zai/glm-5v-turbo",
         dream: "",
+        codex_reasoning_effort: "medium",
       ),
       brain_context: 128_000,
       memory: config.MemoryConfig(

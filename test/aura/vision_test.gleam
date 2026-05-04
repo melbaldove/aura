@@ -19,6 +19,7 @@ pub fn resolve_vision_config_global_only_test() {
         monitor: "",
         vision: "zai/glm-5v-turbo",
         dream: "",
+        codex_reasoning_effort: "medium",
       ),
       vision: config.VisionConfig(prompt: "Describe this image."),
     )
@@ -39,6 +40,7 @@ pub fn resolve_vision_config_domain_override_test() {
         monitor: "",
         vision: "zai/glm-5v-turbo",
         dream: "",
+        codex_reasoning_effort: "medium",
       ),
       vision: config.VisionConfig(prompt: "Global prompt."),
     )
@@ -65,6 +67,7 @@ pub fn resolve_vision_config_domain_partial_override_test() {
         monitor: "",
         vision: "zai/glm-5v-turbo",
         dream: "",
+        codex_reasoning_effort: "medium",
       ),
       vision: config.VisionConfig(prompt: "Global prompt."),
     )
@@ -148,7 +151,13 @@ pub fn describe_with_config_calls_llm_client_test() {
       chat: fn(_, _, _) { Error("not used") },
       chat_text: fn(_cfg, _msgs, _temp) { Ok("image description") },
     )
-  let config = llm.LlmConfig(base_url: "http://fake", api_key: "k", model: "m")
+  let config =
+    llm.LlmConfig(
+      base_url: "http://fake",
+      api_key: "k",
+      model: "m",
+      codex_reasoning_effort: "medium",
+    )
   let result =
     vision.describe_with_config(fake_client, config, "describe it", "fake-url")
   result |> should.equal(Ok("image description"))

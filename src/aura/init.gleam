@@ -276,6 +276,7 @@ fn generate_config(
         "acp = \"claude/opus\"",
         "heartbeat = \"" <> brain_model <> "\"",
         "monitor = \"" <> brain_model <> "\"",
+        "codex_reasoning_effort = \"medium\"",
         "",
         "[notifications]",
         "digest_windows = [\"07:35\", \"09:10\", \"11:10\", \"15:00\"]",

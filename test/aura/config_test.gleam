@@ -1,6 +1,7 @@
 import aura/config
 import gleam/option
 import gleam/result
+import gleam/string
 import gleeunit/should
 
 pub fn parse_global_config_test() {
@@ -35,10 +36,78 @@ global_max_concurrent = 4
   cfg.models.brain |> should.equal("zai/glm-5-turbo")
   cfg.models.domain |> should.equal("claude/sonnet")
   cfg.models.acp |> should.equal("claude/opus")
+  cfg.models.codex_reasoning_effort |> should.equal("medium")
   cfg.notifications.timezone |> should.equal("Asia/Manila")
   cfg.acp_global_max_concurrent |> should.equal(4)
   cfg.acp_transport |> should.equal("stdio")
   cfg.acp_command |> should.equal("codex-acp")
+}
+
+pub fn parse_global_config_with_codex_reasoning_effort_test() {
+  let toml =
+    "
+[discord]
+token = \"test-token\"
+guild = \"aura\"
+default_channel = \"aura\"
+
+[models]
+brain = \"openai-codex/gpt-5.5\"
+domain = \"zai/glm-5.1\"
+acp = \"claude/opus\"
+heartbeat = \"zai/glm-5-turbo\"
+monitor = \"zai/glm-5-turbo\"
+codex_reasoning_effort = \"high\"
+
+[notifications]
+digest_windows = [\"07:35\"]
+timezone = \"Asia/Manila\"
+urgent_bypass = true
+
+[acp]
+global_max_concurrent = 4
+"
+
+  let result = config.parse_global(toml)
+  result |> should.be_ok
+
+  let cfg = result |> result.unwrap(config.default_global())
+  cfg.models.codex_reasoning_effort |> should.equal("high")
+}
+
+pub fn parse_global_config_rejects_bad_codex_reasoning_effort_test() {
+  let toml =
+    "
+[discord]
+token = \"test-token\"
+guild = \"aura\"
+default_channel = \"aura\"
+
+[models]
+brain = \"openai-codex/gpt-5.5\"
+domain = \"zai/glm-5.1\"
+acp = \"claude/opus\"
+heartbeat = \"zai/glm-5-turbo\"
+monitor = \"zai/glm-5-turbo\"
+codex_reasoning_effort = \"maximum\"
+
+[notifications]
+digest_windows = [\"07:35\"]
+timezone = \"Asia/Manila\"
+urgent_bypass = true
+
+[acp]
+global_max_concurrent = 4
+"
+
+  let result = config.parse_global(toml)
+  case result {
+    Ok(_) -> should.fail()
+    Error(msg) -> {
+      string.contains(msg, "models.codex_reasoning_effort") |> should.be_true
+      string.contains(msg, "maximum") |> should.be_true
+    }
+  }
 }
 
 pub fn parse_domain_config_test() {

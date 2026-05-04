@@ -45,6 +45,7 @@ fn fake_config() -> llm.LlmConfig {
     base_url: "http://example.invalid",
     api_key: "test",
     model: "test",
+    codex_reasoning_effort: "medium",
   )
 }
 
