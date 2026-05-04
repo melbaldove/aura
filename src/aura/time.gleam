@@ -45,6 +45,27 @@ pub fn format_ms_utc(ms: Int) -> String {
   <> pad_zero(minute)
 }
 
+/// Format an epoch-milliseconds timestamp as an RFC3339 UTC timestamp.
+pub fn format_ms_rfc3339_utc(ms: Int) -> String {
+  let seconds = ms / 1000
+  // Seconds from year 0 to Unix epoch (1970-01-01).
+  let epoch_offset = 62_167_219_200
+  let #(#(year, month, day), #(hour, minute, second)) =
+    erlang_seconds_to_datetime(seconds + epoch_offset)
+  int.to_string(year)
+  <> "-"
+  <> pad_zero(month)
+  <> "-"
+  <> pad_zero(day)
+  <> "T"
+  <> pad_zero(hour)
+  <> ":"
+  <> pad_zero(minute)
+  <> ":"
+  <> pad_zero(second)
+  <> "Z"
+}
+
 fn pad_zero(n: Int) -> String {
   case n < 10 {
     True -> "0" <> int.to_string(n)

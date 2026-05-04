@@ -1,5 +1,6 @@
 -module(aura_stream_ffi).
--export([chat_stream/5, receive_stream_message/1, test_parse_delta_type/1]).
+-export([chat_stream/5, receive_stream_message/1, test_parse_delta_type/1,
+         test_stream_timeout_ms/1]).
 
 %% ---------------------------------------------------------------------------
 %% chat_stream/5 — Streaming HTTP POST to an OpenAI-compatible endpoint.
@@ -24,15 +25,16 @@ chat_stream(Url, ApiKey, _Model, BodyJson, CallbackPid) ->
     Headers = auth_headers(Url, ApiKey),
     ContentType = "application/json",
     Body = binary_to_list(BodyJson),
+    TimeoutMs = stream_timeout_ms(Url),
     case httpc:request(post,
                        {UrlStr, Headers, ContentType, Body},
-                       [{timeout, 120000}],
+                       [{timeout, TimeoutMs}],
                        [{sync, false}, {stream, self}]) of
         {ok, RequestId} ->
             %% State: {AccContent, ToolCalls}
             %% ToolCalls = #{Index => {Id, Name, ArgsAcc}}
             try
-                stream_loop(RequestId, CallbackPid, <<>>, <<>>, #{}, 0)
+                stream_loop(RequestId, CallbackPid, <<>>, <<>>, #{}, 0, TimeoutMs)
             catch
                 _:Reason ->
                     httpc:cancel_request(RequestId),
@@ -76,10 +78,16 @@ split_codex_auth(ApiKey) ->
     end.
 
 %% State now includes PromptTokens accumulator for usage tracking
-stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls, PromptTokens) ->
+stream_timeout_ms(Url) ->
+    case is_codex_url(Url) of
+        true -> 600000;
+        false -> 120000
+    end.
+
+stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls, PromptTokens, TimeoutMs) ->
     receive
         {http, {RequestId, stream_start, _Headers}} ->
-            stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls, PromptTokens);
+            stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls, PromptTokens, TimeoutMs);
 
         {http, {RequestId, stream, BinBodyPart}} ->
             NewBuffer = <<Buffer/binary, BinBodyPart/binary>>,
@@ -92,7 +100,7 @@ stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls, PromptTokens)
                     CallbackPid ! {stream_complete, NewContent, TcJson, NewPromptTokens};
                 false ->
                     stream_loop(RequestId, CallbackPid, Remainder,
-                                NewContent, NewToolCalls, NewPromptTokens)
+                                NewContent, NewToolCalls, NewPromptTokens, TimeoutMs)
             end;
 
         {http, {RequestId, stream_end, _Headers}} ->
@@ -104,7 +112,7 @@ stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls, PromptTokens)
                 io_lib:format("Stream error: ~p", [Reason])),
             CallbackPid ! {stream_error, Msg}
 
-    after 120000 ->
+    after TimeoutMs ->
         CallbackPid ! {stream_error, <<"Stream timeout">>}
     end.
 
@@ -254,17 +262,27 @@ parse_responses_delta(<<"response.reasoning_summary_text.delta">>, _Json) ->
 parse_responses_delta(<<"response.output_item.added">>, Json) ->
     case binary:match(Json, <<"\"function_call\"">>) of
         {_, _} -> parse_responses_tool_item(Json);
-        nomatch -> {delta, <<>>}
+        nomatch -> parse_responses_non_tool_item(Json)
     end;
 parse_responses_delta(<<"response.output_item.done">>, Json) ->
     case binary:match(Json, <<"\"function_call\"">>) of
         {_, _} -> parse_responses_tool_item_metadata(Json);
-        nomatch -> {delta, <<>>}
+        nomatch -> parse_responses_non_tool_item(Json)
     end;
 parse_responses_delta(<<"response.function_call_arguments.delta">>, Json) ->
     parse_responses_tool_arguments_delta(Json);
 parse_responses_delta(_, _Json) ->
     {delta, <<>>}.
+
+parse_responses_non_tool_item(Json) ->
+    case binary:match(Json, <<"\"type\":\"reasoning\"">>) of
+        {_, _} -> {reasoning, thinking};
+        nomatch ->
+            case binary:match(Json, <<"\"type\": \"reasoning\"">>) of
+                {_, _} -> {reasoning, thinking};
+                nomatch -> {delta, <<>>}
+            end
+    end.
 
 parse_responses_tool_item(Json) ->
     Index = case extract_json_int_field(Json, <<"\"output_index\"">>) of
@@ -417,3 +435,6 @@ test_parse_delta_type(Json) ->
         {tool_call_delta, _, _, _, _}  -> <<"tool_call_delta">>;
         {usage, _}                     -> <<"usage">>
     end.
+
+test_stream_timeout_ms(Url) ->
+    stream_timeout_ms(Url).

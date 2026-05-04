@@ -101,9 +101,9 @@ Claude Code auth token (from
 .BR "claude setup\-token" ).
 .TP
 .B AURA_OPENAI_CODEX_ACCESS_TOKEN
-Optional bearer token override for
+Optional fixed bearer token override for
 .B openai\-codex/*
-model specs. Prefer Codex CLI login cache when possible.
+model specs. Prefer Codex CLI login cache when possible so Aura can refresh OAuth tokens.
 .TP
 .B AURA_OPENAI_CODEX_ACCOUNT_ID
 Optional ChatGPT workspace/account id header for

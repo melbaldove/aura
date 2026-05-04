@@ -136,7 +136,7 @@ heartbeat = "zai/glm-5-turbo"
 monitor = "zai/glm-5-turbo"
 
 # Experimental: use Codex OAuth subscription auth for Aura's orchestrator.
-# Run `codex login` first, then set:
+# Run `codex login` first. File-backed Codex CLI auth is refreshed by Aura.
 # brain = "openai-codex/gpt-5.5"
 
 [acp]

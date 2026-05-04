@@ -21,22 +21,28 @@ pub fn spawn(
   parent: Subject(channel_actor.ChannelMessage),
 ) -> Pid {
   process.spawn(fn() {
-    let self_pid = process.self()
-    stream_fn(config, messages, tools, self_pid)
-    receive_loop(parent)
+    let callback_pid = process.self()
+    let stream_pid =
+      process.spawn(fn() {
+        stream_fn(config, messages, tools, callback_pid)
+      })
+    receive_loop(parent, stream_pid)
   })
 }
 
-fn receive_loop(parent: Subject(channel_actor.ChannelMessage)) -> Nil {
+fn receive_loop(
+  parent: Subject(channel_actor.ChannelMessage),
+  stream_pid: Pid,
+) -> Nil {
   let result = receive_ffi_message_ffi(120_000)
   case result {
     #("delta", text, _, _) -> {
       process.send(parent, channel_actor.StreamDelta(text))
-      receive_loop(parent)
+      receive_loop(parent, stream_pid)
     }
     #("reasoning", _, _, _) -> {
       process.send(parent, channel_actor.StreamReasoning)
-      receive_loop(parent)
+      receive_loop(parent, stream_pid)
     }
     #("complete", content, tool_calls_json, prompt_tokens) -> {
       process.send(
@@ -48,9 +54,11 @@ fn receive_loop(parent: Subject(channel_actor.ChannelMessage)) -> Nil {
       process.send(parent, channel_actor.StreamError(reason))
     }
     #("timeout", _, _, _) -> {
+      process.kill(stream_pid)
       process.send(parent, channel_actor.StreamError("idle timeout"))
     }
     _ -> {
+      process.kill(stream_pid)
       process.send(parent, channel_actor.StreamError("unknown ffi message"))
     }
   }

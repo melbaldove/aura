@@ -39,7 +39,7 @@
 2. `$CODEX_HOME/auth.json`
 3. `~/.codex/auth.json`
 
-Run `codex login` or `codex login --device-auth` first. If Codex is configured to store credentials only in the OS keychain, Aura cannot read them directly; use file storage or the Aura env override. This model route is separate from `[acp] command = "codex-acp"`, which controls dispatched flare agents.
+Run `codex login` or `codex login --device-auth` first. For file-backed Codex CLI credentials, Aura refreshes expired access tokens through Codex's OAuth refresh flow and persists rotated tokens back to `auth.json`. If Codex is configured to store credentials only in the OS keychain, Aura cannot read or refresh them directly; use file storage or the Aura env override. The env override is treated as a fixed bearer token and is not auto-refreshed. This model route is separate from `[acp] command = "codex-acp"`, which controls dispatched flare agents.
 
 ### [vision]
 
@@ -180,7 +180,7 @@ Each schedule is a `[[schedule]]` entry:
 | `ZAI_API_KEY` | Zhipu/Z.AI API key. |
 | `ANTHROPIC_API_KEY` | Anthropic API key (optional if using `CLAUDE_CODE_OAUTH_TOKEN`). |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code auth token for headless ACP sessions (from `claude setup-token`). |
-| `AURA_OPENAI_CODEX_ACCESS_TOKEN` | Optional bearer-token override for `openai-codex/*` model specs. Prefer Codex CLI login cache when possible. |
+| `AURA_OPENAI_CODEX_ACCESS_TOKEN` | Optional fixed bearer-token override for `openai-codex/*` model specs. Prefer Codex CLI login cache when possible so Aura can refresh OAuth tokens. |
 | `AURA_OPENAI_CODEX_ACCOUNT_ID` | Optional ChatGPT workspace/account id header for `openai-codex/*`; used with `AURA_OPENAI_CODEX_ACCESS_TOKEN`. |
 | `CODEX_HOME` | Optional Codex CLI config/cache directory. Defaults to `~/.codex` when unset. |
 | `CODEX_API_KEY` | Codex API key for `codex-acp` if not using Codex login state. |

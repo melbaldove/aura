@@ -155,15 +155,41 @@ pub fn build_codex_responses_body_with_tools_test() {
     |> json.to_string
 
   body |> string.contains("\"model\":\"gpt-5.5\"") |> should.be_true
+  body |> string.contains("\"instructions\":\"You are Aura.\"") |> should.be_true
+  body |> string.contains("\"reasoning\"") |> should.be_true
+  body |> string.contains("\"effort\":\"low\"") |> should.be_true
+  body |> string.contains("\"summary\":\"auto\"") |> should.be_true
+  body |> string.contains("\"text\"") |> should.be_true
+  body |> string.contains("\"verbosity\":\"low\"") |> should.be_true
   body |> string.contains("\"input\"") |> should.be_true
   body |> string.contains("\"messages\"") |> should.be_false
+  body |> string.contains("\"role\":\"system\"") |> should.be_false
   body |> string.contains("\"function_call\"") |> should.be_true
   body |> string.contains("\"function_call_output\"") |> should.be_true
   body |> string.contains("\"call_id\":\"call_1\"") |> should.be_true
+  body |> string.contains("\"id\":\"call_1\"") |> should.be_false
   body |> string.contains("\"tools\"") |> should.be_true
   body |> string.contains("\"name\":\"read_file\"") |> should.be_true
   body |> string.contains("\"function\":{\"name\"") |> should.be_false
   body |> string.contains("\"stream\":true") |> should.be_true
+}
+
+pub fn build_codex_responses_body_omits_orphan_tool_outputs_test() {
+  let body =
+    llm.build_codex_responses_body(
+      "gpt-5.5",
+      [
+        llm.UserMessage("hello"),
+        llm.ToolResultMessage("missing_call", "orphan output"),
+        llm.UserMessage("next"),
+      ],
+      [],
+      True,
+    )
+    |> json.to_string
+
+  body |> string.contains("orphan output") |> should.be_false
+  body |> string.contains("\"function_call_output\"") |> should.be_false
 }
 
 pub fn parse_codex_response_with_text_and_tool_call_test() {

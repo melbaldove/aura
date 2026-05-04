@@ -398,7 +398,7 @@ Steps:
 - `ZAI_API_KEY` — z.ai/GLM API key
 - `ANTHROPIC_API_KEY` — Anthropic API key (for ACP, optional if using CLAUDE_CODE_OAUTH_TOKEN)
 - `CLAUDE_CODE_OAUTH_TOKEN` — Claude Code auth token for headless ACP sessions (from `claude setup-token`)
-- `AURA_OPENAI_CODEX_ACCESS_TOKEN` — optional bearer-token override for `openai-codex/*` orchestrator/domain model specs; prefer Codex CLI login cache when possible
+- `AURA_OPENAI_CODEX_ACCESS_TOKEN` — optional fixed bearer-token override for `openai-codex/*` orchestrator/domain model specs; prefer Codex CLI login cache when possible so Aura can refresh OAuth tokens
 - `AURA_OPENAI_CODEX_ACCOUNT_ID` — optional ChatGPT workspace/account id header for `openai-codex/*` when using `AURA_OPENAI_CODEX_ACCESS_TOKEN`
 - `CODEX_HOME` — optional Codex CLI config/cache directory for `openai-codex/*`; defaults to `~/.codex`
 - `CODEX_API_KEY` — Codex API key for `codex-acp` if not using Codex login state

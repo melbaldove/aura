@@ -2,7 +2,7 @@ import aura/channel_actor
 import aura/llm
 import aura/stream_worker
 import fakes/fake_llm
-import gleam/erlang/process
+import gleam/erlang/process.{type Pid}
 import gleeunit/should
 
 fn fake_config() -> llm.LlmConfig {
@@ -43,6 +43,42 @@ pub fn stream_worker_forwards_error_test() {
   let received_error = collect_until_error(parent, 2000, 0)
   received_error |> should.be_true
 }
+
+pub fn stream_worker_receives_while_stream_call_is_blocked_test() {
+  let parent: process.Subject(channel_actor.ChannelMessage) =
+    process.new_subject()
+
+  let _ =
+    stream_worker.spawn(blocking_stream, fake_config(), [], [], parent)
+
+  let received_delta = case process.receive(parent, 100) {
+    Ok(channel_actor.StreamDelta("early")) -> True
+    _ -> False
+  }
+  received_delta |> should.be_true
+}
+
+fn blocking_stream(
+  _config: llm.LlmConfig,
+  _messages: List(llm.Message),
+  _tools: List(llm.ToolDefinition),
+  callback_pid: Pid,
+) -> Nil {
+  send_stream_delta(callback_pid, "early")
+  process.sleep(500)
+  send_stream_complete(callback_pid, "early", "[]", 0)
+}
+
+@external(erlang, "fake_llm_ffi", "stream_delta")
+fn send_stream_delta(pid: Pid, text: String) -> Nil
+
+@external(erlang, "fake_llm_ffi", "stream_complete")
+fn send_stream_complete(
+  pid: Pid,
+  content: String,
+  tool_calls_json: String,
+  prompt_tokens: Int,
+) -> Nil
 
 fn collect_until_complete(
   parent: process.Subject(channel_actor.ChannelMessage),

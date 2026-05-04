@@ -212,6 +212,25 @@ fn post_chat(
   body: String,
   label: String,
 ) -> Result(String, String) {
+  let config = config_with_fresh_codex_auth(config)
+  use resp <- result.try(dispatch_post_chat(config, body, label))
+  let #(status, resp_body) = resp
+  case status {
+    200 -> Ok(resp_body)
+    401 ->
+      case is_openai_codex_config(config) {
+        True -> retry_post_chat_after_codex_refresh(config, body, label)
+        False -> api_error(config, status, resp_body)
+      }
+    _ -> api_error(config, status, resp_body)
+  }
+}
+
+fn dispatch_post_chat(
+  config: LlmConfig,
+  body: String,
+  label: String,
+) -> Result(#(Int, String), String) {
   let url = case is_openai_codex_config(config) {
     True -> config.base_url <> "/responses"
     False -> config.base_url <> "/chat/completions"
@@ -240,23 +259,61 @@ fn post_chat(
     |> httpc.dispatch(req)
     |> result.map_error(fn(e) { "HTTP request failed: " <> string.inspect(e) }),
   )
-  case resp.status {
-    200 -> Ok(resp.body)
-    status -> {
-      logging.log(
-        logging.Error,
-        "[llm] Error from "
-          <> config.model
-          <> ": status "
-          <> int.to_string(status),
-      )
-      Error(
-        "LLM API error (status "
-        <> int.to_string(status)
-        <> "): "
-        <> string.slice(resp.body, 0, 200),
-      )
-    }
+  Ok(#(resp.status, resp.body))
+}
+
+fn retry_post_chat_after_codex_refresh(
+  config: LlmConfig,
+  body: String,
+  label: String,
+) -> Result(String, String) {
+  logging.log(
+    logging.Info,
+    "[llm] Refreshing Codex OAuth token after 401 from " <> config.model,
+  )
+  use auth <- result.try(
+    codex_auth.refresh_from_auth_json()
+    |> result.map_error(fn(err) {
+      "LLM API error (status 401); Codex token refresh failed: " <> err
+    }),
+  )
+  let config = LlmConfig(..config, api_key: codex_auth.encode(auth))
+  use resp <- result.try(dispatch_post_chat(config, body, label <> " retry"))
+  let #(status, resp_body) = resp
+  case status {
+    200 -> Ok(resp_body)
+    _ -> api_error(config, status, resp_body)
+  }
+}
+
+fn api_error(
+  config: LlmConfig,
+  status: Int,
+  body: String,
+) -> Result(String, String) {
+  logging.log(
+    logging.Error,
+    "[llm] Error from "
+      <> config.model
+      <> ": status "
+      <> int.to_string(status),
+  )
+  Error(
+    "LLM API error (status "
+    <> int.to_string(status)
+    <> "): "
+    <> string.slice(body, 0, 200),
+  )
+}
+
+fn config_with_fresh_codex_auth(config: LlmConfig) -> LlmConfig {
+  case is_openai_codex_config(config) {
+    False -> config
+    True ->
+      case codex_auth.load() {
+        Ok(auth) -> LlmConfig(..config, api_key: codex_auth.encode(auth))
+        Error(_) -> config
+      }
   }
 }
 
@@ -388,7 +445,6 @@ fn codex_image_message(content: String, image_url: String) -> json.Json {
 fn codex_function_call_item(call: ToolCall) -> json.Json {
   json.object([
     #("type", json.string("function_call")),
-    #("id", json.string(call.id)),
     #("call_id", json.string(call.id)),
     #("name", json.string(call.name)),
     #("arguments", json.string(call.arguments)),
@@ -406,21 +462,72 @@ fn codex_function_call_output_item(
   ])
 }
 
-fn message_to_codex_input_items(message: Message) -> List(json.Json) {
-  case message {
-    SystemMessage(c) -> [codex_text_message("system", c)]
-    UserMessage(c) -> [codex_text_message("user", c)]
-    UserMessageWithImage(c, url) -> [codex_image_message(c, url)]
-    AssistantMessage(c) -> [codex_text_message("assistant", c)]
-    AssistantToolCallMessage(c, calls) -> {
-      let content_items = case c {
-        "" -> []
-        _ -> [codex_text_message("assistant", c)]
+fn codex_input_items(messages: List(Message)) -> List(json.Json) {
+  let #(items, _) =
+    list.fold(messages, #([], []), fn(acc, message) {
+      let #(items, known_call_ids) = acc
+      case message {
+        SystemMessage(_) -> #(items, known_call_ids)
+        UserMessage(c) ->
+          #(list.append(items, [codex_text_message("user", c)]), known_call_ids)
+        UserMessageWithImage(c, url) ->
+          #(list.append(items, [codex_image_message(c, url)]), known_call_ids)
+        AssistantMessage(c) ->
+          #(
+            list.append(items, [codex_text_message("assistant", c)]),
+            known_call_ids,
+          )
+        AssistantToolCallMessage(c, calls) -> {
+          let content_items = case c {
+            "" -> []
+            _ -> [codex_text_message("assistant", c)]
+          }
+          let call_items = list.map(calls, codex_function_call_item)
+          let call_ids = list.map(calls, fn(call) { call.id })
+          #(
+            list.append(items, list.append(content_items, call_items)),
+            list.append(known_call_ids, call_ids),
+          )
+        }
+        ToolResultMessage(id, c) ->
+          case list.contains(known_call_ids, id) {
+            True ->
+              #(
+                list.append(items, [codex_function_call_output_item(id, c)]),
+                known_call_ids,
+              )
+            False -> #(items, known_call_ids)
+          }
       }
-      list.append(content_items, list.map(calls, codex_function_call_item))
-    }
-    ToolResultMessage(id, c) -> [codex_function_call_output_item(id, c)]
+    })
+  items
+}
+
+fn codex_instructions(messages: List(Message)) -> String {
+  let instructions =
+    messages
+    |> list.filter_map(fn(message) {
+      case message {
+        SystemMessage(c) -> Ok(c)
+        _ -> Error(Nil)
+      }
+    })
+    |> string.join("\n\n")
+  case instructions {
+    "" -> "You are a helpful assistant."
+    _ -> instructions
   }
+}
+
+fn codex_reasoning_config() -> json.Json {
+  json.object([
+    #("effort", json.string("low")),
+    #("summary", json.string("auto")),
+  ])
+}
+
+fn codex_text_config() -> json.Json {
+  json.object([#("verbosity", json.string("low"))])
 }
 
 /// Build the request body JSON for the Codex/Responses route.
@@ -430,13 +537,15 @@ pub fn build_codex_responses_body(
   tools: List(ToolDefinition),
   stream: Bool,
 ) -> json.Json {
-  let input_items =
-    list.flat_map(messages, message_to_codex_input_items)
+  let input_items = codex_input_items(messages)
   let base_fields = [
     #("model", json.string(model)),
+    #("instructions", json.string(codex_instructions(messages))),
     #("input", json.preprocessed_array(input_items)),
     #("store", json.bool(False)),
     #("stream", json.bool(stream)),
+    #("reasoning", codex_reasoning_config()),
+    #("text", codex_text_config()),
   ]
   let fields = case tools {
     [] -> base_fields
@@ -589,6 +698,7 @@ pub fn chat_streaming_with_tools(
   tools: List(ToolDefinition),
   callback_pid: process.Pid,
 ) -> Nil {
+  let config = config_with_fresh_codex_auth(config)
   let url = case is_openai_codex_config(config) {
     True -> config.base_url <> "/responses"
     False -> config.base_url <> "/chat/completions"

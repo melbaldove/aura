@@ -209,6 +209,9 @@ pub fn estimate_tokens_unicode_test() {
 @external(erlang, "aura_stream_ffi", "test_parse_delta_type")
 fn parse_delta_type(json: String) -> String
 
+@external(erlang, "aura_stream_ffi", "test_stream_timeout_ms")
+fn stream_timeout_ms(url: String) -> Int
+
 /// Regression: when an SSE delta contains both "content":"" (empty) AND
 /// "tool_calls", parse_delta must classify it as tool_call_delta, not as an
 /// empty content delta.  Before the fix, the content check matched first and
@@ -241,6 +244,19 @@ pub fn parse_delta_responses_output_text_test() {
 
   parse_delta_type(json)
   |> should.equal("delta")
+}
+
+pub fn parse_delta_responses_reasoning_item_added_test() {
+  let json =
+    "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[]},\"output_index\":0,\"sequence_number\":2}"
+
+  parse_delta_type(json)
+  |> should.equal("reasoning")
+}
+
+pub fn codex_stream_timeout_uses_turn_deadline_test() {
+  stream_timeout_ms("https://chatgpt.com/backend-api/codex/responses")
+  |> should.equal(600_000)
 }
 
 pub fn parse_delta_responses_function_call_added_test() {
