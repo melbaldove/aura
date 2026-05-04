@@ -1709,11 +1709,25 @@ pub fn finalize_turn_long_discord_output_emits_continuation_sends_test() {
 
   let assert [first_chunk] = edit_chunks
   list.length(send_chunks) |> should.equal(2)
-  string.concat([first_chunk, ..send_chunks]) |> should.equal(content)
-  list.all([first_chunk, ..send_chunks], fn(body) {
-    string.length(body) <= 1990
-  })
+  let all_chunks = [first_chunk, ..send_chunks]
+  let assert [_, _, last_chunk] = all_chunks
+  string.starts_with(first_chunk, "Part 1/3\n") |> should.be_true
+  string.starts_with(last_chunk, "Part 3/3\n") |> should.be_true
+  string.concat(list.map(all_chunks, strip_discord_part_label))
+  |> should.equal(content)
+  list.all(all_chunks, fn(body) { string.length(body) <= 1990 })
   |> should.be_true
+}
+
+fn strip_discord_part_label(chunk: String) -> String {
+  case string.split_once(chunk, on: "\n") {
+    Ok(#(label, body)) ->
+      case string.starts_with(label, "Part ") {
+        True -> body
+        False -> chunk
+      }
+    Error(_) -> chunk
+  }
 }
 
 // --- non-blocking stream retry backoff -----------------------------------

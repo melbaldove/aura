@@ -39,9 +39,36 @@ pub fn split_to_discord_messages_preserves_long_content_test() {
   let chunks = discord_message.split_to_discord_messages(content)
 
   list.length(chunks) |> should.equal(3)
-  string.concat(chunks) |> should.equal(content)
+  let assert [first, second, third] = chunks
+  string.starts_with(first, "Part 1/3\n") |> should.be_true
+  string.starts_with(second, "Part 2/3\n") |> should.be_true
+  string.starts_with(third, "Part 3/3\n") |> should.be_true
+  string.concat(list.map(chunks, strip_part_label)) |> should.equal(content)
   list.all(chunks, fn(chunk) {
     string.length(chunk) <= discord_message.discord_max_chars
   })
   |> should.be_true
+}
+
+pub fn split_to_discord_messages_reserves_room_for_part_labels_test() {
+  let content = string.repeat("y", 3790)
+  let chunks = discord_message.split_to_discord_messages(content)
+
+  list.length(chunks) |> should.equal(3)
+  string.concat(list.map(chunks, strip_part_label)) |> should.equal(content)
+  list.all(chunks, fn(chunk) {
+    string.length(chunk) <= discord_message.discord_max_chars
+  })
+  |> should.be_true
+}
+
+fn strip_part_label(chunk: String) -> String {
+  case string.split_once(chunk, on: "\n") {
+    Ok(#(label, body)) ->
+      case string.starts_with(label, "Part ") {
+        True -> body
+        False -> chunk
+      }
+    Error(_) -> chunk
+  }
 }
