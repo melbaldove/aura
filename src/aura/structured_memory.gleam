@@ -14,6 +14,19 @@ pub type Entry {
   Entry(key: String, content: String)
 }
 
+/// Structured result describing how a memory archive write affected lineage.
+pub type ArchiveWriteResult {
+  ArchiveNew(new_id: Int, content_chars: Int)
+  ArchiveChanged(
+    previous_id: Int,
+    new_id: Int,
+    previous_chars: Int,
+    content_chars: Int,
+  )
+  ArchiveNoop(previous_id: Option(Int), content_chars: Int)
+  ArchiveRemoved(previous_id: Int)
+}
+
 /// Parse a keyed memory file into a list of entries.
 /// Format: `§ key\ncontent\n` blocks. Content before the first `§` is ignored.
 pub fn read_entries(path: String) -> Result(List(Entry), String) {
@@ -110,8 +123,58 @@ pub fn set_with_archive(
   domain: String,
   target: String,
 ) -> Result(Nil, String) {
+  set_with_archive_checked(path, key, content, db_subject, domain, target)
+  |> result.map(fn(_) { Nil })
+}
+
+/// Upsert an entry and return the exact archive effect that occurred.
+pub fn set_with_archive_checked(
+  path: String,
+  key: String,
+  content: String,
+  db_subject: process.Subject(db.DbMessage),
+  domain: String,
+  target: String,
+) -> Result(ArchiveWriteResult, String) {
   use _ <- result.try(security_scan(content))
   use entries <- result.try(read_entries(path))
+  let previous_file_entry = find_entry(entries, key)
+  let previous_db_entry =
+    db.get_active_memory_entry_by_key(db_subject, domain, target, key)
+  let previous_id = case previous_db_entry {
+    Ok(Some(entry)) -> Some(entry.id)
+    _ -> None
+  }
+
+  case previous_file_entry {
+    Some(entry) if entry.content == content ->
+      Ok(ArchiveNoop(previous_id, string.length(content)))
+    _ ->
+      write_changed_archive_entry(
+        path,
+        entries,
+        key,
+        content,
+        db_subject,
+        domain,
+        target,
+        previous_file_entry,
+        previous_id,
+      )
+  }
+}
+
+fn write_changed_archive_entry(
+  path: String,
+  entries: List(Entry),
+  key: String,
+  content: String,
+  db_subject: process.Subject(db.DbMessage),
+  domain: String,
+  target: String,
+  previous_file_entry: Option(Entry),
+  previous_id: Option(Int),
+) -> Result(ArchiveWriteResult, String) {
   let #(exists, updated) = upsert_entries(entries, key, content)
   use _ <- result.try(write_entries(path, updated))
 
@@ -120,29 +183,45 @@ pub fn set_with_archive(
   case db.insert_memory_entry(db_subject, domain, target, key, content, now) {
     Ok(new_id) -> {
       // If the key already existed, supersede the old archive entry
-      case exists {
-        True -> {
-          case db.get_active_entry_id(db_subject, domain, target, key, new_id) {
-            Ok(old_id) -> {
-              case db.supersede_memory_entry(db_subject, old_id, new_id, now) {
-                Ok(Nil) -> Nil
-                Error(err) ->
-                  logging.log(
-                    logging.Error,
-                    "[memory] Archive supersede failed: " <> err,
-                  )
+      let archived_previous_id = case previous_id {
+        Some(id) -> Some(id)
+        None ->
+          case exists {
+            True ->
+              case
+                db.get_active_entry_id(db_subject, domain, target, key, new_id)
+              {
+                Ok(old_id) -> Some(old_id)
+                Error(_) -> None
               }
-            }
-            Error(_) -> Nil
+            False -> None
           }
-        }
-        False -> Nil
       }
-      Ok(Nil)
+
+      case archived_previous_id {
+        Some(old_id) -> {
+          case db.supersede_memory_entry(db_subject, old_id, new_id, now) {
+            Ok(Nil) -> Nil
+            Error(err) ->
+              logging.log(
+                logging.Error,
+                "[memory] Archive supersede failed: " <> err,
+              )
+          }
+          Ok(ArchiveChanged(
+            previous_id: old_id,
+            new_id: new_id,
+            previous_chars: previous_chars(previous_file_entry),
+            content_chars: string.length(content),
+          ))
+        }
+        None ->
+          Ok(ArchiveNew(new_id: new_id, content_chars: string.length(content)))
+      }
     }
     Error(err) -> {
       logging.log(logging.Error, "[memory] Archive insert failed: " <> err)
-      Ok(Nil)
+      Ok(ArchiveNoop(previous_id, string.length(content)))
     }
   }
 }
@@ -157,6 +236,18 @@ pub fn remove_with_archive(
   domain: String,
   target: String,
 ) -> Result(Nil, String) {
+  remove_with_archive_checked(path, key, db_subject, domain, target)
+  |> result.map(fn(_) { Nil })
+}
+
+/// Remove an entry and return the exact archive effect that occurred.
+pub fn remove_with_archive_checked(
+  path: String,
+  key: String,
+  db_subject: process.Subject(db.DbMessage),
+  domain: String,
+  target: String,
+) -> Result(ArchiveWriteResult, String) {
   use entries <- result.try(read_entries(path))
   let filtered = list.filter(entries, fn(e) { e.key != key })
   case list.length(filtered) == list.length(entries) {
@@ -185,11 +276,25 @@ pub fn remove_with_archive(
                 "[memory] Archive supersede on remove failed: " <> err,
               )
           }
+          Ok(ArchiveRemoved(previous_id: old_id))
         }
-        Error(_) -> Nil
+        Error(_) -> Ok(ArchiveRemoved(previous_id: 0))
       }
-      Ok(Nil)
     }
+  }
+}
+
+fn find_entry(entries: List(Entry), key: String) -> Option(Entry) {
+  case list.find(entries, fn(entry) { entry.key == key }) {
+    Ok(entry) -> Some(entry)
+    Error(_) -> None
+  }
+}
+
+fn previous_chars(entry: Option(Entry)) -> Int {
+  case entry {
+    Some(value) -> string.length(value.content)
+    None -> 0
   }
 }
 

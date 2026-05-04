@@ -125,7 +125,7 @@ Codex Responses reasoning effort for `openai-codex/*` model specs is configured 
 - **Skill** — a directory with a SKILL.md and optional CLI entrypoint. Instruction-only skills teach the LLM; external skills are invoked as subprocesses.
 - **Tool** — primitive operation the LLM can call. 26 built-in tools (filesystem, Discord, skills, memory, tracking, search, web, schedules, shell, browser, attachments, vision, events).
 - **Schedule** — a config-driven periodic task defined in `schedules.toml`. Supports fixed intervals ("15m") and cron expressions ("0 9 * * *"). Each schedule invokes a skill, classifies urgency via LLM, and emits findings.
-- **Dreaming** — periodic offline memory consolidation. Cron-triggered, per-domain, parallel. Four-phase LLM process (consolidate, promote, reflect, render) that synthesizes knowledge from memory, state, flare outcomes, and conversation summaries. Writes to flat files through SQLite archive for lossless lineage tracking.
+- **Dreaming** — periodic offline memory consolidation. Cron-triggered, per-domain, parallel. Four-phase LLM process (consolidate, promote, reflect, render) that synthesizes knowledge from memory, state, flare outcomes, and conversation summaries. Writes to flat files through SQLite archive for lossless lineage tracking, suppresses exact no-op rewrites, and records per-run memory effects plus compact before/after reports.
 
 ## Source layout
 
@@ -236,7 +236,7 @@ Additional conventions:
 - FTS5 for full-text search, auto-synced via triggers
 - Schema versioned via `schema_version` table (currently v4)
 - `memory_entries` table for lossless memory archive with lineage tracking
-- `dream_runs` table for dream cycle history
+- `dream_runs`, `dream_run_effects`, and `dream_action_candidates` tables for dream cycle history, memory-write effects, and deterministic operational follow-up candidates
 - Conversations keyed by `(platform, platform_id)` — multi-platform ready
 
 ### Tool system
@@ -286,7 +286,9 @@ Additional conventions:
 - Four phases per domain: consolidate (merge/compress entries), promote (extract durable knowledge from episodic sources), reflect (identify cross-domain patterns), render (produce final working set within token budget)
 - Global pass after all domains: consolidates global MEMORY.md and USER.md with domain index summaries
 - Config in global `config.toml`: `[models] dream` (model spec, defaults to brain model), `[dreaming] cron` (cron expression, default `"0 4 * * *"`), `[dreaming] budget_percent` (% of context window for memory, default `10`)
-- Dream results logged to `dream_runs` table; memory writes go through `set_with_archive` / `remove_with_archive` for lineage tracking
+- Dream results logged to `dream_runs`; individual memory effects are logged to `dream_run_effects`; deterministic follow-up candidates are logged to `dream_action_candidates`
+- Memory writes go through `set_with_archive_checked` / `remove_with_archive_checked` during dreaming so exact no-op rewrites do not churn the archive
+- Each dream cycle writes a compact markdown before/after report under `~/.local/share/aura/dream_reports/`
 - Retry logic: each phase retries up to 3 times with 5s/15s/30s backoff delays
 - Per-domain timeout: 10 minutes; timed-out domains are skipped gracefully
 

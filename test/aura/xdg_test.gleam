@@ -28,6 +28,20 @@ pub fn data_subpath_test() {
   |> should.equal("/home/testuser/.local/share/aura/events.jsonl")
 }
 
+pub fn dream_reports_dir_test() {
+  let paths = xdg.resolve_with_home("/home/testuser")
+  xdg.dream_reports_dir(paths)
+  |> should.equal("/home/testuser/.local/share/aura/dream_reports")
+}
+
+pub fn dream_report_path_test() {
+  let paths = xdg.resolve_with_home("/home/testuser")
+  xdg.dream_report_path(paths, 1_777_867_200_000)
+  |> should.equal(
+    "/home/testuser/.local/share/aura/dream_reports/1777867200000.md",
+  )
+}
+
 pub fn domain_config_path_test() {
   let paths = xdg.resolve_with_home("/home/testuser")
   xdg.domain_config_path(paths, "cm2")

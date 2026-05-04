@@ -66,7 +66,7 @@ pub fn schema_version_is_set_test() {
 
   db_schema.get_version(conn)
   |> should.be_ok
-  |> should.equal(7)
+  |> should.equal(8)
 }
 
 pub fn schema_v5_creates_events_table_test() {
@@ -167,6 +167,54 @@ pub fn schema_v4_creates_dream_runs_table_test() {
   list.length(rows) |> should.equal(1)
 }
 
+pub fn schema_v8_adds_dream_run_effects_table_test() {
+  let assert Ok(conn) = sqlight.open(":memory:")
+  let assert Ok(_) = db_schema.initialize(conn)
+  let assert Ok(_) =
+    sqlight.exec(
+      "INSERT INTO dream_runs (domain, completed_at_ms, phase_reached) VALUES ('work', 1000, 'render')",
+      conn,
+    )
+  let assert Ok(_) =
+    sqlight.exec(
+      "INSERT INTO dream_run_effects (dream_run_id, domain, phase, target, key, action, effect_kind, previous_memory_entry_id, new_memory_entry_id, previous_chars, content_chars, created_at_ms) VALUES (1, 'work', 'render', 'memory', 'domain-index', 'set', 'new', NULL, 10, NULL, 100, 1000)",
+      conn,
+    )
+
+  let assert Ok(rows) =
+    sqlight.query(
+      "SELECT effect_kind FROM dream_run_effects",
+      on: conn,
+      with: [],
+      expecting: decode.at([0], decode.string),
+    )
+  rows |> should.equal(["new"])
+}
+
+pub fn schema_v8_adds_dream_action_candidates_table_test() {
+  let assert Ok(conn) = sqlight.open(":memory:")
+  let assert Ok(_) = db_schema.initialize(conn)
+  let assert Ok(_) =
+    sqlight.exec(
+      "INSERT INTO dream_runs (domain, completed_at_ms, phase_reached) VALUES ('work', 1000, 'render')",
+      conn,
+    )
+  let assert Ok(_) =
+    sqlight.exec(
+      "INSERT INTO dream_action_candidates (dream_run_id, domain, candidate_type, severity, reason, created_at_ms) VALUES (1, 'work', 'sleep_candidate', 2, 'No changed memory across repeated cycles.', 1000)",
+      conn,
+    )
+
+  let assert Ok(rows) =
+    sqlight.query(
+      "SELECT candidate_type FROM dream_action_candidates",
+      on: conn,
+      with: [],
+      expecting: decode.at([0], decode.string),
+    )
+  rows |> should.equal(["sleep_candidate"])
+}
+
 pub fn schema_v4_adds_flares_result_text_column_test() {
   let assert Ok(conn) = sqlight.open(":memory:")
   let assert Ok(_) = db_schema.initialize(conn)
@@ -201,7 +249,7 @@ pub fn schema_v4_alter_table_idempotent_test() {
   // Verify version is migrated forward to the current version
   db_schema.get_version(conn)
   |> should.be_ok
-  |> should.equal(7)
+  |> should.equal(8)
 }
 
 pub fn schema_v6_creates_integration_checkpoints_test() {

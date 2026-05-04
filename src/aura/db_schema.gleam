@@ -3,7 +3,7 @@ import gleam/result
 import gleam/string
 import sqlight
 
-const current_version = 7
+const current_version = 8
 
 /// Create all tables, indexes, FTS5 virtual table, and triggers if they do not
 /// already exist, then run any pending schema migrations.
@@ -188,7 +188,10 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
       entries_consolidated INTEGER,
       entries_promoted INTEGER,
       reflections_generated INTEGER,
-      duration_ms INTEGER
+      duration_ms INTEGER,
+      entries_rendered INTEGER NOT NULL DEFAULT 0,
+      entries_noop INTEGER NOT NULL DEFAULT 0,
+      action_candidates_count INTEGER NOT NULL DEFAULT 0
     )
   ",
   ))
@@ -196,6 +199,7 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
     conn,
     "CREATE INDEX IF NOT EXISTS idx_dream_runs_domain ON dream_runs(domain)",
   ))
+  use _ <- result.try(create_dream_observability_tables(conn))
 
   use _ <- result.try(exec(
     conn,
@@ -562,6 +566,30 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
         }
         False -> Ok(Nil)
       })
+      use _ <- result.try(case v < 8 {
+        True -> {
+          use _ <- result.try(add_column_if_missing(
+            conn,
+            "dream_runs",
+            "entries_rendered",
+            "ALTER TABLE dream_runs ADD COLUMN entries_rendered INTEGER NOT NULL DEFAULT 0",
+          ))
+          use _ <- result.try(add_column_if_missing(
+            conn,
+            "dream_runs",
+            "entries_noop",
+            "ALTER TABLE dream_runs ADD COLUMN entries_noop INTEGER NOT NULL DEFAULT 0",
+          ))
+          use _ <- result.try(add_column_if_missing(
+            conn,
+            "dream_runs",
+            "action_candidates_count",
+            "ALTER TABLE dream_runs ADD COLUMN action_candidates_count INTEGER NOT NULL DEFAULT 0",
+          ))
+          create_dream_observability_tables(conn)
+        }
+        False -> Ok(Nil)
+      })
       exec(
         conn,
         "UPDATE schema_version SET version = "
@@ -577,6 +605,81 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
         <> string.inspect(current_version),
       )
     }
+  }
+}
+
+fn create_dream_observability_tables(
+  conn: sqlight.Connection,
+) -> Result(Nil, String) {
+  use _ <- result.try(exec(
+    conn,
+    "
+    CREATE TABLE IF NOT EXISTS dream_run_effects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dream_run_id INTEGER NOT NULL REFERENCES dream_runs(id),
+      domain TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      target TEXT NOT NULL,
+      key TEXT NOT NULL,
+      action TEXT NOT NULL,
+      effect_kind TEXT NOT NULL,
+      previous_memory_entry_id INTEGER,
+      new_memory_entry_id INTEGER,
+      previous_chars INTEGER,
+      content_chars INTEGER NOT NULL,
+      created_at_ms INTEGER NOT NULL
+    )
+  ",
+  ))
+  use _ <- result.try(exec(
+    conn,
+    "CREATE INDEX IF NOT EXISTS idx_dream_run_effects_run ON dream_run_effects(dream_run_id)",
+  ))
+  use _ <- result.try(exec(
+    conn,
+    "CREATE INDEX IF NOT EXISTS idx_dream_run_effects_key ON dream_run_effects(domain, target, key)",
+  ))
+  use _ <- result.try(exec(
+    conn,
+    "
+    CREATE TABLE IF NOT EXISTS dream_action_candidates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dream_run_id INTEGER NOT NULL REFERENCES dream_runs(id),
+      domain TEXT NOT NULL,
+      candidate_type TEXT NOT NULL,
+      severity INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      created_at_ms INTEGER NOT NULL
+    )
+  ",
+  ))
+  use _ <- result.try(exec(
+    conn,
+    "CREATE INDEX IF NOT EXISTS idx_dream_action_candidates_run ON dream_action_candidates(dream_run_id)",
+  ))
+  exec(
+    conn,
+    "CREATE INDEX IF NOT EXISTS idx_dream_action_candidates_domain ON dream_action_candidates(domain, candidate_type)",
+  )
+}
+
+fn add_column_if_missing(
+  conn: sqlight.Connection,
+  table: String,
+  column: String,
+  alter_sql: String,
+) -> Result(Nil, String) {
+  case
+    sqlight.query(
+      "SELECT COUNT(*) FROM pragma_table_info('" <> table <> "') WHERE name = ?",
+      on: conn,
+      with: [sqlight.text(column)],
+      expecting: decode.at([0], decode.int),
+    )
+  {
+    Ok([0]) -> exec(conn, alter_sql)
+    Ok(_) -> Ok(Nil)
+    Error(_) -> exec(conn, alter_sql)
   }
 }
 

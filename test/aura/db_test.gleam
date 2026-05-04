@@ -1,5 +1,6 @@
 import aura/conversation
 import aura/db
+import aura/dream_effect
 import aura/event
 import aura/llm
 import aura/time
@@ -590,6 +591,37 @@ pub fn get_active_memory_entries_excludes_superseded_test() {
   process.send(subject, db.Shutdown)
 }
 
+pub fn get_active_memory_entry_by_key_returns_active_row_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(id) =
+    db.insert_memory_entry(subject, "work", "memory", "policy", "old", 1000)
+
+  let assert Ok(Some(entry)) =
+    db.get_active_memory_entry_by_key(subject, "work", "memory", "policy")
+
+  entry.id |> should.equal(id)
+  entry.content |> should.equal("old")
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_active_memory_entry_by_key_returns_latest_active_row_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(old_id) =
+    db.insert_memory_entry(subject, "work", "memory", "policy", "old", 1000)
+  let assert Ok(new_id) =
+    db.insert_memory_entry(subject, "work", "memory", "policy", "new", 2000)
+  let assert Ok(_) = db.supersede_memory_entry(subject, old_id, new_id, 2000)
+
+  let assert Ok(Some(entry)) =
+    db.get_active_memory_entry_by_key(subject, "work", "memory", "policy")
+
+  entry.id |> should.equal(new_id)
+  entry.content |> should.equal("new")
+
+  process.send(subject, db.Shutdown)
+}
+
 pub fn supersede_memory_entry_idempotent_test() {
   let assert Ok(subject) = db.start(":memory:")
   let assert Ok(old_id) =
@@ -672,6 +704,95 @@ pub fn memory_entry_fields_roundtrip_test() {
   process.send(subject, db.Shutdown)
 }
 
+pub fn insert_dream_run_returns_id_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(id) =
+    db.insert_dream_run(subject, "work", 1000, "render", 1, 2, 3, 4000, 4, 5, 6)
+
+  should.be_true(id > 0)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_recent_noop_dream_run_count_counts_latest_streak_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(_) =
+    db.insert_dream_run(subject, "work", 1000, "render", 0, 0, 0, 4000, 0, 2, 0)
+  let assert Ok(_) =
+    db.insert_dream_run(subject, "work", 2000, "render", 0, 0, 0, 4000, 0, 1, 0)
+
+  let assert Ok(count) = db.get_recent_noop_dream_run_count(subject, "work", 3)
+  count |> should.equal(2)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn get_recent_noop_dream_run_count_stops_at_changed_run_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(_) =
+    db.insert_dream_run(subject, "work", 1000, "render", 0, 0, 0, 4000, 0, 2, 0)
+  let assert Ok(_) =
+    db.insert_dream_run(subject, "work", 2000, "render", 0, 0, 0, 4000, 0, 1, 0)
+  let assert Ok(_) =
+    db.insert_dream_run(subject, "work", 3000, "render", 0, 0, 0, 4000, 1, 0, 0)
+
+  let assert Ok(count) = db.get_recent_noop_dream_run_count(subject, "work", 3)
+  count |> should.equal(0)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn insert_dream_run_effect_persists_effect_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(run_id) =
+    db.insert_dream_run(subject, "work", 1000, "render", 0, 0, 0, 4000, 1, 0, 0)
+
+  let effect =
+    dream_effect.DreamEffect(
+      phase: "render",
+      domain: "work",
+      target: "memory",
+      key: "domain-index",
+      action: "set",
+      kind: dream_effect.EffectNew,
+      previous_memory_entry_id: None,
+      new_memory_entry_id: Some(10),
+      previous_chars: None,
+      content_chars: 100,
+      created_at_ms: 1000,
+    )
+
+  let assert Ok(effect_id) = db.insert_dream_run_effect(subject, run_id, effect)
+
+  should.be_true(effect_id > 0)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn insert_dream_action_candidate_persists_candidate_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(run_id) =
+    db.insert_dream_run(subject, "work", 1000, "render", 0, 0, 0, 4000, 0, 0, 1)
+
+  let candidate =
+    dream_effect.ActionCandidate(
+      domain: "work",
+      candidate_type: "sleep_candidate",
+      severity: 2,
+      reason: "No changed memory across repeated cycles.",
+    )
+
+  let assert Ok(candidate_id) =
+    db.insert_dream_action_candidate(subject, run_id, candidate, 1000)
+
+  should.be_true(candidate_id > 0)
+
+  process.send(subject, db.Shutdown)
+}
+
 // ---------------------------------------------------------------------------
 // Dream run tests
 // ---------------------------------------------------------------------------
@@ -679,8 +800,20 @@ pub fn memory_entry_fields_roundtrip_test() {
 pub fn insert_dream_run_test() {
   let assert Ok(subject) = db.start(":memory:")
 
-  let assert Ok(Nil) =
-    db.insert_dream_run(subject, "work", 5000, "consolidate", 3, 1, 2, 1200)
+  let assert Ok(_) =
+    db.insert_dream_run(
+      subject,
+      "work",
+      5000,
+      "consolidate",
+      3,
+      1,
+      2,
+      1200,
+      0,
+      0,
+      0,
+    )
 
   process.send(subject, db.Shutdown)
 }
@@ -689,10 +822,22 @@ pub fn get_last_dream_ms_returns_latest_test() {
   let assert Ok(subject) = db.start(":memory:")
 
   // Insert two dream runs for the same domain with different timestamps
-  let assert Ok(Nil) =
-    db.insert_dream_run(subject, "work", 1000, "consolidate", 2, 0, 1, 500)
-  let assert Ok(Nil) =
-    db.insert_dream_run(subject, "work", 3000, "promote", 1, 1, 0, 800)
+  let assert Ok(_) =
+    db.insert_dream_run(
+      subject,
+      "work",
+      1000,
+      "consolidate",
+      2,
+      0,
+      1,
+      500,
+      0,
+      0,
+      0,
+    )
+  let assert Ok(_) =
+    db.insert_dream_run(subject, "work", 3000, "promote", 1, 1, 0, 800, 0, 0, 0)
 
   // Should return the most recent completed_at_ms
   let assert Ok(ms) = db.get_last_dream_ms(subject, "work")
@@ -714,8 +859,8 @@ pub fn get_last_dream_ms_returns_zero_when_none_test() {
 pub fn get_last_dream_ms_scoped_to_domain_test() {
   let assert Ok(subject) = db.start(":memory:")
 
-  let assert Ok(Nil) =
-    db.insert_dream_run(subject, "work", 5000, "reflect", 0, 0, 3, 600)
+  let assert Ok(_) =
+    db.insert_dream_run(subject, "work", 5000, "reflect", 0, 0, 3, 600, 0, 0, 0)
 
   // Different domain should return 0
   let assert Ok(ms) = db.get_last_dream_ms(subject, "personal")

@@ -12,7 +12,7 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Every 
 
 - **Domains** — isolated knowledge partitions, one per area of your life. Each has its own instructions, memory, state, and Discord channel. The brain sees across all of them.
 - **Flares** — long-running coding-agent sessions dispatched via ACP. Active / parked / failed lifecycle with SQLite persistence, recovery on restart, and rekindle on schedule.
-- **Memory** — active review persists state and knowledge every N turns; nightly dreaming consolidates the archive offline, promotes durable facts, and enforces a token budget.
+- **Memory** — active review persists state and knowledge every N turns; nightly dreaming consolidates the archive offline, promotes durable facts, enforces a token budget, and writes compact before/after reports for auditability.
 - **Concern tracking** — Aura can internally track durable objects of care, work, watch, or risk from natural conversation and ambient events using ordinary markdown state files.
 - **Skills** — language-agnostic CLI tools. Drop a script in a directory, it becomes a capability the LLM can call.
 - **Self-diagnosis** — ships with man pages plus live cognitive smoke/eval/replay, natural correction capture, replay-aware improvement proposals, delivery probe, digest flush, and delivery dead-letter retry commands. The brain reads them via the shell tool when it needs to understand its own behavior.
@@ -100,6 +100,7 @@ A.U.R.A. follows the XDG Base Directory specification:
   cognitive/labels.jsonl             # Human replay labels
   cognitive/patch-proposals/*.md     # Reviewable policy/concern patch briefs
   cognitive/improvement-proposals/*.md # Replay-backed improvement reports
+  dream_reports/*.md                 # Dream cycle counts, action candidates, and memory effects
   skills/<name>/SKILL.md             # Skills
   domains/<name>/MEMORY.md           # Durable domain knowledge
   domains/<name>/repos/              # Project repositories

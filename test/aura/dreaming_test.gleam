@@ -1,5 +1,7 @@
+import aura/dream_effect
 import aura/dreaming
 import aura/llm
+import aura/structured_memory
 import aura/test_helpers
 import aura/time
 import gleam/erlang/process
@@ -56,6 +58,25 @@ pub fn build_promotion_prompt_test() {
   prompt |> string.contains("fix-bug") |> should.be_true
   prompt |> string.contains("off-by-one") |> should.be_true
   prompt |> string.contains("migration strategy") |> should.be_true
+}
+
+pub fn build_promotion_prompt_with_time_grounds_cycle_date_test() {
+  let context =
+    dreaming.DreamTimeContext(
+      started_at_ms: 1_777_867_200_000,
+      started_local: "2026-05-04 12:00:00 Asia/Manila",
+      started_utc: "2026-05-04 04:00:00 UTC",
+    )
+  let prompt =
+    dreaming.build_promotion_prompt_with_time(
+      "§ current-focus\nDreaming system implementation",
+      "### fix-bug\nFixed pagination",
+      "Discussed migration strategy",
+      context,
+    )
+
+  prompt |> string.contains("2026-05-04") |> should.be_true
+  prompt |> string.contains("Do not invent dates") |> should.be_true
 }
 
 pub fn build_reflection_prompt_test() {
@@ -237,6 +258,72 @@ pub fn retry_delays_are_increasing_test() {
   }
 }
 
+pub fn append_dream_tool_messages_appends_tool_results_once_test() {
+  let call =
+    llm.ToolCall(
+      id: "call-1",
+      name: "memory",
+      arguments: "{\"action\":\"set\",\"target\":\"memory\",\"key\":\"x\",\"content\":\"y\"}",
+    )
+  let result_message = llm.ToolResultMessage("call-1", "Saved [x]")
+
+  let messages =
+    dreaming.append_dream_tool_messages(
+      [llm.UserMessage("phase prompt")],
+      "assistant text",
+      [call],
+      [result_message],
+    )
+
+  let tool_result_count =
+    list.count(messages, fn(message) {
+      case message {
+        llm.ToolResultMessage(_, _) -> True
+        _ -> False
+      }
+    })
+
+  tool_result_count |> should.equal(1)
+}
+
+pub fn archive_changed_maps_to_changed_dream_effect_test() {
+  let effect =
+    dreaming.archive_result_to_dream_effect(
+      structured_memory.ArchiveChanged(
+        previous_id: 10,
+        new_id: 11,
+        previous_chars: 47,
+        content_chars: 756,
+      ),
+      "render",
+      "arc",
+      "memory",
+      "domain-index",
+      "set",
+      1_777_867_368_328,
+    )
+
+  effect.kind |> should.equal(dream_effect.EffectChanged)
+  effect.previous_memory_entry_id |> should.equal(Some(10))
+  effect.new_memory_entry_id |> should.equal(Some(11))
+}
+
+pub fn archive_removed_without_archive_id_maps_to_none_test() {
+  let effect =
+    dreaming.archive_result_to_dream_effect(
+      structured_memory.ArchiveRemoved(previous_id: 0),
+      "render",
+      "arc",
+      "memory",
+      "stale-entry",
+      "remove",
+      1_777_867_368_328,
+    )
+
+  effect.kind |> should.equal(dream_effect.EffectRemoved)
+  effect.previous_memory_entry_id |> should.equal(None)
+}
+
 pub fn extract_index_entry_found_test() {
   // Build a message list that contains an AssistantToolCallMessage
   // with a "domain-index" set call
@@ -367,24 +454,36 @@ pub fn dream_memory_tool_definition_test() {
 
 pub fn extract_index_entries_from_successes_test() {
   let results = [
-    Ok(dreaming.DreamResult(
-      domain: "backend",
-      phase_reached: "render",
-      entries_consolidated: 3,
-      entries_promoted: 1,
-      reflections_generated: 1,
-      duration_ms: 5000,
-      index_entry: Some("Backend covers DB and API patterns."),
-    )),
-    Ok(dreaming.DreamResult(
-      domain: "frontend",
-      phase_reached: "render",
-      entries_consolidated: 2,
-      entries_promoted: 0,
-      reflections_generated: 0,
-      duration_ms: 3000,
-      index_entry: Some("Frontend covers React and state management."),
-    )),
+    Ok(
+      dreaming.DreamResult(
+        domain: "backend",
+        phase_reached: "render",
+        entries_consolidated: 3,
+        entries_promoted: 1,
+        reflections_generated: 1,
+        entries_rendered: 0,
+        entries_noop: 0,
+        duration_ms: 5000,
+        index_entry: Some("Backend covers DB and API patterns."),
+        effects: [],
+        action_candidates: [],
+      ),
+    ),
+    Ok(
+      dreaming.DreamResult(
+        domain: "frontend",
+        phase_reached: "render",
+        entries_consolidated: 2,
+        entries_promoted: 0,
+        reflections_generated: 0,
+        entries_rendered: 0,
+        entries_noop: 0,
+        duration_ms: 3000,
+        index_entry: Some("Frontend covers React and state management."),
+        effects: [],
+        action_candidates: [],
+      ),
+    ),
   ]
 
   let entries = dreaming.extract_index_entries(results)
@@ -409,15 +508,21 @@ pub fn extract_index_entries_from_successes_test() {
 
 pub fn extract_index_entries_skips_failures_test() {
   let results = [
-    Ok(dreaming.DreamResult(
-      domain: "backend",
-      phase_reached: "render",
-      entries_consolidated: 3,
-      entries_promoted: 1,
-      reflections_generated: 1,
-      duration_ms: 5000,
-      index_entry: Some("Backend index."),
-    )),
+    Ok(
+      dreaming.DreamResult(
+        domain: "backend",
+        phase_reached: "render",
+        entries_consolidated: 3,
+        entries_promoted: 1,
+        reflections_generated: 1,
+        entries_rendered: 0,
+        entries_noop: 0,
+        duration_ms: 5000,
+        index_entry: Some("Backend index."),
+        effects: [],
+        action_candidates: [],
+      ),
+    ),
     Error("Phase consolidate failed after all retries"),
   ]
 
@@ -427,15 +532,21 @@ pub fn extract_index_entries_skips_failures_test() {
 
 pub fn extract_index_entries_skips_none_index_test() {
   let results = [
-    Ok(dreaming.DreamResult(
-      domain: "backend",
-      phase_reached: "reflect",
-      entries_consolidated: 3,
-      entries_promoted: 1,
-      reflections_generated: 1,
-      duration_ms: 5000,
-      index_entry: None,
-    )),
+    Ok(
+      dreaming.DreamResult(
+        domain: "backend",
+        phase_reached: "reflect",
+        entries_consolidated: 3,
+        entries_promoted: 1,
+        reflections_generated: 1,
+        entries_rendered: 0,
+        entries_noop: 0,
+        duration_ms: 5000,
+        index_entry: None,
+        effects: [],
+        action_candidates: [],
+      ),
+    ),
   ]
 
   let entries = dreaming.extract_index_entries(results)
@@ -444,6 +555,85 @@ pub fn extract_index_entries_skips_none_index_test() {
 
 pub fn extract_index_entries_empty_results_test() {
   dreaming.extract_index_entries([]) |> should.equal([])
+}
+
+pub fn collect_cycle_report_effects_includes_global_effects_test() {
+  let domain_effect =
+    dream_effect.DreamEffect(
+      phase: "render",
+      domain: "cm2",
+      target: "memory",
+      key: "domain-index",
+      action: "set",
+      kind: dream_effect.EffectChanged,
+      previous_memory_entry_id: Some(1),
+      new_memory_entry_id: Some(2),
+      previous_chars: Some(100),
+      content_chars: 120,
+      created_at_ms: 1_777_867_200_000,
+    )
+  let global_effect =
+    dream_effect.DreamEffect(
+      phase: "render",
+      domain: "_global",
+      target: "memory",
+      key: "global-index",
+      action: "set",
+      kind: dream_effect.EffectNew,
+      previous_memory_entry_id: None,
+      new_memory_entry_id: Some(3),
+      previous_chars: None,
+      content_chars: 80,
+      created_at_ms: 1_777_867_200_001,
+    )
+
+  let effects =
+    dreaming.collect_cycle_report_effects(
+      [
+        Ok(
+          dreaming.DreamResult(
+            domain: "cm2",
+            phase_reached: "render",
+            entries_consolidated: 0,
+            entries_promoted: 0,
+            reflections_generated: 0,
+            entries_rendered: 1,
+            entries_noop: 0,
+            duration_ms: 1000,
+            index_entry: None,
+            effects: [domain_effect],
+            action_candidates: [],
+          ),
+        ),
+      ],
+      [global_effect],
+    )
+
+  list.length(effects) |> should.equal(2)
+  effects |> should.equal([domain_effect, global_effect])
+}
+
+pub fn count_failed_domain_results_includes_missing_results_test() {
+  let results = [
+    Ok(
+      dreaming.DreamResult(
+        domain: "cm2",
+        phase_reached: "render",
+        entries_consolidated: 0,
+        entries_promoted: 0,
+        reflections_generated: 0,
+        entries_rendered: 0,
+        entries_noop: 0,
+        duration_ms: 1000,
+        index_entry: None,
+        effects: [],
+        action_candidates: [],
+      ),
+    ),
+  ]
+
+  dreaming.count_failed_domain_results(domain_count: 2, results:)
+  |> should.equal(1)
 }
 
 pub fn build_global_dream_system_prompt_test() {
@@ -490,28 +680,40 @@ pub fn collect_results_all_received_test() {
 
   process.send(subject, #(
     "backend",
-    Ok(dreaming.DreamResult(
-      domain: "backend",
-      phase_reached: "render",
-      entries_consolidated: 3,
-      entries_promoted: 1,
-      reflections_generated: 1,
-      duration_ms: 5000,
-      index_entry: Some("Backend index."),
-    )),
+    Ok(
+      dreaming.DreamResult(
+        domain: "backend",
+        phase_reached: "render",
+        entries_consolidated: 3,
+        entries_promoted: 1,
+        reflections_generated: 1,
+        entries_rendered: 0,
+        entries_noop: 0,
+        duration_ms: 5000,
+        index_entry: Some("Backend index."),
+        effects: [],
+        action_candidates: [],
+      ),
+    ),
   ))
 
   process.send(subject, #(
     "frontend",
-    Ok(dreaming.DreamResult(
-      domain: "frontend",
-      phase_reached: "render",
-      entries_consolidated: 2,
-      entries_promoted: 0,
-      reflections_generated: 0,
-      duration_ms: 3000,
-      index_entry: None,
-    )),
+    Ok(
+      dreaming.DreamResult(
+        domain: "frontend",
+        phase_reached: "render",
+        entries_consolidated: 2,
+        entries_promoted: 0,
+        reflections_generated: 0,
+        entries_rendered: 0,
+        entries_noop: 0,
+        duration_ms: 3000,
+        index_entry: None,
+        effects: [],
+        action_candidates: [],
+      ),
+    ),
   ))
 
   let deadline = time.now_ms() + 1000
@@ -534,15 +736,21 @@ pub fn collect_results_timeout_returns_partial_test() {
 
   process.send(subject, #(
     "backend",
-    Ok(dreaming.DreamResult(
-      domain: "backend",
-      phase_reached: "render",
-      entries_consolidated: 1,
-      entries_promoted: 0,
-      reflections_generated: 0,
-      duration_ms: 1000,
-      index_entry: None,
-    )),
+    Ok(
+      dreaming.DreamResult(
+        domain: "backend",
+        phase_reached: "render",
+        entries_consolidated: 1,
+        entries_promoted: 0,
+        reflections_generated: 0,
+        entries_rendered: 0,
+        entries_noop: 0,
+        duration_ms: 1000,
+        index_entry: None,
+        effects: [],
+        action_candidates: [],
+      ),
+    ),
   ))
 
   // Expect 2 but only 1 was sent — should timeout and return what we have
@@ -565,15 +773,21 @@ pub fn collect_results_includes_errors_test() {
   process.send(subject, #("backend", Error("LLM call failed")))
   process.send(subject, #(
     "frontend",
-    Ok(dreaming.DreamResult(
-      domain: "frontend",
-      phase_reached: "render",
-      entries_consolidated: 2,
-      entries_promoted: 0,
-      reflections_generated: 0,
-      duration_ms: 3000,
-      index_entry: None,
-    )),
+    Ok(
+      dreaming.DreamResult(
+        domain: "frontend",
+        phase_reached: "render",
+        entries_consolidated: 2,
+        entries_promoted: 0,
+        reflections_generated: 0,
+        entries_rendered: 0,
+        entries_noop: 0,
+        duration_ms: 3000,
+        index_entry: None,
+        effects: [],
+        action_candidates: [],
+      ),
+    ),
   ))
 
   let deadline = time.now_ms() + 1000

@@ -1,4 +1,5 @@
 import aura/env
+import gleam/int
 import simplifile
 
 pub type Paths {
@@ -43,6 +44,16 @@ pub fn config_path(paths: Paths, subpath: String) -> String {
 
 pub fn data_path(paths: Paths, subpath: String) -> String {
   paths.data <> "/" <> subpath
+}
+
+/// Resolve the directory where compact dream cycle reports are written.
+pub fn dream_reports_dir(paths: Paths) -> String {
+  data_path(paths, "dream_reports")
+}
+
+/// Resolve the path for a dream cycle report, keyed by cycle start time.
+pub fn dream_report_path(paths: Paths, started_at_ms: Int) -> String {
+  dream_reports_dir(paths) <> "/" <> int.to_string(started_at_ms) <> ".md"
 }
 
 pub fn state_path(paths: Paths, subpath: String) -> String {

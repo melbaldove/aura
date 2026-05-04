@@ -1,4 +1,5 @@
 import aura/db_schema
+import aura/dream_effect
 import aura/event
 import gleam/dynamic/decode
 import gleam/erlang/process
@@ -92,6 +93,10 @@ pub type MemoryEntry {
     content: String,
     created_at_ms: Int,
   )
+}
+
+type DreamRunWriteCounts {
+  DreamRunWriteCounts(actual_writes: Int, noops: Int)
 }
 
 /// Internal actor message type for the DB actor.
@@ -201,6 +206,12 @@ pub type DbMessage {
     domain: String,
     target: String,
   )
+  GetActiveMemoryEntryByKey(
+    reply_to: process.Subject(Result(Option(MemoryEntry), String)),
+    domain: String,
+    target: String,
+    key: String,
+  )
   GetActiveEntryId(
     reply_to: process.Subject(Result(Int, String)),
     domain: String,
@@ -209,7 +220,7 @@ pub type DbMessage {
     exclude_id: Int,
   )
   InsertDreamRun(
-    reply_to: process.Subject(Result(Nil, String)),
+    reply_to: process.Subject(Result(Int, String)),
     domain: String,
     completed_at_ms: Int,
     phase_reached: String,
@@ -217,8 +228,27 @@ pub type DbMessage {
     entries_promoted: Int,
     reflections_generated: Int,
     duration_ms: Int,
+    entries_rendered: Int,
+    entries_noop: Int,
+    action_candidates_count: Int,
+  )
+  InsertDreamRunEffect(
+    reply_to: process.Subject(Result(Int, String)),
+    dream_run_id: Int,
+    effect: dream_effect.DreamEffect,
+  )
+  InsertDreamActionCandidate(
+    reply_to: process.Subject(Result(Int, String)),
+    dream_run_id: Int,
+    candidate: dream_effect.ActionCandidate,
+    created_at_ms: Int,
   )
   GetLastDreamMs(reply_to: process.Subject(Result(Int, String)), domain: String)
+  GetRecentNoopDreamRunCount(
+    reply_to: process.Subject(Result(Int, String)),
+    domain: String,
+    limit: Int,
+  )
   UpdateFlareResult(
     reply_to: process.Subject(Result(Nil, String)),
     id: String,
@@ -572,6 +602,18 @@ pub fn get_active_memory_entries(
   })
 }
 
+/// Return the active memory entry for an exact domain/target/key, if present.
+pub fn get_active_memory_entry_by_key(
+  subject: process.Subject(DbMessage),
+  domain: String,
+  target: String,
+  key: String,
+) -> Result(Option(MemoryEntry), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetActiveMemoryEntryByKey(reply_to:, domain:, target:, key:)
+  })
+}
+
 /// Find the active entry matching domain/target/key, excluding a specific id.
 /// Used during write-through to find the old entry to supersede after inserting
 /// a new one. Returns Error if no matching entry is found.
@@ -597,7 +639,10 @@ pub fn insert_dream_run(
   entries_promoted: Int,
   reflections_generated: Int,
   duration_ms: Int,
-) -> Result(Nil, String) {
+  entries_rendered: Int,
+  entries_noop: Int,
+  action_candidates_count: Int,
+) -> Result(Int, String) {
   process.call(subject, 5000, fn(reply_to) {
     InsertDreamRun(
       reply_to:,
@@ -608,6 +653,37 @@ pub fn insert_dream_run(
       entries_promoted:,
       reflections_generated:,
       duration_ms:,
+      entries_rendered:,
+      entries_noop:,
+      action_candidates_count:,
+    )
+  })
+}
+
+/// Insert one structured effect produced by a dream run.
+pub fn insert_dream_run_effect(
+  subject: process.Subject(DbMessage),
+  dream_run_id: Int,
+  effect: dream_effect.DreamEffect,
+) -> Result(Int, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    InsertDreamRunEffect(reply_to:, dream_run_id:, effect:)
+  })
+}
+
+/// Insert one deterministic action candidate produced by a dream run.
+pub fn insert_dream_action_candidate(
+  subject: process.Subject(DbMessage),
+  dream_run_id: Int,
+  candidate: dream_effect.ActionCandidate,
+  created_at_ms: Int,
+) -> Result(Int, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    InsertDreamActionCandidate(
+      reply_to:,
+      dream_run_id:,
+      candidate:,
+      created_at_ms:,
     )
   })
 }
@@ -620,6 +696,18 @@ pub fn get_last_dream_ms(
 ) -> Result(Int, String) {
   process.call(subject, 5000, fn(reply_to) {
     GetLastDreamMs(reply_to:, domain:)
+  })
+}
+
+/// Return the number of latest consecutive dream runs that produced no writes
+/// and at least one no-op effect for a domain.
+pub fn get_recent_noop_dream_run_count(
+  subject: process.Subject(DbMessage),
+  domain: String,
+  limit: Int,
+) -> Result(Int, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetRecentNoopDreamRunCount(reply_to:, domain:, limit:)
   })
 }
 
@@ -972,6 +1060,13 @@ fn handle_message(
       actor.continue(state)
     }
 
+    GetActiveMemoryEntryByKey(reply_to:, domain:, target:, key:) -> {
+      let result =
+        do_get_active_memory_entry_by_key(state.conn, domain, target, key)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
     GetActiveEntryId(reply_to:, domain:, target:, key:, exclude_id:) -> {
       let result =
         do_get_active_entry_id(state.conn, domain, target, key, exclude_id)
@@ -988,6 +1083,9 @@ fn handle_message(
       entries_promoted:,
       reflections_generated:,
       duration_ms:,
+      entries_rendered:,
+      entries_noop:,
+      action_candidates_count:,
     ) -> {
       let result =
         do_insert_dream_run(
@@ -999,6 +1097,32 @@ fn handle_message(
           entries_promoted,
           reflections_generated,
           duration_ms,
+          entries_rendered,
+          entries_noop,
+          action_candidates_count,
+        )
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    InsertDreamRunEffect(reply_to:, dream_run_id:, effect:) -> {
+      let result = do_insert_dream_run_effect(state.conn, dream_run_id, effect)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    InsertDreamActionCandidate(
+      reply_to:,
+      dream_run_id:,
+      candidate:,
+      created_at_ms:,
+    ) -> {
+      let result =
+        do_insert_dream_action_candidate(
+          state.conn,
+          dream_run_id,
+          candidate,
+          created_at_ms,
         )
       process.send(reply_to, result)
       actor.continue(state)
@@ -1006,6 +1130,12 @@ fn handle_message(
 
     GetLastDreamMs(reply_to:, domain:) -> {
       let result = do_get_last_dream_ms(state.conn, domain)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetRecentNoopDreamRunCount(reply_to:, domain:, limit:) -> {
+      let result = do_get_recent_noop_dream_run_count(state.conn, domain, limit)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -1515,6 +1645,28 @@ fn do_get_active_memory_entries(
   })
 }
 
+fn do_get_active_memory_entry_by_key(
+  conn: sqlight.Connection,
+  domain: String,
+  target: String,
+  key: String,
+) -> Result(Option(MemoryEntry), String) {
+  case
+    sqlight.query(
+      "SELECT id, domain, target, key, content, created_at_ms FROM memory_entries WHERE domain = ? AND target = ? AND key = ? AND superseded_at_ms IS NULL ORDER BY created_at_ms DESC, id DESC LIMIT 1",
+      on: conn,
+      with: [sqlight.text(domain), sqlight.text(target), sqlight.text(key)],
+      expecting: memory_entry_decoder(),
+    )
+  {
+    Ok([entry]) -> Ok(Some(entry))
+    Ok([]) -> Ok(None)
+    Ok(_) -> Ok(None)
+    Error(e) ->
+      Error("Failed to get active memory entry by key: " <> string.inspect(e))
+  }
+}
+
 fn do_get_active_entry_id(
   conn: sqlight.Connection,
   domain: String,
@@ -1553,9 +1705,12 @@ fn do_insert_dream_run(
   entries_promoted: Int,
   reflections_generated: Int,
   duration_ms: Int,
-) -> Result(Nil, String) {
+  entries_rendered: Int,
+  entries_noop: Int,
+  action_candidates_count: Int,
+) -> Result(Int, String) {
   sqlight.query(
-    "INSERT INTO dream_runs (domain, completed_at_ms, phase_reached, entries_consolidated, entries_promoted, reflections_generated, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO dream_runs (domain, completed_at_ms, phase_reached, entries_consolidated, entries_promoted, reflections_generated, duration_ms, entries_rendered, entries_noop, action_candidates_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     on: conn,
     with: [
       sqlight.text(domain),
@@ -1565,12 +1720,94 @@ fn do_insert_dream_run(
       sqlight.int(entries_promoted),
       sqlight.int(reflections_generated),
       sqlight.int(duration_ms),
+      sqlight.int(entries_rendered),
+      sqlight.int(entries_noop),
+      sqlight.int(action_candidates_count),
     ],
-    expecting: decode.success(Nil),
+    expecting: decode.at([0], decode.int),
   )
-  |> result.map(fn(_) { Nil })
   |> result.map_error(fn(err) {
     "Failed to insert dream run: " <> string.inspect(err)
+  })
+  |> result.try(fn(rows) {
+    case rows {
+      [id] -> Ok(id)
+      _ ->
+        Error(
+          "Expected one row from INSERT RETURNING, got " <> string.inspect(rows),
+        )
+    }
+  })
+}
+
+fn do_insert_dream_run_effect(
+  conn: sqlight.Connection,
+  dream_run_id: Int,
+  effect: dream_effect.DreamEffect,
+) -> Result(Int, String) {
+  sqlight.query(
+    "INSERT INTO dream_run_effects (dream_run_id, domain, phase, target, key, action, effect_kind, previous_memory_entry_id, new_memory_entry_id, previous_chars, content_chars, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+    on: conn,
+    with: [
+      sqlight.int(dream_run_id),
+      sqlight.text(effect.domain),
+      sqlight.text(effect.phase),
+      sqlight.text(effect.target),
+      sqlight.text(effect.key),
+      sqlight.text(effect.action),
+      sqlight.text(dream_effect.effect_kind_to_string(effect.kind)),
+      nullable_int(effect.previous_memory_entry_id),
+      nullable_int(effect.new_memory_entry_id),
+      nullable_int(effect.previous_chars),
+      sqlight.int(effect.content_chars),
+      sqlight.int(effect.created_at_ms),
+    ],
+    expecting: decode.at([0], decode.int),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to insert dream run effect: " <> string.inspect(err)
+  })
+  |> result.try(fn(rows) {
+    case rows {
+      [id] -> Ok(id)
+      _ ->
+        Error(
+          "Expected one row from INSERT RETURNING, got " <> string.inspect(rows),
+        )
+    }
+  })
+}
+
+fn do_insert_dream_action_candidate(
+  conn: sqlight.Connection,
+  dream_run_id: Int,
+  candidate: dream_effect.ActionCandidate,
+  created_at_ms: Int,
+) -> Result(Int, String) {
+  sqlight.query(
+    "INSERT INTO dream_action_candidates (dream_run_id, domain, candidate_type, severity, reason, created_at_ms) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+    on: conn,
+    with: [
+      sqlight.int(dream_run_id),
+      sqlight.text(candidate.domain),
+      sqlight.text(candidate.candidate_type),
+      sqlight.int(candidate.severity),
+      sqlight.text(candidate.reason),
+      sqlight.int(created_at_ms),
+    ],
+    expecting: decode.at([0], decode.int),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to insert dream action candidate: " <> string.inspect(err)
+  })
+  |> result.try(fn(rows) {
+    case rows {
+      [id] -> Ok(id)
+      _ ->
+        Error(
+          "Expected one row from INSERT RETURNING, got " <> string.inspect(rows),
+        )
+    }
   })
 }
 
@@ -1590,6 +1827,35 @@ fn do_get_last_dream_ms(
     Ok([]) -> Ok(0)
     Ok(_) -> Ok(0)
     Error(e) -> Error("Failed to get last dream ms: " <> string.inspect(e))
+  }
+}
+
+fn do_get_recent_noop_dream_run_count(
+  conn: sqlight.Connection,
+  domain: String,
+  limit: Int,
+) -> Result(Int, String) {
+  sqlight.query(
+    "SELECT entries_consolidated, entries_promoted, reflections_generated, entries_rendered, entries_noop FROM dream_runs WHERE domain = ? ORDER BY completed_at_ms DESC, id DESC LIMIT ?",
+    on: conn,
+    with: [sqlight.text(domain), sqlight.int(limit)],
+    expecting: dream_run_write_counts_decoder(),
+  )
+  |> result.map(count_consecutive_noop_runs)
+  |> result.map_error(fn(err) {
+    "Failed to get recent noop dream run count: " <> string.inspect(err)
+  })
+}
+
+fn count_consecutive_noop_runs(rows: List(DreamRunWriteCounts)) -> Int {
+  case rows {
+    [] -> 0
+    [row, ..rest] -> {
+      case row.actual_writes == 0 && row.noops > 0 {
+        True -> 1 + count_consecutive_noop_runs(rest)
+        False -> 0
+      }
+    }
   }
 }
 
@@ -1877,6 +2143,25 @@ fn nullable_string_decoder() -> decode.Decoder(String) {
   decode.one_of(decode.string, [
     decode.success(""),
   ])
+}
+
+fn nullable_int(value: Option(Int)) -> sqlight.Value {
+  sqlight.nullable(sqlight.int, value)
+}
+
+fn dream_run_write_counts_decoder() -> decode.Decoder(DreamRunWriteCounts) {
+  use entries_consolidated <- decode.field(0, decode.int)
+  use entries_promoted <- decode.field(1, decode.int)
+  use reflections_generated <- decode.field(2, decode.int)
+  use entries_rendered <- decode.field(3, decode.int)
+  use entries_noop <- decode.field(4, decode.int)
+  decode.success(DreamRunWriteCounts(
+    actual_writes: entries_consolidated
+      + entries_promoted
+      + reflections_generated
+      + entries_rendered,
+    noops: entries_noop,
+  ))
 }
 
 fn memory_entry_decoder() -> decode.Decoder(MemoryEntry) {

@@ -1,8 +1,10 @@
 import aura/db
 import aura/structured_memory
 import aura/time
+import gleam/erlang/process
 import gleam/int
 import gleam/list
+import gleam/option.{Some}
 import gleam/string
 import gleeunit
 import gleeunit/should
@@ -231,6 +233,42 @@ pub fn set_with_archive_supersedes_old_entry_test() {
   should.equal(db_entry.content, "PR merged")
 
   let _ = simplifile.delete(dir)
+}
+
+pub fn set_with_archive_checked_skips_identical_content_test() {
+  let ts = int.to_string(time.now_ms())
+  let dir = "/tmp/aura-smem-noop-" <> ts
+  let path = dir <> "/MEMORY.md"
+  let assert Ok(_) = simplifile.create_directory_all(dir)
+  let assert Ok(db_subject) = db.start("/tmp/aura-smem-noop-" <> ts <> ".db")
+
+  let assert Ok(structured_memory.ArchiveNew(first_id, _)) =
+    structured_memory.set_with_archive_checked(
+      path,
+      "policy",
+      "same content",
+      db_subject,
+      "work",
+      "memory",
+    )
+
+  let assert Ok(structured_memory.ArchiveNoop(Some(noop_id), _)) =
+    structured_memory.set_with_archive_checked(
+      path,
+      "policy",
+      "same content",
+      db_subject,
+      "work",
+      "memory",
+    )
+
+  noop_id |> should.equal(first_id)
+  let assert Ok(entries) =
+    db.get_active_memory_entries(db_subject, "work", "memory")
+  list.length(entries) |> should.equal(1)
+
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([dir])
 }
 
 pub fn remove_with_archive_supersedes_entry_test() {

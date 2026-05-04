@@ -57,11 +57,11 @@
 
 **Why:** The caps force the LLM to play Tetris — deleting entries for space, not relevance. A token budget is the right constraint (it's what actually matters for the context window), and dreaming is the process that maintains it, not the LLM during live conversation.
 
-## D3: Trigger and scope — cron-triggered, per-domain, sequential
+## D3: Trigger and scope — cron-triggered, per-domain, map-reduce
 
 **Date:** 2026-04-16
 
-**Decision:** Dreaming runs on a fixed cron schedule, processes one domain at a time, sequentially. Each domain is an independent unit of work. After all domains, process global USER.md.
+**Decision:** Dreaming runs on a fixed cron schedule, processes domains independently in parallel, then runs a global reduce pass. Each domain is an independent unit of work. After all domains, process global USER.md.
 
 **Why (from ENGINEERING.md):**
 - **"Do one thing well"** — a dream cycle consolidates one domain. Clear scope, clear inputs/outputs.
@@ -200,3 +200,22 @@ Example index entry: `§ domain-health: tracks medications, doctor appointments,
 - Cache hierarchy — L1 (global, always loaded, metadata-rich) / L2 (domain, loaded on demand, detail-rich)
 - "One Aura" principle — cross-domain access is allowed, the channel sets default context not a wall
 - Dreaming sequence: domain A → domain B → ... → global (last, sees all domain summaries)
+
+## D11: Dreaming writes structured effects and cycle reports
+
+**Date:** 2026-05-04
+
+**Decision:** Dreaming records every memory tool outcome as a structured effect, suppresses exact no-op archive writes, and writes a compact markdown report after each full cycle.
+
+**Architecture:**
+- `dream_runs` keeps per-run phase/count metadata.
+- `dream_run_effects` stores each memory outcome with domain, phase, target, key, action, effect kind, prior archive id, new archive id, and before/after character counts.
+- `dream_action_candidates` stores deterministic operational follow-ups derived from repeated dream evidence, such as domains that appear ready for sleep/archive or that need external input.
+- `~/.local/share/aura/dream_reports/*.md` renders cycle counts, action candidates, and domain/global memory effects without copying full memory content.
+- Dream prompts include the concrete cycle timestamp so state entries can refer to the real dream date instead of inventing dates.
+
+**Why:**
+- The archive is lossless, but operators need a compact before/after view to tell whether dreaming did useful work.
+- No-op rewrites should be visible as no-ops, not new archive lineage.
+- Repeated dream observations should become explicit operational candidates instead of lingering as vague index wording.
+- Reports must include the global reduce pass as well as per-domain effects, because global memory drift was part of the audit surface.
