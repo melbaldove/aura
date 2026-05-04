@@ -1682,6 +1682,40 @@ pub fn finalize_turn_final_discord_edit_has_no_trailing_ellipsis_test() {
   |> should.be_true
 }
 
+pub fn finalize_turn_long_discord_output_emits_continuation_sends_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let content = string.repeat("a", 4500)
+  let #(_, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete(content, "[]", 100),
+    )
+
+  let edit_chunks =
+    list.filter_map(effects, fn(e) {
+      case e {
+        channel_actor.DiscordEdit(_, body) -> Ok(body)
+        _ -> Error(Nil)
+      }
+    })
+  let send_chunks =
+    list.filter_map(effects, fn(e) {
+      case e {
+        channel_actor.DiscordSend(body) -> Ok(body)
+        _ -> Error(Nil)
+      }
+    })
+
+  let assert [first_chunk] = edit_chunks
+  list.length(send_chunks) |> should.equal(2)
+  string.concat([first_chunk, ..send_chunks]) |> should.equal(content)
+  list.all([first_chunk, ..send_chunks], fn(body) {
+    string.length(body) <= 1990
+  })
+  |> should.be_true
+}
+
 // --- non-blocking stream retry backoff -----------------------------------
 
 /// Regression: StreamError with retry_count=2 (third attempt triggers 500ms

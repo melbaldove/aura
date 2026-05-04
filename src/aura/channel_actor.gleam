@@ -598,16 +598,14 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       update_deadline_timer(state, Some(timer))
     }
     DiscordEdit(msg_id, content) -> {
+      let first_chunk = discord_message.first_chunk(content)
       case msg_id {
         "" -> {
           // No message id yet — fall back to sending a new message so the
           // user still sees the content. Update the turn's discord_msg_id
           // when the send succeeds.
           case
-            state.tool_ctx.discord.send_message(
-              state.channel_id,
-              discord_message.clip_to_discord_limit(content),
-            )
+            state.tool_ctx.discord.send_message(state.channel_id, first_chunk)
           {
             Ok(id) -> update_turn_msg_id(state, id)
             Error(_) -> state
@@ -618,18 +616,17 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
             state.tool_ctx.discord.edit_message(
               state.channel_id,
               existing,
-              discord_message.clip_to_discord_limit(content),
+              first_chunk,
             )
           state
         }
       }
     }
     DiscordSend(content) -> {
-      let _ =
-        state.tool_ctx.discord.send_message(
-          state.channel_id,
-          discord_message.clip_to_discord_limit(content),
-        )
+      list.each(discord_message.split_to_discord_messages(content), fn(chunk) {
+        let _ = state.tool_ctx.discord.send_message(state.channel_id, chunk)
+        Nil
+      })
       state
     }
     DbSaveExchange(messages, author_id, author_name, _prompt_tokens) -> {
@@ -2502,15 +2499,22 @@ fn finalize_turn(
           }
       }
   }
-  let base_effects = [
-    DiscordEdit(
-      turn.discord_msg_id,
-      conversation.format_full_message(turn.traces, final_content),
-    ),
-    DbSaveExchange(final_messages, author_id, author_name, prompt_tokens),
-    UpdateCompressorTokens(prompt_tokens),
-    ..compression_effects
-  ]
+  let discord_effects = case
+    conversation.format_full_message(turn.traces, final_content)
+    |> discord_message.split_to_discord_messages
+  {
+    [] -> []
+    [first, ..rest] -> [
+      DiscordEdit(turn.discord_msg_id, first),
+      ..list.map(rest, DiscordSend)
+    ]
+  }
+  let base_effects =
+    list.append(discord_effects, [
+      DbSaveExchange(final_messages, author_id, author_name, prompt_tokens),
+      UpdateCompressorTokens(prompt_tokens),
+      ..compression_effects
+    ])
   let base_with_reviews =
     list.append(base_effects, [
       SpawnMemoryReview(full_history),

@@ -1,3 +1,4 @@
+import aura/discord/message as discord_message
 import aura/llm
 import aura/memory
 import aura/models
@@ -703,14 +704,16 @@ fn log_and_notify(
         _ -> "Memory saved"
       }
       let msg = "\u{1F4BE} " <> icon <> ":\n" <> entries_text
-      case transport.send_message(channel_id, msg) {
-        Ok(_) -> Nil
-        Error(e) ->
-          logging.log(
-            logging.Error,
-            "[review] Discord notification failed: " <> e,
-          )
-      }
+      list.each(discord_message.split_to_discord_messages(msg), fn(chunk) {
+        case transport.send_message(channel_id, chunk) {
+          Ok(_) -> Nil
+          Error(e) ->
+            logging.log(
+              logging.Error,
+              "[review] Discord notification failed: " <> e,
+            )
+        }
+      })
     }
     False -> Nil
   }

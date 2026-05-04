@@ -1,5 +1,7 @@
 import aura/discord
+import aura/discord/message as discord_message
 import aura/discord/types as discord_types
+import gleam/list
 import gleam/option
 import gleam/string
 import gleeunit/should
@@ -30,4 +32,16 @@ pub fn incoming_from_received_test() {
   incoming.author_name |> should.equal("testuser")
   incoming.content |> should.equal("hello aura")
   incoming.is_bot |> should.equal(False)
+}
+
+pub fn split_to_discord_messages_preserves_long_content_test() {
+  let content = string.repeat("x", 4500)
+  let chunks = discord_message.split_to_discord_messages(content)
+
+  list.length(chunks) |> should.equal(3)
+  string.concat(chunks) |> should.equal(content)
+  list.all(chunks, fn(chunk) {
+    string.length(chunk) <= discord_message.discord_max_chars
+  })
+  |> should.be_true
 }

@@ -363,11 +363,8 @@ fn send_immediate(
     }
 
     Ok(target) -> {
-      let content =
-        decision
-        |> format_immediate
-        |> discord_message.clip_to_discord_limit
-      case state.discord.send_message(target.channel_id, content) {
+      let content = format_immediate(decision)
+      case send_discord_chunks(state.discord, target.channel_id, content) {
         Ok(_) -> {
           persist_front_surface_message(state, target.channel_id, content)
           let _ =
@@ -408,6 +405,32 @@ fn send_immediate(
           )
         }
       }
+    }
+  }
+}
+
+fn send_discord_chunks(
+  discord: Transport,
+  channel_id: String,
+  content: String,
+) -> Result(Nil, String) {
+  send_discord_chunk_list(
+    discord,
+    channel_id,
+    discord_message.split_to_discord_messages(content),
+  )
+}
+
+fn send_discord_chunk_list(
+  discord: Transport,
+  channel_id: String,
+  chunks: List(String),
+) -> Result(Nil, String) {
+  case chunks {
+    [] -> Ok(Nil)
+    [chunk, ..rest] -> {
+      use _ <- result.try(discord.send_message(channel_id, chunk))
+      send_discord_chunk_list(discord, channel_id, rest)
     }
   }
 }
@@ -496,11 +519,8 @@ fn send_digest_group(
         }
 
         _ -> {
-          let content =
-            entries
-            |> format_digest
-            |> discord_message.clip_to_discord_limit
-          case state.discord.send_message(channel_id, content) {
+          let content = format_digest(entries)
+          case send_discord_chunks(state.discord, channel_id, content) {
             Ok(_) -> {
               persist_front_surface_message(state, channel_id, content)
               list.each(entries, fn(entry) {
@@ -607,11 +627,8 @@ fn retry_digest_group(
         }
 
         Ok(target) -> {
-          let content =
-            entries
-            |> format_digest
-            |> discord_message.clip_to_discord_limit
-          case state.discord.send_message(target.channel_id, content) {
+          let content = format_digest(entries)
+          case send_discord_chunks(state.discord, target.channel_id, content) {
             Ok(_) -> {
               persist_front_surface_message(state, target.channel_id, content)
               list.each(entries, fn(entry) {
@@ -714,11 +731,8 @@ fn retry_immediate_entry(
     }
 
     Ok(target) -> {
-      let content =
-        entry
-        |> format_retry_immediate
-        |> discord_message.clip_to_discord_limit
-      case state.discord.send_message(target.channel_id, content) {
+      let content = format_retry_immediate(entry)
+      case send_discord_chunks(state.discord, target.channel_id, content) {
         Ok(_) -> {
           persist_front_surface_message(state, target.channel_id, content)
           let _ =

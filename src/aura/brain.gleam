@@ -828,7 +828,7 @@ fn handle_acp_event(
       let new_state = case dict.get(state.acp_progress_msgs, session_name) {
         Ok(progress_ref) -> {
           process.spawn_unlinked(fn() {
-            let safe = discord_message.clip_to_discord_limit(msg)
+            let safe = discord_message.first_chunk(msg)
             case
               discord.edit_message(
                 progress_ref.channel_id,
@@ -862,8 +862,7 @@ fn handle_acp_event(
           // First progress for this session — send inline to get message ID
           let progress_msgs = state.acp_progress_msgs
           let sn = session_name
-          let safe = discord_message.clip_to_discord_limit(msg)
-          case discord.send_message(channel, safe) {
+          case send_discord_chunks(discord, channel, msg) {
             Ok(message_id) ->
               BrainState(
                 ..state,
@@ -1161,8 +1160,7 @@ fn maybe_send_progress_resurface(
   {
     False -> progress_ref
     True -> {
-      let safe = discord_message.clip_to_discord_limit(msg)
-      case discord.send_message(channel, safe) {
+      case send_discord_chunks(discord, channel, msg) {
         Ok(_) -> Nil
         Error(err) ->
           logging.log(
@@ -1288,12 +1286,40 @@ fn send_discord_response(
       <> ": "
       <> string.slice(content, 0, 100),
   )
-  let safe_content = discord_message.clip_to_discord_limit(content)
-  case discord.send_message(channel_id, safe_content) {
+  case send_discord_chunks(discord, channel_id, content) {
     Ok(_) -> Nil
     Error(err) -> {
       logging.log(logging.Error, "[brain] Failed to send message: " <> err)
       Nil
+    }
+  }
+}
+
+fn send_discord_chunks(
+  discord: Transport,
+  channel_id: String,
+  content: String,
+) -> Result(String, String) {
+  case discord_message.split_to_discord_messages(content) {
+    [] -> discord.send_message(channel_id, "")
+    [first, ..rest] -> {
+      use first_id <- result.try(discord.send_message(channel_id, first))
+      use _ <- result.try(send_discord_chunk_rest(discord, channel_id, rest))
+      Ok(first_id)
+    }
+  }
+}
+
+fn send_discord_chunk_rest(
+  discord: Transport,
+  channel_id: String,
+  chunks: List(String),
+) -> Result(Nil, String) {
+  case chunks {
+    [] -> Ok(Nil)
+    [chunk, ..rest] -> {
+      use _ <- result.try(discord.send_message(channel_id, chunk))
+      send_discord_chunk_rest(discord, channel_id, rest)
     }
   }
 }
