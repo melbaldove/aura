@@ -133,6 +133,25 @@ pub fn security_scan_public_allows_clean_content_test() {
   |> should.be_ok
 }
 
+pub fn sanitize_untrusted_report_redacts_sensitive_markers_case_insensitively_test() {
+  let assert Ok(sanitized) =
+    structured_memory.sanitize_untrusted_report(
+      "Checked Credentials and /Users/me/.SSH/config before deploy",
+    )
+
+  sanitized
+  |> string.contains("Credentials")
+  |> should.be_false
+
+  sanitized
+  |> string.contains(".SSH/")
+  |> should.be_false
+
+  sanitized
+  |> string.contains("[redacted sensitive reference]")
+  |> should.be_true
+}
+
 pub fn set_beyond_old_char_limit_test() {
   let dir = "/tmp/aura-mem-test6-" <> int.to_string(time.now_ms())
   let _ = simplifile.create_directory_all(dir)

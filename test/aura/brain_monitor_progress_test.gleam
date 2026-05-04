@@ -1,5 +1,6 @@
 import aura/acp/flare_manager
 import aura/acp/monitor as acp_monitor
+import aura/acp/types as acp_types
 import aura/brain
 import aura/time
 import fakes/fake_discord
@@ -52,6 +53,15 @@ fn progress(summary: String) -> brain.BrainMessage {
   ))
 }
 
+fn alert(summary: String) -> brain.BrainMessage {
+  brain.AcpEvent(acp_monitor.AcpAlert(
+    session_name,
+    "cm2",
+    acp_types.Blocked,
+    summary,
+  ))
+}
+
 fn summary(current: String) -> String {
   "Status: Working\nDone: found report generators\nCurrent: "
   <> current
@@ -61,6 +71,17 @@ fn summary(current: String) -> String {
 fn sent_contains(sys: test_harness.TestSystem, needle: String) -> Bool {
   fake_discord.all_sent_to(sys.fake_discord, thread_id)
   |> list.any(fn(message) { string.contains(message, needle) })
+}
+
+fn edited_contains(sys: test_harness.TestSystem, needle: String) -> Bool {
+  fake_discord.all_events(sys.fake_discord)
+  |> list.any(fn(event) {
+    case event {
+      fake_discord.Edited(channel_id, _, content) if channel_id == thread_id ->
+        string.contains(content, needle)
+      _ -> False
+    }
+  })
 }
 
 pub fn acp_progress_edits_existing_monitor_when_thread_is_quiet_test() {
@@ -88,6 +109,108 @@ pub fn acp_progress_edits_existing_monitor_when_thread_is_quiet_test() {
   fake_discord.all_sent_to(sys.fake_discord, thread_id)
   |> list.length
   |> should.equal(1)
+
+  test_harness.teardown(sys)
+}
+
+pub fn acp_alert_edits_existing_monitor_instead_of_spamming_test() {
+  let sys = test_harness.fresh_system()
+  register_active_flare(sys)
+
+  process.send(sys.brain_subject, progress(summary("reading samples")))
+  poll.poll_until(
+    fn() {
+      list.length(fake_discord.all_sent_to(sys.fake_discord, thread_id)) == 1
+    },
+    2000,
+  )
+  |> should.be_true
+
+  process.send(
+    sys.brain_subject,
+    alert(
+      "Status: Blocked\nDone: tests passed\nCurrent: deploy blocked by SSH access\nNeeds input: SSH access\nNext: wait for user",
+    ),
+  )
+
+  poll.poll_until(
+    fn() { edited_contains(sys, "deploy blocked by SSH access") },
+    2000,
+  )
+  |> should.be_true
+
+  fake_discord.all_sent_to(sys.fake_discord, thread_id)
+  |> list.length
+  |> should.equal(1)
+
+  test_harness.teardown(sys)
+}
+
+pub fn acp_alert_ignored_after_handback_when_flare_is_idle_test() {
+  let sys = test_harness.fresh_system()
+  let now = time.now_ms()
+  flare_manager.register_for_test(
+    sys.acp_subject,
+    flare_manager.FlareRecord(
+      id: "f-test",
+      label: "scope report work",
+      status: flare_manager.Active,
+      domain: "cm2",
+      thread_id: thread_id,
+      original_prompt: "scope report work",
+      execution_json: "",
+      triggers_json: "",
+      tools_json: "",
+      workspace: "",
+      session_id: "session-id",
+      session_name: session_name,
+      handle: option.None,
+      started_at_ms: now,
+      updated_at_ms: now,
+      awaiting_response: False,
+    ),
+  )
+
+  process.send(
+    sys.brain_subject,
+    alert(
+      "Status: Dangerous\nDone: reported back already\nCurrent: stale monitor escalation\nNeeds input: none\nNext: continue",
+    ),
+  )
+  process.sleep(100)
+
+  fake_discord.all_sent_to(sys.fake_discord, thread_id)
+  |> list.length
+  |> should.equal(0)
+
+  test_harness.teardown(sys)
+}
+
+pub fn acp_turn_completed_marks_monitor_as_handed_back_test() {
+  let sys = test_harness.fresh_system()
+  register_active_flare(sys)
+  fake_llm.script_text_response(sys.fake_llm, "handback acknowledged")
+
+  process.send(sys.brain_subject, progress(summary("running deploy")))
+  poll.poll_until(
+    fn() {
+      list.length(fake_discord.all_sent_to(sys.fake_discord, thread_id)) == 1
+    },
+    2000,
+  )
+  |> should.be_true
+
+  process.send(
+    sys.brain_subject,
+    brain.AcpEvent(acp_monitor.AcpTurnCompleted(
+      session_name,
+      "cm2",
+      "Agent's response:\ndeploy blocked by SSH access",
+    )),
+  )
+
+  poll.poll_until(fn() { edited_contains(sys, "Handback received") }, 2000)
+  |> should.be_true
 
   test_harness.teardown(sys)
 }

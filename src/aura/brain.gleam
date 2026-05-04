@@ -597,65 +597,83 @@ fn handle_acp_event(
       actor.continue(BrainState(..state, acp_progress_msgs: new_msgs))
     }
     acp_monitor.AcpAlert(session_name, domain, status, summary) -> {
-      let status_str = acp_types.status_to_string(status)
-      let title = acp_monitor.extract_field(summary, "Title:")
-      let title_display = case title {
-        "" -> session_name
-        _ -> title
-      }
+      case should_surface_acp_monitor(state, session_name) {
+        False -> actor.continue(state)
+        True -> {
+          let status_str = acp_types.status_to_string(status)
+          let title = acp_monitor.extract_field(summary, "Title:")
+          let title_display = case title {
+            "" -> session_name
+            _ -> title
+          }
 
-      let elapsed_str = case
-        flare_manager.get_session(state.acp_subject, session_name)
-      {
-        Ok(flare) -> {
-          let elapsed_min = { time.now_ms() - flare.started_at_ms } / 60_000
-          int.to_string(elapsed_min) <> "m elapsed"
+          let elapsed_str = case
+            flare_manager.get_session(state.acp_subject, session_name)
+          {
+            Ok(flare) -> {
+              let elapsed_min = { time.now_ms() - flare.started_at_ms } / 60_000
+              int.to_string(elapsed_min) <> "m elapsed"
+            }
+            Error(_) -> ""
+          }
+
+          let header =
+            "\u{26A0}\u{FE0F} **"
+            <> title_display
+            <> "** \u{00B7} "
+            <> elapsed_str
+            <> " \u{00B7} "
+            <> status_str
+            <> "\n`"
+            <> session_name
+            <> "`"
+
+          let done = acp_monitor.extract_field(summary, "Done:")
+          let current = acp_monitor.extract_field(summary, "Current:")
+          let needs = acp_monitor.extract_field(summary, "Needs input:")
+          let next = acp_monitor.extract_field(summary, "Next:")
+          let parts = [
+            "**Status:** " <> status_str,
+            case done {
+              "" -> ""
+              _ -> "**Done:** " <> done
+            },
+            case current {
+              "" -> ""
+              _ -> "**Current:** " <> current
+            },
+            case needs {
+              "" | "none" | "None" -> ""
+              _ -> "**Needs input:** " <> needs
+            },
+            case next {
+              "" -> ""
+              _ -> "**Next:** " <> next
+            },
+          ]
+          let body = list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
+          let msg = header <> "\n\n" <> body
+
+          let channel = resolve_acp_channel(state, session_name, domain)
+          let resurface_key =
+            progress_resurface_key(title_display, status_str, summary, False)
+          let new_state =
+            update_acp_monitor_message(
+              state,
+              session_name,
+              channel,
+              msg,
+              resurface_key,
+              build_progress_resurface_message(
+                title_display,
+                status_str,
+                summary,
+                False,
+              ),
+            )
+          actor.continue(new_state)
         }
-        Error(_) -> ""
       }
-
-      let header =
-        "\u{26A0}\u{FE0F} **"
-        <> title_display
-        <> "** \u{00B7} "
-        <> elapsed_str
-        <> " \u{00B7} "
-        <> status_str
-        <> "\n`"
-        <> session_name
-        <> "`"
-
-      let done = acp_monitor.extract_field(summary, "Done:")
-      let current = acp_monitor.extract_field(summary, "Current:")
-      let needs = acp_monitor.extract_field(summary, "Needs input:")
-      let next = acp_monitor.extract_field(summary, "Next:")
-      let parts = [
-        "**Status:** " <> status_str,
-        case done {
-          "" -> ""
-          _ -> "**Done:** " <> done
-        },
-        case current {
-          "" -> ""
-          _ -> "**Current:** " <> current
-        },
-        case needs {
-          "" | "none" | "None" -> ""
-          _ -> "**Needs input:** " <> needs
-        },
-        case next {
-          "" -> ""
-          _ -> "**Next:** " <> next
-        },
-      ]
-      let body = list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
-      let msg = header <> "\n\n" <> body
-
-      let channel = resolve_acp_channel(state, session_name, domain)
-      process.spawn_unlinked(fn() {
-        send_discord_response(state.discord, channel, msg)
-      })
-      actor.continue(state)
     }
     acp_monitor.AcpCompleted(session_name, domain, report, result_text) -> {
       let channel = resolve_acp_channel(state, session_name, domain)
@@ -671,14 +689,20 @@ fn handle_acp_event(
         }
         text -> {
           // Persist result_text to flares table for dreaming synthesis
-          persist_flare_result(
-            state.acp_subject,
-            state.db_subject,
-            session_name,
-            text,
-          )
+          let safe_text =
+            persist_flare_result(
+              state.acp_subject,
+              state.db_subject,
+              session_name,
+              text,
+            )
           // Route handback via channel_actor keyed on the flare's thread_id.
-          route_handback_to_channel_actor(state, session_name, domain, text)
+          route_handback_to_channel_actor(
+            state,
+            session_name,
+            domain,
+            safe_text,
+          )
           let new_msgs = dict.delete(state.acp_progress_msgs, session_name)
           actor.continue(BrainState(..state, acp_progress_msgs: new_msgs))
         }
@@ -691,15 +715,31 @@ fn handle_acp_event(
         "" -> actor.continue(state)
         text -> {
           // Persist result_text to flares table for dreaming synthesis
-          persist_flare_result(
-            state.acp_subject,
-            state.db_subject,
-            session_name,
-            text,
-          )
+          let safe_text =
+            persist_flare_result(
+              state.acp_subject,
+              state.db_subject,
+              session_name,
+              text,
+            )
+          let channel = resolve_acp_channel(state, session_name, domain)
+          let monitor_state =
+            update_acp_monitor_message(
+              state,
+              session_name,
+              channel,
+              build_handback_monitor_message(session_name, safe_text),
+              "handback|" <> session_name,
+              "Progress: handback received\nMonitor: awaiting user - no input needed",
+            )
           // Route handback via channel_actor keyed on the flare's thread_id.
-          route_handback_to_channel_actor(state, session_name, domain, text)
-          actor.continue(state)
+          route_handback_to_channel_actor(
+            monitor_state,
+            session_name,
+            domain,
+            safe_text,
+          )
+          actor.continue(monitor_state)
         }
       }
     }
@@ -719,175 +759,123 @@ fn handle_acp_event(
       summary,
       is_idle,
     ) -> {
-      // Write to domain log
-      let domain_dir = xdg.domain_data_dir(state.paths, domain)
-      case memory.append_domain_log(domain_dir, summary) {
-        Ok(_) -> Nil
-        Error(e) ->
-          logging.log(
-            logging.Error,
-            "[brain] Failed to write domain log: " <> e,
-          )
-      }
-
-      // Build elapsed time from session
-      let elapsed_str = case
-        flare_manager.get_session(state.acp_subject, session_name)
-      {
-        Ok(flare) -> {
-          let elapsed_min = { time.now_ms() - flare.started_at_ms } / 60_000
-          int.to_string(elapsed_min) <> "m elapsed"
-        }
-        Error(_) -> ""
-      }
-
-      // Format Discord message
-      let icon = case is_idle {
-        True -> "\u{23F8}\u{FE0F}"
-        False -> "\u{1F4CB}"
-      }
-      let title_display = case title {
-        "" -> session_name
-        _ -> title
-      }
-      let idle_suffix = case is_idle {
-        True -> " \u{00B7} idle"
-        False -> ""
-      }
-
-      let header =
-        icon
-        <> " **"
-        <> title_display
-        <> "** \u{00B7} "
-        <> elapsed_str
-        <> idle_suffix
-        <> "\n`"
-        <> session_name
-        <> "`"
-
-      // Build body from structured fields (same format for tmux and stdio — both LLM-summarized)
-      let body = case is_idle {
+      case should_surface_acp_monitor(state, session_name) {
+        False -> actor.continue(state)
         True -> {
-          let done = acp_monitor.extract_field(summary, "Done:")
-          let needs = acp_monitor.extract_field(summary, "Needs input:")
-          let parts = [
-            case done {
-              "" -> ""
-              _ -> "**Done:** " <> done
-            },
-            case needs {
-              "" | "none" | "None" -> ""
-              _ -> "**Needs input:** " <> needs
-            },
-          ]
-          let body_text =
-            list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
-          body_text <> "\n\nWant me to check on this? Reply in this thread."
-        }
-        False -> {
-          let status_line = case status {
-            "" -> ""
-            _ -> "**Status:** " <> status
-          }
-          let done = acp_monitor.extract_field(summary, "Done:")
-          let current = acp_monitor.extract_field(summary, "Current:")
-          let needs = acp_monitor.extract_field(summary, "Needs input:")
-          let next = acp_monitor.extract_field(summary, "Next:")
-          let parts = [
-            status_line,
-            case done {
-              "" -> ""
-              _ -> "**Done:** " <> done
-            },
-            case current {
-              "" -> ""
-              _ -> "**Current:** " <> current
-            },
-            case needs {
-              "" | "none" | "None" -> ""
-              _ -> "**Needs input:** " <> needs
-            },
-            case next {
-              "" -> ""
-              _ -> "**Next:** " <> next
-            },
-          ]
-          list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
-        }
-      }
-
-      let msg = header <> "\n\n" <> body
-      let channel = resolve_acp_channel(state, session_name, domain)
-      let discord = state.discord
-      let chatter_count = channel_chatter_count(state, channel)
-      let resurface_key =
-        progress_resurface_key(title, status, summary, is_idle)
-
-      // Edit existing progress message or send new one
-      let new_state = case dict.get(state.acp_progress_msgs, session_name) {
-        Ok(progress_ref) -> {
-          process.spawn_unlinked(fn() {
-            let safe = discord_message.first_chunk(msg)
-            case
-              discord.edit_message(
-                progress_ref.channel_id,
-                progress_ref.message_id,
-                safe,
+          // Write to domain log
+          let domain_dir = xdg.domain_data_dir(state.paths, domain)
+          case memory.append_domain_log(domain_dir, summary) {
+            Ok(_) -> Nil
+            Error(e) ->
+              logging.log(
+                logging.Error,
+                "[brain] Failed to write domain log: " <> e,
               )
-            {
-              Ok(_) -> Nil
-              Error(_) -> Nil
+          }
+
+          // Build elapsed time from session
+          let elapsed_str = case
+            flare_manager.get_session(state.acp_subject, session_name)
+          {
+            Ok(flare) -> {
+              let elapsed_min = { time.now_ms() - flare.started_at_ms } / 60_000
+              int.to_string(elapsed_min) <> "m elapsed"
             }
-          })
-          let updated_ref =
-            maybe_send_progress_resurface(
-              discord,
+            Error(_) -> ""
+          }
+
+          // Format Discord message
+          let icon = case is_idle {
+            True -> "\u{23F8}\u{FE0F}"
+            False -> "\u{1F4CB}"
+          }
+          let title_display = case title {
+            "" -> session_name
+            _ -> title
+          }
+          let idle_suffix = case is_idle {
+            True -> " \u{00B7} idle"
+            False -> ""
+          }
+
+          let header =
+            icon
+            <> " **"
+            <> title_display
+            <> "** \u{00B7} "
+            <> elapsed_str
+            <> idle_suffix
+            <> "\n`"
+            <> session_name
+            <> "`"
+
+          // Build body from structured fields (same format for tmux and stdio — both LLM-summarized)
+          let body = case is_idle {
+            True -> {
+              let done = acp_monitor.extract_field(summary, "Done:")
+              let needs = acp_monitor.extract_field(summary, "Needs input:")
+              let parts = [
+                case done {
+                  "" -> ""
+                  _ -> "**Done:** " <> done
+                },
+                case needs {
+                  "" | "none" | "None" -> ""
+                  _ -> "**Needs input:** " <> needs
+                },
+              ]
+              let body_text =
+                list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
+              body_text <> "\n\nWant me to check on this? Reply in this thread."
+            }
+            False -> {
+              let status_line = case status {
+                "" -> ""
+                _ -> "**Status:** " <> status
+              }
+              let done = acp_monitor.extract_field(summary, "Done:")
+              let current = acp_monitor.extract_field(summary, "Current:")
+              let needs = acp_monitor.extract_field(summary, "Needs input:")
+              let next = acp_monitor.extract_field(summary, "Next:")
+              let parts = [
+                status_line,
+                case done {
+                  "" -> ""
+                  _ -> "**Done:** " <> done
+                },
+                case current {
+                  "" -> ""
+                  _ -> "**Current:** " <> current
+                },
+                case needs {
+                  "" | "none" | "None" -> ""
+                  _ -> "**Needs input:** " <> needs
+                },
+                case next {
+                  "" -> ""
+                  _ -> "**Next:** " <> next
+                },
+              ]
+              list.filter(parts, fn(p) { p != "" }) |> string.join("\n")
+            }
+          }
+
+          let msg = header <> "\n\n" <> body
+          let channel = resolve_acp_channel(state, session_name, domain)
+          let resurface_key =
+            progress_resurface_key(title, status, summary, is_idle)
+          let new_state =
+            update_acp_monitor_message(
+              state,
+              session_name,
               channel,
-              progress_ref,
-              chatter_count,
+              msg,
               resurface_key,
               build_progress_resurface_message(title, status, summary, is_idle),
             )
-          BrainState(
-            ..state,
-            acp_progress_msgs: dict.insert(
-              state.acp_progress_msgs,
-              session_name,
-              updated_ref,
-            ),
-          )
-        }
-        Error(_) -> {
-          // First progress for this session — send inline to get message ID
-          let progress_msgs = state.acp_progress_msgs
-          let sn = session_name
-          case send_discord_chunks(discord, channel, msg) {
-            Ok(message_id) ->
-              BrainState(
-                ..state,
-                acp_progress_msgs: dict.insert(
-                  progress_msgs,
-                  sn,
-                  AcpProgressRef(
-                    channel_id: channel,
-                    message_id: message_id,
-                    last_chatter_count: chatter_count,
-                    last_resurface_key: resurface_key,
-                  ),
-                ),
-              )
-            Error(err) -> {
-              logging.log(
-                logging.Error,
-                "[brain] Failed to send progress: " <> err,
-              )
-              state
-            }
-          }
+          actor.continue(new_state)
         }
       }
-      actor.continue(new_state)
     }
   }
 }
@@ -900,8 +888,8 @@ fn persist_flare_result(
   db_subject: process.Subject(db.DbMessage),
   session_name: String,
   result_text: String,
-) -> Nil {
-  case structured_memory.security_scan(result_text) {
+) -> String {
+  case structured_memory.sanitize_untrusted_report(result_text) {
     Error(reason) -> {
       logging.log(
         logging.Info,
@@ -910,22 +898,31 @@ fn persist_flare_result(
           <> ": "
           <> reason,
       )
-      Nil
+      "ACP handback blocked by Aura security scan: " <> reason
     }
-    Ok(_) ->
+    Ok(safe_text) -> {
+      case safe_text == result_text {
+        True -> Nil
+        False ->
+          logging.log(
+            logging.Info,
+            "[brain] Sanitized flare result_text for " <> session_name,
+          )
+      }
       case flare_manager.get_flare_by_session_name(acp_subject, session_name) {
         Ok(flare) -> {
           let _ =
             db.update_flare_result(
               db_subject,
               flare.id,
-              result_text,
+              safe_text,
               time.now_ms(),
             )
-          Nil
+          safe_text
         }
-        Error(_) -> Nil
+        Error(_) -> safe_text
       }
+    }
   }
 }
 
@@ -1144,6 +1141,110 @@ fn build_progress_resurface_message(
   <> one_line(progress_status_label(status, is_idle), 80)
   <> " - "
   <> needs_label
+}
+
+fn build_handback_monitor_message(
+  session_name: String,
+  result_text: String,
+) -> String {
+  let result_line = one_line(result_text, 220)
+  let result_part = case result_line {
+    "" -> ""
+    _ -> "\n**Result:** " <> result_line
+  }
+
+  "\u{23F8}\u{FE0F} **Handback received** \u{00B7} awaiting user\n`"
+  <> session_name
+  <> "`\n\n**Status:** awaiting user\n**Done:** ACP reported back; Aura summarized it in the thread."
+  <> result_part
+}
+
+fn should_surface_acp_monitor(state: BrainState, session_name: String) -> Bool {
+  case flare_manager.get_session(state.acp_subject, session_name) {
+    Ok(flare) ->
+      case flare.status {
+        flare_manager.Active -> flare.awaiting_response
+        _ -> False
+      }
+    Error(_) -> True
+  }
+}
+
+fn update_acp_monitor_message(
+  state: BrainState,
+  session_name: String,
+  channel: String,
+  msg: String,
+  resurface_key: String,
+  resurface_msg: String,
+) -> BrainState {
+  let discord = state.discord
+  let chatter_count = channel_chatter_count(state, channel)
+  case dict.get(state.acp_progress_msgs, session_name) {
+    Ok(progress_ref) -> {
+      process.spawn_unlinked(fn() {
+        case
+          discord.edit_message(
+            progress_ref.channel_id,
+            progress_ref.message_id,
+            discord_message.first_chunk(msg),
+          )
+        {
+          Ok(_) -> Nil
+          Error(err) ->
+            logging.log(
+              logging.Error,
+              "[brain] Failed to edit ACP monitor: " <> err,
+            )
+        }
+      })
+      let updated_ref =
+        maybe_send_progress_resurface(
+          discord,
+          channel,
+          progress_ref,
+          chatter_count,
+          resurface_key,
+          resurface_msg,
+        )
+      BrainState(
+        ..state,
+        acp_progress_msgs: dict.insert(
+          state.acp_progress_msgs,
+          session_name,
+          updated_ref,
+        ),
+      )
+    }
+    Error(_) -> {
+      case send_discord_chunks(discord, channel, msg) {
+        Ok(message_id) -> {
+          let progress_ref =
+            AcpProgressRef(
+              channel_id: channel,
+              message_id: message_id,
+              last_chatter_count: chatter_count,
+              last_resurface_key: resurface_key,
+            )
+          BrainState(
+            ..state,
+            acp_progress_msgs: dict.insert(
+              state.acp_progress_msgs,
+              session_name,
+              progress_ref,
+            ),
+          )
+        }
+        Error(err) -> {
+          logging.log(
+            logging.Error,
+            "[brain] Failed to send ACP monitor: " <> err,
+          )
+          state
+        }
+      }
+    }
+  }
 }
 
 fn maybe_send_progress_resurface(

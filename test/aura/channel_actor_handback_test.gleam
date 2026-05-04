@@ -9,6 +9,7 @@ import aura/acp/monitor as acp_monitor
 import aura/acp/types as acp_types
 import aura/brain
 import aura/channel_actor
+import aura/db
 import aura/llm
 import fakes/fake_llm
 import gleam/erlang/process
@@ -101,6 +102,79 @@ pub fn handback_injects_system_message_into_turn_test() {
     "Treat the Agent's response section as the latest ACP answer.",
   )
   |> should.be_true
+
+  test_harness.teardown(sys)
+}
+
+pub fn handback_with_sensitive_path_is_sanitized_before_persisting_test() {
+  let sys = test_harness.fresh_system()
+
+  let assert Ok(_) =
+    db.upsert_flare(
+      sys.db_subject,
+      db.StoredFlare(
+        id: "f1",
+        label: "deploy",
+        status: "active",
+        domain: "cm2",
+        thread_id: "flare-thread-1",
+        original_prompt: "deploy aura",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      ),
+    )
+
+  flare_manager.register_for_test(
+    sys.acp_subject,
+    flare_manager.FlareRecord(
+      id: "f1",
+      label: "deploy",
+      status: flare_manager.Active,
+      domain: "cm2",
+      thread_id: "flare-thread-1",
+      original_prompt: "deploy aura",
+      execution_json: "{}",
+      triggers_json: "[]",
+      tools_json: "[]",
+      workspace: "",
+      session_id: "",
+      session_name: "deploy",
+      handle: option.None,
+      started_at_ms: 0,
+      updated_at_ms: 0,
+      awaiting_response: False,
+    ),
+  )
+  fake_llm.script_text_response(sys.fake_llm, "handback acknowledged")
+
+  process.send(
+    sys.brain_subject,
+    brain.AcpEvent(acp_monitor.AcpTurnCompleted(
+      session_name: "deploy",
+      domain: "cm2",
+      result_text: "Agent's response:\ndeploy failed while reading /Users/me/.ssh/config",
+    )),
+  )
+
+  poll.poll_until(
+    fn() {
+      case db.get_flare_result(sys.db_subject, "f1") {
+        Ok(text) -> text != ""
+        Error(_) -> False
+      }
+    },
+    3000,
+  )
+  |> should.be_true
+
+  let assert Ok(result) = db.get_flare_result(sys.db_subject, "f1")
+  string.contains(result, ".ssh/") |> should.be_false
+  string.contains(result, "[redacted sensitive reference]") |> should.be_true
 
   test_harness.teardown(sys)
 }
