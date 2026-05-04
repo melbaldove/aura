@@ -127,8 +127,9 @@ pub type BrainState {
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
     brain_context: Int,
     shell_patterns: shell.CompiledPatterns,
-    acp_progress_msgs: dict.Dict(String, #(String, String)),
-    // session_name -> #(channel_id, message_id)
+    // session_name -> canonical progress message plus resurface bookkeeping
+    acp_progress_msgs: dict.Dict(String, AcpProgressRef),
+    channel_chatter_counts: dict.Dict(String, Int),
     discord: Transport,
     transports: dict.Dict(String, Transport),
     llm_client: LLMClient,
@@ -136,6 +137,16 @@ pub type BrainState {
     browser_runner: BrowserRunner,
     channel_supervisor: process.Subject(channel_supervisor.SupervisorMessage),
     review_runner: review_runner.ReviewRunner,
+  )
+}
+
+/// Canonical ACP progress message state for a running session.
+pub type AcpProgressRef {
+  AcpProgressRef(
+    channel_id: String,
+    message_id: String,
+    last_chatter_count: Int,
+    last_resurface_key: String,
   )
 }
 
@@ -217,6 +228,7 @@ pub fn start(
       brain_context: brain_context,
       shell_patterns: shell.compile_patterns(),
       acp_progress_msgs: dict.new(),
+      channel_chatter_counts: dict.new(),
       discord: brain_config.discord,
       transports: brain_config.transports,
       llm_client: brain_config.llm,
@@ -365,6 +377,7 @@ fn handle_message(
         _, _ -> #(msg.channel_id, state)
       }
       logging.log(logging.Info, "[brain] Routing msg to " <> routed_channel_id)
+      let new_state = record_channel_chatter(new_state, routed_channel_id)
       let routed_msg =
         message.IncomingMessage(..msg, channel_id: routed_channel_id)
       let deps =
@@ -807,18 +820,43 @@ fn handle_acp_event(
       let msg = header <> "\n\n" <> body
       let channel = resolve_acp_channel(state, session_name, domain)
       let discord = state.discord
+      let chatter_count = channel_chatter_count(state, channel)
+      let resurface_key =
+        progress_resurface_key(title, status, summary, is_idle)
 
       // Edit existing progress message or send new one
       let new_state = case dict.get(state.acp_progress_msgs, session_name) {
-        Ok(#(ch, mid)) -> {
+        Ok(progress_ref) -> {
           process.spawn_unlinked(fn() {
             let safe = discord_message.clip_to_discord_limit(msg)
-            case discord.edit_message(ch, mid, safe) {
+            case
+              discord.edit_message(
+                progress_ref.channel_id,
+                progress_ref.message_id,
+                safe,
+              )
+            {
               Ok(_) -> Nil
               Error(_) -> Nil
             }
           })
-          state
+          let updated_ref =
+            maybe_send_progress_resurface(
+              discord,
+              channel,
+              progress_ref,
+              chatter_count,
+              resurface_key,
+              build_progress_resurface_message(title, status, summary, is_idle),
+            )
+          BrainState(
+            ..state,
+            acp_progress_msgs: dict.insert(
+              state.acp_progress_msgs,
+              session_name,
+              updated_ref,
+            ),
+          )
         }
         Error(_) -> {
           // First progress for this session — send inline to get message ID
@@ -829,10 +867,16 @@ fn handle_acp_event(
             Ok(message_id) ->
               BrainState(
                 ..state,
-                acp_progress_msgs: dict.insert(progress_msgs, sn, #(
-                  channel,
-                  message_id,
-                )),
+                acp_progress_msgs: dict.insert(
+                  progress_msgs,
+                  sn,
+                  AcpProgressRef(
+                    channel_id: channel,
+                    message_id: message_id,
+                    last_chatter_count: chatter_count,
+                    last_resurface_key: resurface_key,
+                  ),
+                ),
               )
             Error(err) -> {
               logging.log(
@@ -984,6 +1028,155 @@ fn build_channel_actor_deps(
     soul: state.soul,
     domain_names: domain_names,
   )
+}
+
+fn channel_chatter_count(state: BrainState, channel_id: String) -> Int {
+  dict.get(state.channel_chatter_counts, channel_id)
+  |> result.unwrap(0)
+}
+
+fn record_channel_chatter(state: BrainState, channel_id: String) -> BrainState {
+  let count = channel_chatter_count(state, channel_id)
+  BrainState(
+    ..state,
+    channel_chatter_counts: dict.insert(
+      state.channel_chatter_counts,
+      channel_id,
+      count + 1,
+    ),
+  )
+}
+
+fn useful_needs_input(needs: String) -> String {
+  let trimmed = string.trim(needs)
+  let lowered = string.lowercase(trimmed)
+  case lowered {
+    "" | "none" | "no" | "n/a" -> ""
+    _ -> trimmed
+  }
+}
+
+fn one_line(text: String, limit: Int) -> String {
+  let cleaned =
+    text
+    |> string.replace("\n", " ")
+    |> string.replace("\r", " ")
+    |> string.trim
+  case string.length(cleaned) > limit {
+    True -> string.slice(cleaned, 0, limit) <> "..."
+    False -> cleaned
+  }
+}
+
+fn progress_status_label(status: String, is_idle: Bool) -> String {
+  case is_idle {
+    True -> "idle"
+    False ->
+      case string.trim(status) {
+        "" -> "working"
+        s -> s
+      }
+  }
+}
+
+fn progress_resurface_line(
+  title: String,
+  _status: String,
+  summary: String,
+  _is_idle: Bool,
+) -> String {
+  let needs =
+    useful_needs_input(acp_monitor.extract_field(summary, "Needs input:"))
+  case needs {
+    "" -> {
+      let current = string.trim(acp_monitor.extract_field(summary, "Current:"))
+      case current {
+        "" -> {
+          let next = string.trim(acp_monitor.extract_field(summary, "Next:"))
+          case next {
+            "" ->
+              case string.trim(title) {
+                "" -> "monitor updated"
+                t -> t
+              }
+            n -> n
+          }
+        }
+        c -> c
+      }
+    }
+    n -> "needs input: " <> n
+  }
+}
+
+fn progress_resurface_key(
+  title: String,
+  status: String,
+  summary: String,
+  is_idle: Bool,
+) -> String {
+  [
+    progress_status_label(status, is_idle),
+    string.trim(title),
+    string.trim(acp_monitor.extract_field(summary, "Done:")),
+    string.trim(acp_monitor.extract_field(summary, "Current:")),
+    useful_needs_input(acp_monitor.extract_field(summary, "Needs input:")),
+    string.trim(acp_monitor.extract_field(summary, "Next:")),
+  ]
+  |> string.join("|")
+}
+
+fn build_progress_resurface_message(
+  title: String,
+  status: String,
+  summary: String,
+  is_idle: Bool,
+) -> String {
+  let line = progress_resurface_line(title, status, summary, is_idle)
+  let needs =
+    useful_needs_input(acp_monitor.extract_field(summary, "Needs input:"))
+  let needs_label = case needs {
+    "" -> "no input needed"
+    _ -> "needs input"
+  }
+  "Progress: "
+  <> one_line(line, 180)
+  <> "\nMonitor: "
+  <> one_line(progress_status_label(status, is_idle), 80)
+  <> " - "
+  <> needs_label
+}
+
+fn maybe_send_progress_resurface(
+  discord: Transport,
+  channel: String,
+  progress_ref: AcpProgressRef,
+  chatter_count: Int,
+  resurface_key: String,
+  msg: String,
+) -> AcpProgressRef {
+  case
+    chatter_count > progress_ref.last_chatter_count
+    && resurface_key != progress_ref.last_resurface_key
+  {
+    False -> progress_ref
+    True -> {
+      let safe = discord_message.clip_to_discord_limit(msg)
+      case discord.send_message(channel, safe) {
+        Ok(_) -> Nil
+        Error(err) ->
+          logging.log(
+            logging.Error,
+            "[brain] Failed to send progress resurfacer: " <> err,
+          )
+      }
+      AcpProgressRef(
+        ..progress_ref,
+        last_chatter_count: chatter_count,
+        last_resurface_key: resurface_key,
+      )
+    }
+  }
 }
 
 fn resolve_domain_channel(state: BrainState, domain: String) -> String {

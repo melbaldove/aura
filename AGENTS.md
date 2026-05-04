@@ -321,6 +321,8 @@ When making any non-trivial change, check whether these need updating:
 
 ## Deploy
 
+**Always commit before deploying.** A deploy must correspond to a committed repo state, not an uncommitted working-tree patch. Stage only the intended files, preserve unrelated local changes, run the required verification, create the commit, then deploy. If the change cannot be committed yet, stop before deploying and ask.
+
 **Always use `bash scripts/deploy.sh`.** Never manual scp+build — it causes stale beams, missing NIF, and FFI mismatch bugs.
 
 **Before deploying, tail `/tmp/aura.log` on Eisenhower for in-flight work.** A deploy SIGTERMs the VM and kills any unlinked background process. Specifically, check for:
