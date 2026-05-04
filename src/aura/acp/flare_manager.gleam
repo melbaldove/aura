@@ -1483,31 +1483,118 @@ fn handle_monitor_event(
   event: acp_monitor.AcpEvent,
 ) -> FlareManagerState {
   let session_name = event_session_name(event)
-  let new_state = case event {
-    acp_monitor.AcpStarted(..) -> state
-    acp_monitor.AcpCompleted(..) ->
-      update_flare_for_session(state, session_name, Archived)
-    acp_monitor.AcpTurnCompleted(..) -> {
-      // Turn completed but session still alive — don't archive.
-      // Clear awaiting_response so status reports "idle".
-      case lookup_flare_by_session(state, session_name) {
-        Ok(flare) -> {
-          let updated = FlareRecord(..flare, awaiting_response: False)
-          let new_flares = dict.insert(state.flares, flare.id, updated)
-          FlareManagerState(..state, flares: new_flares)
-        }
-        Error(_) -> state
-      }
+  let #(new_state, forward_to_brain) = case event {
+    acp_monitor.AcpStarted(..) -> #(
+      state,
+      should_forward_monitor_event(state, event),
+    )
+    acp_monitor.AcpCompleted(..) -> {
+      let updated = update_flare_for_session(state, session_name, Archived)
+      #(updated, True)
     }
-    acp_monitor.AcpFailed(_, _, reason) ->
-      update_flare_for_session(state, session_name, Failed(reason))
-    acp_monitor.AcpProgress(..) -> state
-    acp_monitor.AcpAlert(..) -> state
+    acp_monitor.AcpTurnCompleted(..) -> {
+      // Turn completed but the flare is not done. Park it so a future user
+      // reply rekindles explicitly instead of deploy recovery auto-reprompting.
+      let updated = park_flare_after_handback(state, session_name)
+      #(updated, True)
+    }
+    acp_monitor.AcpFailed(_, _, reason) -> {
+      let updated =
+        update_flare_for_session(state, session_name, Failed(reason))
+      #(updated, should_forward_monitor_event(state, event))
+    }
+    acp_monitor.AcpProgress(..) -> #(
+      state,
+      should_forward_monitor_event(state, event),
+    )
+    acp_monitor.AcpAlert(..) -> #(
+      state,
+      should_forward_monitor_event(state, event),
+    )
   }
   // Forward to brain — lookup_flare_by_session has a fallback scan
   // that finds archived flares even after session_to_flare is cleared
-  state.on_brain_event(event)
+  case forward_to_brain {
+    True -> state.on_brain_event(event)
+    False -> log_suppressed_monitor_event(event)
+  }
   new_state
+}
+
+fn park_flare_after_handback(
+  state: FlareManagerState,
+  session_name: String,
+) -> FlareManagerState {
+  case lookup_flare_by_session(state, session_name) {
+    Error(_) -> state
+    Ok(flare) -> {
+      let now = time.now_ms()
+      // Keep the in-memory session mapping so the brain can resolve and route
+      // this handback; the DB status is parked so restart will not rekindle it.
+      let updated =
+        FlareRecord(
+          ..flare,
+          status: Parked,
+          awaiting_response: False,
+          handle: None,
+          updated_at_ms: now,
+        )
+      case db.upsert_flare(state.db_subject, flare_to_stored(updated)) {
+        Ok(_) ->
+          FlareManagerState(
+            ..state,
+            flares: dict.insert(state.flares, flare.id, updated),
+          )
+        Error(e) -> {
+          logging.log(
+            logging.Error,
+            "[flare] Failed to persist handback park for "
+              <> flare.id
+              <> ": "
+              <> e,
+          )
+          FlareManagerState(
+            ..state,
+            flares: dict.insert(state.flares, flare.id, updated),
+          )
+        }
+      }
+    }
+  }
+}
+
+fn should_forward_monitor_event(
+  state: FlareManagerState,
+  event: acp_monitor.AcpEvent,
+) -> Bool {
+  case event {
+    acp_monitor.AcpStarted(..) -> True
+    acp_monitor.AcpCompleted(..) -> True
+    acp_monitor.AcpTurnCompleted(..) -> True
+    acp_monitor.AcpProgress(session_name, _, _, _, _, _) ->
+      should_forward_live_session_event(state, session_name)
+    acp_monitor.AcpAlert(session_name, _, _, _) ->
+      should_forward_live_session_event(state, session_name)
+    acp_monitor.AcpFailed(session_name, _, _) ->
+      should_forward_live_session_event(state, session_name)
+  }
+}
+
+fn should_forward_live_session_event(
+  state: FlareManagerState,
+  session_name: String,
+) -> Bool {
+  case lookup_flare_by_session(state, session_name) {
+    Ok(flare) -> flare.status == Active && flare.awaiting_response
+    Error(_) -> False
+  }
+}
+
+fn log_suppressed_monitor_event(event: acp_monitor.AcpEvent) -> Nil {
+  logging.log(
+    logging.Info,
+    "[flare] Suppressed stale monitor event for " <> event_session_name(event),
+  )
 }
 
 /// Extract session_name from any AcpEvent.

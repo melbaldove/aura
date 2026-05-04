@@ -1,9 +1,14 @@
 import aura/acp/flare_manager
+import aura/acp/monitor as acp_monitor
 import aura/acp/provider
 import aura/acp/transport
 import aura/acp/types
+import aura/db
+import gleam/erlang/process
+import gleam/list
 import gleam/option.{type Option, None}
 import gleeunit/should
+import poll
 
 // ---------------------------------------------------------------------------
 // status_to_string / status_from_string roundtrip
@@ -159,6 +164,102 @@ pub fn resolve_prompt_archived_rejects_test() {
   case action {
     flare_manager.RejectPrompt(_) -> Nil
     _ -> should.fail()
+  }
+}
+
+pub fn turn_completed_parks_flare_and_suppresses_stale_monitor_events_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let events = process.new_subject()
+  let assert Ok(subject) =
+    flare_manager.start(
+      1,
+      "zai/glm-5-turbo",
+      fn(event) { process.send(events, event) },
+      transport.Tmux,
+      db_subject,
+    )
+  let session_name = "acp-cm2-f-handback"
+  let assert Ok(_) =
+    db.upsert_flare(
+      db_subject,
+      db.StoredFlare(
+        id: "f-handback",
+        label: "handback",
+        status: "active",
+        domain: "cm2",
+        thread_id: "thread-1",
+        original_prompt: "do work",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "run-1",
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      ),
+    )
+  flare_manager.register_for_test(
+    subject,
+    flare_manager.FlareRecord(
+      id: "f-handback",
+      label: "handback",
+      status: flare_manager.Active,
+      domain: "cm2",
+      thread_id: "thread-1",
+      original_prompt: "do work",
+      execution_json: "{}",
+      triggers_json: "[]",
+      tools_json: "[]",
+      workspace: "",
+      session_id: "run-1",
+      session_name: session_name,
+      handle: None,
+      started_at_ms: 0,
+      updated_at_ms: 0,
+      awaiting_response: True,
+    ),
+  )
+
+  process.send(
+    subject,
+    flare_manager.MonitorEvent(acp_monitor.AcpTurnCompleted(
+      session_name,
+      "cm2",
+      "Agent's response:\ndone",
+    )),
+  )
+
+  let assert Ok(acp_monitor.AcpTurnCompleted(_, _, _)) =
+    process.receive(events, 1000)
+
+  poll.poll_until(
+    fn() {
+      case flare_manager.get_flare(subject, "f-handback") {
+        Ok(flare) -> flare.status == flare_manager.Parked
+        Error(_) -> False
+      }
+    },
+    1000,
+  )
+  |> should.be_true
+
+  let assert Ok(flares) = db.load_flares(db_subject, False)
+  let assert Ok(stored) =
+    list.find(flares, fn(flare) { flare.id == "f-handback" })
+  stored.status |> should.equal("parked")
+
+  process.send(
+    subject,
+    flare_manager.MonitorEvent(acp_monitor.AcpAlert(
+      session_name,
+      "cm2",
+      types.Blocked,
+      "Status: Blocked\nCurrent: stale monitor update",
+    )),
+  )
+  case process.receive(events, 100) {
+    Ok(_) -> should.fail()
+    Error(_) -> should.be_true(True)
   }
 }
 
