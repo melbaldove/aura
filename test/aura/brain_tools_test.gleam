@@ -468,6 +468,47 @@ pub fn flare_archive_without_current_user_request_is_rejected_test() {
   process.send(db_subject, db.Shutdown)
 }
 
+pub fn flare_status_includes_latest_agent_response_test() {
+  let #(ctx, db_subject) = flare_ctx("status?")
+
+  let stored =
+    db.StoredFlare(
+      id: "f-tool-policy",
+      label: "demo task",
+      status: "active",
+      domain: "demo",
+      thread_id: "test-channel",
+      original_prompt: "investigate the issue",
+      execution: "{}",
+      triggers: "{}",
+      tools: "{}",
+      workspace: "/tmp",
+      session_id: "",
+      created_at_ms: 0,
+      updated_at_ms: 0,
+    )
+  db.upsert_flare(db_subject, stored) |> should.be_ok
+  db.update_flare_result(
+    db_subject,
+    "f-tool-policy",
+    "Summary: Status: Idle\n\nAgent's response:\n**OVERALL: GO**\nChecked the outputs.",
+    1,
+  )
+  |> should.be_ok
+
+  let out =
+    run_flare_tool(
+      ctx,
+      "{\"action\":\"status\",\"session_name\":\"acp-demo-f-tool-policy\"}",
+    )
+
+  out |> string.contains("Latest agent response:") |> should.be_true
+  out |> string.contains("**OVERALL: GO**") |> should.be_true
+  out |> string.contains("Status: Idle") |> should.be_false
+
+  process.send(db_subject, db.Shutdown)
+}
+
 pub fn flare_ignite_in_active_flare_thread_without_new_request_is_rejected_test() {
   let #(ctx, db_subject) = flare_ctx("i fixed the permissions. try again")
 

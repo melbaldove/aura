@@ -255,6 +255,10 @@ pub type DbMessage {
     result_text: String,
     updated_at_ms: Int,
   )
+  GetFlareResult(
+    reply_to: process.Subject(Result(String, String)),
+    id: String,
+  )
   GetFlareOutcomes(
     reply_to: process.Subject(Result(List(#(String, String)), String)),
     domain: String,
@@ -723,6 +727,16 @@ pub fn update_flare_result(
   })
 }
 
+/// Return the latest persisted result_text for a flare, or an empty string.
+pub fn get_flare_result(
+  subject: process.Subject(DbMessage),
+  id: String,
+) -> Result(String, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetFlareResult(reply_to:, id:)
+  })
+}
+
 /// Return (label, result_text) pairs for completed flares in this domain
 /// with non-null result_text, where updated_at_ms > since_ms.
 pub fn get_flare_outcomes(
@@ -1143,6 +1157,12 @@ fn handle_message(
     UpdateFlareResult(reply_to:, id:, result_text:, updated_at_ms:) -> {
       let result =
         do_update_flare_result(state.conn, id, result_text, updated_at_ms)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetFlareResult(reply_to:, id:) -> {
+      let result = do_get_flare_result(state.conn, id)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -1879,6 +1899,25 @@ fn do_update_flare_result(
   |> result.map_error(fn(err) {
     "Failed to update flare result: " <> string.inspect(err)
   })
+}
+
+fn do_get_flare_result(
+  conn: sqlight.Connection,
+  id: String,
+) -> Result(String, String) {
+  let result =
+    sqlight.query(
+      "SELECT COALESCE(result_text, '') FROM flares WHERE id = ?",
+      on: conn,
+      with: [sqlight.text(id)],
+      expecting: decode.at([0], decode.string),
+    )
+  case result {
+    Ok([result_text]) -> Ok(result_text)
+    Ok([]) -> Ok("")
+    Ok(_) -> Ok("")
+    Error(err) -> Error("Failed to get flare result: " <> string.inspect(err))
+  }
 }
 
 fn do_get_flare_outcomes(

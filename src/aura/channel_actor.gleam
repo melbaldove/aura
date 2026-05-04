@@ -2085,8 +2085,7 @@ fn start_turn(
       }
     }
     PendingHandback(flare_id, session_name, result) -> {
-      let handback_msg =
-        "[Flare reported back: \"" <> session_name <> "\"]\n\n" <> result
+      let handback_msg = build_handback_system_message(session_name, result)
       let handback_system = llm.SystemMessage(handback_msg)
       let new_messages = [handback_system]
       let messages = list.append(state.conversation, new_messages)
@@ -2099,6 +2098,14 @@ fn start_turn(
       ])
     }
   }
+}
+
+fn build_handback_system_message(session_name: String, result: String) -> String {
+  "[Flare reported back: \""
+  <> session_name
+  <> "\"]\n\n"
+  <> "This is an ACP handback. Treat the Agent's response section as the latest ACP answer. If it conflicts with monitor summary fields, prefer the Agent's response. Summarize that answer to the user before checking status or sending follow-up prompts.\n\n"
+  <> result
 }
 
 // ---------------------------------------------------------------------------

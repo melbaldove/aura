@@ -635,7 +635,8 @@ fn execute_tool_dispatch(
                       sid -> "\nRun: " <> sid
                     }
                     <> "\nPrompt: "
-                    <> string.slice(flare.original_prompt, 0, 200),
+                    <> string.slice(flare.original_prompt, 0, 200)
+                    <> latest_flare_result_section(ctx.db_subject, flare.id),
                   )
                 }
                 Error(_) -> TextResult("Flare not found: " <> identifier)
@@ -1129,6 +1130,51 @@ pub fn expand_tool_calls(calls: List(llm.ToolCall)) -> List(llm.ToolCall) {
       }
     }
   })
+}
+
+fn latest_flare_result_section(
+  db_subject: process.Subject(db.DbMessage),
+  flare_id: String,
+) -> String {
+  case db.get_flare_result(db_subject, flare_id) {
+    Ok(result_text) -> {
+      case latest_agent_response(result_text) {
+        Some(agent_response) ->
+          "\nLatest agent response:\n" <> clamp_flare_result(agent_response)
+        None -> {
+          let trimmed = string.trim(result_text)
+          case trimmed {
+            "" -> ""
+            _ -> "\nLatest result:\n" <> clamp_flare_result(trimmed)
+          }
+        }
+      }
+    }
+    Error(_) -> ""
+  }
+}
+
+fn latest_agent_response(result_text: String) -> Option(String) {
+  case string.split_once(result_text, "Agent's response:\n") {
+    Ok(#(_, agent_response)) -> {
+      let trimmed = string.trim(agent_response)
+      case trimmed {
+        "" -> None
+        _ -> Some(trimmed)
+      }
+    }
+    Error(_) -> None
+  }
+}
+
+fn clamp_flare_result(text: String) -> String {
+  let max_chars = 2500
+  case string.length(text) > max_chars {
+    True ->
+      string.slice(text, 0, max_chars)
+      <> "\n... (latest flare result continues in persisted flare history)"
+    False -> text
+  }
 }
 
 fn guard_ignite_in_active_flare_thread(ctx: ToolContext) -> Result(Nil, String) {

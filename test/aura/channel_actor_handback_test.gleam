@@ -96,6 +96,12 @@ pub fn handback_injects_system_message_into_turn_test() {
   string.contains(system_messages, "build passed")
   |> should.be_true
 
+  string.contains(
+    system_messages,
+    "Treat the Agent's response section as the latest ACP answer.",
+  )
+  |> should.be_true
+
   test_harness.teardown(sys)
 }
 
