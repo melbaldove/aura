@@ -47,6 +47,7 @@ erlc -o . ../src/esqlite3.erl ../src/esqlite3_nif.erl
 - C compiler (for esqlite NIF)
 - tmux (for ACP sessions)
 - agent-browser (npm) — for browser tool. Install: `npm install -g agent-browser && agent-browser install`
+- ACP adapters (npm) — `@zed-industries/codex-acp` and `@agentclientprotocol/claude-agent-acp`; deploy bootstraps both.
 
 ## Prompt and policy hygiene
 
@@ -330,11 +331,12 @@ If any of these are in-flight, wait for them to settle (or warn the user) before
 
 The script does:
 1. `rsync` source + test `.gleam`/`.erl` files and `evals/` fixtures to Eisenhower (192.168.50.140)
-2. `gleam clean && gleam build` — ensures no stale beams from previous builds
-3. Fix esqlite NIF — `gleam clean` wipes the NIF, OTP 27+ needs manual `erlc` recompile
-4. Recompile all Erlang FFI beams — `gleam build` doesn't compile `.erl` files, so every `aura_*_ffi.erl` is compiled with `erlc -o ebin`
-5. `launchctl kickstart -k` restarts the launchd service (`com.aura.agent`)
-6. Waits 5s and tails the log to verify startup
+2. Bootstraps npm runtime tools if missing: `agent-browser`, `claude-agent-acp`, and `codex-acp`
+3. `gleam clean && gleam build` — ensures no stale beams from previous builds
+4. Fix esqlite NIF — `gleam clean` wipes the NIF, OTP 27+ needs manual `erlc` recompile
+5. Recompile all Erlang FFI beams — `gleam build` doesn't compile `.erl` files, so every `aura_*_ffi.erl` is compiled with `erlc -o ebin`
+6. `launchctl kickstart -k` restarts the launchd service (`com.aura.agent`)
+7. Waits 5s and tails the log to verify startup
 
 **Gotchas:**
 - Never deploy with `gleam build` alone — FFI beams won't update
@@ -364,7 +366,7 @@ Domains follow XDG Base Directory layout:
 
 Steps:
 1. Create config: `~/.config/aura/domains/<name>/config.toml` with name, description, cwd, tools, discord channel
-2. Optionally add `[acp]` section for provider config (defaults: `provider = "Codex"`, `worktree = true`)
+2. Optionally add `[acp]` section for provider/worktree config; the active stdio ACP adapter is selected globally by `[acp].command`
 3. Create `~/.config/aura/domains/<name>/AGENTS.md` with repo index, domain expertise, jira instance if applicable
 4. Create data/state dirs (or use `scaffold.scaffold_domain`)
 5. Create the Discord channel (if it doesn't exist)
@@ -395,7 +397,12 @@ Steps:
 - `AURA_DISCORD_TOKEN` — Discord bot token
 - `ZAI_API_KEY` — z.ai/GLM API key
 - `ANTHROPIC_API_KEY` — Anthropic API key (for ACP, optional if using CLAUDE_CODE_OAUTH_TOKEN)
-- `CLAUDE_CODE_OAUTH_TOKEN` — Codex auth token for headless ACP sessions (from `Codex setup-token`)
+- `CLAUDE_CODE_OAUTH_TOKEN` — Claude Code auth token for headless ACP sessions (from `claude setup-token`)
+- `AURA_OPENAI_CODEX_ACCESS_TOKEN` — optional bearer-token override for `openai-codex/*` orchestrator/domain model specs; prefer Codex CLI login cache when possible
+- `AURA_OPENAI_CODEX_ACCOUNT_ID` — optional ChatGPT workspace/account id header for `openai-codex/*` when using `AURA_OPENAI_CODEX_ACCESS_TOKEN`
+- `CODEX_HOME` — optional Codex CLI config/cache directory for `openai-codex/*`; defaults to `~/.codex`
+- `CODEX_API_KEY` — Codex API key for `codex-acp` if not using Codex login state
+- `OPENAI_API_KEY` — OpenAI API key accepted by `codex-acp` as an alternative to `CODEX_API_KEY`
 - `BRAVE_API_KEY` — Brave Search API key (optional, for web_search tool)
 - `HOME` — used for XDG path resolution
 

@@ -37,6 +37,8 @@ global_max_concurrent = 4
   cfg.models.acp |> should.equal("claude/opus")
   cfg.notifications.timezone |> should.equal("Asia/Manila")
   cfg.acp_global_max_concurrent |> should.equal(4)
+  cfg.acp_transport |> should.equal("stdio")
+  cfg.acp_command |> should.equal("codex-acp")
 }
 
 pub fn parse_domain_config_test() {

@@ -21,6 +21,7 @@ api_key = "${BLATHER_API_KEY}"     # Blather agent key
 
 [models]
 brain = "zai/glm\-5.1"             # Orchestrator model
+# brain = "openai\-codex/gpt\-5.5"  # Experimental Codex OAuth route
 acp = "claude/opus"               # Flare coding model
 monitor = "zai/glm\-5\-turbo"       # Progress summarizer
 vision = "zai/glm\-4.6v"           # Image description model
@@ -28,7 +29,7 @@ vision = "zai/glm\-4.6v"           # Image description model
 [acp]
 global_max_concurrent = 4         # Max simultaneous flares
 transport = "stdio"               # "stdio" | "http" | "tmux"
-command = "claude\-agent\-acp"      # Binary for stdio transport
+command = "codex\-acp"             # Binary for stdio transport
 
 [memory]
 review_interval = 10              # Turns between auto\-review
@@ -99,6 +100,25 @@ Anthropic API key (for ACP).
 Claude Code auth token (from
 .BR "claude setup\-token" ).
 .TP
+.B AURA_OPENAI_CODEX_ACCESS_TOKEN
+Optional bearer token override for
+.B openai\-codex/*
+model specs. Prefer Codex CLI login cache when possible.
+.TP
+.B AURA_OPENAI_CODEX_ACCOUNT_ID
+Optional ChatGPT workspace/account id header for
+.B openai\-codex/*
+when using AURA_OPENAI_CODEX_ACCESS_TOKEN.
+.TP
+.B CODEX_HOME
+Optional Codex CLI config/cache directory. Defaults to ~/.codex.
+.TP
+.B CODEX_API_KEY
+Codex API key for codex\-acp if not using Codex login state.
+.TP
+.B OPENAI_API_KEY
+OpenAI API key accepted by codex\-acp as an alternative to CODEX_API_KEY.
+.TP
 .B BRAVE_API_KEY
 Brave Search API key (optional).
 .TP
@@ -116,14 +136,16 @@ The script:
 .IP 1. 4
 rsync source .gleam and .erl files to Eisenhower
 .IP 2. 4
-gleam clean && gleam build \(em no stale beams
+Bootstrap npm runtime tools: agent\-browser, claude\-agent\-acp, codex\-acp
 .IP 3. 4
-Fix esqlite NIF \(em gleam clean wipes it, OTP 27+ needs erlc recompile
+gleam clean && gleam build \(em no stale beams
 .IP 4. 4
-Recompile Erlang FFI beams \(em gleam build doesn't compile .erl files
+Fix esqlite NIF \(em gleam clean wipes it, OTP 27+ needs erlc recompile
 .IP 5. 4
-launchctl kickstart \-k restarts the service
+Recompile Erlang FFI beams \(em gleam build doesn't compile .erl files
 .IP 6. 4
+launchctl kickstart \-k restarts the service
+.IP 7. 4
 Wait 5s, tail log to verify
 .SS What a deploy does to flares
 .IP \(bu 2

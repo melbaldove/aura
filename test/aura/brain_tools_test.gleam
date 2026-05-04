@@ -1,3 +1,5 @@
+import aura/acp/flare_manager
+import aura/acp/transport
 import aura/brain_tools
 import aura/db
 import aura/event
@@ -7,6 +9,7 @@ import aura/xdg
 import gleam/dict
 import gleam/erlang/process
 import gleam/list
+import gleam/option.{None}
 import gleam/string
 import gleeunit/should
 import simplifile
@@ -145,6 +148,44 @@ pub fn built_in_tools_include_flare_test() {
   has_flare |> should.be_true
 }
 
+pub fn flare_tool_schema_guides_continuation_to_prompt_test() {
+  let tools = brain_tools.make_built_in_tools()
+  let flare_tool =
+    list.find(tools, fn(t) {
+      case t {
+        llm.ToolDefinition(name: "flare", ..) -> True
+        _ -> False
+      }
+    })
+
+  case flare_tool {
+    Ok(llm.ToolDefinition(description: description, parameters: params, ..)) -> {
+      description |> string.contains("retry") |> should.be_true
+      description |> string.contains("re-scope") |> should.be_true
+      description |> string.contains("use prompt") |> should.be_true
+      description |> string.contains("kill + ignite") |> should.be_true
+
+      let action_param =
+        list.find(params, fn(p) { p.name == "action" })
+        |> should.be_ok
+      action_param.description
+      |> string.contains("archive")
+      |> should.be_true
+      action_param.description
+      |> string.contains("For retry")
+      |> should.be_true
+
+      let session_param =
+        list.find(params, fn(p) { p.name == "session_name" })
+        |> should.be_ok
+      session_param.description
+      |> string.contains("prompt/park/rekindle/status")
+      |> should.be_true
+    }
+    Error(_) -> should.fail()
+  }
+}
+
 pub fn built_in_tools_no_acp_dispatch_test() {
   let tools = brain_tools.make_built_in_tools()
   let has_acp =
@@ -221,7 +262,8 @@ pub fn proposal_rejection_result_guides_user_strategy_check_test() {
 
   message |> string.contains("rejected by user") |> should.be_true
   message |> string.contains("strategy/authority gap") |> should.be_true
-  message |> string.contains("Do not immediately attempt another write")
+  message
+  |> string.contains("Do not immediately attempt another write")
   |> should.be_true
   message |> string.contains("Ask the user") |> should.be_true
 }
@@ -231,7 +273,8 @@ pub fn shell_rejection_result_guides_user_strategy_check_test() {
 
   message |> string.contains("rejected by user") |> should.be_true
   message |> string.contains("strategy/authority gap") |> should.be_true
-  message |> string.contains("Do not run alternative commands")
+  message
+  |> string.contains("Do not run alternative commands")
   |> should.be_true
   message |> string.contains("Ask the user") |> should.be_true
 }
@@ -320,6 +363,127 @@ pub fn memory_tool_has_attention_feedback_params_test() {
   }
 }
 
+fn active_flare_for_tool_test(session_name: String) -> flare_manager.FlareRecord {
+  flare_manager.FlareRecord(
+    id: "f-tool-policy",
+    label: "demo task",
+    status: flare_manager.Active,
+    domain: "demo",
+    thread_id: "test-channel",
+    original_prompt: "investigate the issue",
+    execution_json: "{}",
+    triggers_json: "{}",
+    tools_json: "{}",
+    workspace: "/tmp",
+    session_id: "",
+    session_name: session_name,
+    handle: None,
+    started_at_ms: 0,
+    updated_at_ms: 0,
+    awaiting_response: True,
+  )
+}
+
+fn flare_ctx(
+  user_text: String,
+) -> #(brain_tools.ToolContext, process.Subject(db.DbMessage)) {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let assert Ok(acp_subject) =
+    flare_manager.start(
+      4,
+      "zai/glm-5-turbo",
+      fn(_) { Nil },
+      transport.Tmux,
+      db_subject,
+    )
+  flare_manager.register_for_test(
+    acp_subject,
+    active_flare_for_tool_test("acp-demo-f-tool-policy"),
+  )
+
+  let stub = test_harness.standalone_tool_context()
+  #(
+    brain_tools.ToolContext(
+      ..stub,
+      db_subject: db_subject,
+      acp_subject: acp_subject,
+      channel_id: "test-channel",
+      domain_cwd: "/tmp",
+      current_user_content: user_text,
+    ),
+    db_subject,
+  )
+}
+
+fn run_flare_tool(ctx: brain_tools.ToolContext, args_json: String) -> String {
+  let call = llm.ToolCall(id: "1", name: "flare", arguments: args_json)
+  let #(result, _) = brain_tools.execute_tool(ctx, call)
+  case result {
+    brain_tools.TextResult(s) -> s
+  }
+}
+
+pub fn flare_kill_without_current_user_request_is_rejected_test() {
+  let #(ctx, db_subject) = flare_ctx("i fixed the permissions. try again")
+
+  let out =
+    run_flare_tool(
+      ctx,
+      "{\"action\":\"kill\",\"session_name\":\"acp-demo-f-tool-policy\"}",
+    )
+
+  out |> string.contains("Error: flare kill requires") |> should.be_true
+  out |> string.contains("strategy/authority gap") |> should.be_true
+  out |> string.contains("Use flare(action='prompt'") |> should.be_true
+  flare_manager.get_flare_by_session_name(
+    ctx.acp_subject,
+    "acp-demo-f-tool-policy",
+  )
+  |> should.be_ok
+  |> fn(f) { f.status }
+  |> should.equal(flare_manager.Active)
+
+  process.send(db_subject, db.Shutdown)
+}
+
+pub fn flare_archive_without_current_user_request_is_rejected_test() {
+  let #(ctx, db_subject) = flare_ctx("looks good")
+
+  let out =
+    run_flare_tool(
+      ctx,
+      "{\"action\":\"archive\",\"session_name\":\"acp-demo-f-tool-policy\"}",
+    )
+
+  out |> string.contains("Error: flare archive requires") |> should.be_true
+  out |> string.contains("Ask the user") |> should.be_true
+  flare_manager.get_flare_by_session_name(
+    ctx.acp_subject,
+    "acp-demo-f-tool-policy",
+  )
+  |> should.be_ok
+  |> fn(f) { f.status }
+  |> should.equal(flare_manager.Active)
+
+  process.send(db_subject, db.Shutdown)
+}
+
+pub fn flare_ignite_in_active_flare_thread_without_new_request_is_rejected_test() {
+  let #(ctx, db_subject) = flare_ctx("i fixed the permissions. try again")
+
+  let out =
+    run_flare_tool(
+      ctx,
+      "{\"action\":\"ignite\",\"repo\":\".\",\"prompt\":\"pull staging and re-scope\"}",
+    )
+
+  out |> string.contains("Error: active flare already exists") |> should.be_true
+  out |> string.contains("Use flare(action='prompt'") |> should.be_true
+  out |> string.contains("kill + ignite") |> should.be_true
+
+  process.send(db_subject, db.Shutdown)
+}
+
 fn memory_ctx(base: String) -> brain_tools.ToolContext {
   let stub = test_harness.standalone_tool_context()
   brain_tools.ToolContext(
@@ -395,7 +559,8 @@ pub fn memory_attention_tool_rejects_unscoped_plain_feedback_test() {
 pub fn memory_attention_tool_rejects_standing_feedback_when_recent_event_matches_test() {
   let assert Ok(db_subject) = db.start(":memory:")
   let base =
-    "/tmp/aura-attention-memory-standing-overlap-" <> test_helpers.random_suffix()
+    "/tmp/aura-attention-memory-standing-overlap-"
+    <> test_helpers.random_suffix()
   let _ = simplifile.delete_all([base])
   let ctx = brain_tools.ToolContext(..memory_ctx(base), db_subject: db_subject)
   let assert Ok(_) =

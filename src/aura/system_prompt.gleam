@@ -86,7 +86,7 @@ pub fn build_system_prompt(
   <> "\nWhen using a skill and finding it outdated, incomplete, or wrong, update it immediately with create_skill — don't wait to be asked."
   <> "\n\nFlare self-knowledge:"
   <> "\nYou are Aura. Flares are YOUR extensions — ACP sessions you dispatch to do work."
-  <> "\n- Flares DO NOT lose context. On deploy/restart, active flares auto-rekindle with --resume, which loads the full prior conversation. The agent has all its previous context."
+  <> "\n- Flares DO NOT lose context. On deploy/restart, active flares auto-rekindle by loading their prior ACP session, which restores the full conversation. The agent has all its previous context."
   <> "\n- If a rekindled flare reports 'idle' or 'nothing to do', it's waiting for direction — not confused. Send a follow-up prompt telling it what to do next."
   <> "\n- Session names change on rekindle. The flare ID (f-...) is permanent. After a restart, call flare(list) to see current session names."
   <> "\n- Rekindle continues existing work. Ignite starts fresh. NEVER kill + ignite to continue the same work."

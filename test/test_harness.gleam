@@ -599,6 +599,7 @@ pub fn standalone_tool_context() -> brain_tools.ToolContext {
     discord_token: "fake",
     guild_id: "",
     message_id: "",
+    current_user_content: "",
     channel_id: "test-channel",
     paths: paths,
     skill_infos: [],

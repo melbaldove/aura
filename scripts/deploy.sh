@@ -28,13 +28,25 @@ rsync -av docs/man/ "${REMOTE}:${REMOTE_DIR}/docs/man/"
 rsync -av scripts/ "${REMOTE}:${REMOTE_DIR}/scripts/"
 rsync -av --delete evals/ "${REMOTE}:${REMOTE_DIR}/evals/"
 
-echo "==> Bootstrapping agent-browser (if missing)..."
-ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && if ! command -v agent-browser >/dev/null 2>&1; then
+echo "==> Bootstrapping npm runtime tools (if missing)..."
+ssh "$REMOTE" "set -e
+export PATH=${RPATH}:\$PATH
+if ! command -v agent-browser >/dev/null 2>&1; then
   echo 'Installing agent-browser...'
-  npm install -g agent-browser && agent-browser install
-else
-  echo \"agent-browser already installed: \$(agent-browser --version)\"
-fi"
+  npm install -g agent-browser
+fi
+if ! command -v claude-agent-acp >/dev/null 2>&1; then
+  echo 'Installing claude-agent-acp...'
+  npm install -g @agentclientprotocol/claude-agent-acp
+fi
+if ! command -v codex-acp >/dev/null 2>&1; then
+  echo 'Installing codex-acp...'
+  npm install -g @zed-industries/codex-acp
+fi
+agent-browser install
+for bin in agent-browser claude-agent-acp codex-acp; do
+  echo \"\$bin: \$(command -v \$bin)\"
+done"
 
 echo "==> Clean build..."
 ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && cd ${REMOTE_DIR} && gleam clean && gleam build"

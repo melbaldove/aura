@@ -119,3 +119,71 @@ pub fn user_message_with_image_to_json_test() {
   json_str |> string.contains("Describe this image") |> should.be_true
   json_str |> string.contains("image.png") |> should.be_true
 }
+
+pub fn build_codex_responses_body_with_tools_test() {
+  let tool =
+    llm.ToolDefinition(
+      name: "read_file",
+      description: "Read a file",
+      parameters: [
+        llm.ToolParam(
+          name: "path",
+          param_type: "string",
+          description: "File path",
+          required: True,
+        ),
+      ],
+    )
+  let body =
+    llm.build_codex_responses_body(
+      "gpt-5.5",
+      [
+        llm.SystemMessage("You are Aura."),
+        llm.UserMessage("Read the README."),
+        llm.AssistantToolCallMessage("", [
+          llm.ToolCall(
+            id: "call_1",
+            name: "read_file",
+            arguments: "{\"path\":\"README.md\"}",
+          ),
+        ]),
+        llm.ToolResultMessage("call_1", "file content"),
+      ],
+      [tool],
+      True,
+    )
+    |> json.to_string
+
+  body |> string.contains("\"model\":\"gpt-5.5\"") |> should.be_true
+  body |> string.contains("\"input\"") |> should.be_true
+  body |> string.contains("\"messages\"") |> should.be_false
+  body |> string.contains("\"function_call\"") |> should.be_true
+  body |> string.contains("\"function_call_output\"") |> should.be_true
+  body |> string.contains("\"call_id\":\"call_1\"") |> should.be_true
+  body |> string.contains("\"tools\"") |> should.be_true
+  body |> string.contains("\"name\":\"read_file\"") |> should.be_true
+  body |> string.contains("\"function\":{\"name\"") |> should.be_false
+  body |> string.contains("\"stream\":true") |> should.be_true
+}
+
+pub fn parse_codex_response_with_text_and_tool_call_test() {
+  let body =
+    "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"I need the file.\"}]},{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}]}"
+
+  let result = llm.parse_codex_response_with_tools(body) |> should.be_ok
+
+  result.content |> should.equal("I need the file.")
+  list.length(result.tool_calls) |> should.equal(1)
+  let assert [call] = result.tool_calls
+  call.id |> should.equal("call_1")
+  call.name |> should.equal("read_file")
+}
+
+pub fn parse_codex_response_output_text_helper_test() {
+  let body = "{\"output_text\":\"Done.\"}"
+
+  let result = llm.parse_codex_response_with_tools(body) |> should.be_ok
+
+  result.content |> should.equal("Done.")
+  list.length(result.tool_calls) |> should.equal(0)
+}

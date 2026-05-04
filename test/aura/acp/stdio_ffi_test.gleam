@@ -1,5 +1,8 @@
 import aura/acp/stdio
+import aura/test_helpers
+import gleam/erlang/process
 import gleeunit/should
+import simplifile
 
 // ---------------------------------------------------------------------------
 // jsx_encode — regression tests for malformed JSON bug
@@ -39,6 +42,70 @@ pub fn jsx_encode_prompt_params_test() {
   json |> string_contains("\"text\":\"Analyze the code\"") |> should.be_true
   // Must NOT have the broken {[ pattern
   json |> string_contains("{[") |> should.be_false
+}
+
+pub fn start_session_resume_uses_session_load_test() {
+  let suffix = test_helpers.random_suffix()
+  let script_path = "/tmp/aura-acp-resume-fake-" <> suffix <> ".py"
+  let log_path = "/tmp/aura-acp-resume-fake-" <> suffix <> ".jsonl"
+  let fake_adapter =
+    "
+import json
+import sys
+
+log_path = sys.argv[1]
+if '--resume' in sys.argv:
+    with open(log_path, 'a') as f:
+        f.write('bad-argv\\n')
+    sys.exit(44)
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    with open(log_path, 'a') as f:
+        f.write(json.dumps(msg, separators=(',', ':')) + '\\n')
+    method = msg.get('method')
+    msg_id = msg.get('id')
+    if method == 'initialize':
+        print(json.dumps({
+            'jsonrpc': '2.0',
+            'id': msg_id,
+            'result': {
+                'protocolVersion': 1,
+                'agentCapabilities': {'loadSession': True}
+            }
+        }, separators=(',', ':')), flush=True)
+    elif method == 'session/load':
+        print(json.dumps({'jsonrpc': '2.0', 'id': msg_id, 'result': None}, separators=(',', ':')), flush=True)
+    elif method == 'session/prompt':
+        print(json.dumps({'jsonrpc': '2.0', 'id': msg_id, 'result': {'stopReason': 'end_turn'}}, separators=(',', ':')), flush=True)
+    elif method == 'session/cancel':
+        sys.exit(0)
+"
+
+  simplifile.write(script_path, fake_adapter) |> should.be_ok
+
+  let result =
+    stdio.start_session_resume(
+      "python3 " <> script_path <> " " <> log_path,
+      "/tmp",
+      "sess-existing",
+      "continue work",
+    )
+
+  result |> should.be_ok
+  let assert Ok(#(owner, session_id)) = result
+  session_id |> should.equal("sess-existing")
+  stdio.close(owner)
+  process.sleep(50)
+
+  let assert Ok(log) = simplifile.read(log_path)
+  log |> string_contains("\"method\":\"session/load\"") |> should.be_true
+  log |> string_contains("\"sessionId\":\"sess-existing\"") |> should.be_true
+  log |> string_contains("bad-argv") |> should.be_false
+
+  let _ = simplifile.delete_file(script_path)
+  let _ = simplifile.delete_file(log_path)
+  Nil
 }
 
 pub fn jsx_encode_list_test() {
@@ -142,6 +209,17 @@ pub fn extract_field_with_escaped_quotes_test() {
   let line = "{\"field\":\"value with \\\"quotes\\\"\"}"
   stdio.ffi_extract_field(line, "\"field\":\"")
   |> should.equal("value with \"quotes\"")
+}
+
+// ---------------------------------------------------------------------------
+// parse_jsonrpc_id — top-level response id extraction
+// ---------------------------------------------------------------------------
+
+pub fn parse_jsonrpc_id_uses_top_level_id_test() {
+  let line =
+    "{\"jsonrpc\":\"2.0\",\"result\":{\"authMethods\":[{\"id\":\"chatgpt\"},{\"id\":\"codex-api-key\"}]},\"id\":0}"
+  stdio.ffi_parse_jsonrpc_id(line)
+  |> should.equal(Ok(0))
 }
 
 // ---------------------------------------------------------------------------

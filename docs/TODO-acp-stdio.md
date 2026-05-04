@@ -1,14 +1,15 @@
-# ACP Stdio Transport Implementation
+# ACP Stdio Transport Implementation (Historical)
+
+This TODO is historical. Stdio ACP transport is implemented in
+`src/aura/acp/stdio.gleam`, `src/aura/acp/transport.gleam`, and
+`src/aura_acp_stdio_ffi.erl`. Current adapter guidance lives in
+[`docs/ACP.md`](ACP.md).
 
 ## Context
 
-The ACP protocol supports two transports:
-- **HTTP REST** — implemented in `acp/client.gleam` (done)
-- **Stdio JSON-RPC** — NOT yet implemented (this task)
-
-The existing Claude Code ACP adapter (`@agentclientprotocol/claude-agent-acp`) uses **stdio**, not HTTP.
-The HTTP client we built works but has no server to connect to yet.
-Stdio is the priority because it works with the existing adapter today.
+At the time this note was written, Aura had only the HTTP client and still
+needed stdio support. The stdio implementation now exists. Keep this file only
+as implementation history; use `docs/ACP.md` for current operational guidance.
 
 ## ACP Stdio Protocol
 

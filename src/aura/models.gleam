@@ -1,3 +1,4 @@
+import aura/codex_auth
 import aura/env
 import aura/llm
 import gleam/option.{type Option, None, Some}
@@ -13,11 +14,11 @@ pub fn resolve_model_name(model_spec: String) -> String {
 }
 
 /// Build an LlmConfig from a model spec string
-/// Supports "zai/" and "claude/" prefixes
+/// Supports "zai/", "claude/", and experimental "openai-codex/" prefixes.
 pub fn build_llm_config(model_spec: String) -> Result(llm.LlmConfig, String) {
   let model = resolve_model_name(model_spec)
-  case string.starts_with(model_spec, "zai/") {
-    True -> {
+  case string.split_once(model_spec, "/") {
+    Ok(#("zai", _)) -> {
       case env.get_env("ZAI_API_KEY") {
         Ok(key) ->
           Ok(llm.LlmConfig(
@@ -28,21 +29,26 @@ pub fn build_llm_config(model_spec: String) -> Result(llm.LlmConfig, String) {
         Error(_) -> Error("ZAI_API_KEY environment variable not set")
       }
     }
-    False ->
-      case string.starts_with(model_spec, "claude/") {
-        True -> {
-          case env.get_env("ANTHROPIC_API_KEY") {
-            Ok(key) ->
-              Ok(llm.LlmConfig(
-                base_url: "https://api.anthropic.com/v1",
-                api_key: key,
-                model: model,
-              ))
-            Error(_) -> Error("ANTHROPIC_API_KEY environment variable not set")
-          }
-        }
-        False -> Error("Unknown model provider in spec: " <> model_spec)
+    Ok(#("claude", _)) -> {
+      case env.get_env("ANTHROPIC_API_KEY") {
+        Ok(key) ->
+          Ok(llm.LlmConfig(
+            base_url: "https://api.anthropic.com/v1",
+            api_key: key,
+            model: model,
+          ))
+        Error(_) -> Error("ANTHROPIC_API_KEY environment variable not set")
       }
+    }
+    Ok(#("openai-codex", _)) -> {
+      use auth <- result.try(codex_auth.load())
+      Ok(llm.LlmConfig(
+        base_url: llm.openai_codex_base_url,
+        api_key: codex_auth.encode(auth),
+        model: model,
+      ))
+    }
+    _ -> Error("Unknown model provider in spec: " <> model_spec)
   }
 }
 
@@ -50,6 +56,7 @@ pub fn build_llm_config(model_spec: String) -> Result(llm.LlmConfig, String) {
 pub fn default_brain_model(provider: String) -> String {
   case provider {
     "zai" -> "zai/glm-5-turbo"
+    "openai-codex" -> "openai-codex/gpt-5.5"
     _ -> "claude/haiku"
   }
 }
@@ -58,6 +65,7 @@ pub fn default_brain_model(provider: String) -> String {
 pub fn api_key_env_var(provider: String) -> String {
   case provider {
     "zai" -> "ZAI_API_KEY"
+    "openai-codex" -> "AURA_OPENAI_CODEX_ACCESS_TOKEN"
     _ -> "ANTHROPIC_API_KEY"
   }
 }
@@ -110,6 +118,7 @@ fn context_length_by_prefix(model_spec: String) -> Option(Int) {
     Ok(#("zai", _)) -> Some(202_752)
     Ok(#("claude", _)) -> Some(200_000)
     Ok(#("openai", _)) -> Some(128_000)
+    Ok(#("openai-codex", _)) -> Some(272_000)
     Ok(#("google", _)) -> Some(1_048_576)
     Ok(#("deepseek", _)) -> Some(128_000)
     Ok(#("meta", _)) -> Some(131_072)
@@ -161,7 +170,11 @@ pub fn build_llm_config_with_key(
     False ->
       case string.starts_with(model_spec, "claude/") {
         True -> Ok("https://api.anthropic.com/v1")
-        False -> Error("Unknown model provider in spec: " <> model_spec)
+        False ->
+          case string.starts_with(model_spec, "openai-codex/") {
+            True -> Ok(llm.openai_codex_base_url)
+            False -> Error("Unknown model provider in spec: " <> model_spec)
+          }
       }
   })
   Ok(llm.LlmConfig(base_url: base_url, api_key: api_key, model: model))

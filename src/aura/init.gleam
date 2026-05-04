@@ -155,14 +155,28 @@ fn prompt_llm_key() -> Result(#(String, String), String) {
     prompt.choose("Select LLM provider:", [
       "zai (ZhipuAI)",
       "claude (Anthropic)",
+      "openai-codex (Codex OAuth)",
     ]),
   )
   let provider = case choice {
     1 -> "zai"
-    _ -> "claude"
+    2 -> "claude"
+    _ -> "openai-codex"
   }
   let default_model = models.default_brain_model(provider)
-  prompt_llm_key_loop(provider, default_model)
+  case provider {
+    "openai-codex" -> prompt_codex_oauth(default_model)
+    _ -> prompt_llm_key_loop(provider, default_model)
+  }
+}
+
+fn prompt_codex_oauth(default_model: String) -> Result(#(String, String), String) {
+  io.println("  Using Codex CLI ChatGPT login for " <> default_model)
+  io.println("  Run `codex login` first if this check fails.")
+  use _config <- result.try(models.build_llm_config(default_model))
+  io.println("  Codex auth cache found")
+  io.println("")
+  Ok(#("openai-codex", ""))
 }
 
 fn prompt_llm_key_loop(
@@ -202,8 +216,17 @@ fn write_env_file(
 ) -> Result(Nil, String) {
   let env_path = xdg.env_path(paths)
   let key_var = models.api_key_env_var(provider)
-  let content =
-    "AURA_DISCORD_TOKEN=" <> token <> "\n" <> key_var <> "=" <> api_key <> "\n"
+  let content = case api_key {
+    "" -> "AURA_DISCORD_TOKEN=" <> token <> "\n"
+    _ ->
+      "AURA_DISCORD_TOKEN="
+      <> token
+      <> "\n"
+      <> key_var
+      <> "="
+      <> api_key
+      <> "\n"
+  }
 
   use _ <- result.try(
     simplifile.write(env_path, content)
@@ -261,6 +284,8 @@ fn generate_config(
         "",
         "[acp]",
         "global_max_concurrent = 4",
+        "transport = \"stdio\"",
+        "command = \"codex-acp\"",
         "",
       ],
       "\n",

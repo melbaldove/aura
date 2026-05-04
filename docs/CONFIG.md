@@ -23,7 +23,7 @@
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `brain` | string | yes | — | Main LLM for conversation. Format: `provider/model` (e.g., `zai/glm-5.1`). |
+| `brain` | string | yes | — | Main LLM for conversation. Format: `provider/model` (e.g., `zai/glm-5.1`, `openai-codex/gpt-5.5`). |
 | `domain` | string | yes | — | LLM for domain-specific tasks. |
 | `acp` | string | yes | — | LLM for ACP coding sessions (dispatched to Claude Code). |
 | `heartbeat` | string | yes | — | LLM for scheduled task classification. |
@@ -31,7 +31,15 @@
 | `vision` | string | no | `""` | Vision model for image description. |
 | `brain_context` | int | no | `0` | Override context window size (tokens). `0` = use built-in lookup table. |
 
-**Supported providers:** `zai/`, `claude/`, `openai/`, `google/`, `deepseek/`, `meta/`
+**Runtime providers:** `zai/`, `claude/`, `openai-codex/`
+
+`openai-codex/*` is an experimental orchestrator route for using a ChatGPT/Codex subscription login instead of an API key. It sends Aura's LLM tool loop to the Codex Responses backend (`https://chatgpt.com/backend-api/codex/responses`) and reads credentials in this order:
+
+1. `AURA_OPENAI_CODEX_ACCESS_TOKEN` plus optional `AURA_OPENAI_CODEX_ACCOUNT_ID`
+2. `$CODEX_HOME/auth.json`
+3. `~/.codex/auth.json`
+
+Run `codex login` or `codex login --device-auth` first. If Codex is configured to store credentials only in the OS keychain, Aura cannot read them directly; use file storage or the Aura env override. This model route is separate from `[acp] command = "codex-acp"`, which controls dispatched flare agents.
 
 ### [vision]
 
@@ -52,8 +60,10 @@
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `global_max_concurrent` | int | yes | — | Max concurrent ACP sessions across all domains. |
-| `server_url` | string | no | `""` | ACP server URL (e.g., `http://localhost:8000`). Empty = use tmux fallback. |
-| `agent_name` | string | no | `"claude-code"` | Agent name to dispatch to on the ACP server. |
+| `transport` | string | no | `"stdio"` | ACP transport: `"stdio"`, `"http"`, or `"tmux"`. |
+| `command` | string | no | `"codex-acp"` | Stdio ACP adapter command. Deploy bootstraps `codex-acp` and `claude-agent-acp`. |
+| `server_url` | string | no | `""` | HTTP ACP server URL (e.g., `http://localhost:8000`). Used only when `transport = "http"`. |
+| `agent_name` | string | no | `"claude-code"` | Agent name to dispatch to on the HTTP ACP server. |
 
 ### [memory]
 
@@ -170,4 +180,9 @@ Each schedule is a `[[schedule]]` entry:
 | `ZAI_API_KEY` | Zhipu/Z.AI API key. |
 | `ANTHROPIC_API_KEY` | Anthropic API key (optional if using `CLAUDE_CODE_OAUTH_TOKEN`). |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code auth token for headless ACP sessions (from `claude setup-token`). |
+| `AURA_OPENAI_CODEX_ACCESS_TOKEN` | Optional bearer-token override for `openai-codex/*` model specs. Prefer Codex CLI login cache when possible. |
+| `AURA_OPENAI_CODEX_ACCOUNT_ID` | Optional ChatGPT workspace/account id header for `openai-codex/*`; used with `AURA_OPENAI_CODEX_ACCESS_TOKEN`. |
+| `CODEX_HOME` | Optional Codex CLI config/cache directory. Defaults to `~/.codex` when unset. |
+| `CODEX_API_KEY` | Codex API key for `codex-acp` if not using Codex login state. |
+| `OPENAI_API_KEY` | OpenAI API key accepted by `codex-acp` as an alternative to `CODEX_API_KEY`. |
 | `BRAVE_API_KEY` | Brave Search API key (optional, for web_search tool). |

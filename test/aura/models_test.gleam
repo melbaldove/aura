@@ -26,6 +26,11 @@ pub fn default_brain_model_zai_test() {
   models.default_brain_model("zai") |> should.equal("zai/glm-5-turbo")
 }
 
+pub fn default_brain_model_openai_codex_test() {
+  models.default_brain_model("openai-codex")
+  |> should.equal("openai-codex/gpt-5.5")
+}
+
 pub fn default_brain_model_unknown_falls_back_to_claude_test() {
   models.default_brain_model("unknown") |> should.equal("claude/haiku")
 }
@@ -38,6 +43,11 @@ pub fn default_brain_model_empty_falls_back_to_claude_test() {
 
 pub fn api_key_env_var_zai_test() {
   models.api_key_env_var("zai") |> should.equal("ZAI_API_KEY")
+}
+
+pub fn api_key_env_var_openai_codex_test() {
+  models.api_key_env_var("openai-codex")
+  |> should.equal("AURA_OPENAI_CODEX_ACCESS_TOKEN")
 }
 
 pub fn api_key_env_var_unknown_falls_back_to_anthropic_test() {
@@ -68,6 +78,17 @@ pub fn build_llm_config_with_key_claude_test() {
       base_url: "https://api.anthropic.com/v1",
       api_key: "sk-ant-abc",
       model: "haiku",
+    )),
+  )
+}
+
+pub fn build_llm_config_with_key_openai_codex_test() {
+  models.build_llm_config_with_key("openai-codex/gpt-5.5", "access\nacct")
+  |> should.equal(
+    Ok(llm.LlmConfig(
+      base_url: "https://chatgpt.com/backend-api/codex",
+      api_key: "access\nacct",
+      model: "gpt-5.5",
     )),
   )
 }

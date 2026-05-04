@@ -104,6 +104,7 @@ pub type ToolContext {
     discord_token: String,
     guild_id: String,
     message_id: String,
+    current_user_content: String,
     channel_id: String,
     paths: xdg.Paths,
     skill_infos: List(skill.SkillInfo),
@@ -520,72 +521,78 @@ fn execute_tool_dispatch(
               case require_arg(args, "repo") {
                 Error(e) -> TextResult(e)
                 Ok(repo) -> {
-                  let cwd = ctx.domain_cwd <> "/" <> repo
-                  let timeout_ms = case
-                    int.parse(get_arg(args, "timeout_minutes"))
-                  {
-                    Ok(m) -> m * 60_000
-                    Error(_) -> 30 * 60_000
-                  }
-                  let label = string.slice(prompt, 0, 50)
-                  let thread_id = ctx.channel_id
-                  // Create flare record first
-                  case
-                    flare_manager.ignite(
-                      ctx.acp_subject,
-                      label,
-                      ctx.domain_name,
-                      thread_id,
-                      prompt,
-                      flare_manager.execution_to_json(
-                        flare_manager.FlareExecution(
-                          provider: ctx.acp_provider,
-                          binary: ctx.acp_binary,
-                          worktree: ctx.acp_worktree,
-                          timeout_ms: timeout_ms,
-                          transport: flare_manager.LegacyTransport,
-                        ),
-                      ),
-                      "{}",
-                      "{}",
-                      cwd,
-                    )
-                  {
-                    Ok(flare_id) -> {
-                      let task_spec =
-                        acp_types.TaskSpec(
-                          id: flare_id,
-                          domain: ctx.domain_name,
-                          prompt: prompt,
-                          cwd: cwd,
-                          timeout_ms: timeout_ms,
-                          acceptance_criteria: [],
-                          provider: provider.parse_provider(
-                            ctx.acp_provider,
-                            ctx.acp_binary,
-                          ),
-                          worktree: ctx.acp_worktree,
-                        )
+                  case guard_ignite_in_active_flare_thread(ctx) {
+                    Error(message) -> TextResult(message)
+                    Ok(_) -> {
+                      let cwd = ctx.domain_cwd <> "/" <> repo
+                      let timeout_ms = case
+                        int.parse(get_arg(args, "timeout_minutes"))
+                      {
+                        Ok(m) -> m * 60_000
+                        Error(_) -> 30 * 60_000
+                      }
+                      let label = string.slice(prompt, 0, 50)
+                      let thread_id = ctx.channel_id
+                      // Create flare record first
                       case
-                        flare_manager.dispatch(
+                        flare_manager.ignite(
                           ctx.acp_subject,
-                          task_spec,
+                          label,
+                          ctx.domain_name,
                           thread_id,
-                          flare_id,
+                          prompt,
+                          flare_manager.execution_to_json(
+                            flare_manager.FlareExecution(
+                              provider: ctx.acp_provider,
+                              binary: ctx.acp_binary,
+                              worktree: ctx.acp_worktree,
+                              timeout_ms: timeout_ms,
+                              transport: flare_manager.LegacyTransport,
+                            ),
+                          ),
+                          "{}",
+                          "{}",
+                          cwd,
                         )
                       {
-                        Ok(session_name) -> {
-                          let details_msg =
-                            "Flare ignited: "
-                            <> session_name
-                            <> "\n\n**Prompt:**\n"
-                            <> prompt
-                          TextResult("Flare ignited.\n" <> details_msg)
+                        Ok(flare_id) -> {
+                          let task_spec =
+                            acp_types.TaskSpec(
+                              id: flare_id,
+                              domain: ctx.domain_name,
+                              prompt: prompt,
+                              cwd: cwd,
+                              timeout_ms: timeout_ms,
+                              acceptance_criteria: [],
+                              provider: provider.parse_provider(
+                                ctx.acp_provider,
+                                ctx.acp_binary,
+                              ),
+                              worktree: ctx.acp_worktree,
+                            )
+                          case
+                            flare_manager.dispatch(
+                              ctx.acp_subject,
+                              task_spec,
+                              thread_id,
+                              flare_id,
+                            )
+                          {
+                            Ok(session_name) -> {
+                              let details_msg =
+                                "Flare ignited: "
+                                <> session_name
+                                <> "\n\n**Prompt:**\n"
+                                <> prompt
+                              TextResult("Flare ignited.\n" <> details_msg)
+                            }
+                            Error(e) ->
+                              TextResult("Error dispatching flare: " <> e)
+                          }
                         }
-                        Error(e) -> TextResult("Error dispatching flare: " <> e)
+                        Error(e) -> TextResult("Error creating flare: " <> e)
                       }
                     }
-                    Error(e) -> TextResult("Error creating flare: " <> e)
                   }
                 }
               }
@@ -725,14 +732,19 @@ fn execute_tool_dispatch(
           case require_arg(args, "session_name") {
             Error(e) -> TextResult(e)
             Ok(identifier) -> {
-              case resolve_flare(identifier) {
-                Ok(flare) -> {
-                  case flare_manager.archive(ctx.acp_subject, flare.id) {
-                    Ok(_) -> TextResult("Flare archived: " <> flare.label)
-                    Error(e) -> TextResult("Error: " <> e)
+              case guard_destructive_flare_action("archive", ctx) {
+                Error(message) -> TextResult(message)
+                Ok(_) -> {
+                  case resolve_flare(identifier) {
+                    Ok(flare) -> {
+                      case flare_manager.archive(ctx.acp_subject, flare.id) {
+                        Ok(_) -> TextResult("Flare archived: " <> flare.label)
+                        Error(e) -> TextResult("Error: " <> e)
+                      }
+                    }
+                    Error(_) -> TextResult("Flare not found: " <> identifier)
                   }
                 }
-                Error(_) -> TextResult("Flare not found: " <> identifier)
               }
             }
           }
@@ -741,17 +753,24 @@ fn execute_tool_dispatch(
           case require_arg(args, "session_name") {
             Error(e) -> TextResult(e)
             Ok(identifier) -> {
-              case resolve_flare(identifier) {
-                Ok(flare) -> {
-                  case flare_manager.kill(ctx.acp_subject, flare.session_name) {
-                    Ok(_) -> TextResult("Flare aborted: " <> flare.label)
-                    Error(e) -> TextResult("Error: " <> e)
-                  }
-                }
-                Error(_) -> {
-                  case flare_manager.kill(ctx.acp_subject, identifier) {
-                    Ok(_) -> TextResult("Flare aborted: " <> identifier)
-                    Error(e) -> TextResult("Error: " <> e)
+              case guard_destructive_flare_action("kill", ctx) {
+                Error(message) -> TextResult(message)
+                Ok(_) -> {
+                  case resolve_flare(identifier) {
+                    Ok(flare) -> {
+                      case
+                        flare_manager.kill(ctx.acp_subject, flare.session_name)
+                      {
+                        Ok(_) -> TextResult("Flare aborted: " <> flare.label)
+                        Error(e) -> TextResult("Error: " <> e)
+                      }
+                    }
+                    Error(_) -> {
+                      case flare_manager.kill(ctx.acp_subject, identifier) {
+                        Ok(_) -> TextResult("Flare aborted: " <> identifier)
+                        Error(e) -> TextResult("Error: " <> e)
+                      }
+                    }
                   }
                 }
               }
@@ -1110,6 +1129,89 @@ pub fn expand_tool_calls(calls: List(llm.ToolCall)) -> List(llm.ToolCall) {
       }
     }
   })
+}
+
+fn guard_ignite_in_active_flare_thread(ctx: ToolContext) -> Result(Nil, String) {
+  case user_requested_new_flare(ctx.current_user_content) {
+    True -> Ok(Nil)
+    False ->
+      case active_flare_in_current_channel(ctx) {
+        Some(flare) -> Error(active_flare_already_exists_result(flare))
+        None -> Ok(Nil)
+      }
+  }
+}
+
+fn active_flare_in_current_channel(
+  ctx: ToolContext,
+) -> Option(flare_manager.FlareRecord) {
+  case
+    list.find(flare_manager.list_flares(ctx.acp_subject), fn(flare) {
+      flare.status == flare_manager.Active && flare.thread_id == ctx.channel_id
+    })
+  {
+    Ok(flare) -> Some(flare)
+    Error(_) -> None
+  }
+}
+
+fn guard_destructive_flare_action(
+  action: String,
+  ctx: ToolContext,
+) -> Result(Nil, String) {
+  case
+    user_requested_destructive_flare_action(action, ctx.current_user_content)
+  {
+    True -> Ok(Nil)
+    False -> Error(flare_destructive_action_rejected_result(action))
+  }
+}
+
+pub fn flare_destructive_action_rejected_result(action: String) -> String {
+  "Error: flare "
+  <> action
+  <> " requires an explicit user request in this turn. Treat this as a strategy/authority gap, not permission to keep trying autonomously. Ask the user before stopping persistent work. For retry, re-scope, continue, or permission-fixed follow-up, Use flare(action='prompt', session_name='...', prompt='...') on the existing flare. Never kill + ignite to continue the same work."
+}
+
+fn active_flare_already_exists_result(
+  flare: flare_manager.FlareRecord,
+) -> String {
+  "Error: active flare already exists in this thread: "
+  <> flare.id
+  <> " (session "
+  <> flare.session_name
+  <> "). For retry, re-scope, continue, or permission-fixed follow-up, Use flare(action='prompt', session_name='"
+  <> flare.session_name
+  <> "', prompt='...') on the existing flare. Never kill + ignite to continue the same work."
+}
+
+fn user_requested_new_flare(text: String) -> Bool {
+  let lower = string.lowercase(text)
+  contains_any(lower, [
+    "new flare",
+    "fresh flare",
+    "another flare",
+    "separate flare",
+    "start a new",
+    "start new",
+    "ignite a new",
+    "ignite new",
+  ])
+}
+
+fn user_requested_destructive_flare_action(action: String, text: String) -> Bool {
+  let lower = string.lowercase(text)
+  case action {
+    "kill" ->
+      contains_any(lower, ["kill", "abort", "stop", "terminate", "cancel"])
+    "archive" ->
+      contains_any(lower, ["archive", "retire", "mark done", "close flare"])
+    _ -> False
+  }
+}
+
+fn contains_any(haystack: String, needles: List(String)) -> Bool {
+  list.any(needles, fn(needle) { string.contains(haystack, needle) })
 }
 
 fn expand_tool_calls_inner(
@@ -2150,8 +2252,7 @@ fn attention_memory_set_result(
     _ -> content
   }
   case string.trim(durable_content) {
-    "" ->
-      Error("content is required for attention memory; use content or note")
+    "" -> Error("content is required for attention memory; use content or note")
     _ -> {
       use _ <- result.try(structured_memory.security_scan(durable_content))
 
@@ -2266,9 +2367,11 @@ fn reject_standing_attention_event_overlap(
             <> msg,
           )
         Ok(events) ->
-          case list.find(events, fn(e) {
-            event_overlaps_attention_tokens(e, tokens)
-          }) {
+          case
+            list.find(events, fn(e) {
+              event_overlaps_attention_tokens(e, tokens)
+            })
+          {
             Error(_) -> Ok(Nil)
             Ok(e) ->
               Error(
@@ -3161,18 +3264,18 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "flare",
-      description: "Extend yourself to work on a task. Flares are long-running — treat them like persistent workspaces. Actions: ignite (start new), status (check progress), list (show all), prompt (send follow-up; auto-rekindles a parked flare), park (suspend — default after handback, flare can be resumed), rekindle (explicitly resume a parked flare with a prompt), kill (terminate — only when user asks), archive (retire — only when user asks).",
+      description: "Extend yourself to work on a task. Flares are long-running persistent workspaces. For retry, re-scope, continue, permission-fixed follow-up, or any update to existing work, use prompt on the existing flare. Never kill + ignite to continue the same work. Actions: ignite (start unrelated new work only), status (check progress), list (show all), prompt (send follow-up; auto-rekindles a parked flare), park (suspend; default after handback), rekindle (explicitly resume parked flare), kill (terminate only when the user explicitly asks in the current turn), archive (retire only when the user explicitly asks in the current turn).",
       parameters: [
         llm.ToolParam(
           name: "action",
           param_type: "string",
-          description: "One of: ignite, status, list, prompt, kill, park, rekindle",
+          description: "One of: ignite, status, list, prompt, park, rekindle, kill, archive. For retry/re-scope/continue existing work, use prompt. Use ignite only for unrelated new work. Use kill/archive only when the user explicitly asked to stop or retire the flare in the current turn.",
           required: True,
         ),
         llm.ToolParam(
           name: "prompt",
           param_type: "string",
-          description: "For ignite: the full task prompt. For prompt: the follow-up message.",
+          description: "For ignite: the full task prompt for unrelated new work. For prompt: the follow-up message to the existing flare; this is the correct action for retry, re-scope, continue, or permission-fixed follow-up.",
           required: False,
         ),
         llm.ToolParam(
@@ -3184,7 +3287,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
         llm.ToolParam(
           name: "session_name",
           param_type: "string",
-          description: "For status/prompt/kill: the session name.",
+          description: "For prompt/park/rekindle/status/kill/archive: the session name or flare id. In an active flare thread, use the existing session_name with prompt to continue work.",
           required: False,
         ),
         llm.ToolParam(

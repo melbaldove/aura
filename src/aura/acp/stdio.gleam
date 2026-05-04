@@ -35,7 +35,7 @@ fn start_session_ffi(
 ) -> Result(#(SessionOwner, String), String)
 
 /// Start a stdio ACP session resuming a previous conversation.
-/// The --resume flag tells Claude Code to load the previous session's context.
+/// Loads the previous ACP session with session/load, then sends a prompt.
 pub fn start_session_resume(
   command: String,
   cwd: String,
@@ -112,6 +112,10 @@ pub fn ffi_extract_field(line: String, marker: String) -> String
 /// Extract the sessionId from a JSON-RPC response line.
 @external(erlang, "aura_acp_stdio_ffi", "extract_session_id")
 pub fn ffi_extract_session_id(line: String) -> String
+
+/// Extract a JSON-RPC response id from a raw message line.
+@external(erlang, "aura_acp_stdio_ffi", "parse_jsonrpc_id")
+pub fn ffi_parse_jsonrpc_id(line: String) -> Result(Int, Nil)
 
 /// Check if a JSON-RPC response is an error.
 pub type ErrorCheck {

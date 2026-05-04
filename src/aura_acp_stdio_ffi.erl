@@ -33,13 +33,12 @@ start_session(Command, Cwd, Prompt, EventPid) ->
         {error, <<"Handshake timeout">>}
     end.
 
-%% start_session_resume/5 — Like start_session but with --resume flag
-%% Resumes a previous Claude Code session by appending --resume SessionId to the command.
+%% start_session_resume/5 — Like start_session but loads an existing ACP session.
+%% Uses protocol-level session/load rather than provider-specific CLI flags.
 start_session_resume(Command, Cwd, ResumeSessionId, Prompt, EventPid) ->
     Self = self(),
     OwnerPid = spawn_link(fun() ->
-        ResumeCmd = binary_to_list(iolist_to_binary([Command, <<" --resume ">>, ResumeSessionId])),
-        session_init(ResumeCmd, Cwd, Prompt, EventPid, Self)
+        session_init_resume(binary_to_list(Command), Cwd, ResumeSessionId, Prompt, EventPid, Self)
     end),
     receive
         {handshake_ok, OwnerPid, SessionId} ->
@@ -85,14 +84,20 @@ receive_event(TimeoutMs) ->
 %% Internal: session owner process
 %% ---------------------------------------------------------------------------
 
-session_init(CommandStr, Cwd, Prompt, EventPid, CallerPid) ->
-    Port = open_port({spawn, CommandStr}, [
+open_session_port(CommandStr) ->
+    open_port({spawn, CommandStr}, [
         binary,
         {line, 65536},
         use_stdio,
         exit_status,
         stderr_to_stdout
-    ]),
+    ]).
+
+safe_port_close(Port) ->
+    try port_close(Port) catch _:_ -> ok end.
+
+session_init(CommandStr, Cwd, Prompt, EventPid, CallerPid) ->
+    Port = open_session_port(CommandStr),
     %% Step 1: Initialize
     %% Spec: params = {protocolVersion, clientCapabilities, clientInfo}
     send_jsonrpc(Port, 0, <<"initialize">>, #{
@@ -106,7 +111,7 @@ session_init(CommandStr, Cwd, Prompt, EventPid, CallerPid) ->
     }),
     case wait_response(Port, 0, EventPid, 10000) of
         {error, Reason} ->
-            port_close(Port),
+            safe_port_close(Port),
             CallerPid ! {handshake_error, self(), Reason};
         {ok, _} ->
             %% Step 2: session/new
@@ -118,7 +123,7 @@ session_init(CommandStr, Cwd, Prompt, EventPid, CallerPid) ->
             }),
             case wait_response(Port, 1, EventPid, 10000) of
                 {error, Reason2} ->
-                    port_close(Port),
+                    safe_port_close(Port),
                     CallerPid ! {handshake_error, self(), Reason2};
                 {ok, SessionResponse} ->
                     SessionId = extract_session_id(SessionResponse),
@@ -126,7 +131,7 @@ session_init(CommandStr, Cwd, Prompt, EventPid, CallerPid) ->
                         <<"unknown">> ->
                             io:format("[acp-stdio] session/new returned no sessionId: ~s~n",
                                       [binary:part(SessionResponse, 0, min(500, byte_size(SessionResponse)))]),
-                            port_close(Port),
+                            safe_port_close(Port),
                             CallerPid ! {handshake_error, self(), <<"No sessionId in session/new response">>};
                         _ ->
                             %% Step 3: session/prompt
@@ -144,6 +149,52 @@ session_init(CommandStr, Cwd, Prompt, EventPid, CallerPid) ->
                             NextId = 3,
                             session_loop(Port, SessionId, EventPid, NextId)
                     end
+            end
+    end.
+
+session_init_resume(CommandStr, Cwd, ResumeSessionId, Prompt, EventPid, CallerPid) ->
+    Port = open_session_port(CommandStr),
+    %% Step 1: Initialize.
+    send_jsonrpc(Port, 0, <<"initialize">>, #{
+        <<"protocolVersion">> => 1,
+        <<"clientCapabilities">> => #{},
+        <<"clientInfo">> => #{
+            <<"name">> => <<"aura">>,
+            <<"title">> => <<"A.U.R.A.">>,
+            <<"version">> => <<"0.1.0">>
+        }
+    }),
+    case wait_response(Port, 0, EventPid, 10000) of
+        {error, Reason} ->
+            safe_port_close(Port),
+            CallerPid ! {handshake_error, self(), Reason};
+        {ok, _} ->
+            %% Step 2: session/load.
+            %% Spec: params = {sessionId, cwd, mcpServers}
+            send_jsonrpc(Port, 1, <<"session/load">>, #{
+                <<"sessionId">> => ResumeSessionId,
+                <<"cwd">> => Cwd,
+                <<"mcpServers">> => []
+            }),
+            case wait_response(Port, 1, EventPid, 10000) of
+                {error, Reason2} ->
+                    safe_port_close(Port),
+                    CallerPid ! {handshake_error, self(), Reason2};
+                {ok, LoadResponse} ->
+                    LoadedSessionId = case extract_session_id(LoadResponse) of
+                        <<"unknown">> -> ResumeSessionId;
+                        Id -> Id
+                    end,
+                    %% Step 3: session/prompt.
+                    send_jsonrpc(Port, 2, <<"session/prompt">>, #{
+                        <<"sessionId">> => LoadedSessionId,
+                        <<"prompt">> => [#{
+                            <<"type">> => <<"text">>,
+                            <<"text">> => Prompt
+                        }]
+                    }),
+                    CallerPid ! {handshake_ok, self(), LoadedSessionId},
+                    session_loop(Port, LoadedSessionId, EventPid, 3)
             end
     end.
 
@@ -188,7 +239,7 @@ session_loop(Port, SessionId, EventPid, NextId) ->
             send_notification(Port, <<"session/cancel">>, #{
                 <<"sessionId">> => SessionId
             }),
-            try port_close(Port) catch _:_ -> ok end
+            safe_port_close(Port)
     end.
 
 %% Wait for a JSON-RPC response with a specific id.
@@ -307,17 +358,51 @@ json_escape(<<C, R/binary>>, Acc) -> json_escape(R, <<Acc/binary, C>>).
 
 %% Extract the "id" from a JSON-RPC message.
 parse_jsonrpc_id(Line) ->
-    case binary:match(Line, <<"\"id\":">>) of
-        {Pos, Len} ->
-            After = binary:part(Line, Pos + Len, byte_size(Line) - Pos - Len),
+    case find_top_level_id(Line) of
+        {ok, After} ->
             After2 = skip_ws(After),
             case After2 of
                 <<"null", _/binary>> -> notification;
                 _ -> extract_int(After2)
             end;
-        nomatch ->
+        not_found ->
             notification
     end.
+
+find_top_level_id(Line) ->
+    find_top_level_id(Line, 0).
+
+find_top_level_id(<<>>, _) -> not_found;
+find_top_level_id(<<"{", Rest/binary>>, Depth) ->
+    find_top_level_id(Rest, Depth + 1);
+find_top_level_id(<<"[", Rest/binary>>, Depth) ->
+    find_top_level_id(Rest, Depth + 1);
+find_top_level_id(<<"}", Rest/binary>>, Depth) when Depth > 0 ->
+    find_top_level_id(Rest, Depth - 1);
+find_top_level_id(<<"]", Rest/binary>>, Depth) when Depth > 0 ->
+    find_top_level_id(Rest, Depth - 1);
+find_top_level_id(<<"\"", Rest/binary>>, 1) ->
+    case read_json_string(Rest, <<>>) of
+        {<<"id">>, AfterString} ->
+            case skip_ws(AfterString) of
+                <<":", AfterColon/binary>> -> {ok, AfterColon};
+                _ -> find_top_level_id(AfterString, 1)
+            end;
+        {_, AfterString} ->
+            find_top_level_id(AfterString, 1)
+    end;
+find_top_level_id(<<"\"", Rest/binary>>, Depth) ->
+    {_, AfterString} = read_json_string(Rest, <<>>),
+    find_top_level_id(AfterString, Depth);
+find_top_level_id(<<_, Rest/binary>>, Depth) ->
+    find_top_level_id(Rest, Depth).
+
+read_json_string(<<>>, Acc) -> {Acc, <<>>};
+read_json_string(<<"\\", C, Rest/binary>>, Acc) ->
+    read_json_string(Rest, <<Acc/binary, C>>);
+read_json_string(<<"\"", Rest/binary>>, Acc) -> {Acc, Rest};
+read_json_string(<<C, Rest/binary>>, Acc) ->
+    read_json_string(Rest, <<Acc/binary, C>>).
 
 extract_int(<<D, Rest/binary>>) when D >= $0, D =< $9 ->
     extract_int(Rest, <<D>>);
@@ -329,6 +414,8 @@ extract_int(_, Acc) ->
 
 skip_ws(<<" ", R/binary>>) -> skip_ws(R);
 skip_ws(<<"\t", R/binary>>) -> skip_ws(R);
+skip_ws(<<"\r", R/binary>>) -> skip_ws(R);
+skip_ws(<<"\n", R/binary>>) -> skip_ws(R);
 skip_ws(Other) -> Other.
 
 %% Check if a JSON-RPC response contains an error.

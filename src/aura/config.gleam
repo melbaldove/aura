@@ -171,7 +171,7 @@ pub fn default_global() -> GlobalConfig {
     acp_server_url: "",
     acp_agent_name: "claude-code",
     acp_transport: "stdio",
-    acp_command: "claude-agent-acp",
+    acp_command: "codex-acp",
     brain_context: 0,
     dreaming_cron: "0 4 * * *",
     dreaming_budget_percent: 10,
@@ -313,7 +313,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
 
   let acp_command =
     tom.get_string(doc, ["acp", "command"])
-    |> result.unwrap("claude-agent-acp")
+    |> result.unwrap("codex-acp")
 
   let dream_model =
     tom.get_string(doc, ["models", "dream"])

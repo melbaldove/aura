@@ -26,8 +26,10 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Every 
 - Erlang/OTP 27+
 - tmux
 - A Discord bot token ([create one here](https://discord.com/developers/applications))
-- An LLM API key (ZAI/GLM or Anthropic/Claude)
+- LLM credentials: `ZAI_API_KEY`, `ANTHROPIC_API_KEY`, or Codex CLI ChatGPT login for `openai-codex/*`
+- Codex auth for the default ACP adapter: Codex login state, `CODEX_API_KEY`, or `OPENAI_API_KEY`
 - agent-browser (npm) for the browser tool: `npm install -g agent-browser && agent-browser install`
+- ACP adapters for flares: `@zed-industries/codex-acp` and `@agentclientprotocol/claude-agent-acp` are bootstrapped by `scripts/deploy.sh`
 
 ### Nix Dev Shell
 
@@ -133,8 +135,14 @@ dream = "zai/glm-5.1"
 heartbeat = "zai/glm-5-turbo"
 monitor = "zai/glm-5-turbo"
 
+# Experimental: use Codex OAuth subscription auth for Aura's orchestrator.
+# Run `codex login` first, then set:
+# brain = "openai-codex/gpt-5.5"
+
 [acp]
 global_max_concurrent = 4
+transport = "stdio"
+command = "codex-acp"
 
 [memory]
 review_interval = 10
@@ -162,7 +170,7 @@ channel = "blather-channel-id"
 
 ## Flares ([Agent Communication Protocol](https://agentcommunicationprotocol.dev))
 
-A flare is a long-running agent session. A.U.R.A. is an ACP client — it dispatches flares via the open standard, subscribes to their SSE event stream, and reports structured progress updates. Any ACP-compatible agent works (Claude Code, Codex, Gemini CLI), and multiple transports are pluggable (stdio, tmux).
+A flare is a long-running agent session. A.U.R.A. is an ACP client — it dispatches flares via the open standard, subscribes to their event stream, and reports structured progress updates. The default stdio adapter is Codex via `codex-acp`; Claude Code is installed as `claude-agent-acp` and can be selected with `[acp].command`. See [docs/ACP.md](docs/ACP.md) for the adapter support path.
 
 Flares persist across restarts: the roster is written to SQLite and recovered on boot. Parked flares can be rekindled on a schedule.
 

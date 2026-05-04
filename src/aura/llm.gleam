@@ -1,3 +1,4 @@
+import aura/codex_auth
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http
@@ -45,8 +46,18 @@ pub type LlmResponse {
   LlmResponse(content: String, tool_calls: List(ToolCall))
 }
 
+type ParsedCodexOutput {
+  ParsedCodexOutput(content: String, tool_calls: List(ToolCall))
+}
+
 pub type LlmConfig {
   LlmConfig(base_url: String, api_key: String, model: String)
+}
+
+pub const openai_codex_base_url = "https://chatgpt.com/backend-api/codex"
+
+pub fn is_openai_codex_config(config: LlmConfig) -> Bool {
+  config.base_url == openai_codex_base_url
 }
 
 /// Encode a ToolCall as a JSON object for the assistant message tool_calls array.
@@ -164,10 +175,17 @@ pub fn chat_with_options(
   messages: List(Message),
   temperature: Option(Float),
 ) -> Result(String, String) {
-  let body =
-    build_request_body(config.model, messages, temperature) |> json.to_string
+  let body = case is_openai_codex_config(config) {
+    True -> build_codex_responses_body(config.model, messages, [], False)
+    False -> build_request_body(config.model, messages, temperature)
+  } |> json.to_string
   use resp <- result.try(post_chat(config, body, ""))
-  parse_response(resp)
+  case is_openai_codex_config(config) {
+    True ->
+      parse_codex_response_with_tools(resp)
+      |> result.map(fn(response) { response.content })
+    False -> parse_response(resp)
+  }
 }
 
 /// Make a non-streaming chat completion request with tool definitions.
@@ -177,11 +195,15 @@ pub fn chat_with_tools(
   messages: List(Message),
   tools: List(ToolDefinition),
 ) -> Result(LlmResponse, String) {
-  let body =
-    build_request_body_with_tools(config.model, messages, tools, None)
-    |> json.to_string
+  let body = case is_openai_codex_config(config) {
+    True -> build_codex_responses_body(config.model, messages, tools, False)
+    False -> build_request_body_with_tools(config.model, messages, tools, None)
+  } |> json.to_string
   use resp <- result.try(post_chat(config, body, " (with tools)"))
-  parse_response_with_tools(resp)
+  case is_openai_codex_config(config) {
+    True -> parse_codex_response_with_tools(resp)
+    False -> parse_response_with_tools(resp)
+  }
 }
 
 /// Shared HTTP POST for chat completions. Returns the response body on 200.
@@ -190,7 +212,10 @@ fn post_chat(
   body: String,
   label: String,
 ) -> Result(String, String) {
-  let url = config.base_url <> "/chat/completions"
+  let url = case is_openai_codex_config(config) {
+    True -> config.base_url <> "/responses"
+    False -> config.base_url <> "/chat/completions"
+  }
   logging.log(
     logging.Info,
     "[llm] Calling " <> config.model <> " at " <> url <> label,
@@ -206,7 +231,7 @@ fn post_chat(
   let req =
     req
     |> request.set_method(http.Post)
-    |> request.set_header("authorization", "Bearer " <> config.api_key)
+    |> set_auth_headers(config)
     |> request.set_header("content-type", "application/json")
     |> request.set_body(body)
   use resp <- result.try(
@@ -231,6 +256,28 @@ fn post_chat(
         <> "): "
         <> string.slice(resp.body, 0, 200),
       )
+    }
+  }
+}
+
+fn set_auth_headers(
+  req: request.Request(String),
+  config: LlmConfig,
+) -> request.Request(String) {
+  case is_openai_codex_config(config) {
+    False -> request.set_header(req, "authorization", "Bearer " <> config.api_key)
+    True -> {
+      let auth = codex_auth.decode(config.api_key)
+      let req =
+        req
+        |> request.set_header("authorization", "Bearer " <> auth.access_token)
+        |> request.set_header("originator", "codex_cli_rs")
+        |> request.set_header("user-agent", "codex_cli_rs/0.0.1 (aura)")
+      case auth.account_id {
+        "" -> req
+        account_id ->
+          request.set_header(req, "ChatGPT-Account-ID", account_id)
+      }
     }
   }
 }
@@ -272,6 +319,134 @@ pub fn tool_definition_to_json(tool: ToolDefinition) -> json.Json {
       ]),
     ),
   ])
+}
+
+/// Encode a ToolDefinition as OpenAI Responses function-tool format.
+pub fn codex_tool_definition_to_json(tool: ToolDefinition) -> json.Json {
+  let properties =
+    list.map(tool.parameters, tool_param_to_property)
+    |> json.object
+  let required =
+    list.filter(tool.parameters, fn(p) { p.required })
+    |> list.map(fn(p) { p.name })
+  json.object([
+    #("type", json.string("function")),
+    #("name", json.string(tool.name)),
+    #("description", json.string(tool.description)),
+    #("strict", json.bool(False)),
+    #(
+      "parameters",
+      json.object([
+        #("type", json.string("object")),
+        #("properties", properties),
+        #("required", json.array(required, json.string)),
+      ]),
+    ),
+  ])
+}
+
+fn codex_text_part(role: String, content: String) -> json.Json {
+  let part_type = case role {
+    "assistant" -> "output_text"
+    _ -> "input_text"
+  }
+  json.object([
+    #("type", json.string(part_type)),
+    #("text", json.string(content)),
+  ])
+}
+
+fn codex_text_message(role: String, content: String) -> json.Json {
+  json.object([
+    #("type", json.string("message")),
+    #("role", json.string(role)),
+    #(
+      "content",
+      json.preprocessed_array([codex_text_part(role, content)]),
+    ),
+  ])
+}
+
+fn codex_image_message(content: String, image_url: String) -> json.Json {
+  let text_part =
+    json.object([
+      #("type", json.string("input_text")),
+      #("text", json.string(content)),
+    ])
+  let image_part =
+    json.object([
+      #("type", json.string("input_image")),
+      #("image_url", json.string(image_url)),
+    ])
+  json.object([
+    #("type", json.string("message")),
+    #("role", json.string("user")),
+    #("content", json.preprocessed_array([text_part, image_part])),
+  ])
+}
+
+fn codex_function_call_item(call: ToolCall) -> json.Json {
+  json.object([
+    #("type", json.string("function_call")),
+    #("id", json.string(call.id)),
+    #("call_id", json.string(call.id)),
+    #("name", json.string(call.name)),
+    #("arguments", json.string(call.arguments)),
+  ])
+}
+
+fn codex_function_call_output_item(
+  tool_call_id: String,
+  content: String,
+) -> json.Json {
+  json.object([
+    #("type", json.string("function_call_output")),
+    #("call_id", json.string(tool_call_id)),
+    #("output", json.string(content)),
+  ])
+}
+
+fn message_to_codex_input_items(message: Message) -> List(json.Json) {
+  case message {
+    SystemMessage(c) -> [codex_text_message("system", c)]
+    UserMessage(c) -> [codex_text_message("user", c)]
+    UserMessageWithImage(c, url) -> [codex_image_message(c, url)]
+    AssistantMessage(c) -> [codex_text_message("assistant", c)]
+    AssistantToolCallMessage(c, calls) -> {
+      let content_items = case c {
+        "" -> []
+        _ -> [codex_text_message("assistant", c)]
+      }
+      list.append(content_items, list.map(calls, codex_function_call_item))
+    }
+    ToolResultMessage(id, c) -> [codex_function_call_output_item(id, c)]
+  }
+}
+
+/// Build the request body JSON for the Codex/Responses route.
+pub fn build_codex_responses_body(
+  model: String,
+  messages: List(Message),
+  tools: List(ToolDefinition),
+  stream: Bool,
+) -> json.Json {
+  let input_items =
+    list.flat_map(messages, message_to_codex_input_items)
+  let base_fields = [
+    #("model", json.string(model)),
+    #("input", json.preprocessed_array(input_items)),
+    #("store", json.bool(False)),
+    #("stream", json.bool(stream)),
+  ]
+  let fields = case tools {
+    [] -> base_fields
+    _ ->
+      list.append(base_fields, [
+        #("tools", json.array(tools, codex_tool_definition_to_json)),
+        #("tool_choice", json.string("auto")),
+      ])
+  }
+  json.object(fields)
 }
 
 /// Build request body JSON including tools array for function calling.
@@ -338,6 +513,65 @@ pub fn parse_response_with_tools(body: String) -> Result(LlmResponse, String) {
   }
 }
 
+/// Parse a Responses API body from Codex/OpenAI.
+pub fn parse_codex_response_with_tools(
+  body: String,
+) -> Result(LlmResponse, String) {
+  let content_item_decoder = {
+    use item_type <- decode.field("type", decode.string)
+    use text <- decode.optional_field("text", "", decode.string)
+    case item_type {
+      "output_text" -> decode.success(text)
+      _ -> decode.success("")
+    }
+  }
+  let output_item_decoder = {
+    use item_type <- decode.field("type", decode.string)
+    case item_type {
+      "message" -> {
+        use texts <- decode.field(
+          "content",
+          decode.list(content_item_decoder),
+        )
+        decode.success(ParsedCodexOutput(
+          content: texts
+            |> list.filter(fn(text) { text != "" })
+            |> string.join(""),
+          tool_calls: [],
+        ))
+      }
+      "function_call" -> {
+        use call_id <- decode.field("call_id", decode.string)
+        use name <- decode.field("name", decode.string)
+        use arguments <- decode.field("arguments", decode.string)
+        decode.success(ParsedCodexOutput(
+          content: "",
+          tool_calls: [ToolCall(id: call_id, name: name, arguments: arguments)],
+        ))
+      }
+      _ -> decode.success(ParsedCodexOutput(content: "", tool_calls: []))
+    }
+  }
+  let output_decoder =
+    decode.at(["output"], decode.list(output_item_decoder))
+
+  case json.parse(body, output_decoder) {
+    Ok(items) ->
+      Ok(LlmResponse(
+        content: items
+          |> list.map(fn(item) { item.content })
+          |> string.join(""),
+        tool_calls: items |> list.flat_map(fn(item) { item.tool_calls }),
+      ))
+    Error(_) ->
+      json.parse(body, decode.at(["output_text"], decode.string))
+      |> result.map(fn(content) {
+        LlmResponse(content: content, tool_calls: [])
+      })
+      |> result.map_error(fn(_) { "Failed to parse Codex response JSON" })
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Streaming
 // ---------------------------------------------------------------------------
@@ -355,25 +589,38 @@ pub fn chat_streaming_with_tools(
   tools: List(ToolDefinition),
   callback_pid: process.Pid,
 ) -> Nil {
-  let url = config.base_url <> "/chat/completions"
+  let url = case is_openai_codex_config(config) {
+    True -> config.base_url <> "/responses"
+    False -> config.base_url <> "/chat/completions"
+  }
   logging.log(
     logging.Info,
     "[llm] Streaming " <> config.model <> " at " <> url <> " (with tools)",
   )
-  let base_fields = [
-    #("model", json.string(config.model)),
-    #("messages", json.array(messages, message_to_json)),
-    #("stream", json.bool(True)),
-    #("stream_options", json.object([#("include_usage", json.bool(True))])),
-  ]
-  let fields = case tools {
-    [] -> base_fields
-    _ ->
-      list.append(base_fields, [
-        #("tools", json.array(tools, tool_definition_to_json)),
-      ])
+  let body_str = case is_openai_codex_config(config) {
+    True ->
+      build_codex_responses_body(config.model, messages, tools, True)
+      |> json.to_string
+    False -> {
+      let base_fields = [
+        #("model", json.string(config.model)),
+        #("messages", json.array(messages, message_to_json)),
+        #("stream", json.bool(True)),
+        #(
+          "stream_options",
+          json.object([#("include_usage", json.bool(True))]),
+        ),
+      ]
+      let fields = case tools {
+        [] -> base_fields
+        _ ->
+          list.append(base_fields, [
+            #("tools", json.array(tools, tool_definition_to_json)),
+          ])
+      }
+      json.object(fields) |> json.to_string
+    }
   }
-  let body_str = json.object(fields) |> json.to_string
   stream_ffi(url, config.api_key, config.model, body_str, callback_pid)
 }
 

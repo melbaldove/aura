@@ -21,7 +21,7 @@ chat_stream(Url, ApiKey, _Model, BodyJson, CallbackPid) ->
     ssl:start(),
     inets:start(),
     UrlStr = binary_to_list(Url),
-    Headers = [{"authorization", "Bearer " ++ binary_to_list(ApiKey)}],
+    Headers = auth_headers(Url, ApiKey),
     ContentType = "application/json",
     Body = binary_to_list(BodyJson),
     case httpc:request(post,
@@ -43,6 +43,36 @@ chat_stream(Url, ApiKey, _Model, BodyJson, CallbackPid) ->
             CallbackPid ! {stream_error,
                 iolist_to_binary(io_lib:format("~p", [Reason]))},
             nil
+    end.
+
+auth_headers(Url, ApiKey) ->
+    case is_codex_url(Url) of
+        true -> codex_auth_headers(ApiKey);
+        false -> [{"authorization", "Bearer " ++ binary_to_list(ApiKey)}]
+    end.
+
+is_codex_url(Url) ->
+    case binary:match(Url, <<"chatgpt.com/backend-api/codex/responses">>) of
+        {_, _} -> true;
+        nomatch -> false
+    end.
+
+codex_auth_headers(ApiKey) ->
+    {AccessToken, AccountId} = split_codex_auth(ApiKey),
+    BaseHeaders = [
+        {"authorization", "Bearer " ++ binary_to_list(AccessToken)},
+        {"originator", "codex_cli_rs"},
+        {"user-agent", "codex_cli_rs/0.0.1 (aura)"}
+    ],
+    case AccountId of
+        <<>> -> BaseHeaders;
+        _ -> [{"ChatGPT-Account-ID", binary_to_list(AccountId)} | BaseHeaders]
+    end.
+
+split_codex_auth(ApiKey) ->
+    case binary:split(ApiKey, <<"\n">>) of
+        [AccessToken, AccountId] -> {AccessToken, AccountId};
+        [AccessToken] -> {AccessToken, <<>>}
     end.
 
 %% State now includes PromptTokens accumulator for usage tracking
@@ -183,26 +213,103 @@ parse_delta(Json) ->
     case binary:match(Json, <<"\"tool_calls\"">>) of
         {_, _} -> parse_tool_call_delta(Json);
         nomatch ->
-            %% Check for content (most common non-tool delta)
-            case extract_json_string_field(Json, <<"\"content\"">>) of
-                {ok, Content} -> {delta, Content};
+            case extract_json_string_field(Json, <<"\"type\"">>) of
+                {ok, <<"response.", _/binary>> = EventType} ->
+                    parse_responses_delta(EventType, Json);
+                _ ->
+                    parse_chat_delta(Json)
+            end
+    end.
+
+parse_chat_delta(Json) ->
+    %% Check for content (most common non-tool delta)
+    case extract_json_string_field(Json, <<"\"content\"">>) of
+        {ok, Content} -> {delta, Content};
+        error ->
+            %% Check reasoning_content (GLM-5.1 thinking phase)
+            case extract_json_string_field(Json, <<"\"reasoning_content\"">>) of
+                {ok, _} -> {reasoning, thinking};
                 error ->
-                    %% Check reasoning_content (GLM-5.1 thinking phase)
-                    case extract_json_string_field(Json, <<"\"reasoning_content\"">>) of
-                        {ok, _} -> {reasoning, thinking};
-                        error ->
-                            %% Check usage (final chunk only — no content, no tools)
-                            case binary:match(Json, <<"\"usage\"">>) of
-                                {_, _} ->
-                                    case extract_json_int_field(Json, <<"\"prompt_tokens\"">>) of
-                                        {ok, PromptTokens} -> {usage, PromptTokens};
-                                        error -> {delta, <<>>}
-                                    end;
-                                nomatch -> {delta, <<>>}
-                            end
+                    %% Check usage (final chunk only — no content, no tools)
+                    case binary:match(Json, <<"\"usage\"">>) of
+                        {_, _} ->
+                            case extract_json_int_field(Json, <<"\"prompt_tokens\"">>) of
+                                {ok, PromptTokens} -> {usage, PromptTokens};
+                                error -> {delta, <<>>}
+                            end;
+                        nomatch -> {delta, <<>>}
                     end
             end
     end.
+
+parse_responses_delta(<<"response.output_text.delta">>, Json) ->
+    case extract_json_string_field(Json, <<"\"delta\"">>) of
+        {ok, Text} -> {delta, Text};
+        error -> {delta, <<>>}
+    end;
+parse_responses_delta(<<"response.reasoning_text.delta">>, _Json) ->
+    {reasoning, thinking};
+parse_responses_delta(<<"response.reasoning_summary_text.delta">>, _Json) ->
+    {reasoning, thinking};
+parse_responses_delta(<<"response.output_item.added">>, Json) ->
+    case binary:match(Json, <<"\"function_call\"">>) of
+        {_, _} -> parse_responses_tool_item(Json);
+        nomatch -> {delta, <<>>}
+    end;
+parse_responses_delta(<<"response.output_item.done">>, Json) ->
+    case binary:match(Json, <<"\"function_call\"">>) of
+        {_, _} -> parse_responses_tool_item_metadata(Json);
+        nomatch -> {delta, <<>>}
+    end;
+parse_responses_delta(<<"response.function_call_arguments.delta">>, Json) ->
+    parse_responses_tool_arguments_delta(Json);
+parse_responses_delta(_, _Json) ->
+    {delta, <<>>}.
+
+parse_responses_tool_item(Json) ->
+    Index = case extract_json_int_field(Json, <<"\"output_index\"">>) of
+        {ok, I} -> I;
+        error -> 0
+    end,
+    Id = case extract_json_string_field(Json, <<"\"call_id\"">>) of
+        {ok, V} -> V;
+        error -> <<>>
+    end,
+    Name = case extract_json_string_field(Json, <<"\"name\"">>) of
+        {ok, N} -> N;
+        error -> <<>>
+    end,
+    Args = case extract_json_string_field(Json, <<"\"arguments\"">>) of
+        {ok, A} -> A;
+        error -> <<>>
+    end,
+    {tool_call_delta, Index, Id, Name, Args}.
+
+parse_responses_tool_item_metadata(Json) ->
+    Index = case extract_json_int_field(Json, <<"\"output_index\"">>) of
+        {ok, I} -> I;
+        error -> 0
+    end,
+    Id = case extract_json_string_field(Json, <<"\"call_id\"">>) of
+        {ok, V} -> V;
+        error -> <<>>
+    end,
+    Name = case extract_json_string_field(Json, <<"\"name\"">>) of
+        {ok, N} -> N;
+        error -> <<>>
+    end,
+    {tool_call_delta, Index, Id, Name, <<>>}.
+
+parse_responses_tool_arguments_delta(Json) ->
+    Index = case extract_json_int_field(Json, <<"\"output_index\"">>) of
+        {ok, I} -> I;
+        error -> 0
+    end,
+    Args = case extract_json_string_field(Json, <<"\"delta\"">>) of
+        {ok, A} -> A;
+        error -> <<>>
+    end,
+    {tool_call_delta, Index, <<>>, <<>>, Args}.
 
 %% Parse a streaming tool_call delta.
 %% Format: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","function":{"name":"fn","arguments":"piece"}}]}}]}

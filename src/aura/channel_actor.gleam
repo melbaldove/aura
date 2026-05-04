@@ -111,7 +111,12 @@ pub type ChannelMessage {
 }
 
 pub type TurnKind {
-  UserTurn(message_id: String, author_id: String, author_name: String)
+  UserTurn(
+    message_id: String,
+    author_id: String,
+    author_name: String,
+    user_content: String,
+  )
   HandbackTurn(flare_id: String, session_name: String)
 }
 
@@ -265,6 +270,7 @@ fn build_initial_state(
       discord_token: deps.discord_token,
       guild_id: deps.guild_id,
       message_id: "",
+      current_user_content: "",
       channel_id: deps.channel_id,
       paths: deps.paths,
       skill_infos: deps.skill_infos,
@@ -485,6 +491,7 @@ fn build_initial_state_for_test(
       discord_token: deps.discord_token,
       guild_id: "",
       message_id: "",
+      current_user_content: "",
       channel_id: deps.channel_id,
       paths: paths,
       skill_infos: [],
@@ -1114,8 +1121,15 @@ fn execute_spawn_tool_worker(
 
 fn tool_context_for_current_turn(state: ChannelState) -> brain_tools.ToolContext {
   case state.turn {
-    Some(TurnState(kind: UserTurn(message_id: message_id, ..), ..)) ->
-      brain_tools.ToolContext(..state.tool_ctx, message_id: message_id)
+    Some(TurnState(
+      kind: UserTurn(message_id: message_id, user_content: user_content, ..),
+      ..,
+    )) ->
+      brain_tools.ToolContext(
+        ..state.tool_ctx,
+        message_id: message_id,
+        current_user_content: user_content,
+      )
     _ -> state.tool_ctx
   }
 }
@@ -2035,14 +2049,29 @@ fn start_turn(
           // rejection. attachment.preprocess has already downloaded the file.
           let #(path, question, filename) =
             first_image_and_question(msg, state.resolved_vision_config.prompt)
-          #(state_with_pending_vision(state, messages, new_messages, msg), [
-            SpawnVisionWorker(path, question, filename),
-            StartTyping,
-            ScheduleDeadline(600_000),
-          ])
+          #(
+            state_with_pending_vision(
+              state,
+              messages,
+              new_messages,
+              msg,
+              msg.content,
+            ),
+            [
+              SpawnVisionWorker(path, question, filename),
+              StartTyping,
+              ScheduleDeadline(600_000),
+            ],
+          )
         }
         False -> #(
-          state_with_pending_stream(state, messages, new_messages, msg),
+          state_with_pending_stream(
+            state,
+            messages,
+            new_messages,
+            msg,
+            msg.content,
+          ),
           [SpawnStreamWorker(messages), StartTyping, ScheduleDeadline(600_000)],
         )
       }
@@ -2306,12 +2335,14 @@ fn state_with_pending_vision(
   messages: List(llm.Message),
   new_messages: List(llm.Message),
   msg: message.IncomingMessage,
+  user_content: String,
 ) -> ChannelState {
   let kind =
     UserTurn(
       message_id: msg.message_id,
       author_id: msg.author_id,
       author_name: msg.author_name,
+      user_content: user_content,
     )
   let turn = new_turn_state(kind, VisionWorker, messages, new_messages)
   ChannelState(..state, turn: Some(turn))
@@ -2322,12 +2353,14 @@ fn state_with_pending_stream(
   messages: List(llm.Message),
   new_messages: List(llm.Message),
   msg: message.IncomingMessage,
+  user_content: String,
 ) -> ChannelState {
   let kind =
     UserTurn(
       message_id: msg.message_id,
       author_id: msg.author_id,
       author_name: msg.author_name,
+      user_content: user_content,
     )
   let turn = new_turn_state(kind, StreamWorker, messages, new_messages)
   ChannelState(..state, turn: Some(turn))
@@ -2406,7 +2439,7 @@ fn finalize_turn(
   let final_messages =
     list.append(turn.new_messages, [llm.AssistantMessage(final_content)])
   let #(author_id, author_name) = case turn.kind {
-    UserTurn(_, aid, aname) -> #(aid, aname)
+    UserTurn(_, aid, aname, _) -> #(aid, aname)
     HandbackTurn(_, _) -> #("aura", "Aura")
   }
   let full_history = list.append(state.conversation, final_messages)
@@ -2847,7 +2880,12 @@ pub fn with_fake_handback_turn(
 
 fn fresh_fake_turn(worker_kind: WorkerKind) -> TurnState {
   TurnState(
-    kind: UserTurn(message_id: "fake", author_id: "fake", author_name: ""),
+    kind: UserTurn(
+      message_id: "fake",
+      author_id: "fake",
+      author_name: "",
+      user_content: "",
+    ),
     discord_msg_id: "",
     started_at: 0,
     iteration: 0,

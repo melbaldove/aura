@@ -64,6 +64,8 @@ urgent_bypass = true
 
 [acp]
 global_max_concurrent = 4
+transport = \"stdio\"
+command = \"codex-acp\"
 "
 
 fn domain_config_toml(

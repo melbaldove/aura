@@ -235,3 +235,26 @@ pub fn parse_delta_null_content_with_tool_calls_test() {
   parse_delta_type(json)
   |> should.equal("tool_call_delta")
 }
+
+pub fn parse_delta_responses_output_text_test() {
+  let json = "{\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}"
+
+  parse_delta_type(json)
+  |> should.equal("delta")
+}
+
+pub fn parse_delta_responses_function_call_added_test() {
+  let json =
+    "{\"type\":\"response.output_item.added\",\"response_id\":\"resp_1\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"read_file\",\"arguments\":\"\"}}"
+
+  parse_delta_type(json)
+  |> should.equal("tool_call_delta")
+}
+
+pub fn parse_delta_responses_function_call_arguments_test() {
+  let json =
+    "{\"type\":\"response.function_call_arguments.delta\",\"response_id\":\"resp_1\",\"item_id\":\"fc_1\",\"output_index\":0,\"delta\":\"{\\\"path\\\"\"}"
+
+  parse_delta_type(json)
+  |> should.equal("tool_call_delta")
+}
