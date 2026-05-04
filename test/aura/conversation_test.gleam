@@ -90,9 +90,9 @@ pub fn format_traces_error_test() {
     ),
   ]
   let formatted = conversation.format_traces(traces)
-  formatted |> string.contains("> write_file") |> should.be_true
+  formatted |> string.contains("- tool `write_file`") |> should.be_true
   formatted
-  |> string.contains("error=\"Error: requires approval\"")
+  |> string.contains("error=`Error: requires approval`")
   |> should.be_true
 }
 
@@ -130,7 +130,7 @@ pub fn format_full_message_puts_compact_tool_calls_before_answer_test() {
 
   full
   |> string.starts_with(
-    "> read_file path=\"src/aura/channel_actor.gleam\"\n> shell command=\"nix develop --command gleam test\"\n\nHere is the answer.",
+    "- tool `read_file` path=`src/aura/channel_actor.gleam`\n- tool `shell` command=`nix develop --command gleam test`\n\nHere is the answer.",
   )
   |> should.be_true
   full |> string.contains("large file contents") |> should.be_false
@@ -151,7 +151,7 @@ pub fn format_full_message_includes_short_tool_errors_test() {
 
   full
   |> string.contains(
-    "> shell command=\"gleam test\" error=\"Error: Gleam version mismatch expected v1.14+\"",
+    "- tool `shell` command=`gleam test` error=`Error: Gleam version mismatch expected v1.14+`",
   )
   |> should.be_true
   full |> string.contains("\n\nI could not run tests.") |> should.be_true

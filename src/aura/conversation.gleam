@@ -513,11 +513,11 @@ fn one_line(text: String) -> String {
   |> string.replace(each: "\n", with: " ")
 }
 
-fn quote_value(text: String, max: Int) -> String {
-  "\""
+fn code_value(text: String, max: Int) -> String {
+  "`"
   <> cap_field(one_line(text), max)
-  |> string.replace(each: "\"", with: "\\\"")
-  <> "\""
+  |> string.replace(each: "`", with: "\\`")
+  <> "`"
 }
 
 fn dynamic_to_json(value) -> json.Json {
@@ -562,12 +562,13 @@ fn dynamic_to_json(value) -> json.Json {
 
 fn format_arg_value(value) -> String {
   case decode.run(value, decode.string) {
-    Ok(s) -> quote_value(s, max_trace_value_chars)
+    Ok(s) -> code_value(s, max_trace_value_chars)
     Error(_) ->
       dynamic_to_json(value)
       |> json.to_string
       |> one_line
       |> cap_field(max_trace_value_chars)
+      |> code_value(max_trace_value_chars)
   }
 }
 
@@ -583,7 +584,7 @@ fn format_args(args: String) -> String {
           |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
           |> list.map(fn(pair) { pair.0 <> "=" <> format_arg_value(pair.1) })
           |> string.join(" ")
-        Error(_) -> cap_field(one_line(trimmed), max_trace_value_chars)
+        Error(_) -> "args=" <> code_value(trimmed, max_trace_value_chars)
       }
   }
 }
@@ -591,13 +592,12 @@ fn format_args(args: String) -> String {
 fn format_trace_line(trace: ToolTrace) -> String {
   let args = format_args(trace.args)
   let base = case args {
-    "" -> "> " <> trace.name
-    _ -> "> " <> trace.name <> " " <> args
+    "" -> "- tool `" <> trace.name <> "`"
+    _ -> "- tool `" <> trace.name <> "` " <> args
   }
   let line = case trace.is_error {
     False -> base
-    True ->
-      base <> " error=" <> quote_value(trace.result, max_trace_error_chars)
+    True -> base <> " error=" <> code_value(trace.result, max_trace_error_chars)
   }
   cap_field(line, max_trace_line_chars)
 }
@@ -632,7 +632,7 @@ fn append_omission_marker(
   case omitted > 0 {
     False -> selected
     True -> {
-      let marker = "> ... " <> int.to_string(omitted) <> " more tool calls"
+      let marker = "- ... `" <> int.to_string(omitted) <> "` more tool calls"
       let current = string.join(selected, "\n")
       let separator = case selected {
         [] -> 0
@@ -662,9 +662,9 @@ fn fit_tool_section(lines: List(String), budget: Int) -> String {
   |> string.join("\n")
 }
 
-/// Format tool traces for Discord display. Each trace is a compact call line:
-/// `> tool key="value"`. Successful results stay out of the message; short
-/// errors stay visible.
+/// Format tool traces for Discord display. Each trace is a compact bullet line
+/// with tool names and scan-critical values wrapped in inline code. Successful
+/// results stay out of the message; short errors stay visible.
 pub fn format_traces(traces: List(ToolTrace)) -> String {
   list.map(traces, format_trace_line)
   |> string.join("\n")
