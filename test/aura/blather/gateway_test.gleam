@@ -1,4 +1,5 @@
 import aura/blather/gateway
+import gleam/erlang/process
 import gleam/string
 import gleeunit/should
 
@@ -7,7 +8,7 @@ pub fn resolve_ws_target_with_explicit_port_and_path_prefix_test() {
     gateway.resolve_ws_target("http://10.0.0.2:18100/api", "blather_abc")
 
   host |> should.equal("10.0.0.2")
-  port |> should.equal(18100)
+  port |> should.equal(18_100)
   path |> should.equal("/api/ws/events?api_key=blather_abc")
 }
 
@@ -63,3 +64,17 @@ pub fn resolve_ws_target_rejects_invalid_url_test() {
   |> should.be_error
 }
 
+pub fn websocket_error_keeps_gateway_actor_alive_test() {
+  let assert Ok(started) =
+    gateway.connect("http://127.0.0.1:9/api", "k", fn(_) { Nil })
+  process.unlink(started.pid)
+
+  process.send(
+    started.data,
+    gateway.WsError("TCP connect failed: econnrefused"),
+  )
+  process.sleep(50)
+
+  process.is_alive(started.pid) |> should.be_true
+  process.kill(started.pid)
+}

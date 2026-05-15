@@ -24,7 +24,13 @@ import logging
 // ---------------------------------------------------------------------------
 
 pub type GatewayState {
-  GatewayState(on_event: fn(types.GatewayEvent) -> Nil)
+  GatewayState(
+    host: String,
+    port: Int,
+    path: String,
+    subject: process.Subject(GatewayMessage),
+    on_event: fn(types.GatewayEvent) -> Nil,
+  )
 }
 
 pub type GatewayMessage {
@@ -32,6 +38,8 @@ pub type GatewayMessage {
   WsClosed
   WsError(String)
 }
+
+const reconnect_delay_ms = 5000
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -55,14 +63,22 @@ pub fn connect(
       process.new_selector()
       |> process.select(self_subject)
     Ok(
-      actor.initialised(GatewayState(on_event: on_event))
+      actor.initialised(GatewayState(
+        host: host,
+        port: port,
+        path: ws_path,
+        subject: self_subject,
+        on_event: on_event,
+      ))
       |> actor.selecting(selector)
       |> actor.returning(self_subject),
     )
   })
   |> actor.on_message(handle_message)
   |> actor.start
-  |> result.map_error(fn(err) { "Blather gateway start failed: " <> string.inspect(err) })
+  |> result.map_error(fn(err) {
+    "Blather gateway start failed: " <> string.inspect(err)
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -91,10 +107,7 @@ pub fn resolve_ws_target(
     "/" -> ""
     p -> strip_trailing_slash(p)
   }
-  let path =
-    prefix
-    <> "/ws/events?api_key="
-    <> uri.percent_encode(api_key)
+  let path = prefix <> "/ws/events?api_key=" <> uri.percent_encode(api_key)
   Ok(#(host, port, path))
 }
 
@@ -149,17 +162,20 @@ fn handle_message(
   case message {
     WsText(text) -> handle_text(state, text)
     WsClosed -> {
-      logging.log(
-        logging.Info,
-        "[blather-gateway] WsClosed — supervisor will restart",
-      )
-      actor.stop_abnormal("WebSocket closed")
+      logging.log(logging.Info, "[blather-gateway] WsClosed — reconnecting")
+      reconnect(state)
     }
     WsError(err) -> {
       logging.log(logging.Error, "[blather-gateway] WsError: " <> err)
-      actor.stop_abnormal("WebSocket error: " <> err)
+      reconnect(state)
     }
   }
+}
+
+fn reconnect(state: GatewayState) -> actor.Next(GatewayState, GatewayMessage) {
+  process.sleep(reconnect_delay_ms)
+  let _ws_pid = ws_connect(state.host, state.port, state.path, state.subject)
+  actor.continue(state)
 }
 
 fn handle_text(
@@ -183,4 +199,3 @@ fn handle_text(
     }
   }
 }
-
