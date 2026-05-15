@@ -36,6 +36,7 @@ import gleam/option
 import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/result
+import gleam/string
 import logging
 
 // ---------------------------------------------------------------------------
@@ -70,6 +71,11 @@ pub type ReconcilePlan {
   CatchUpFromUid(from_uid: Int)
   SeedCheckpoint(last_seen_uid: Int)
   ResetCheckpoint(last_seen_uid: Int)
+}
+
+pub type AuthFailureAction {
+  RetryAuth
+  MarkReauthRequired
 }
 
 const base_backoff_ms = 5000
@@ -187,6 +193,41 @@ pub fn plan_reconcile(
   }
 }
 
+/// Classify OAuth failures. `invalid_grant` is not transient: Google has
+/// rejected the refresh token, so the integration needs a new consent flow.
+pub fn auth_failure_action(error: String) -> AuthFailureAction {
+  case string.contains(error, "invalid_grant") {
+    True -> MarkReauthRequired
+    False -> RetryAuth
+  }
+}
+
+/// Construct a source-neutral reauthorization event for the cognitive pipeline.
+pub fn reauth_required_event(
+  config: GmailConfig,
+  message: String,
+  now_ms: Int,
+) -> event.AuraEvent {
+  event.AuraEvent(
+    id: config.name <> "-reauth-required-" <> int.to_string(now_ms),
+    source: config.name,
+    type_: "integration.reauth_required",
+    subject: "Gmail reauthorization required",
+    time_ms: now_ms,
+    tags: dict.from_list([
+      #("integration", "gmail"),
+      #("status", "reauth_required"),
+    ]),
+    external_id: config.name <> ":reauth_required",
+    data: json.object([
+      #("integration", json.string("gmail")),
+      #("status", json.string("reauth_required")),
+      #("message", json.string(message)),
+    ])
+      |> json.to_string,
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Actor message handler
 // ---------------------------------------------------------------------------
@@ -215,8 +256,7 @@ fn run_cycle(state: State, attempt: Int) -> Nil {
       let now = time.now_ms()
       case oauth.ensure_fresh(state.config.oauth, tokens, now) {
         Error(err) -> {
-          log_error(name, "oauth refresh: " <> err)
-          schedule_next(state, attempt + 1)
+          handle_auth_error(state, err, attempt)
         }
         Ok(fresh) -> {
           persist_if_changed(state.config.token_path, tokens, fresh)
@@ -226,6 +266,28 @@ fn run_cycle(state: State, attempt: Int) -> Nil {
           schedule_next(state, attempt + 1)
         }
       }
+    }
+  }
+}
+
+fn handle_auth_error(state: State, err: String, attempt: Int) -> Nil {
+  let name = state.config.name
+  case auth_failure_action(err) {
+    RetryAuth -> {
+      log_error(name, "oauth refresh: " <> err)
+      save_error_health(state, "auth_error", "OAuth refresh failed: " <> err)
+      schedule_next(state, attempt + 1)
+    }
+    MarkReauthRequired -> {
+      let message =
+        "Gmail rejected the stored refresh token. Reconnect this account with connect_gmail_start/connect_gmail_complete."
+      let now = time.now_ms()
+      log_error(name, "reauth required: " <> err)
+      save_error_health_at(state, "reauth_required", message, now)
+      event_ingest.ingest(
+        state.event_ingest,
+        reauth_required_event(state.config, message, now),
+      )
     }
   }
 }
@@ -352,9 +414,7 @@ fn reconcile_mailbox(
   mailbox
 }
 
-fn load_checkpoint_for_reconcile(
-  state: State,
-) -> option.Option(#(Int, Int)) {
+fn load_checkpoint_for_reconcile(state: State) -> option.Option(#(Int, Int)) {
   case db.get_integration_checkpoint(state.db, state.config.name) {
     Ok(cp) -> cp
     Error(err) -> {
@@ -501,9 +561,52 @@ fn save_checkpoint(state: State, uidvalidity: Int, last_seen_uid: Int) -> Nil {
       time.now_ms(),
     )
   {
-    Ok(_) -> Nil
+    Ok(_) -> save_success_health(state)
     Error(err) ->
       log_warning(state.config.name, "checkpoint save failed: " <> err)
+  }
+}
+
+fn save_success_health(state: State) -> Nil {
+  let now = time.now_ms()
+  let health =
+    db.IntegrationHealth(
+      name: state.config.name,
+      status: "healthy",
+      message: "",
+      last_success_at_ms: option.Some(now),
+      last_error_at_ms: option.None,
+      updated_at_ms: now,
+    )
+  case db.save_integration_health(state.db, health) {
+    Error(err) -> log_warning(state.config.name, "health save failed: " <> err)
+    Ok(_) -> Nil
+  }
+}
+
+fn save_error_health(state: State, status: String, message: String) -> Nil {
+  let now = time.now_ms()
+  save_error_health_at(state, status, message, now)
+}
+
+fn save_error_health_at(
+  state: State,
+  status: String,
+  message: String,
+  now: Int,
+) -> Nil {
+  let health =
+    db.IntegrationHealth(
+      name: state.config.name,
+      status: status,
+      message: message,
+      last_success_at_ms: option.None,
+      last_error_at_ms: option.Some(now),
+      updated_at_ms: now,
+    )
+  case db.save_integration_health(state.db, health) {
+    Error(err) -> log_warning(state.config.name, "health save failed: " <> err)
+    Ok(_) -> Nil
   }
 }
 

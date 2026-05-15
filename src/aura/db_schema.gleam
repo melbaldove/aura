@@ -3,7 +3,7 @@ import gleam/result
 import gleam/string
 import sqlight
 
-const current_version = 8
+const current_version = 9
 
 /// Create all tables, indexes, FTS5 virtual table, and triggers if they do not
 /// already exist, then run any pending schema migrations.
@@ -278,6 +278,7 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
     )
   ",
   ))
+  use _ <- result.try(create_integration_health_table(conn))
 
   use _ <- result.try(exec(
     conn,
@@ -590,6 +591,10 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
         }
         False -> Ok(Nil)
       })
+      use _ <- result.try(case v < 9 {
+        True -> create_integration_health_table(conn)
+        False -> Ok(Nil)
+      })
       exec(
         conn,
         "UPDATE schema_version SET version = "
@@ -606,6 +611,24 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
       )
     }
   }
+}
+
+fn create_integration_health_table(
+  conn: sqlight.Connection,
+) -> Result(Nil, String) {
+  exec(
+    conn,
+    "
+    CREATE TABLE IF NOT EXISTS integration_health (
+      name TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      message TEXT NOT NULL,
+      last_success_at_ms INTEGER,
+      last_error_at_ms INTEGER,
+      updated_at_ms INTEGER NOT NULL
+    )
+  ",
+  )
 }
 
 fn create_dream_observability_tables(

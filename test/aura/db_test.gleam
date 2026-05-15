@@ -1434,6 +1434,92 @@ pub fn integration_checkpoint_separate_names_test() {
   process.send(subject, db.Shutdown)
 }
 
+pub fn integration_health_missing_returns_none_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  db.get_integration_health(subject, "gmail-x")
+  |> should.be_ok
+  |> should.equal(None)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn integration_health_save_and_load_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(_) =
+    db.save_integration_health(
+      subject,
+      db.IntegrationHealth(
+        name: "gmail-x",
+        status: "reauth_required",
+        message: "Gmail rejected the refresh token",
+        last_success_at_ms: None,
+        last_error_at_ms: Some(1_778_000_000_000),
+        updated_at_ms: 1_778_000_000_000,
+      ),
+    )
+
+  db.get_integration_health(subject, "gmail-x")
+  |> should.be_ok
+  |> should.equal(
+    Some(db.IntegrationHealth(
+      name: "gmail-x",
+      status: "reauth_required",
+      message: "Gmail rejected the refresh token",
+      last_success_at_ms: None,
+      last_error_at_ms: Some(1_778_000_000_000),
+      updated_at_ms: 1_778_000_000_000,
+    )),
+  )
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn integration_health_upsert_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(_) =
+    db.save_integration_health(
+      subject,
+      db.IntegrationHealth(
+        name: "gmail-x",
+        status: "reauth_required",
+        message: "bad token",
+        last_success_at_ms: None,
+        last_error_at_ms: Some(1000),
+        updated_at_ms: 1000,
+      ),
+    )
+  let assert Ok(_) =
+    db.save_integration_health(
+      subject,
+      db.IntegrationHealth(
+        name: "gmail-x",
+        status: "healthy",
+        message: "",
+        last_success_at_ms: Some(2000),
+        last_error_at_ms: None,
+        updated_at_ms: 2000,
+      ),
+    )
+
+  db.get_integration_health(subject, "gmail-x")
+  |> should.be_ok
+  |> should.equal(
+    Some(db.IntegrationHealth(
+      name: "gmail-x",
+      status: "healthy",
+      message: "",
+      last_success_at_ms: Some(2000),
+      last_error_at_ms: None,
+      updated_at_ms: 2000,
+    )),
+  )
+
+  process.send(subject, db.Shutdown)
+}
+
 fn sample_shell_approval(
   id: String,
   channel_id: String,

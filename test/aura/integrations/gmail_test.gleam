@@ -135,29 +135,79 @@ pub fn envelope_to_event_data_carries_full_envelope_test() {
 }
 
 pub fn plan_reconcile_fetches_when_uidnext_advanced_test() {
-  let mailbox = imap.MailboxState(exists: 12, uidvalidity: 1, uidnext: 20779)
+  let mailbox = imap.MailboxState(exists: 12, uidvalidity: 1, uidnext: 20_779)
 
-  gmail.plan_reconcile(option.Some(#(1, 20777)), mailbox)
-  |> should.equal(gmail.CatchUpFromUid(20778))
+  gmail.plan_reconcile(option.Some(#(1, 20_777)), mailbox)
+  |> should.equal(gmail.CatchUpFromUid(20_778))
 }
 
 pub fn plan_reconcile_is_current_when_checkpoint_reaches_uidnext_minus_one_test() {
-  let mailbox = imap.MailboxState(exists: 12, uidvalidity: 1, uidnext: 20778)
+  let mailbox = imap.MailboxState(exists: 12, uidvalidity: 1, uidnext: 20_778)
 
-  gmail.plan_reconcile(option.Some(#(1, 20777)), mailbox)
+  gmail.plan_reconcile(option.Some(#(1, 20_777)), mailbox)
   |> should.equal(gmail.AlreadyCurrent)
 }
 
 pub fn plan_reconcile_seeds_fresh_install_without_backfill_test() {
-  let mailbox = imap.MailboxState(exists: 12, uidvalidity: 1, uidnext: 20778)
+  let mailbox = imap.MailboxState(exists: 12, uidvalidity: 1, uidnext: 20_778)
 
   gmail.plan_reconcile(option.None, mailbox)
-  |> should.equal(gmail.SeedCheckpoint(20777))
+  |> should.equal(gmail.SeedCheckpoint(20_777))
 }
 
 pub fn plan_reconcile_resets_uidvalidity_change_without_backfill_test() {
-  let mailbox = imap.MailboxState(exists: 12, uidvalidity: 2, uidnext: 20778)
+  let mailbox = imap.MailboxState(exists: 12, uidvalidity: 2, uidnext: 20_778)
 
-  gmail.plan_reconcile(option.Some(#(1, 12000)), mailbox)
-  |> should.equal(gmail.ResetCheckpoint(20777))
+  gmail.plan_reconcile(option.Some(#(1, 12_000)), mailbox)
+  |> should.equal(gmail.ResetCheckpoint(20_777))
+}
+
+pub fn auth_failure_action_marks_invalid_grant_reauth_required_test() {
+  gmail.auth_failure_action(
+    "oauth refresh failed: status 400 body {\n  \"error\": \"invalid_grant\"\n}",
+  )
+  |> should.equal(gmail.MarkReauthRequired)
+}
+
+pub fn auth_failure_action_retries_network_errors_test() {
+  gmail.auth_failure_action(
+    "oauth refresh failed: HTTP request failed: FailedToConnect",
+  )
+  |> should.equal(gmail.RetryAuth)
+}
+
+pub fn reauth_required_event_uses_stable_dedup_key_test() {
+  let config = sample_config()
+  let ae =
+    gmail.reauth_required_event(
+      config,
+      "Reconnect this account with the Gmail OAuth flow.",
+      1_779_000_000_000,
+    )
+
+  ae.type_ |> should.equal("integration.reauth_required")
+  ae.subject |> should.equal("Gmail reauthorization required")
+  ae.external_id |> should.equal("gmail-work:reauth_required")
+  dict.get(ae.tags, "integration") |> should.equal(Ok("gmail"))
+  dict.get(ae.tags, "status") |> should.equal(Ok("reauth_required"))
+}
+
+pub fn reauth_required_event_data_is_source_neutral_test() {
+  let config = sample_config()
+  let ae =
+    gmail.reauth_required_event(
+      config,
+      "Reconnect this account with the Gmail OAuth flow.",
+      1_779_000_000_000,
+    )
+
+  json.parse(ae.data, decode.dict(decode.string, decode.string))
+  |> should.be_ok
+  |> should.equal(
+    dict.from_list([
+      #("integration", "gmail"),
+      #("status", "reauth_required"),
+      #("message", "Reconnect this account with the Gmail OAuth flow."),
+    ]),
+  )
 }

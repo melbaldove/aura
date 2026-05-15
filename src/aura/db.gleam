@@ -82,6 +82,18 @@ pub type StoredShellApproval {
   )
 }
 
+/// Current health for an external integration.
+pub type IntegrationHealth {
+  IntegrationHealth(
+    name: String,
+    status: String,
+    message: String,
+    last_success_at_ms: Option(Int),
+    last_error_at_ms: Option(Int),
+    updated_at_ms: Int,
+  )
+}
+
 /// A memory entry row from the memory_entries table.
 /// Represents a keyed piece of knowledge with optional supersession chain.
 pub type MemoryEntry {
@@ -255,10 +267,7 @@ pub type DbMessage {
     result_text: String,
     updated_at_ms: Int,
   )
-  GetFlareResult(
-    reply_to: process.Subject(Result(String, String)),
-    id: String,
-  )
+  GetFlareResult(reply_to: process.Subject(Result(String, String)), id: String)
   GetFlareOutcomes(
     reply_to: process.Subject(Result(List(#(String, String)), String)),
     domain: String,
@@ -293,6 +302,14 @@ pub type DbMessage {
     uidvalidity: Int,
     last_seen_uid: Int,
     now_ms: Int,
+  )
+  GetIntegrationHealth(
+    reply_to: process.Subject(Result(Option(IntegrationHealth), String)),
+    name: String,
+  )
+  SaveIntegrationHealth(
+    reply_to: process.Subject(Result(Nil, String)),
+    health: IntegrationHealth,
   )
   SaveShellApproval(
     reply_to: process.Subject(Result(Nil, String)),
@@ -732,9 +749,7 @@ pub fn get_flare_result(
   subject: process.Subject(DbMessage),
   id: String,
 ) -> Result(String, String) {
-  process.call(subject, 5000, fn(reply_to) {
-    GetFlareResult(reply_to:, id:)
-  })
+  process.call(subject, 5000, fn(reply_to) { GetFlareResult(reply_to:, id:) })
 }
 
 /// Return (label, result_text) pairs for completed flares in this domain
@@ -832,6 +847,26 @@ pub fn save_integration_checkpoint(
       last_seen_uid: last_seen_uid,
       now_ms: now_ms,
     )
+  })
+}
+
+/// Load the current health row for an integration.
+pub fn get_integration_health(
+  subject: process.Subject(DbMessage),
+  name: String,
+) -> Result(Option(IntegrationHealth), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetIntegrationHealth(reply_to: reply_to, name: name)
+  })
+}
+
+/// Upsert the current health row for an integration.
+pub fn save_integration_health(
+  subject: process.Subject(DbMessage),
+  health: IntegrationHealth,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    SaveIntegrationHealth(reply_to: reply_to, health: health)
   })
 }
 
@@ -1219,6 +1254,18 @@ fn handle_message(
           last_seen_uid,
           now_ms,
         )
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetIntegrationHealth(reply_to:, name:) -> {
+      let result = do_get_integration_health(state.conn, name)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    SaveIntegrationHealth(reply_to:, health:) -> {
+      let result = do_save_integration_health(state.conn, health)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -2184,6 +2231,10 @@ fn nullable_string_decoder() -> decode.Decoder(String) {
   ])
 }
 
+fn nullable_int_decoder() -> decode.Decoder(Option(Int)) {
+  decode.optional(decode.int)
+}
+
 fn nullable_int(value: Option(Int)) -> sqlight.Value {
   sqlight.nullable(sqlight.int, value)
 }
@@ -2340,6 +2391,65 @@ fn do_save_integration_checkpoint(
   )
   |> result.map_error(fn(err) {
     "Failed to save integration checkpoint: " <> string.inspect(err)
+  })
+  |> result.map(fn(_) { Nil })
+}
+
+fn do_get_integration_health(
+  conn: sqlight.Connection,
+  name: String,
+) -> Result(Option(IntegrationHealth), String) {
+  sqlight.query(
+    "SELECT name, status, message, last_success_at_ms, last_error_at_ms, updated_at_ms FROM integration_health WHERE name = ? LIMIT 1",
+    on: conn,
+    with: [sqlight.text(name)],
+    expecting: {
+      use name <- decode.field(0, decode.string)
+      use status <- decode.field(1, decode.string)
+      use message <- decode.field(2, decode.string)
+      use last_success_at_ms <- decode.field(3, nullable_int_decoder())
+      use last_error_at_ms <- decode.field(4, nullable_int_decoder())
+      use updated_at_ms <- decode.field(5, decode.int)
+      decode.success(IntegrationHealth(
+        name: name,
+        status: status,
+        message: message,
+        last_success_at_ms: last_success_at_ms,
+        last_error_at_ms: last_error_at_ms,
+        updated_at_ms: updated_at_ms,
+      ))
+    },
+  )
+  |> result.map_error(fn(err) {
+    "Failed to read integration health: " <> string.inspect(err)
+  })
+  |> result.map(fn(rows) {
+    case rows {
+      [] -> option.None
+      [row, ..] -> option.Some(row)
+    }
+  })
+}
+
+fn do_save_integration_health(
+  conn: sqlight.Connection,
+  health: IntegrationHealth,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "INSERT INTO integration_health (name, status, message, last_success_at_ms, last_error_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET status = excluded.status, message = excluded.message, last_success_at_ms = excluded.last_success_at_ms, last_error_at_ms = excluded.last_error_at_ms, updated_at_ms = excluded.updated_at_ms",
+    on: conn,
+    with: [
+      sqlight.text(health.name),
+      sqlight.text(health.status),
+      sqlight.text(health.message),
+      nullable_int(health.last_success_at_ms),
+      nullable_int(health.last_error_at_ms),
+      sqlight.int(health.updated_at_ms),
+    ],
+    expecting: decode.success(Nil),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to save integration health: " <> string.inspect(err)
   })
   |> result.map(fn(_) { Nil })
 }
