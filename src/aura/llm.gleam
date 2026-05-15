@@ -181,23 +181,25 @@ pub fn chat_with_options(
   messages: List(Message),
   temperature: Option(Float),
 ) -> Result(String, String) {
-  let body = case is_openai_codex_config(config) {
-    True ->
-      build_codex_responses_body_with_reasoning_effort(
-        config.model,
-        messages,
-        [],
-        False,
-        config.codex_reasoning_effort,
-      )
-    False -> build_request_body(config.model, messages, temperature)
-  } |> json.to_string
-  use resp <- result.try(post_chat(config, body, ""))
   case is_openai_codex_config(config) {
-    True ->
-      parse_codex_response_with_tools(resp)
-      |> result.map(fn(response) { response.content })
-    False -> parse_response(resp)
+    True -> {
+      let body =
+        build_codex_text_request_body(
+          config.model,
+          messages,
+          config.codex_reasoning_effort,
+        )
+        |> json.to_string
+      use response <- result.try(post_codex_streaming(config, body, ""))
+      Ok(response.content)
+    }
+    False -> {
+      let body =
+        build_request_body(config.model, messages, temperature)
+        |> json.to_string
+      use resp <- result.try(post_chat(config, body, ""))
+      parse_response(resp)
+    }
   }
 }
 
@@ -208,21 +210,47 @@ pub fn chat_with_tools(
   messages: List(Message),
   tools: List(ToolDefinition),
 ) -> Result(LlmResponse, String) {
-  let body = case is_openai_codex_config(config) {
-    True ->
-      build_codex_responses_body_with_reasoning_effort(
-        config.model,
-        messages,
-        tools,
-        False,
-        config.codex_reasoning_effort,
-      )
-    False -> build_request_body_with_tools(config.model, messages, tools, None)
-  } |> json.to_string
-  use resp <- result.try(post_chat(config, body, " (with tools)"))
   case is_openai_codex_config(config) {
-    True -> parse_codex_response_with_tools(resp)
-    False -> parse_response_with_tools(resp)
+    True -> {
+      let body =
+        build_codex_responses_body_with_reasoning_effort(
+          config.model,
+          messages,
+          tools,
+          True,
+          config.codex_reasoning_effort,
+        )
+        |> json.to_string
+      post_codex_streaming(config, body, " (with tools)")
+    }
+    False -> {
+      let body =
+        build_request_body_with_tools(config.model, messages, tools, None)
+        |> json.to_string
+      use resp <- result.try(post_chat(config, body, " (with tools)"))
+      parse_response_with_tools(resp)
+    }
+  }
+}
+
+fn post_codex_streaming(
+  config: LlmConfig,
+  body: String,
+  label: String,
+) -> Result(LlmResponse, String) {
+  let config = config_with_fresh_codex_auth(config)
+  let url = config.base_url <> "/responses"
+  logging.log(
+    logging.Info,
+    "[llm] Streaming " <> config.model <> " at " <> url <> label,
+  )
+  case stream_sync_ffi(url, config.api_key, config.model, body, 600_000) {
+    #("ok", content, tool_calls_json) -> {
+      use tool_calls <- result.try(parse_flat_tool_calls_json(tool_calls_json))
+      Ok(LlmResponse(content: content, tool_calls: tool_calls))
+    }
+    #("error", reason, _) -> Error("LLM stream error: " <> reason)
+    other -> Error("Unexpected stream result: " <> string.inspect(other))
   }
 }
 
@@ -313,10 +341,7 @@ fn api_error(
 ) -> Result(String, String) {
   logging.log(
     logging.Error,
-    "[llm] Error from "
-      <> config.model
-      <> ": status "
-      <> int.to_string(status),
+    "[llm] Error from " <> config.model <> ": status " <> int.to_string(status),
   )
   Error(
     "LLM API error (status "
@@ -342,7 +367,8 @@ fn set_auth_headers(
   config: LlmConfig,
 ) -> request.Request(String) {
   case is_openai_codex_config(config) {
-    False -> request.set_header(req, "authorization", "Bearer " <> config.api_key)
+    False ->
+      request.set_header(req, "authorization", "Bearer " <> config.api_key)
     True -> {
       let auth = codex_auth.decode(config.api_key)
       let req =
@@ -352,8 +378,7 @@ fn set_auth_headers(
         |> request.set_header("user-agent", "codex_cli_rs/0.0.1 (aura)")
       case auth.account_id {
         "" -> req
-        account_id ->
-          request.set_header(req, "ChatGPT-Account-ID", account_id)
+        account_id -> request.set_header(req, "ChatGPT-Account-ID", account_id)
       }
     }
   }
@@ -437,10 +462,7 @@ fn codex_text_message(role: String, content: String) -> json.Json {
   json.object([
     #("type", json.string("message")),
     #("role", json.string(role)),
-    #(
-      "content",
-      json.preprocessed_array([codex_text_part(role, content)]),
-    ),
+    #("content", json.preprocessed_array([codex_text_part(role, content)])),
   ])
 }
 
@@ -488,15 +510,18 @@ fn codex_input_items(messages: List(Message)) -> List(json.Json) {
       let #(items, known_call_ids) = acc
       case message {
         SystemMessage(_) -> #(items, known_call_ids)
-        UserMessage(c) ->
-          #(list.append(items, [codex_text_message("user", c)]), known_call_ids)
-        UserMessageWithImage(c, url) ->
-          #(list.append(items, [codex_image_message(c, url)]), known_call_ids)
-        AssistantMessage(c) ->
-          #(
-            list.append(items, [codex_text_message("assistant", c)]),
-            known_call_ids,
-          )
+        UserMessage(c) -> #(
+          list.append(items, [codex_text_message("user", c)]),
+          known_call_ids,
+        )
+        UserMessageWithImage(c, url) -> #(
+          list.append(items, [codex_image_message(c, url)]),
+          known_call_ids,
+        )
+        AssistantMessage(c) -> #(
+          list.append(items, [codex_text_message("assistant", c)]),
+          known_call_ids,
+        )
         AssistantToolCallMessage(c, calls) -> {
           let content_items = case c {
             "" -> []
@@ -511,11 +536,10 @@ fn codex_input_items(messages: List(Message)) -> List(json.Json) {
         }
         ToolResultMessage(id, c) ->
           case list.contains(known_call_ids, id) {
-            True ->
-              #(
-                list.append(items, [codex_function_call_output_item(id, c)]),
-                known_call_ids,
-              )
+            True -> #(
+              list.append(items, [codex_function_call_output_item(id, c)]),
+              known_call_ids,
+            )
             False -> #(items, known_call_ids)
           }
       }
@@ -592,6 +616,22 @@ pub fn build_codex_responses_body_with_reasoning_effort(
       ])
   }
   json.object(fields)
+}
+
+/// Build a text-only Codex Responses request for internal non-interactive jobs.
+/// Codex's backend requires SSE even when callers only need the final text.
+pub fn build_codex_text_request_body(
+  model: String,
+  messages: List(Message),
+  reasoning_effort: String,
+) -> json.Json {
+  build_codex_responses_body_with_reasoning_effort(
+    model,
+    messages,
+    [],
+    True,
+    reasoning_effort,
+  )
 }
 
 /// Build request body JSON including tools array for function calling.
@@ -674,31 +714,30 @@ pub fn parse_codex_response_with_tools(
     use item_type <- decode.field("type", decode.string)
     case item_type {
       "message" -> {
-        use texts <- decode.field(
-          "content",
-          decode.list(content_item_decoder),
+        use texts <- decode.field("content", decode.list(content_item_decoder))
+        decode.success(
+          ParsedCodexOutput(
+            content: texts
+              |> list.filter(fn(text) { text != "" })
+              |> string.join(""),
+            tool_calls: [],
+          ),
         )
-        decode.success(ParsedCodexOutput(
-          content: texts
-            |> list.filter(fn(text) { text != "" })
-            |> string.join(""),
-          tool_calls: [],
-        ))
       }
       "function_call" -> {
         use call_id <- decode.field("call_id", decode.string)
         use name <- decode.field("name", decode.string)
         use arguments <- decode.field("arguments", decode.string)
-        decode.success(ParsedCodexOutput(
-          content: "",
-          tool_calls: [ToolCall(id: call_id, name: name, arguments: arguments)],
-        ))
+        decode.success(
+          ParsedCodexOutput(content: "", tool_calls: [
+            ToolCall(id: call_id, name: name, arguments: arguments),
+          ]),
+        )
       }
       _ -> decode.success(ParsedCodexOutput(content: "", tool_calls: []))
     }
   }
-  let output_decoder =
-    decode.at(["output"], decode.list(output_item_decoder))
+  let output_decoder = decode.at(["output"], decode.list(output_item_decoder))
 
   case json.parse(body, output_decoder) {
     Ok(items) ->
@@ -765,10 +804,7 @@ pub fn chat_streaming_with_tools(
         #("model", json.string(config.model)),
         #("messages", json.array(messages, message_to_json)),
         #("stream", json.bool(True)),
-        #(
-          "stream_options",
-          json.object([#("include_usage", json.bool(True))]),
-        ),
+        #("stream_options", json.object([#("include_usage", json.bool(True))])),
       ]
       let fields = case tools {
         [] -> base_fields
@@ -827,3 +863,12 @@ fn stream_ffi(
   body_json: String,
   callback_pid: process.Pid,
 ) -> Nil
+
+@external(erlang, "aura_stream_ffi", "chat_stream_sync")
+fn stream_sync_ffi(
+  url: String,
+  api_key: String,
+  model: String,
+  body_json: String,
+  timeout_ms: Int,
+) -> #(String, String, String)

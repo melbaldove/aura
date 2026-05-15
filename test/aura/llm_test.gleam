@@ -155,7 +155,9 @@ pub fn build_codex_responses_body_with_tools_test() {
     |> json.to_string
 
   body |> string.contains("\"model\":\"gpt-5.5\"") |> should.be_true
-  body |> string.contains("\"instructions\":\"You are Aura.\"") |> should.be_true
+  body
+  |> string.contains("\"instructions\":\"You are Aura.\"")
+  |> should.be_true
   body |> string.contains("\"reasoning\"") |> should.be_true
   body |> string.contains("\"effort\":\"medium\"") |> should.be_true
   body |> string.contains("\"summary\":\"auto\"") |> should.be_true
@@ -189,6 +191,22 @@ pub fn build_codex_responses_body_uses_configured_reasoning_effort_test() {
     |> json.to_string
 
   body |> string.contains("\"effort\":\"high\"") |> should.be_true
+}
+
+pub fn build_codex_text_request_body_streams_for_noninteractive_calls_test() {
+  let body =
+    llm.build_codex_text_request_body(
+      "gpt-5.5",
+      [
+        llm.SystemMessage("You classify events."),
+        llm.UserMessage("Return JSON."),
+      ],
+      "medium",
+    )
+    |> json.to_string
+
+  body |> string.contains("\"stream\":true") |> should.be_true
+  body |> string.contains("\"tools\"") |> should.be_false
 }
 
 pub fn build_codex_responses_body_omits_orphan_tool_outputs_test() {

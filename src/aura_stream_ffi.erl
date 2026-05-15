@@ -1,5 +1,5 @@
 -module(aura_stream_ffi).
--export([chat_stream/5, receive_stream_message/1, test_parse_delta_type/1,
+-export([chat_stream/5, chat_stream_sync/5, receive_stream_message/1, test_parse_delta_type/1,
          test_stream_timeout_ms/1]).
 
 %% ---------------------------------------------------------------------------
@@ -45,6 +45,26 @@ chat_stream(Url, ApiKey, _Model, BodyJson, CallbackPid) ->
             CallbackPid ! {stream_error,
                 iolist_to_binary(io_lib:format("~p", [Reason]))},
             nil
+    end.
+
+chat_stream_sync(Url, ApiKey, Model, BodyJson, TimeoutMs) ->
+    Parent = self(),
+    StreamPid = spawn(fun() -> chat_stream(Url, ApiKey, Model, BodyJson, Parent) end),
+    collect_stream_sync(StreamPid, TimeoutMs).
+
+collect_stream_sync(StreamPid, TimeoutMs) ->
+    receive
+        {stream_delta, _Delta} ->
+            collect_stream_sync(StreamPid, TimeoutMs);
+        stream_reasoning ->
+            collect_stream_sync(StreamPid, TimeoutMs);
+        {stream_complete, Content, TcJson, _PromptTok} ->
+            {<<"ok">>, Content, TcJson};
+        {stream_error, Err} ->
+            {<<"error">>, Err, <<>>}
+    after TimeoutMs ->
+        exit(StreamPid, kill),
+        {<<"error">>, <<"Stream timeout">>, <<>>}
     end.
 
 auth_headers(Url, ApiKey) ->
