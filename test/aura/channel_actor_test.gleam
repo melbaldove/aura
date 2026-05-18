@@ -293,6 +293,30 @@ pub fn stream_complete_with_tools_spawns_tool_worker_test() {
   has_tool_spawn |> should.be_true
 }
 
+pub fn stream_complete_with_tools_edits_chat_before_tool_runs_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let tool_calls_json =
+    "[{\"id\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"docs/ENGINEERING.md\\\"}\"}]"
+  let #(_, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete("", tool_calls_json, 100),
+    )
+
+  let edit =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  edit |> string.contains("tool `read_file`") |> should.be_true
+  edit |> string.contains("path=`docs/ENGINEERING.md`") |> should.be_true
+}
+
 // --- Task 12: tool result sequencing -----------------------------------------
 
 pub fn tool_result_spawns_next_pending_tool_test() {
@@ -327,6 +351,27 @@ pub fn tool_result_all_resolved_spawns_next_stream_test() {
     }
   })
   |> should.be_true
+}
+
+pub fn tool_result_edits_chat_before_next_stream_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_one = channel_actor.with_fake_one_tool_call_turn(state)
+  let #(_, effects) =
+    channel_actor.transition(
+      with_one,
+      channel_actor.ToolResult("c1", "done", False),
+    )
+
+  let edit =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.DiscordEdit(_, content) -> Ok(content)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+
+  edit |> string.contains("tool `tool_a`") |> should.be_true
 }
 
 pub fn tool_result_trace_keeps_tool_call_arguments_test() {

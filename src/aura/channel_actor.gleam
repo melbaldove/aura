@@ -1416,6 +1416,13 @@ pub fn transition(
           }
         }
         Ok([first_call, ..rest]) -> {
+          let tool_start_trace =
+            conversation.ToolTrace(
+              name: first_call.name,
+              args: first_call.arguments,
+              result: "",
+              is_error: False,
+            )
           let new_turn =
             TurnState(
               ..turn,
@@ -1436,7 +1443,17 @@ pub fn transition(
                 transition(next_state, ToolResult(first_call.id, error, True))
               #(blocked_state, [summary, ..blocked_effects])
             }
-            None -> #(next_state, [SpawnToolWorker(first_call), summary])
+            None -> #(next_state, [
+              DiscordEdit(
+                turn.discord_msg_id,
+                format_progress(
+                  turn.accumulated_content,
+                  list.append(turn.traces, [tool_start_trace]),
+                ),
+              ),
+              SpawnToolWorker(first_call),
+              summary,
+            ])
           }
         }
       }
@@ -1459,6 +1476,13 @@ pub fn transition(
         False -> {
           case find_next_unresolved(turn.accumulated_tool_calls, new_pending) {
             Some(next_call) -> {
+              let next_tool_trace =
+                conversation.ToolTrace(
+                  name: next_call.name,
+                  args: next_call.arguments,
+                  result: "",
+                  is_error: False,
+                )
               let new_turn =
                 TurnState(
                   ..turn,
@@ -1470,7 +1494,16 @@ pub fn transition(
               case blocked_tool_call_result(new_turn, next_call) {
                 Some(error) ->
                   transition(next_state, ToolResult(next_call.id, error, True))
-                None -> #(next_state, [SpawnToolWorker(next_call)])
+                None -> #(next_state, [
+                  DiscordEdit(
+                    turn.discord_msg_id,
+                    format_progress(
+                      turn.accumulated_content,
+                      list.append(new_traces, [next_tool_trace]),
+                    ),
+                  ),
+                  SpawnToolWorker(next_call),
+                ])
               }
             }
             None -> {
@@ -1512,6 +1545,8 @@ pub fn transition(
                   ],
                   tool_result_messages,
                 ])
+              let needs_attention_followup =
+                needs_attention_memory_followup(new_messages)
               let new_turn =
                 TurnState(
                   ..turn,
@@ -1538,9 +1573,7 @@ pub fn transition(
                     0,
                   )
                 False -> {
-                  let new_messages = case
-                    needs_attention_memory_followup(new_messages)
-                  {
+                  let new_messages = case needs_attention_followup {
                     True ->
                       list.append(new_messages, [
                         llm.SystemMessage(attention_memory_followup_prompt),
@@ -1555,9 +1588,21 @@ pub fn transition(
                       messages_at_llm_call: next_llm_messages,
                       worker_kind: StreamWorker,
                     )
-                  #(ChannelState(..state, turn: Some(stream_turn)), [
-                    SpawnStreamWorker(next_llm_messages),
-                  ])
+                  let progress_effects = case needs_attention_followup {
+                    True -> []
+                    False -> [
+                      DiscordEdit(
+                        turn.discord_msg_id,
+                        format_progress(turn.accumulated_content, new_traces),
+                      ),
+                    ]
+                  }
+                  #(
+                    ChannelState(..state, turn: Some(stream_turn)),
+                    list.append(progress_effects, [
+                      SpawnStreamWorker(next_llm_messages),
+                    ]),
+                  )
                 }
               }
             }
