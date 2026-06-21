@@ -117,6 +117,58 @@ pub fn vision_error_still_spawns_stream_worker_test() {
   has_stream_spawn |> should.be_true
 }
 
+pub fn vision_complete_with_queued_images_spawns_next_vision_worker_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  // One more image still queued behind the one that just completed.
+  let with_vision =
+    channel_actor.with_fake_vision_turn_pending(state, [
+      #("data:image/png;base64,AAAA", "describe", "second.png"),
+    ])
+  let #(_new_state, effects) =
+    channel_actor.transition(
+      with_vision,
+      channel_actor.VisionComplete("first.png", "a cat"),
+    )
+  // The queued image is described next — vision worker, not stream worker yet.
+  let has_vision_spawn =
+    list.any(effects, fn(e) {
+      case e {
+        channel_actor.SpawnVisionWorker("data:image/png;base64,AAAA", _, "second.png") ->
+          True
+        _ -> False
+      }
+    })
+  let has_stream_spawn =
+    list.any(effects, fn(e) {
+      case e {
+        channel_actor.SpawnStreamWorker(_) -> True
+        _ -> False
+      }
+    })
+  has_vision_spawn |> should.be_true
+  has_stream_spawn |> should.be_false
+}
+
+pub fn vision_error_with_queued_images_still_describes_next_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_vision =
+    channel_actor.with_fake_vision_turn_pending(state, [
+      #("data:image/png;base64,BBBB", "describe", "second.png"),
+    ])
+  let #(_new_state, effects) =
+    channel_actor.transition(with_vision, channel_actor.VisionError("rejected"))
+  // A failed image must not abort the rest of the queue.
+  let has_vision_spawn =
+    list.any(effects, fn(e) {
+      case e {
+        channel_actor.SpawnVisionWorker("data:image/png;base64,BBBB", _, "second.png") ->
+          True
+        _ -> False
+      }
+    })
+  has_vision_spawn |> should.be_true
+}
+
 // --- Task 10: stream deltas and reasoning ------------------------------------
 
 pub fn stream_delta_accumulates_content_test() {

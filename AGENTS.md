@@ -252,7 +252,7 @@ Additional conventions:
 - Vision call is synchronous (`llm.chat_with_options`), runs before the streaming tool loop
 - Config is tiered: domain `config.toml` overrides global `config.toml` overrides built-in defaults
 - `[models] vision` sets the vision model, `[vision] prompt` sets the description prompt
-- Only first image attachment per message is processed
+- All image attachments per message are processed: described sequentially by the vision worker, each description prepended to the user message before the tool loop runs
 - Graceful fallback: if vision fails, original message is used without description
 
 ### Streaming

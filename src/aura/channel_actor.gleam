@@ -150,6 +150,10 @@ pub type TurnState {
     new_messages: List(llm.Message),
     traces: List(conversation.ToolTrace),
     messages_at_llm_call: List(llm.Message),
+    // Remaining images (url, question, filename) to describe sequentially via
+    // the vision worker before the stream worker runs. Empty for non-image or
+    // single-image turns; drained one entry per VisionComplete/VisionError.
+    pending_images: List(#(String, String, String)),
     stream_retry_count: Int,
     stream_stats: StreamStats,
     deadline_timer: Option(Timer),
@@ -1330,22 +1334,16 @@ pub fn transition(
           filename,
           description,
         )
-      let new_turn =
-        TurnState(
-          ..turn,
-          worker_kind: StreamWorker,
-          messages_at_llm_call: enriched,
-          new_messages: enriched_new,
-        )
-      #(ChannelState(..state, turn: Some(new_turn)), [
-        SpawnStreamWorker(enriched),
-      ])
+      drain_pending_image(state, turn, enriched, enriched_new)
     }
     VisionError(_reason), Some(turn) -> {
-      let new_turn = TurnState(..turn, worker_kind: StreamWorker)
-      #(ChannelState(..state, turn: Some(new_turn)), [
-        SpawnStreamWorker(turn.messages_at_llm_call),
-      ])
+      // Skip the failed image but still describe any remaining ones.
+      drain_pending_image(
+        state,
+        turn,
+        turn.messages_at_llm_call,
+        turn.new_messages,
+      )
     }
     VisionComplete(_, _), None -> #(state, [])
     VisionError(_), None -> #(state, [])
@@ -2096,12 +2094,10 @@ fn start_turn(
       let user_msg = llm.UserMessage(content: enriched_content)
       let new_messages = [user_msg]
       let messages = list.append(state.conversation, new_messages)
-      case has_image_attachment(msg) {
-        True -> {
-          // Prefer the local copy as a data URL to avoid Discord CDN HMAC
-          // rejection. attachment.preprocess has already downloaded the file.
-          let #(path, question, filename) =
-            first_image_and_question(msg, state.resolved_vision_config.prompt)
+      case all_images_and_question(msg, state.resolved_vision_config.prompt) {
+        // Describe images one at a time: spawn the first, queue the rest in the
+        // turn so each VisionComplete drains the next before the stream worker.
+        [#(path, question, filename), ..rest] -> {
           #(
             state_with_pending_vision(
               state,
@@ -2109,6 +2105,7 @@ fn start_turn(
               new_messages,
               msg,
               msg.content,
+              rest,
             ),
             [
               SpawnVisionWorker(path, question, filename),
@@ -2117,7 +2114,7 @@ fn start_turn(
             ],
           )
         }
-        False -> #(
+        [] -> #(
           state_with_pending_stream(
             state,
             messages,
@@ -2327,35 +2324,68 @@ pub fn assemble_system_prompt(
   base <> fs_section <> flare_context
 }
 
-fn has_image_attachment(msg: message.IncomingMessage) -> Bool {
-  list.any(msg.attachments, vision.is_image_attachment)
-}
-
-fn first_image_and_question(
+/// Resolve every image attachment to a (url, question, filename) triple so the
+/// vision worker can describe each one in turn. Prefers the local copy
+/// downloaded by attachment.preprocess as a base64 data URL — Discord CDN URLs
+/// with HMAC query strings get rejected by some vision endpoints (e.g. GLM
+/// returns 400 on them). All images share the same description prompt.
+fn all_images_and_question(
   msg: message.IncomingMessage,
   prompt: String,
-) -> #(String, String, String) {
-  let first_att =
-    list.find(msg.attachments, fn(att) { vision.is_image_attachment(att) })
-  let #(url, filename) = case first_att {
-    Error(_) -> #("", "")
-    Ok(att) -> {
-      // Prefer the local copy downloaded by attachment.preprocess as a
-      // base64 data URL — Discord CDN URLs with HMAC query strings get
-      // rejected by some vision endpoints (e.g. GLM returns 400 on them).
-      let local = attachment.local_path(msg.message_id, att.filename)
-      let resolved_url = case browser.read_as_data_url(local) {
-        Ok(data_url) -> data_url
-        Error(_) -> att.url
-      }
-      #(resolved_url, att.filename)
-    }
-  }
+) -> List(#(String, String, String)) {
   let question = case prompt {
     "" -> "Describe this image in detail for downstream tool use."
     q -> q
   }
-  #(url, question, filename)
+  list.filter_map(msg.attachments, fn(att) {
+    case vision.is_image_attachment(att) {
+      False -> Error(Nil)
+      True -> {
+        let local = attachment.local_path(msg.message_id, att.filename)
+        let resolved_url = case browser.read_as_data_url(local) {
+          Ok(data_url) -> data_url
+          Error(_) -> att.url
+        }
+        Ok(#(resolved_url, question, att.filename))
+      }
+    }
+  })
+}
+
+/// After a vision worker finishes (or fails), describe the next queued image if
+/// any remain; otherwise hand off to the stream worker with every image
+/// description already prepended to the conversation.
+fn drain_pending_image(
+  state: ChannelState,
+  turn: TurnState,
+  enriched: List(llm.Message),
+  enriched_new: List(llm.Message),
+) -> #(ChannelState, List(Effect)) {
+  case turn.pending_images {
+    [#(url, question, filename), ..rest] -> {
+      let new_turn =
+        TurnState(
+          ..turn,
+          worker_kind: VisionWorker,
+          messages_at_llm_call: enriched,
+          new_messages: enriched_new,
+          pending_images: rest,
+        )
+      #(ChannelState(..state, turn: Some(new_turn)), [
+        SpawnVisionWorker(url, question, filename),
+      ])
+    }
+    [] -> {
+      let new_turn =
+        TurnState(
+          ..turn,
+          worker_kind: StreamWorker,
+          messages_at_llm_call: enriched,
+          new_messages: enriched_new,
+        )
+      #(ChannelState(..state, turn: Some(new_turn)), [SpawnStreamWorker(enriched)])
+    }
+  }
 }
 
 fn new_turn_state(
@@ -2378,6 +2408,7 @@ fn new_turn_state(
     new_messages: initial_new_messages,
     traces: [],
     messages_at_llm_call: messages,
+    pending_images: [],
     stream_retry_count: 0,
     stream_stats: StreamStats(
       start_ms: 0,
@@ -2396,6 +2427,7 @@ fn state_with_pending_vision(
   new_messages: List(llm.Message),
   msg: message.IncomingMessage,
   user_content: String,
+  pending_images: List(#(String, String, String)),
 ) -> ChannelState {
   let kind =
     UserTurn(
@@ -2405,7 +2437,7 @@ fn state_with_pending_vision(
       user_content: user_content,
     )
   let turn = new_turn_state(kind, VisionWorker, messages, new_messages)
-  ChannelState(..state, turn: Some(turn))
+  ChannelState(..state, turn: Some(TurnState(..turn, pending_images: pending_images)))
 }
 
 fn state_with_pending_stream(
@@ -2860,6 +2892,17 @@ pub fn with_fake_vision_turn(state: ChannelState) -> ChannelState {
   ChannelState(..state, turn: Some(fake_turn))
 }
 
+/// Build a state with a fake vision-in-flight turn that still has `queued`
+/// images (url, question, filename) waiting to be described. Exercises the
+/// sequential multi-image drain in `VisionComplete` / `VisionError`.
+pub fn with_fake_vision_turn_pending(
+  state: ChannelState,
+  queued: List(#(String, String, String)),
+) -> ChannelState {
+  let fake_turn = TurnState(..fresh_fake_turn(VisionWorker), pending_images: queued)
+  ChannelState(..state, turn: Some(fake_turn))
+}
+
 /// Build a state with a fake stream-in-flight turn. Exercises the
 /// `StreamDelta` / `StreamReasoning` / `StreamComplete` arms of `transition`.
 pub fn with_fake_stream_turn(state: ChannelState) -> ChannelState {
@@ -2965,6 +3008,7 @@ fn fresh_fake_turn(worker_kind: WorkerKind) -> TurnState {
     new_messages: [],
     traces: [],
     messages_at_llm_call: [],
+    pending_images: [],
     stream_retry_count: 0,
     stream_stats: StreamStats(
       start_ms: 0,
