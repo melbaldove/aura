@@ -1,7 +1,7 @@
 import aura/brain
 import aura/message
 import dream_test/gherkin/steps.{
-  type StepContext, type StepRegistry, get_int, get_string, get_word,
+  type StepContext, type StepRegistry, get_int, get_string,
 }
 import dream_test/gherkin/world
 import dream_test/matchers.{
@@ -47,10 +47,6 @@ pub fn register(reg: StepRegistry) -> StepRegistry {
     then_discord_contains,
   )
   |> steps.step("no Discord message is sent to {string}", then_no_discord_send)
-  |> steps.step(
-    "the turn deadline fires after {int} {word}",
-    then_deadline_fires_after,
-  )
   |> steps.step("a tmp file at {string} containing {string}", given_tmp_file)
   |> steps.step(
     "Discord received at least {int} edits to the same message",
@@ -179,16 +175,6 @@ fn then_no_discord_send(
     <> " but got "
     <> int.to_string(count),
   )
-}
-
-fn then_deadline_fires_after(
-  ctx: StepContext,
-) -> Result(dream_types.AssertionResult, String) {
-  use n <- result_try(get_int(ctx.captures, 0))
-  use unit <- result_try(get_word(ctx.captures, 1))
-  let _ms = duration_to_ms(n, unit)
-  // Placeholder — deadline assertion body lands in channel_actor refactor.
-  Ok(succeed())
 }
 
 /// Create a tmp file at the given absolute path with the given content.

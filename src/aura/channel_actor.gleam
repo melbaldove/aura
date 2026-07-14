@@ -101,7 +101,8 @@ pub type ChannelMessage {
     snapshot_len: Int,
   )
 
-  TurnDeadline
+  /// Internal self-send for the watchdog scoped to one running tool call.
+  ToolDeadline(call_id: String)
 
   WorkerDown(monitor: Monitor, reason: String)
 
@@ -427,7 +428,7 @@ pub fn test_deps(channel_id: String, discord_token: String) -> Deps {
 }
 
 /// Dummy spawn functions for tests that never invoke them. The smoke-test
-/// path only sends messages like `Cancel` / `TurnDeadline` which don't
+/// path only sends messages like `Cancel` / `ToolDeadline` which don't
 /// traverse spawn effects.
 fn dummy_stream_spawn(
   _fn: fn(llm.LlmConfig, List(llm.Message), List(llm.ToolDefinition), Pid) ->
@@ -597,8 +598,9 @@ pub fn execute_effect(state: ChannelState, effect: Effect) -> ChannelState {
       let _ = process.cancel_timer(timer)
       state
     }
-    ScheduleDeadline(ms) -> {
-      let timer = process.send_after(state.self_subject, ms, TurnDeadline)
+    ScheduleToolDeadline(call_id, ms) -> {
+      let timer =
+        process.send_after(state.self_subject, ms, ToolDeadline(call_id))
       update_deadline_timer(state, Some(timer))
     }
     DiscordEdit(msg_id, content) -> {
@@ -1268,7 +1270,7 @@ pub type Effect {
   SpawnVisionWorker(image_path: String, question: String, filename: String)
   KillWorker(pid: Pid)
   CancelDeadline(timer: Timer)
-  ScheduleDeadline(ms: Int)
+  ScheduleToolDeadline(call_id: String, ms: Int)
   DiscordEdit(msg_id: String, content: String)
   DiscordSend(content: String)
   DbSaveExchange(
@@ -1450,6 +1452,7 @@ pub fn transition(
                 ),
               ),
               SpawnToolWorker(first_call),
+              ScheduleToolDeadline(first_call.id, 600_000),
               summary,
             ])
           }
@@ -1459,7 +1462,18 @@ pub fn transition(
     StreamComplete(_, _, _), None -> #(state, [])
 
     // --- tool result sequencing ------------------------------------
-    ToolResult(call_id, result, is_error), Some(turn) -> {
+    ToolResult(call_id, result, is_error), Some(original_turn) -> {
+      let #(turn, deadline_effects) = case
+        original_turn.worker_kind,
+        original_turn.deadline_timer
+      {
+        ToolWorker(_, active_call_id), Some(timer) if active_call_id == call_id -> #(
+          TurnState(..original_turn, deadline_timer: None),
+          [CancelDeadline(timer)],
+        )
+        _, _ -> #(original_turn, [])
+      }
+      let state = ChannelState(..state, turn: Some(turn))
       let new_pending =
         dict.insert(turn.pending_tool_results, call_id, #(result, is_error))
       let trace =
@@ -1470,7 +1484,9 @@ pub fn transition(
           is_error: is_error,
         )
       let new_traces = list.append(turn.traces, [trace])
-      case all_tool_calls_resolved(turn.accumulated_tool_calls, new_pending) {
+      let #(next_state, effects) = case
+        all_tool_calls_resolved(turn.accumulated_tool_calls, new_pending)
+      {
         False -> {
           case find_next_unresolved(turn.accumulated_tool_calls, new_pending) {
             Some(next_call) -> {
@@ -1501,6 +1517,7 @@ pub fn transition(
                     ),
                   ),
                   SpawnToolWorker(next_call),
+                  ScheduleToolDeadline(next_call.id, 600_000),
                 ])
               }
             }
@@ -1607,6 +1624,7 @@ pub fn transition(
           }
         }
       }
+      #(next_state, list.append(deadline_effects, effects))
     }
     ToolResult(_, _, _), None -> #(state, [])
 
@@ -1669,16 +1687,21 @@ pub fn transition(
     }
     Cancel, None -> #(state, [])
 
-    TurnDeadline, Some(turn) -> {
-      let kill_effects = [
-        KillWorker(turn.worker_pid),
-        DiscordEdit(turn.discord_msg_id, "Turn exceeded 10-minute deadline"),
-      ]
-      let fail_effects = fail_turn_effects(state, turn, "deadline")
-      let #(cleared, deq_effects) = clear_and_dequeue(state)
-      #(cleared, list.flatten([kill_effects, fail_effects, deq_effects]))
-    }
-    TurnDeadline, None -> #(state, [])
+    ToolDeadline(call_id), Some(turn) ->
+      case turn.worker_kind {
+        ToolWorker(name, active_call_id) if active_call_id == call_id -> {
+          let message = "Tool " <> name <> " exceeded 10-minute deadline"
+          let kill_effects = [
+            KillWorker(turn.worker_pid),
+            DiscordEdit(turn.discord_msg_id, message),
+          ]
+          let fail_effects = fail_turn_effects(state, turn, "tool deadline")
+          let #(cleared, deq_effects) = clear_and_dequeue(state)
+          #(cleared, list.flatten([kill_effects, fail_effects, deq_effects]))
+        }
+        _ -> #(state, [])
+      }
+    ToolDeadline(_), None -> #(state, [])
 
     // --- compression complete -------------------------------------
     CompressionComplete(new_history, new_comp_state, snapshot_len), _ -> {
@@ -1917,8 +1940,8 @@ pub fn transition(
 
 const max_stream_retries = 3
 
-/// Maximum number of tool-call iterations per turn. Prevents runaway LLM tool
-/// loops that could otherwise only be bounded by the 10-minute turn deadline.
+/// Maximum number of tool-call iterations per turn. Prevents fast runaway LLM
+/// tool loops even though there is deliberately no overall turn deadline.
 const max_tool_iterations: Int = 80
 
 const record_cognitive_feedback_is_internal_error = "Error: record_cognitive_feedback is internal. Use memory(target='attention') for user feedback about Aura notifications, digests, surfacing, asks, or missed alerts."
@@ -2110,7 +2133,6 @@ fn start_turn(
             [
               SpawnVisionWorker(path, question, filename),
               StartTyping,
-              ScheduleDeadline(600_000),
             ],
           )
         }
@@ -2122,7 +2144,7 @@ fn start_turn(
             msg,
             msg.content,
           ),
-          [SpawnStreamWorker(messages), StartTyping, ScheduleDeadline(600_000)],
+          [SpawnStreamWorker(messages), StartTyping],
         )
       }
     }
@@ -2136,7 +2158,6 @@ fn start_turn(
       #(ChannelState(..state, turn: Some(turn)), [
         SpawnStreamWorker(messages),
         StartTyping,
-        ScheduleDeadline(600_000),
       ])
     }
   }
@@ -2383,7 +2404,9 @@ fn drain_pending_image(
           messages_at_llm_call: enriched,
           new_messages: enriched_new,
         )
-      #(ChannelState(..state, turn: Some(new_turn)), [SpawnStreamWorker(enriched)])
+      #(ChannelState(..state, turn: Some(new_turn)), [
+        SpawnStreamWorker(enriched),
+      ])
     }
   }
 }
@@ -2437,7 +2460,10 @@ fn state_with_pending_vision(
       user_content: user_content,
     )
   let turn = new_turn_state(kind, VisionWorker, messages, new_messages)
-  ChannelState(..state, turn: Some(TurnState(..turn, pending_images: pending_images)))
+  ChannelState(
+    ..state,
+    turn: Some(TurnState(..turn, pending_images: pending_images)),
+  )
 }
 
 fn state_with_pending_stream(
@@ -2899,7 +2925,8 @@ pub fn with_fake_vision_turn_pending(
   state: ChannelState,
   queued: List(#(String, String, String)),
 ) -> ChannelState {
-  let fake_turn = TurnState(..fresh_fake_turn(VisionWorker), pending_images: queued)
+  let fake_turn =
+    TurnState(..fresh_fake_turn(VisionWorker), pending_images: queued)
   ChannelState(..state, turn: Some(fake_turn))
 }
 

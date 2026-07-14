@@ -231,12 +231,6 @@ Covers both plain sends and progressive\-edit replies.
 .BI "no Discord message is sent to " {string}
 Sleeps 200ms then asserts zero Sent events for the channel.
 .TP
-.BI "the turn deadline fires after " {int} " " {word}
-Duration placeholder; assertion body lands with the channel_actor refactor.
-Unit is parsed by
-.B duration_to_ms
-(see below).
-.TP
 .BI "a tmp file at " {string} " containing " {string}
 Writes the given content to the given absolute path via simplifile.
 .TP

@@ -32,7 +32,7 @@ pub fn channel_actor_starts_and_accepts_messages_test() {
 
   // Sending messages should not crash the actor
   process.send(subject, channel_actor.Cancel)
-  process.send(subject, channel_actor.TurnDeadline)
+  process.send(subject, channel_actor.ToolDeadline("stale"))
 
   // Verify the actor is still alive by sending one more and completing
   process.send(subject, channel_actor.Cancel)
@@ -67,6 +67,13 @@ pub fn incoming_when_idle_starts_turn_test() {
     option.None -> should.fail()
   }
   { effects != [] } |> should.be_true
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.ScheduleToolDeadline(_, _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
 }
 
 pub fn incoming_when_turn_in_flight_queues_test() {
@@ -133,8 +140,11 @@ pub fn vision_complete_with_queued_images_spawns_next_vision_worker_test() {
   let has_vision_spawn =
     list.any(effects, fn(e) {
       case e {
-        channel_actor.SpawnVisionWorker("data:image/png;base64,AAAA", _, "second.png") ->
-          True
+        channel_actor.SpawnVisionWorker(
+          "data:image/png;base64,AAAA",
+          _,
+          "second.png",
+        ) -> True
         _ -> False
       }
     })
@@ -161,8 +171,11 @@ pub fn vision_error_with_queued_images_still_describes_next_test() {
   let has_vision_spawn =
     list.any(effects, fn(e) {
       case e {
-        channel_actor.SpawnVisionWorker("data:image/png;base64,BBBB", _, "second.png") ->
-          True
+        channel_actor.SpawnVisionWorker(
+          "data:image/png;base64,BBBB",
+          _,
+          "second.png",
+        ) -> True
         _ -> False
       }
     })
@@ -1036,7 +1049,86 @@ pub fn stream_error_exhausts_retries_fails_turn_test() {
   |> should.be_true
 }
 
-// --- Task 14: cancel + deadline ----------------------------------------------
+// --- Task 14: cancel + per-tool deadline -------------------------------------
+
+pub fn stream_tool_call_arms_scoped_deadline_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_stream = channel_actor.with_fake_stream_turn(state)
+  let #(_, effects) =
+    channel_actor.transition(
+      with_stream,
+      channel_actor.StreamComplete(
+        "",
+        "[{\"id\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{}\"}]",
+        0,
+      ),
+    )
+
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.ScheduleToolDeadline("c1", 600_000) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
+pub fn tool_result_cancels_deadline_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let armed =
+    channel_actor.with_fake_one_tool_call_turn(state)
+    |> channel_actor.execute_effect(channel_actor.ScheduleToolDeadline(
+      "c1",
+      600_000,
+    ))
+  let #(new_state, effects) =
+    channel_actor.transition(
+      armed,
+      channel_actor.ToolResult("c1", "done", False),
+    )
+
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.CancelDeadline(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+  case new_state.turn {
+    option.Some(turn) -> turn.deadline_timer |> should.equal(option.None)
+    option.None -> Nil
+  }
+}
+
+pub fn next_tool_gets_fresh_scoped_deadline_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let armed =
+    channel_actor.with_fake_two_tool_calls_turn(state)
+    |> channel_actor.execute_effect(channel_actor.ScheduleToolDeadline(
+      "c1",
+      600_000,
+    ))
+  let #(_, effects) =
+    channel_actor.transition(
+      armed,
+      channel_actor.ToolResult("c1", "done", False),
+    )
+
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.CancelDeadline(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.ScheduleToolDeadline("c2", 600_000) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
 
 pub fn cancel_kills_worker_and_fails_turn_test() {
   let state = channel_actor.initial_state_for_test("ch1")
@@ -1053,6 +1145,25 @@ pub fn cancel_kills_worker_and_fails_turn_test() {
   |> should.be_true
 }
 
+pub fn cancel_cancels_active_tool_deadline_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let armed =
+    channel_actor.with_fake_one_tool_call_turn(state)
+    |> channel_actor.execute_effect(channel_actor.ScheduleToolDeadline(
+      "c1",
+      600_000,
+    ))
+  let #(_, effects) = channel_actor.transition(armed, channel_actor.Cancel)
+
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.CancelDeadline(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
 pub fn cancel_idle_is_noop_test() {
   let state = channel_actor.initial_state_for_test("ch1")
   let #(new_state, effects) =
@@ -1061,12 +1172,30 @@ pub fn cancel_idle_is_noop_test() {
   effects |> should.equal([])
 }
 
-pub fn turn_deadline_fails_turn_test() {
+pub fn matching_tool_deadline_fails_turn_test() {
   let state = channel_actor.initial_state_for_test("ch1")
-  let with_stream = channel_actor.with_fake_stream_turn(state)
-  let #(new_state, _) =
-    channel_actor.transition(with_stream, channel_actor.TurnDeadline)
+  let with_tool = channel_actor.with_fake_one_tool_call_turn(state)
+  let #(new_state, effects) =
+    channel_actor.transition(with_tool, channel_actor.ToolDeadline("c1"))
   new_state.turn |> should.equal(option.None)
+  list.any(effects, fn(effect) {
+    case effect {
+      channel_actor.DiscordEdit(_, message) ->
+        message == "Tool tool_a exceeded 10-minute deadline"
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
+pub fn stale_tool_deadline_is_ignored_test() {
+  let state = channel_actor.initial_state_for_test("ch1")
+  let with_tool = channel_actor.with_fake_one_tool_call_turn(state)
+  let #(new_state, effects) =
+    channel_actor.transition(with_tool, channel_actor.ToolDeadline("old-call"))
+
+  new_state |> should.equal(with_tool)
+  effects |> should.equal([])
 }
 
 // --- Task 15: worker down translation ----------------------------------------
