@@ -161,6 +161,11 @@ fn send_stream_complete(
 @external(erlang, "fake_llm_ffi", "stream_error")
 fn send_stream_error(pid: Pid, reason: String) -> Nil
 
+/// Block like a silent stream until the production cancellation message
+/// arrives, then notify both the observer and stream callback.
+@external(erlang, "fake_llm_ffi", "wait_for_cancel")
+pub fn wait_for_cancel(callback_pid: Pid, observer: process.Subject(Nil)) -> Nil
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------

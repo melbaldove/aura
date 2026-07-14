@@ -14,6 +14,10 @@ fn fake_config() -> llm.LlmConfig {
   )
 }
 
+pub fn worker_safety_timeout_does_not_preempt_codex_transport_test() {
+  stream_worker.safety_timeout_ms() |> should.equal(610_000)
+}
+
 pub fn stream_worker_forwards_delta_then_complete_test() {
   // Build a fake LLM, script one text response
   let #(fake, client) = fake_llm.new()
@@ -53,14 +57,43 @@ pub fn stream_worker_receives_while_stream_call_is_blocked_test() {
   let parent: process.Subject(channel_actor.ChannelMessage) =
     process.new_subject()
 
-  let _ =
-    stream_worker.spawn(blocking_stream, fake_config(), [], [], parent)
+  let _ = stream_worker.spawn(blocking_stream, fake_config(), [], [], parent)
 
   let received_delta = case process.receive(parent, 100) {
     Ok(channel_actor.StreamDelta("early")) -> True
     _ -> False
   }
   received_delta |> should.be_true
+}
+
+pub fn idle_timeout_cancels_request_before_reporting_error_test() {
+  let parent: process.Subject(channel_actor.ChannelMessage) =
+    process.new_subject()
+  let cancel_observed: process.Subject(Nil) = process.new_subject()
+  let stalled_stream = fn(
+    _config: llm.LlmConfig,
+    _messages: List(llm.Message),
+    _tools: List(llm.ToolDefinition),
+    callback_pid: Pid,
+  ) {
+    fake_llm.wait_for_cancel(callback_pid, cancel_observed)
+  }
+
+  let _ =
+    stream_worker.spawn_with_idle_timeout(
+      stalled_stream,
+      fake_config(),
+      [],
+      [],
+      parent,
+      10,
+    )
+
+  process.receive(cancel_observed, 1000) |> should.be_ok
+  case process.receive(parent, 1000) {
+    Ok(channel_actor.StreamError("idle timeout")) -> Nil
+    _ -> should.fail()
+  }
 }
 
 fn blocking_stream(

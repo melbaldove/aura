@@ -171,6 +171,12 @@ All LLM calls use SSE streaming via an Erlang FFI (`aura_stream_ffi.erl`). The F
 4. For `delta.tool_calls` — accumulates index/id/name/arguments internally
 5. For `reasoning_content` (GLM-5.1) — sends `stream_reasoning` (keeps timeout alive)
 6. On `[DONE]` — sends `{stream_complete, Content, ToolCallsJson}` with the full response
+7. On idle timeout or worker cancellation — cancels the owning `httpc` request by request ID before the stream process exits
+
+Provider transport timeouts remain authoritative: standard OpenAI-compatible
+streams allow 120 seconds of silence and Codex streams allow 600 seconds. The
+Gleam stream worker has a 610-second safety watchdog so it cannot pre-empt the
+Codex transport timeout or leak an async request when forcing cleanup.
 
 ### Tool loop
 
@@ -255,7 +261,7 @@ All downstream systems (conversation loading, search, compression, persistence) 
 |--------|---------|
 | `aura_ws_ffi` | Raw WebSocket (SSL, RFC 6455 framing, passive recv) |
 | `aura_gateway_bridge` | Bridge raw WS messages to Gleam Subject |
-| `aura_stream_ffi` | SSE streaming HTTP with content + tool call parsing |
+| `aura_stream_ffi` | SSE streaming HTTP with content/tool-call parsing and request-ID cancellation |
 | `aura_time_ffi` | `erlang:system_time(millisecond)` |
 | `aura_poller_ffi` | `receive {'EXIT', _, _}` for trap_exits |
 | `aura_skill_ffi` | `os:cmd/1` for skill subprocess invocation |

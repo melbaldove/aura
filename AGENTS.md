@@ -261,6 +261,7 @@ Additional conventions:
 - Content deltas forwarded to brain process for progressive Discord editing
 - Tool call deltas accumulated in the Erlang FFI, returned as JSON on stream_complete
 - GLM-5.1 sends `reasoning_content` tokens before `content` — the FFI handles both
+- Idle or externally cancelled streams call `httpc:cancel_request/1` before their owner process exits; the worker safety watchdog must not pre-empt provider-specific transport timeouts
 
 ### Tiers (write permissions)
 

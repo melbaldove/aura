@@ -1,5 +1,6 @@
 -module(aura_stream_ffi).
--export([chat_stream/5, chat_stream_sync/5, receive_stream_message/1, test_parse_delta_type/1,
+-export([chat_stream/5, chat_stream_sync/5, cancel_stream/1,
+         receive_stream_message/1, test_parse_delta_type/1,
          test_stream_timeout_ms/1]).
 
 %% ---------------------------------------------------------------------------
@@ -63,8 +64,23 @@ collect_stream_sync(StreamPid, TimeoutMs) ->
         {stream_error, Err} ->
             {<<"error">>, Err, <<>>}
     after TimeoutMs ->
+        cancel_stream(StreamPid),
+        collect_cancel_sync(StreamPid, 1000)
+    end.
+
+collect_cancel_sync(StreamPid, TimeoutMs) ->
+    receive
+        {stream_complete, Content, TcJson, _PromptTok} ->
+            {<<"ok">>, Content, TcJson};
+        {stream_error, Err} ->
+            {<<"error">>, Err, <<>>};
+        stream_cancelled ->
+            {<<"error">>, <<"Stream timeout">>, <<>>};
+        _LateProgress ->
+            collect_cancel_sync(StreamPid, TimeoutMs)
+    after TimeoutMs ->
         exit(StreamPid, kill),
-        {<<"error">>, <<"Stream timeout">>, <<>>}
+        {<<"error">>, <<"Stream timeout; cancellation unacknowledged">>, <<>>}
     end.
 
 auth_headers(Url, ApiKey) ->
@@ -106,6 +122,13 @@ stream_timeout_ms(Url) ->
 
 stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls, PromptTokens, TimeoutMs) ->
     receive
+        cancel_stream ->
+            %% The request is owned by httpc's manager, not this process. An
+            %% external process kill alone therefore leaks the live request.
+            %% Cast cancellation by RequestId before acknowledging shutdown.
+            ok = httpc:cancel_request(RequestId),
+            CallbackPid ! stream_cancelled;
+
         {http, {RequestId, stream_start, _Headers}} ->
             stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls, PromptTokens, TimeoutMs);
 
@@ -133,8 +156,14 @@ stream_loop(RequestId, CallbackPid, Buffer, AccContent, ToolCalls, PromptTokens,
             CallbackPid ! {stream_error, Msg}
 
     after TimeoutMs ->
+        ok = httpc:cancel_request(RequestId),
         CallbackPid ! {stream_error, <<"Stream timeout">>}
     end.
+
+%% Ask a live chat_stream process to cancel its httpc request cleanly.
+cancel_stream(StreamPid) ->
+    StreamPid ! cancel_stream,
+    nil.
 
 %% Process parsed SSE events, updating content, tool call, and usage accumulators
 process_events([], Content, ToolCalls, PromptTokens, _Pid) ->
@@ -437,6 +466,7 @@ receive_stream_message(TimeoutMs) ->
         stream_reasoning                               -> {<<"reasoning">>, <<>>, <<>>, 0};
         {stream_complete, Content, TcJson, PromptTok}  -> {<<"complete">>, Content, TcJson, PromptTok};
         {stream_error, Err}                            -> {<<"error">>, Err, <<>>, 0};
+        stream_cancelled                               -> {<<"cancelled">>, <<>>, <<>>, 0};
         stream_done                                    -> {<<"done">>, <<>>, <<>>, 0}
     after TimeoutMs ->
         {<<"timeout">>, <<>>, <<>>, 0}

@@ -254,7 +254,7 @@ pub fn parse_delta_responses_reasoning_item_added_test() {
   |> should.equal("reasoning")
 }
 
-pub fn codex_stream_timeout_uses_turn_deadline_test() {
+pub fn codex_stream_transport_allows_ten_minute_idle_test() {
   stream_timeout_ms("https://chatgpt.com/backend-api/codex/responses")
   |> should.equal(600_000)
 }
