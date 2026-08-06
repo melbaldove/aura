@@ -66,10 +66,11 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [035](035-no-semantic-memory-guard.md) | No semantic memory guard for cognitive feedback | Partially superseded by ADR-036 |
 | [036](036-attention-memory-feedback.md) | Attention memory feedback | Accepted |
 | [037](037-recent-attention-output-context.md) | Recent attention output context | Accepted |
+| [039](039-backend-neutral-flares.md) | Backend-neutral flares | Accepted |
 
 ## Adding a new ADR
 
 1. Copy the template above
-2. Number sequentially (next is 038)
+2. Number sequentially (next is 040)
 3. Add to the index in this README
 4. Commit with the code change it relates to
