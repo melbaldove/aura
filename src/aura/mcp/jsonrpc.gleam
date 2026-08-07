@@ -322,7 +322,10 @@ fn decode_error_body(
 // JSON-RPC params/result/error.data are arbitrary JSON values. We decode them
 // as Dynamic and re-encode to json.Json so Messages round-trip cleanly.
 
-fn dynamic_to_json(value: Dynamic) -> json.Json {
+/// Convert a decoded JSON value (Dynamic) back to a `json.Json` so arbitrary
+/// payloads round-trip cleanly. On Erlang, `json:decode` produces binaries,
+/// ints, floats, true/false atoms, null, lists, and maps.
+pub fn dynamic_to_json(value: Dynamic) -> json.Json {
   // Try each JSON primitive in turn. On Erlang, `json:decode` returns:
   //   binary (string), integer, float, true/false atom, null atom, list, map.
   case decode.run(value, decode.string) {
