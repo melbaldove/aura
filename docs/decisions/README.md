@@ -66,6 +66,7 @@ What are the trade-offs? What becomes easier? What becomes harder?
 | [035](035-no-semantic-memory-guard.md) | No semantic memory guard for cognitive feedback | Partially superseded by ADR-036 |
 | [036](036-attention-memory-feedback.md) | Attention memory feedback | Accepted |
 | [037](037-recent-attention-output-context.md) | Recent attention output context | Accepted |
+| [038](038-external-hook-layer.md) | External hook layer — socket commands, two lanes, durable external asks | Draft |
 | [039](039-backend-neutral-flares.md) | Backend-neutral flares | Accepted |
 
 ## Adding a new ADR
