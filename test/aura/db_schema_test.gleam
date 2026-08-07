@@ -66,7 +66,7 @@ pub fn schema_version_is_set_test() {
 
   db_schema.get_version(conn)
   |> should.be_ok
-  |> should.equal(9)
+  |> should.equal(10)
 }
 
 pub fn schema_v5_creates_events_table_test() {
@@ -249,7 +249,7 @@ pub fn schema_v4_alter_table_idempotent_test() {
   // Verify version is migrated forward to the current version
   db_schema.get_version(conn)
   |> should.be_ok
-  |> should.equal(9)
+  |> should.equal(10)
 }
 
 pub fn schema_v6_creates_integration_checkpoints_test() {
@@ -300,4 +300,28 @@ pub fn schema_v9_creates_integration_health_test() {
   |> result.map(list.length)
   |> should.be_ok
   |> should.equal(1)
+}
+
+pub fn schema_v10_creates_external_asks_test() {
+  use conn <- sqlight.with_connection(":memory:")
+  let assert Ok(_) = db_schema.initialize(conn)
+
+  let assert Ok(_) =
+    sqlight.exec(
+      "INSERT INTO external_asks (id, source, channel_id, message_id, text, buttons_json, status, decision, requested_at_ms, updated_at_ms) VALUES ('ask-1', 'linkedin', 'ch1', 'm1', 'Challenge up', '[\"Resolved\",\"Abort\"]', 'pending', '', 1000, 1000)",
+      conn,
+    )
+
+  sqlight.query(
+    "SELECT status FROM external_asks WHERE id = 'ask-1'",
+    on: conn,
+    with: [],
+    expecting: decode.at([0], decode.string),
+  )
+  |> should.be_ok
+  |> should.equal(["pending"])
+
+  db_schema.get_version(conn)
+  |> should.be_ok
+  |> should.equal(10)
 }

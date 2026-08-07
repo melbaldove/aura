@@ -3,7 +3,7 @@ import gleam/result
 import gleam/string
 import sqlight
 
-const current_version = 9
+const current_version = 10
 
 /// Create all tables, indexes, FTS5 virtual table, and triggers if they do not
 /// already exist, then run any pending schema migrations.
@@ -300,6 +300,8 @@ pub fn initialize(conn: sqlight.Connection) -> Result(Nil, String) {
     "CREATE INDEX IF NOT EXISTS idx_shell_approvals_channel_status ON shell_approvals(channel_id, status)",
   ))
 
+  use _ <- result.try(create_external_asks_table(conn))
+
   // Set or migrate schema version
   migrate_version(conn)
 }
@@ -595,6 +597,10 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
         True -> create_integration_health_table(conn)
         False -> Ok(Nil)
       })
+      use _ <- result.try(case v < 10 {
+        True -> create_external_asks_table(conn)
+        False -> Ok(Nil)
+      })
       exec(
         conn,
         "UPDATE schema_version SET version = "
@@ -611,6 +617,32 @@ fn migrate_version(conn: sqlight.Connection) -> Result(Nil, String) {
       )
     }
   }
+}
+
+fn create_external_asks_table(
+  conn: sqlight.Connection,
+) -> Result(Nil, String) {
+  use _ <- result.try(exec(
+    conn,
+    "
+    CREATE TABLE IF NOT EXISTS external_asks (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      buttons_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      requested_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    )
+  ",
+  ))
+  exec(
+    conn,
+    "CREATE INDEX IF NOT EXISTS idx_external_asks_status ON external_asks(status)",
+  )
 }
 
 fn create_integration_health_table(
