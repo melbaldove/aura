@@ -1,7 +1,5 @@
 import aura/hook_rules
-import gleam/option.{None, Some}
 import gleam/list
-import gleeunit
 import gleeunit/should
 
 fn ruleset_toml() -> String {

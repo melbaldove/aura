@@ -42,6 +42,13 @@ fn connect_and_send_ffi(
   command: String,
 ) -> Result(String, String)
 
+@external(erlang, "aura_socket_ffi", "connect_and_send")
+fn connect_and_send_with_timeout_ffi(
+  socket_path: String,
+  command: String,
+  timeout_ms: Int,
+) -> Result(String, String)
+
 @external(erlang, "aura_socket_ffi", "cleanup_socket")
 fn cleanup_socket_ffi(socket_path: String) -> Nil
 
@@ -585,6 +592,16 @@ fn handle_hooks_list(ctx: CtlContext) -> String {
 pub fn send(paths: xdg.Paths, command: String) -> Result(String, String) {
   let socket_path = xdg.state_path(paths, "aura.sock")
   connect_and_send_ffi(socket_path, command)
+}
+
+/// Send a command with a caller-supplied read timeout (blocking asks).
+pub fn send_with_timeout(
+  paths: xdg.Paths,
+  command: String,
+  timeout_ms: Int,
+) -> Result(String, String) {
+  let socket_path = xdg.state_path(paths, "aura.sock")
+  connect_and_send_with_timeout_ffi(socket_path, command, timeout_ms)
 }
 
 /// Remove the socket file (called on shutdown).

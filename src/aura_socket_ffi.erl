@@ -1,5 +1,5 @@
 -module(aura_socket_ffi).
--export([start_listener/2, connect_and_send/2, cleanup_socket/1]).
+-export([start_listener/2, connect_and_send/2, connect_and_send/3, cleanup_socket/1]).
 
 %% ---------------------------------------------------------------------------
 %% start_listener/2 — Start a Unix socket listener that dispatches commands.
@@ -69,6 +69,9 @@ handle_connection(Sock, Handler) ->
 %% ---------------------------------------------------------------------------
 
 connect_and_send(SocketPath, Command) ->
+    connect_and_send(SocketPath, Command, 900000).
+
+connect_and_send(SocketPath, Command, TimeoutMs) ->
     PathStr = binary_to_list(SocketPath),
     case gen_tcp:connect({local, PathStr}, 0, [
         binary,
@@ -77,8 +80,8 @@ connect_and_send(SocketPath, Command) ->
     ], 5000) of
         {ok, Sock} ->
             ok = gen_tcp:send(Sock, [Command, <<"\n">>]),
-            %% Cognitive eval commands run multiple sequential live model calls.
-            Result = recv_all(Sock, [], 900000),
+            %% Blocking asks hold the socket open until a decision or the TTL.
+            Result = recv_all(Sock, [], TimeoutMs),
             gen_tcp:close(Sock),
             Result;
         {error, enoent} ->
