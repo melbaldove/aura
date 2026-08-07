@@ -1,8 +1,8 @@
 # External Hook Layer
 
-Status: Agreed design, pending ADR acceptance
+Status: Accepted design (ADR 038)
 Date: 2026-08-07
-ADR: [`docs/decisions/038-external-hook-layer.md`](../decisions/038-external-hook-layer.md) (draft)
+ADR: [`docs/decisions/038-external-hook-layer.md`](../decisions/038-external-hook-layer.md)
 
 Derives from `docs/PRODUCT_PRINCIPLES.md` (attention is deliberate; integrations
 are evidence feeds) and `docs/ENGINEERING.md` (Unix philosophy: text interfaces,

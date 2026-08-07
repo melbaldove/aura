@@ -1,6 +1,6 @@
 # ADR-038: External hook layer — socket commands, two lanes, durable external asks
 
-**Status:** Draft (pending acceptance)
+**Status:** Accepted
 **Date:** 2026-08-07
 **Amends:** ADR 021 (protocol clause only)
 **Extends:** ADR 027 (restart-cancellation pattern, different terminal outcome)

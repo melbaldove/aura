@@ -24,6 +24,9 @@ start_listener(SocketPath, Handler) ->
         {reuseaddr, true}
     ]) of
         {ok, ListenSock} ->
+            %% Restrict the socket to the owning user; hook commands carry
+            %% structured payloads and the socket bypasses Discord's ACLs.
+            file:change_mode(PathStr, 8#600),
             Pid = spawn_link(fun() -> accept_loop(ListenSock, Handler) end),
             io:format("[ctl] Listening on ~s~n", [PathStr]),
             {ok, Pid};

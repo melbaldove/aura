@@ -83,10 +83,28 @@ supervisor (OneForOne)
 ├── cognitive_improve Replay-aware cognitive improvement proposal reports
 ├── poller      Discord gateway WebSocket
 ├── flare_manager Flare lifecycle actor — roster, dispatch, monitor, SQLite persist
+├── external_asks Hook ask lifecycle actor — durable ask rows, button delivery, expiry, decision waiters
 ├── brain       Routes messages, LLM tool loop, progressive streaming, review
 ├── (domains loaded as context, not actors)
 └── scheduler   Config-driven cron + interval + dreaming schedules
 ```
+
+### External hooks
+
+Standalone processes reach the daemon over the ctl Unix socket
+(`~/.local/state/aura/aura.sock`, mode `0600`) with line-framed commands:
+
+- `event <json>` — ingest a structured event through the cognitive pipeline.
+- `notify <json>` — deliver a message directly (deduped, ledgered) without triggering the cognitive worker.
+- `ask <json>` — post a button-ask to a target; blocks until a button is clicked or the TTL expires.
+- `decision <correlation_id>` — replay an ask's resolution.
+- `asks` / `hooks` — introspect pending asks and registered event sources.
+
+JSON payloads carry `source`, an optional `rule` (for provenance), and
+lane-specific fields; see `docs/architecture/external-hooks.md`. Rules files
+live in `~/.config/aura/hooks/<name>.toml` and are driven by
+`aura hook run --rules <name> -- <command>` (see `src/aura/hook_rules.gleam`,
+`src/aura/hook_run.gleam`).
 
 ### Message flow
 
@@ -138,6 +156,10 @@ src/aura/
   db.gleam              SQLite actor (serialized writes, FTS5 search)
   db_schema.gleam       DDL, indexes, FTS5 triggers, schema versioning
   db_migration.gleam    One-time JSONL → SQLite migration
+  external_asks.gleam   Hook ask lifecycle actor — durable rows, button delivery, expiry, decision waiters
+  hook_protocol.gleam   Hook wire protocol — line-framed event/notify/ask/decision parsing + custom_id codec
+  hook_rules.gleam      TOML hook ruleset parsing, regex matching, template rendering
+  hook_run.gleam        aura-hook wrapper — spawn/tee/match/fire loop, decision files
   cognitive_worker.gleam Async model-backed cognitive decisions for events
   cognitive_delivery.gleam Delivery ledger, digest queue, immediate surfacing, conversation history writes
   cognitive_episode_context.gleam Prompt context from recent user-facing cognitive attention outputs
@@ -225,7 +247,7 @@ Additional conventions:
 - Use `gleeunit` + `should` assertions for unit tests
 - Test pure functions directly. Test actors via their public convenience functions.
 - Temp files in `/tmp/aura-*-test`, clean up after
-- 586 tests currently. Don't regress.
+- 1126 tests currently. Don't regress.
 - **HARD RULE: Every bug fix must include a regression test.** No exceptions for "it's hard to test" — if the buggy code has pure functions (encoding, parsing, extraction), test those. If the bug is in process/IO code that genuinely can't be unit tested, document why in the commit message. A `fix:` commit without a test is incomplete.
 
 ### Database
@@ -234,7 +256,7 @@ Additional conventions:
 - WAL mode, 1s busy timeout
 - All access through the `db` actor (never open connections directly)
 - FTS5 for full-text search, auto-synced via triggers
-- Schema versioned via `schema_version` table (currently v4)
+- Schema versioned via `schema_version` table (currently v10)
 - `memory_entries` table for lossless memory archive with lineage tracking
 - `dream_runs`, `dream_run_effects`, and `dream_action_candidates` tables for dream cycle history, memory-write effects, and deterministic operational follow-up candidates
 - Conversations keyed by `(platform, platform_id)` — multi-platform ready
