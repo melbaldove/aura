@@ -119,9 +119,10 @@ logs outcomes.
 10. Aura's ambient world awareness is concern-indexed. It watches broadly enough
     to notice relevant change, but spends attention only when that change
     affects a concern, thesis, commitment, relationship, risk, or opportunity.
-11. Current state is concern-centered and text-first. Aura must not keep a
-    hidden structured policy engine that can drift from the concern and policy
-    files the user and model can inspect.
+11. Policy is text-first. The rules and learned preferences that shape Aura's
+    judgment must remain inspectable, correctable, and reversible in ordinary
+    text. Structured state can support execution, but it must not become a
+    hidden source of judgment.
 12. Aura must not hard-code user preference where it can learn. Early user
     timelines should produce many observed preference gap events, and those
     gaps should become thoughtful decision prompts or batched learning digests

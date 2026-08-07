@@ -194,6 +194,16 @@ The brain owns decomposition, executor selection, manifest policy, completion ch
 
 Executors own the mechanics of one execution attempt. They do not own product policy or final completion.
 
+## Supervision
+
+The root supervisor owns the flare manager and an execution-attempt supervisor.
+
+The execution-attempt supervisor owns each active Aura executor process and its monitor. An ACP attempt remains under the existing ACP runtime and monitor boundary. The flare manager owns durable attempt state. It does not own an unsupervised worker process.
+
+A process crash does not directly create a new attempt. After restart, the flare manager first reconciles durable attempt state with the executor runtime. It then reconnects, marks the attempt as interrupted, or records a gap.
+
+One failed attempt must not stop the flare manager, the brain, or a sibling attempt.
+
 ## Recovery and safe retry
 
 Aura persists the flare identity, objective, executor choice, manifests, transcript, action log, and checkpoint.
@@ -222,6 +232,15 @@ The audit plane records:
 The audit plane redacts secrets.
 
 The attention plane contains only information that the user needs. This separation gives complete observability without making the conversation follow internal execution events.
+
+An immediate update or question must explain:
+
+- Why the user needs the information now.
+- Which user decision or authority is required.
+- What happens if Aura defers the update.
+- Why recording or digesting the information is insufficient.
+
+If Aura cannot provide these explanations, it records or digests the event instead of interrupting the user.
 
 ## Existing ACP flare migration
 

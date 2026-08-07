@@ -71,11 +71,19 @@ After a crash, Aura marks the active attempt as interrupted. It reconciles the a
 
 Aura resumes automatically only when the next action is safe. Aura does not blindly repeat an external write when the first outcome is unknown.
 
+### Active attempts are supervised
+
+The root supervisor owns the flare manager and an execution-attempt supervisor. The attempt supervisor owns active Aura executor processes and their monitors. The existing ACP runtime boundary continues to own ACP processes and monitors.
+
+After a restart, the flare manager reconciles durable attempt state with executor runtime state before it reconnects or starts more work. An attempt failure must not stop the flare manager, the brain, or a sibling attempt.
+
 ### Audit data and user attention are separate
 
 Aura records executor selection, lifecycle events, tool outcomes, retries, gaps, controls, and proof. It redacts secrets.
 
 Aura shows an update only when the user must act, the plan changes, an early result is useful, a material failure or delay occurs, or the full request completes. Aura does not send one message for each routine sibling completion.
+
+An immediate update or question must state why it is needed now, which user decision or authority is required, the cost of deferral, and why recording or digesting is insufficient.
 
 ## Consequences
 
