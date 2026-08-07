@@ -82,6 +82,23 @@ pub type StoredShellApproval {
   )
 }
 
+/// A pending or resolved external (hook-layer) ask. Unlike shell approvals,
+/// pending rows survive restarts: the waiter is an external OS process.
+pub type StoredExternalAsk {
+  StoredExternalAsk(
+    id: String,
+    source: String,
+    channel_id: String,
+    message_id: String,
+    text: String,
+    buttons_json: String,
+    status: String,
+    decision: String,
+    requested_at_ms: Int,
+    updated_at_ms: Int,
+  )
+}
+
 /// Current health for an external integration.
 pub type IntegrationHealth {
   IntegrationHealth(
@@ -324,6 +341,34 @@ pub type DbMessage {
   LoadPendingShellApprovalsForChannel(
     reply_to: process.Subject(Result(List(StoredShellApproval), String)),
     channel_id: String,
+  )
+  SaveExternalAsk(
+    reply_to: process.Subject(Result(Bool, String)),
+    ask: StoredExternalAsk,
+  )
+  UpdateExternalAskDecision(
+    reply_to: process.Subject(Result(Bool, String)),
+    id: String,
+    status: String,
+    decision: String,
+    updated_at_ms: Int,
+  )
+  UpdateExternalAskMessageId(
+    reply_to: process.Subject(Result(Nil, String)),
+    id: String,
+    message_id: String,
+    updated_at_ms: Int,
+  )
+  GetExternalAsk(
+    reply_to: process.Subject(Result(Option(StoredExternalAsk), String)),
+    id: String,
+  )
+  ListExternalAsks(
+    reply_to: process.Subject(Result(List(StoredExternalAsk), String)),
+    limit: Int,
+  )
+  ListEventSources(
+    reply_to: process.Subject(Result(List(#(String, Int, Int)), String)),
   )
 }
 
@@ -913,6 +958,84 @@ pub fn load_pending_shell_approvals_for_channel(
   })
 }
 
+/// Persist an external ask row with INSERT OR IGNORE semantics. Returns
+/// `True` if it was a new row, `False` if the id already existed.
+pub fn save_external_ask(
+  subject: process.Subject(DbMessage),
+  ask: StoredExternalAsk,
+) -> Result(Bool, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    SaveExternalAsk(reply_to: reply_to, ask: ask)
+  })
+}
+
+/// Transition an external ask out of `pending`. Returns `True` if a row was
+/// updated (it was still pending), `False` otherwise. Same conditional
+/// discipline as shell approvals.
+pub fn update_external_ask_decision(
+  subject: process.Subject(DbMessage),
+  id: String,
+  status: String,
+  decision: String,
+  updated_at_ms: Int,
+) -> Result(Bool, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    UpdateExternalAskDecision(
+      reply_to: reply_to,
+      id: id,
+      status: status,
+      decision: decision,
+      updated_at_ms: updated_at_ms,
+    )
+  })
+}
+
+/// Attach the posted Discord message id to a pending ask.
+pub fn update_external_ask_message_id(
+  subject: process.Subject(DbMessage),
+  id: String,
+  message_id: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  process.call(subject, 5000, fn(reply_to) {
+    UpdateExternalAskMessageId(
+      reply_to: reply_to,
+      id: id,
+      message_id: message_id,
+      updated_at_ms: updated_at_ms,
+    )
+  })
+}
+
+/// Fetch one external ask by id.
+pub fn get_external_ask(
+  subject: process.Subject(DbMessage),
+  id: String,
+) -> Result(Option(StoredExternalAsk), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    GetExternalAsk(reply_to: reply_to, id: id)
+  })
+}
+
+/// List external asks, newest first by requested_at_ms.
+pub fn list_external_asks(
+  subject: process.Subject(DbMessage),
+  limit: Int,
+) -> Result(List(StoredExternalAsk), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    ListExternalAsks(reply_to: reply_to, limit: limit)
+  })
+}
+
+/// List event sources and activity, ordered by count descending.
+pub fn list_event_sources(
+  subject: process.Subject(DbMessage),
+) -> Result(List(#(String, Int, Int)), String) {
+  process.call(subject, 5000, fn(reply_to) {
+    ListEventSources(reply_to: reply_to)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
@@ -1286,6 +1409,55 @@ fn handle_message(
     LoadPendingShellApprovalsForChannel(reply_to:, channel_id:) -> {
       let result =
         do_load_pending_shell_approvals_for_channel(state.conn, channel_id)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    SaveExternalAsk(reply_to:, ask:) -> {
+      let result = do_save_external_ask(state.conn, ask)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    UpdateExternalAskDecision(reply_to:, id:, status:, decision:, updated_at_ms:) -> {
+      let result =
+        do_update_external_ask_decision(
+          state.conn,
+          id,
+          status,
+          decision,
+          updated_at_ms,
+        )
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    UpdateExternalAskMessageId(reply_to:, id:, message_id:, updated_at_ms:) -> {
+      let result =
+        do_update_external_ask_message_id(
+          state.conn,
+          id,
+          message_id,
+          updated_at_ms,
+        )
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    GetExternalAsk(reply_to:, id:) -> {
+      let result = do_get_external_ask(state.conn, id)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    ListExternalAsks(reply_to:, limit:) -> {
+      let result = do_list_external_asks(state.conn, limit)
+      process.send(reply_to, result)
+      actor.continue(state)
+    }
+
+    ListEventSources(reply_to:) -> {
+      let result = do_list_event_sources(state.conn)
       process.send(reply_to, result)
       actor.continue(state)
     }
@@ -2515,5 +2687,166 @@ fn do_load_pending_shell_approvals_for_channel(
   )
   |> result.map_error(fn(err) {
     "Failed to load pending shell approvals: " <> string.inspect(err)
+  })
+}
+
+fn external_ask_decoder() -> decode.Decoder(StoredExternalAsk) {
+  use id <- decode.field(0, decode.string)
+  use source <- decode.field(1, decode.string)
+  use channel_id <- decode.field(2, decode.string)
+  use message_id <- decode.field(3, decode.string)
+  use text <- decode.field(4, decode.string)
+  use buttons_json <- decode.field(5, decode.string)
+  use status <- decode.field(6, decode.string)
+  use decision <- decode.field(7, decode.string)
+  use requested_at_ms <- decode.field(8, decode.int)
+  use updated_at_ms <- decode.field(9, decode.int)
+  decode.success(StoredExternalAsk(
+    id: id,
+    source: source,
+    channel_id: channel_id,
+    message_id: message_id,
+    text: text,
+    buttons_json: buttons_json,
+    status: status,
+    decision: decision,
+    requested_at_ms: requested_at_ms,
+    updated_at_ms: updated_at_ms,
+  ))
+}
+
+fn do_save_external_ask(
+  conn: sqlight.Connection,
+  ask: StoredExternalAsk,
+) -> Result(Bool, String) {
+  sqlight.query(
+    "INSERT OR IGNORE INTO external_asks (id, source, channel_id, message_id, text, buttons_json, status, decision, requested_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+    on: conn,
+    with: [
+      sqlight.text(ask.id),
+      sqlight.text(ask.source),
+      sqlight.text(ask.channel_id),
+      sqlight.text(ask.message_id),
+      sqlight.text(ask.text),
+      sqlight.text(ask.buttons_json),
+      sqlight.text(ask.status),
+      sqlight.text(ask.decision),
+      sqlight.int(ask.requested_at_ms),
+      sqlight.int(ask.updated_at_ms),
+    ],
+    expecting: decode.at([0], decode.string),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to save external ask: " <> string.inspect(err)
+  })
+  |> result.map(fn(rows) {
+    case rows {
+      [_] -> True
+      [] -> False
+      _ -> False
+    }
+  })
+}
+
+fn do_update_external_ask_decision(
+  conn: sqlight.Connection,
+  id: String,
+  status: String,
+  decision: String,
+  updated_at_ms: Int,
+) -> Result(Bool, String) {
+  sqlight.query(
+    "UPDATE external_asks SET status = ?, decision = ?, updated_at_ms = ? WHERE id = ? AND status = 'pending' RETURNING id",
+    on: conn,
+    with: [
+      sqlight.text(status),
+      sqlight.text(decision),
+      sqlight.int(updated_at_ms),
+      sqlight.text(id),
+    ],
+    expecting: decode.at([0], decode.string),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to update external ask decision: " <> string.inspect(err)
+  })
+  |> result.map(fn(rows) {
+    case rows {
+      [_] -> True
+      [] -> False
+      _ -> False
+    }
+  })
+}
+
+fn do_update_external_ask_message_id(
+  conn: sqlight.Connection,
+  id: String,
+  message_id: String,
+  updated_at_ms: Int,
+) -> Result(Nil, String) {
+  sqlight.query(
+    "UPDATE external_asks SET message_id = ?, updated_at_ms = ? WHERE id = ? AND status = 'pending'",
+    on: conn,
+    with: [sqlight.text(message_id), sqlight.int(updated_at_ms), sqlight.text(id)],
+    expecting: decode.success(Nil),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to update external ask message id: " <> string.inspect(err)
+  })
+  |> result.map(fn(_) { Nil })
+}
+
+fn do_get_external_ask(
+  conn: sqlight.Connection,
+  id: String,
+) -> Result(Option(StoredExternalAsk), String) {
+  sqlight.query(
+    "SELECT id, source, channel_id, message_id, text, buttons_json, status, decision, requested_at_ms, updated_at_ms FROM external_asks WHERE id = ? LIMIT 1",
+    on: conn,
+    with: [sqlight.text(id)],
+    expecting: external_ask_decoder(),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to load external ask: " <> string.inspect(err)
+  })
+  |> result.map(fn(rows) {
+    case rows {
+      [] -> option.None
+      [row, ..] -> option.Some(row)
+    }
+  })
+}
+
+fn do_list_external_asks(
+  conn: sqlight.Connection,
+  limit: Int,
+) -> Result(List(StoredExternalAsk), String) {
+  sqlight.query(
+    "SELECT id, source, channel_id, message_id, text, buttons_json, status, decision, requested_at_ms, updated_at_ms FROM external_asks ORDER BY requested_at_ms DESC LIMIT ?",
+    on: conn,
+    with: [sqlight.int(limit)],
+    expecting: external_ask_decoder(),
+  )
+  |> result.map_error(fn(err) {
+    "Failed to load external asks: " <> string.inspect(err)
+  })
+}
+
+fn do_list_event_sources(
+  conn: sqlight.Connection,
+) -> Result(List(#(String, Int, Int)), String) {
+  sqlight.query(
+    "SELECT source, COUNT(*), MAX(time_ms) FROM events GROUP BY source ORDER BY COUNT(*) DESC",
+    on: conn,
+    with: [],
+    expecting: {
+      use source <- decode.field(0, decode.string)
+      use count <- decode.field(1, decode.int)
+      use last <- decode.field(2, decode.int)
+      decode.success(#(source, count, last))
+    },
+  )
+  |> result.map_error(fn(err) {
+    "Failed to list event sources: " <> string.inspect(err)
   })
 }

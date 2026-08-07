@@ -1583,3 +1583,100 @@ pub fn shell_approval_status_update_is_pending_only_test() {
 
   process.send(subject, db.Shutdown)
 }
+
+fn sample_external_ask(id: String, status: String, decision: String) -> db.StoredExternalAsk {
+  db.StoredExternalAsk(
+    id: id,
+    source: "linkedin",
+    channel_id: "ch1",
+    message_id: "",
+    text: "Challenge up",
+    buttons_json: "[\"Resolved\",\"Abort\"]",
+    status: status,
+    decision: decision,
+    requested_at_ms: 1000,
+    updated_at_ms: 1000,
+  )
+}
+
+fn sample_external_ask_at(id: String, requested_at_ms: Int) -> db.StoredExternalAsk {
+  db.StoredExternalAsk(
+    id: id,
+    source: "linkedin",
+    channel_id: "ch1",
+    message_id: "",
+    text: "Challenge up",
+    buttons_json: "[\"Resolved\",\"Abort\"]",
+    status: "pending",
+    decision: "",
+    requested_at_ms: requested_at_ms,
+    updated_at_ms: requested_at_ms,
+  )
+}
+
+pub fn external_ask_roundtrip_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let ask = sample_external_ask("ask-1", "pending", "")
+  let assert Ok(True) = db.save_external_ask(subject, ask)
+
+  let assert Ok(Some(fetched)) = db.get_external_ask(subject, "ask-1")
+  fetched.status |> should.equal("pending")
+  fetched.decision |> should.equal("")
+  fetched.source |> should.equal("linkedin")
+
+  let assert Ok(True) =
+    db.update_external_ask_decision(subject, "ask-1", "resolved", "Resolved", 2000)
+
+  let assert Ok(Some(resolved)) = db.get_external_ask(subject, "ask-1")
+  resolved.status |> should.equal("resolved")
+  resolved.decision |> should.equal("Resolved")
+
+  // Conditional update only fires on pending
+  let assert Ok(False) =
+    db.update_external_ask_decision(subject, "ask-1", "resolved", "Abort", 3000)
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn external_ask_idempotent_insert_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let ask = sample_external_ask("ask-1", "pending", "")
+  let assert Ok(True) = db.save_external_ask(subject, ask)
+  let assert Ok(False) = db.save_external_ask(subject, sample_external_ask("ask-1", "pending", ""))
+
+  let assert Ok(Some(_)) = db.get_external_ask(subject, "ask-1")
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn list_recent_external_asks_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(_) = db.save_external_ask(subject, sample_external_ask_at("ask-1", 1000))
+  let assert Ok(_) = db.save_external_ask(subject, sample_external_ask_at("ask-2", 2000))
+  let assert Ok(_) = db.save_external_ask(subject, sample_external_ask_at("ask-3", 3000))
+
+  let assert Ok(asks) = db.list_external_asks(subject, 20)
+  list.length(asks) |> should.equal(3)
+  list.map(asks, fn(a) { a.id }) |> should.equal(["ask-3", "ask-2", "ask-1"])
+
+  process.send(subject, db.Shutdown)
+}
+
+pub fn list_event_sources_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(True) = db.insert_event(subject, sample_event("e1", "gmail", "m1", "a", 1000))
+  let assert Ok(True) = db.insert_event(subject, sample_event("e2", "linkedin", "m2", "b", 2000))
+  let assert Ok(True) = db.insert_event(subject, sample_event("e3", "linkedin", "m3", "c", 3000))
+
+  let assert Ok(sources) = db.list_event_sources(subject)
+  list.length(sources) |> should.equal(2)
+  let assert [linkedin, gmail] = sources
+  linkedin.0 |> should.equal("linkedin")
+  linkedin.1 |> should.equal(2)
+
+  process.send(subject, db.Shutdown)
+}
