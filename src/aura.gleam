@@ -3,6 +3,8 @@ import aura/config_parser
 import aura/ctl
 import aura/doctor
 import aura/dotenv
+import aura/hook_run
+import aura/hook_rules
 import aura/init
 import aura/oauth_cli
 import aura/supervisor
@@ -17,6 +19,7 @@ pub type CliCommand {
   CliStart
   CliDoctor
   CliCtl(command: String)
+  CliHookRun(rules: String, cmd: String)
   CliOauthGmail(email: String)
 }
 
@@ -28,6 +31,10 @@ pub fn main() {
     }
     CliCtl(command) -> {
       run_ctl(command)
+      halt(0)
+    }
+    CliHookRun(rules, cmd) -> {
+      run_hook(rules, cmd)
       halt(0)
     }
     CliOauthGmail(email) -> {
@@ -81,6 +88,14 @@ fn parse_args(args: List(String)) -> CliCommand {
         },
       )
     ["oauth", "gmail", email] -> CliOauthGmail(email)
+    ["hook", "run", "--rules", rules, "--", ..cmd] ->
+      CliHookRun(rules, string.join(cmd, " "))
+    ["event", ..rest] -> CliCtl("event " <> string.join(rest, " "))
+    ["notify", ..rest] -> CliCtl("notify " <> string.join(rest, " "))
+    ["ask", ..rest] -> CliCtl("ask " <> string.join(rest, " "))
+    ["decision", ..rest] -> CliCtl("decision " <> string.join(rest, " "))
+    ["asks"] -> CliCtl("asks")
+    ["hooks"] -> CliCtl("hooks")
     _ -> CliStart
   }
 }
@@ -159,6 +174,34 @@ fn run_ctl(command: String) {
       halt(1)
     }
   }
+}
+
+fn run_hook(rules: String, cmd: String) {
+  logging.configure()
+  let paths = xdg.resolve()
+  // Bare ruleset names resolve to the canonical config dir; explicit paths win.
+  let rules_path = case string.contains(rules, "/") {
+    True -> rules
+    False -> xdg.config_path(paths, "hooks/" <> rules <> ".toml")
+  }
+  let content = case simplifile.read(rules_path) {
+    Ok(content) -> content
+    Error(e) -> {
+      io.println("ERROR: cannot read rules " <> rules_path <> ": " <> string.inspect(e))
+      halt(1)
+      ""
+    }
+  }
+  let ruleset = case hook_rules.parse(content) {
+    Ok(rs) -> rs
+    Error(e) -> {
+      io.println("ERROR: " <> e)
+      halt(1)
+      hook_rules.Ruleset(name: "broken", source: "broken", rules: [])
+    }
+  }
+  let code = hook_run.run(paths, ruleset, cmd)
+  halt(code)
 }
 
 fn load_config(paths: xdg.Paths) -> Result(config.GlobalConfig, String) {

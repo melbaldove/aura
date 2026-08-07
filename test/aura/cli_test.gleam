@@ -107,3 +107,38 @@ pub fn build_external_ask_maps_hook_fields_test() {
   ask.buttons_json |> string.contains("Resolved") |> should.be_true
   ask.requested_at_ms |> should.equal(2000)
 }
+
+pub fn parse_hook_run_test() {
+  aura.parse_args_for_test(["hook", "run", "--rules", "x.toml", "--", "python", "c.py"])
+  |> should.equal(aura.CliHookRun("x.toml", "python c.py"))
+}
+
+pub fn parse_hook_passthrough_test() {
+  aura.parse_args_for_test(["decision", "run-42-ch-1"])
+  |> should.equal(aura.CliCtl("decision run-42-ch-1"))
+}
+
+pub fn parse_event_passthrough_test() {
+  aura.parse_args_for_test(["event", "{\"source\":\"x\"}"])
+  |> should.equal(aura.CliCtl("event {\"source\":\"x\"}"))
+}
+
+pub fn parse_notify_passthrough_test() {
+  aura.parse_args_for_test(["notify", "{\"source\":\"x\"}"])
+  |> should.equal(aura.CliCtl("notify {\"source\":\"x\"}"))
+}
+
+pub fn parse_ask_passthrough_test() {
+  aura.parse_args_for_test(["ask", "{\"source\":\"x\"}"])
+  |> should.equal(aura.CliCtl("ask {\"source\":\"x\"}"))
+}
+
+pub fn parse_asks_passthrough_test() {
+  aura.parse_args_for_test(["asks"])
+  |> should.equal(aura.CliCtl("asks"))
+}
+
+pub fn parse_hooks_passthrough_test() {
+  aura.parse_args_for_test(["hooks"])
+  |> should.equal(aura.CliCtl("hooks"))
+}
