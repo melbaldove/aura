@@ -131,3 +131,18 @@ pub fn resolve_model_name_claude_test() {
   models.resolve_model_name("claude/sonnet")
   |> should.equal("sonnet")
 }
+
+pub fn route_custom_id_xask_test() {
+  brain.route_custom_id("xask|run-42-ch-1|Resolved")
+  |> should.equal(brain.RouteExternalAsk("run-42-ch-1", "Resolved"))
+}
+
+pub fn route_custom_id_shell_approval_test() {
+  brain.route_custom_id("approve:123:sh123-456")
+  |> should.equal(brain.RouteChannelApproval("approve", "123", "sh123-456"))
+}
+
+pub fn route_custom_id_unknown_test() {
+  brain.route_custom_id("weird|id")
+  |> should.equal(brain.RouteUnknown)
+}

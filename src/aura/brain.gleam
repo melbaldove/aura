@@ -13,6 +13,8 @@ import aura/db
 import aura/discord
 import aura/discord/message as discord_message
 import aura/discord/rest
+import aura/external_asks
+import aura/hook_protocol
 import aura/llm
 import aura/memory
 import aura/message
@@ -72,6 +74,7 @@ pub type BrainMessage {
   PostWelcome(channel_id: String)
   RegisterThread(platform: String, thread_id: String, domain_name: String)
   SetScheduler(process.Subject(scheduler.SchedulerMessage))
+  SetExternalAsks(process.Subject(external_asks.Message))
   HandleInteraction(
     interaction_id: String,
     interaction_token: String,
@@ -125,6 +128,7 @@ pub type BrainState {
     domain_configs: List(#(String, config.DomainConfig)),
     thread_domains: dict.Dict(String, String),
     scheduler_subject: Option(process.Subject(scheduler.SchedulerMessage)),
+    external_asks_subject: Option(process.Subject(external_asks.Message)),
     brain_context: Int,
     shell_patterns: shell.CompiledPatterns,
     // session_name -> canonical progress message plus resurface bookkeeping
@@ -167,6 +171,26 @@ pub fn route_message(
   {
     Ok(d) -> DirectRoute(d.name)
     Error(_) -> NeedsClassification
+  }
+}
+
+/// A parsed interaction custom_id, so interactions no longer re-split strings.
+pub type CustomIdRoute {
+  RouteChannelApproval(action: String, channel_id: String, approval_id: String)
+  RouteExternalAsk(correlation_id: String, choice: String)
+  RouteUnknown
+}
+
+/// Route an interaction custom_id to its handler: xask buttons first, then
+/// the legacy channel-approval format.
+pub fn route_custom_id(custom_id: String) -> CustomIdRoute {
+  case hook_protocol.decode_ask_custom_id(custom_id) {
+    Ok(#(cid, choice)) -> RouteExternalAsk(cid, choice)
+    Error(_) ->
+      case string.split(custom_id, ":") {
+        [action, ch, approval_id] -> RouteChannelApproval(action, ch, approval_id)
+        _ -> RouteUnknown
+      }
   }
 }
 
@@ -225,6 +249,7 @@ pub fn start(
       global_config: brain_config.global,
       domain_configs: brain_config.domain_configs,
       scheduler_subject: None,
+      external_asks_subject: None,
       brain_context: brain_context,
       shell_patterns: shell.compile_patterns(),
       acp_progress_msgs: dict.new(),
@@ -501,6 +526,10 @@ fn handle_message(
       logging.log(logging.Info, "[brain] Scheduler connected")
       actor.continue(BrainState(..state, scheduler_subject: Some(subject)))
     }
+    SetExternalAsks(subject) -> {
+      logging.log(logging.Info, "[brain] External asks connected")
+      actor.continue(BrainState(..state, external_asks_subject: Some(subject)))
+    }
     HandleInteraction(
       interaction_id:,
       interaction_token:,
@@ -519,9 +548,26 @@ fn handle_message(
         }
       })
 
-      // Parse three-part custom_id: "{action}:{channel_id}:{approval_id}"
-      case string.split(custom_id, ":") {
-        [action, ch, approval_id] -> {
+      case route_custom_id(custom_id) {
+        RouteExternalAsk(correlation_id, choice) -> {
+          case state.external_asks_subject {
+            Some(s) ->
+              process.send(
+                s,
+                external_asks.ResolveAsk(
+                  correlation_id: correlation_id,
+                  choice: choice,
+                ),
+              )
+            None ->
+              logging.log(
+                logging.Error,
+                "[brain] External asks actor unavailable for xask click",
+              )
+          }
+          actor.continue(state)
+        }
+        RouteChannelApproval(action, ch, approval_id) -> {
           let domain_name = case
             dict.get(
               state.thread_domains,
@@ -569,7 +615,7 @@ fn handle_message(
           }
           actor.continue(state)
         }
-        _ -> {
+        RouteUnknown -> {
           logging.log(
             logging.Info,
             "[brain] Unknown approval custom_id: " <> custom_id,

@@ -316,6 +316,7 @@ pub fn start(
     Ok(scheduler_subject) -> {
       logging.log(logging.Info, "[supervisor] Scheduler started")
       process.send(brain_subject, brain.SetScheduler(scheduler_subject))
+      process.send(brain_subject, brain.SetExternalAsks(asks_subject))
       process.send(scheduler_subject, scheduler.SetFlareSubject(flare_subject))
 
       // Configure dreaming schedule
