@@ -460,3 +460,120 @@ pub fn suppressed_event_blocks_later_delivery_test() {
   let _ = simplifile.delete_all([base])
   Nil
 }
+
+pub fn deliver_hook_notify_sends_and_ledgers_test() {
+  let #(base, paths) = temp_paths("cognitive-delivery-hook-notify")
+  let #(fake, subject, reports) = start_delivery(paths)
+
+  let result =
+    cognitive_delivery.deliver_hook_notify(
+      subject,
+      "hk-1",
+      "linkedin",
+      "default",
+      "Challenge up",
+    )
+  result |> should.be_ok |> should.equal("delivered")
+
+  let sent = fake_discord.all_sent_to(fake, "aura-channel")
+  let assert [message] = sent
+  message |> should.equal("Challenge up")
+
+  let log = simplifile.read(xdg.deliveries_path(paths)) |> should.be_ok
+  log |> string.contains("\"event_id\":\"hk-1\"") |> should.be_true
+  log |> string.contains("\"status\":\"delivered\"") |> should.be_true
+  log |> string.contains("\"attention_action\":\"surface_now\"") |> should.be_true
+  log |> string.contains("\"rationale\":\"hook-declared: linkedin\"") |> should.be_true
+
+  stop_subject(subject)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn deliver_hook_notify_dedupes_test() {
+  let #(base, paths) = temp_paths("cognitive-delivery-hook-dedupe")
+  let #(fake, subject, reports) = start_delivery(paths)
+
+  cognitive_delivery.deliver_hook_notify(
+    subject,
+    "hk-1",
+    "linkedin",
+    "default",
+    "first",
+  )
+  |> should.be_ok
+  |> should.equal("delivered")
+
+  cognitive_delivery.deliver_hook_notify(
+    subject,
+    "hk-1",
+    "linkedin",
+    "default",
+    "second",
+  )
+  |> should.be_ok
+  |> should.equal("deduped")
+
+  let assert [_] = fake_discord.all_sent_to(fake, "aura-channel")
+
+  stop_subject(subject)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn deliver_hook_notify_unknown_target_test() {
+  let #(base, paths) = temp_paths("cognitive-delivery-hook-unknown")
+  let #(fake, subject, reports) = start_delivery(paths)
+
+  cognitive_delivery.deliver_hook_notify(
+    subject,
+    "hk-2",
+    "linkedin",
+    "domain:nope",
+    "x",
+  )
+  |> should.be_error
+  |> string.contains("unknown delivery target")
+  |> should.be_true
+
+  let log = simplifile.read(xdg.deliveries_path(paths)) |> should.be_ok
+  log |> string.contains("\"status\":\"dead_letter\"") |> should.be_true
+  fake_discord.all_sent_to(fake, "aura-channel") |> should.equal([])
+
+  stop_subject(subject)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn record_hook_delivery_appends_without_sending_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let #(base, paths) = temp_paths("cognitive-delivery-hook-record")
+  let #(fake, subject, reports) = start_delivery_with_history(paths, db_subject)
+
+  cognitive_delivery.record_hook_delivery(
+    subject,
+    "hk-3",
+    "linkedin",
+    "default",
+    "aura-channel",
+    "Ask posted elsewhere",
+  )
+
+  let log = simplifile.read(xdg.deliveries_path(paths)) |> should.be_ok
+  log |> string.contains("\"event_id\":\"hk-3\"") |> should.be_true
+  log |> string.contains("\"attention_action\":\"ask_now\"") |> should.be_true
+  log |> string.contains("\"status\":\"delivered\"") |> should.be_true
+
+  // invariant 9: the ask message lands in channel history even though the
+  // transport was not called for a send
+  fake_discord.all_sent_to(fake, "aura-channel") |> should.equal([])
+  let history = channel_history(db_subject, "aura-channel")
+  list.length(history) |> should.equal(1)
+  let assert [stored] = history
+  stored.content |> should.equal("Ask posted elsewhere")
+
+  process.send(db_subject, db.Shutdown)
+  stop_subject(subject)
+  let _ = simplifile.delete_all([base])
+  Nil
+}

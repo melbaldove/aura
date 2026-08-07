@@ -32,6 +32,21 @@ pub type Message {
   FlushDigest
   RetryDeadLetters(reply: Subject(Result(RetrySummary, String)))
   SuppressEvent(event_id: String, reason: String)
+  DeliverHookNotify(
+    event_id: String,
+    source: String,
+    target: String,
+    text: String,
+    reply: Subject(Result(String, String)),
+  )
+  RecordHookDelivery(
+    event_id: String,
+    source: String,
+    target: String,
+    channel_id: String,
+    text: String,
+    reply: Subject(Result(Nil, String)),
+  )
   Tick
 }
 
@@ -155,6 +170,51 @@ pub fn deliver(
   process.send(subject, Deliver(decision))
 }
 
+/// Deliver a hook-layer notify (lane 2, direct): send to the channel for the
+/// given target, persist to conversation history, and ledger the delivery.
+/// Returns `Ok("delivered")` or `Ok("deduped")` if the event was already
+/// delivered, or `Error(...)` on unknown target / send failure.
+pub fn deliver_hook_notify(
+  subject: Subject(Message),
+  event_id: String,
+  source: String,
+  target: String,
+  text: String,
+) -> Result(String, String) {
+  process.call(subject, 30_000, fn(reply) {
+    DeliverHookNotify(
+      event_id: event_id,
+      source: source,
+      target: target,
+      text: text,
+      reply: reply,
+    )
+  })
+}
+
+/// Record a hook ask delivery that was posted by the external_asks actor:
+/// append the ledger row and persist the message to channel history (system
+/// invariant 9) without triggering a new Discord send.
+pub fn record_hook_delivery(
+  subject: Subject(Message),
+  event_id: String,
+  source: String,
+  target: String,
+  channel_id: String,
+  text: String,
+) -> Result(Nil, String) {
+  process.call(subject, 5_000, fn(reply) {
+    RecordHookDelivery(
+      event_id: event_id,
+      source: source,
+      target: target,
+      channel_id: channel_id,
+      text: text,
+      reply: reply,
+    )
+  })
+}
+
 pub fn flush_digest(subject: Subject(Message)) -> Nil {
   process.send(subject, FlushDigest)
 }
@@ -220,6 +280,18 @@ fn handle_message(state: State, message: Message) -> actor.Next(State, Message) 
 
     SuppressEvent(event_id:, reason:) -> {
       suppress(state, event_id, reason)
+      actor.continue(state)
+    }
+
+    DeliverHookNotify(event_id:, source:, target:, text:, reply:) -> {
+      let result = deliver_hook_notify_message(state, event_id, source, target, text)
+      process.send(reply, result)
+      actor.continue(state)
+    }
+
+    RecordHookDelivery(event_id:, source:, target:, channel_id:, text:, reply:) -> {
+      record_hook_delivery_message(state, event_id, source, target, channel_id, text)
+      process.send(reply, Ok(Nil))
       actor.continue(state)
     }
 
@@ -314,7 +386,7 @@ fn queue_digest(
   state: State,
   decision: cognitive_decision.DecisionEnvelope,
 ) -> Nil {
-  case resolve_target(state, decision.delivery.target) {
+  case resolve_target(state.targets, decision.delivery.target) {
     Error(err) -> {
       let _ = append_decision_state(state, decision, "dead_letter", "", err)
       emit_report(
@@ -348,7 +420,7 @@ fn send_immediate(
   state: State,
   decision: cognitive_decision.DecisionEnvelope,
 ) -> Nil {
-  case resolve_target(state, decision.delivery.target) {
+  case resolve_target(state.targets, decision.delivery.target) {
     Error(err) -> {
       let _ = append_decision_state(state, decision, "dead_letter", "", err)
       emit_report(
@@ -407,6 +479,153 @@ fn send_immediate(
       }
     }
   }
+}
+
+fn deliver_hook_notify_message(
+  state: State,
+  event_id: String,
+  source: String,
+  target: String,
+  text: String,
+) -> Result(String, String) {
+  case event_seen(state.paths, event_id) {
+    Ok(True) -> Ok("deduped")
+    Error(err) -> Error(err)
+    Ok(False) ->
+      case resolve_target(state.targets, target) {
+        Error(err) -> {
+          let _ =
+            append_hook_ledger(
+              state.paths,
+              event_id,
+              source,
+              "surface_now",
+              "",
+              text,
+              "dead_letter",
+              err,
+            )
+          Error(err)
+        }
+        Ok(resolved) ->
+          case send_discord_chunks(state.discord, resolved.channel_id, text) {
+            Error(err) -> {
+              let _ =
+                append_hook_ledger(
+                  state.paths,
+                  event_id,
+                  source,
+                  "surface_now",
+                  resolved.channel_id,
+                  text,
+                  "dead_letter",
+                  err,
+                )
+              Error(err)
+            }
+            Ok(_) -> {
+              persist_front_surface_message(state, resolved.channel_id, text)
+              let _ =
+                append_hook_ledger(
+                  state.paths,
+                  event_id,
+                  source,
+                  "surface_now",
+                  resolved.channel_id,
+                  text,
+                  "delivered",
+                  "",
+                )
+              emit_report(
+                state,
+                Report(
+                  event_id: event_id,
+                  status: Delivered,
+                  target: target,
+                  error: "",
+                ),
+              )
+              Ok("delivered")
+            }
+          }
+      }
+  }
+}
+
+fn record_hook_delivery_message(
+  state: State,
+  event_id: String,
+  source: String,
+  target: String,
+  channel_id: String,
+  text: String,
+) -> Nil {
+  case event_seen(state.paths, event_id) {
+    Ok(True) -> Nil
+    _ -> {
+      persist_front_surface_message(state, channel_id, text)
+      let _ =
+        append_hook_ledger(
+          state.paths,
+          event_id,
+          source,
+          "ask_now",
+          channel_id,
+          text,
+          "delivered",
+          "",
+        )
+      Nil
+    }
+  }
+}
+
+fn append_hook_ledger(
+  paths: xdg.Paths,
+  event_id: String,
+  source: String,
+  attention_action: String,
+  channel_id: String,
+  text: String,
+  status: String,
+  error: String,
+) -> Result(Nil, String) {
+  append_ledger(
+    paths,
+    json.object([
+      #("timestamp_ms", json.int(time.now_ms())),
+      #("event_id", json.string(event_id)),
+      #("status", json.string(status)),
+      #("attention_action", json.string(attention_action)),
+      #("target", json.string("")),
+      #("channel_id", json.string(channel_id)),
+      #("summary", json.string(text)),
+      #("rationale", json.string("hook-declared: " <> source)),
+      #("authority_required", json.string("")),
+      #("citations", json.array([], json.string)),
+      #("gaps", json.array([], json.string)),
+      #("error", json.string(error)),
+    ]),
+  )
+}
+
+/// Resolve a hook notify/ask target id against the given targets list.
+pub fn resolve_target(
+  targets: List(DeliveryTarget),
+  target_id: String,
+) -> Result(DeliveryTarget, String) {
+  case target_id {
+    "none" -> Error("delivery target none has no channel")
+    _ ->
+      case list.find(targets, fn(target) { target.id == target_id }) {
+        Ok(target) -> Ok(target)
+        Error(_) -> Error("unknown delivery target: " <> target_id)
+      }
+  }
+}
+
+fn targets_target(state: State, target_id: String) -> Result(DeliveryTarget, String) {
+  resolve_target(state.targets, target_id)
 }
 
 fn send_discord_chunks(
@@ -602,7 +821,7 @@ fn retry_digest_group(
   case entries {
     [] -> summary
     _ -> {
-      case resolve_target(state, target_id) {
+      case resolve_target(state.targets, target_id) {
         Error(err) -> {
           list.each(entries, fn(entry) {
             let _ =
@@ -708,7 +927,7 @@ fn retry_immediate_entry(
   entry: LedgerEntry,
   summary: RetrySummary,
 ) -> RetrySummary {
-  case resolve_target(state, entry.target) {
+  case resolve_target(state.targets, entry.target) {
     Error(err) -> {
       let _ =
         append_entry_state_with_channel(
@@ -909,20 +1128,6 @@ fn gaps_block(gaps: List(String)) -> String {
   case gaps {
     [] -> ""
     _ -> "\nGaps: " <> string.join(gaps, "; ")
-  }
-}
-
-fn resolve_target(
-  state: State,
-  target_id: String,
-) -> Result(DeliveryTarget, String) {
-  case target_id {
-    "none" -> Error("delivery target none has no channel")
-    _ ->
-      case list.find(state.targets, fn(target) { target.id == target_id }) {
-        Ok(target) -> Ok(target)
-        Error(_) -> Error("unknown delivery target: " <> target_id)
-      }
   }
 }
 
