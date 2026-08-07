@@ -557,6 +557,7 @@ fn handle_message(
                 external_asks.ResolveAsk(
                   correlation_id: correlation_id,
                   choice: choice,
+                  interaction_token: interaction_token,
                 ),
               )
             None ->

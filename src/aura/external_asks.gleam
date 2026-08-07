@@ -25,12 +25,16 @@ import logging
 
 /// Post a Discord button message; returns the new message id.
 pub type PostFn = fn(String, String, json.Json) -> Result(String, String)
-/// Edit an existing Discord message body.
-pub type EditFn = fn(String, String, String) -> Result(Nil, String)
+/// Edit an existing Discord message via the channel messages endpoint.
+pub type EditFn = fn(String, String, String, json.Json) -> Result(Nil, String)
+/// Edit a Discord message via the interaction webhook (PATCH @original),
+/// used right after a button click where the channel endpoint is locked.
+/// Args: interaction_token, content, components.
+pub type WebhookEditFn = fn(String, String, json.Json) -> Result(Nil, String)
 
 pub type Message {
   SubmitAsk(ask: db.StoredExternalAsk, ttl_ms: Int, reply_to: Subject(String))
-  ResolveAsk(correlation_id: String, choice: String)
+  ResolveAsk(correlation_id: String, choice: String, interaction_token: String)
   ExpireAsk(correlation_id: String)
   GetDecision(correlation_id: String, reply_to: Subject(String))
 }
@@ -42,6 +46,7 @@ type State {
     targets: List(cognitive_delivery.DeliveryTarget),
     post: PostFn,
     edit: EditFn,
+    webhook_edit: WebhookEditFn,
     waiters: Dict(String, List(Subject(String))),
     self_subject: Subject(Message),
   )
@@ -53,6 +58,7 @@ pub fn start(
   targets: List(cognitive_delivery.DeliveryTarget),
   post: PostFn,
   edit: EditFn,
+  webhook_edit: WebhookEditFn,
 ) -> Result(actor.Started(Subject(Message)), actor.StartError) {
   actor.new_with_initialiser(5000, fn(self_subject) {
     let state =
@@ -62,6 +68,7 @@ pub fn start(
         targets: targets,
         post: post,
         edit: edit,
+        webhook_edit: webhook_edit,
         waiters: dict.new(),
         self_subject: self_subject,
       )
@@ -87,10 +94,15 @@ pub fn resolve_ask(
   subject: Subject(Message),
   correlation_id: String,
   choice: String,
+  interaction_token: String,
 ) -> Nil {
   process.send(
     subject,
-    ResolveAsk(correlation_id: correlation_id, choice: choice),
+    ResolveAsk(
+      correlation_id: correlation_id,
+      choice: choice,
+      interaction_token: interaction_token,
+    ),
   )
 }
 
@@ -114,8 +126,12 @@ fn handle_message(state: State, message: Message) -> actor.Next(State, Message) 
     SubmitAsk(ask: ask, ttl_ms: ttl_ms, reply_to: reply_to) ->
       handle_submit(state, ask, ttl_ms, reply_to)
 
-    ResolveAsk(correlation_id: correlation_id, choice: choice) ->
-      handle_resolve(state, correlation_id, choice)
+    ResolveAsk(
+      correlation_id: correlation_id,
+      choice: choice,
+      interaction_token: interaction_token,
+    ) ->
+      handle_resolve(state, correlation_id, choice, interaction_token)
 
     ExpireAsk(correlation_id: correlation_id) ->
       handle_expire(state, correlation_id)
@@ -168,6 +184,7 @@ fn submit(
             discord_types.hook_ask_buttons(
               ask.id,
               parse_button_labels(ask.buttons_json),
+              False,
             )
           case state.post(target.channel_id, ask.text, buttons) {
             Error(err) -> {
@@ -297,6 +314,7 @@ fn handle_resolve(
   state: State,
   correlation_id: String,
   choice: String,
+  interaction_token: String,
 ) -> actor.Next(State, Message) {
   let updated = db.update_external_ask_decision(
     state.db_subject,
@@ -307,10 +325,11 @@ fn handle_resolve(
   )
   case updated {
     Ok(True) -> {
-      let _ = edit_ask_message(
+      let _ = edit_ask_resolved(
         state,
         correlation_id,
-        "**Resolved** — " <> choice <> " (ask " <> correlation_id <> ")",
+        choice,
+        interaction_token,
       )
       let state = notify_waiters(
         state,
@@ -349,11 +368,7 @@ fn handle_expire(
   )
   case updated {
     Ok(True) -> {
-      let _ = edit_ask_message(
-        state,
-        correlation_id,
-        "**Expired** — no decision within TTL (ask " <> correlation_id <> ")",
-      )
+      let _ = edit_ask_expired(state, correlation_id)
       let state = notify_waiters(
         state,
         correlation_id,
@@ -378,13 +393,46 @@ fn handle_expire(
   }
 }
 
-fn edit_ask_message(
+/// Rebuild the ask's button row with `disabled: true` so the message shows the
+/// ask was already answered.
+fn disabled_buttons(row: db.StoredExternalAsk) -> json.Json {
+  discord_types.hook_ask_buttons(
+    row.id,
+    parse_button_labels(row.buttons_json),
+    True,
+  )
+}
+
+/// Resolve edit: the click locked the message to the interaction, so use the
+/// interaction webhook (@original) rather than the channel endpoint.
+fn edit_ask_resolved(
   state: State,
   correlation_id: String,
-  body: String,
+  choice: String,
+  interaction_token: String,
 ) -> Result(Nil, String) {
   case db.get_external_ask(state.db_subject, correlation_id) {
-    Ok(Some(row)) -> state.edit(row.channel_id, row.message_id, body)
+    Ok(Some(row)) ->
+      state.webhook_edit(
+        interaction_token,
+        "**Resolved** — " <> choice <> " (ask " <> correlation_id <> ")",
+        disabled_buttons(row),
+      )
+    _ -> Ok(Nil)
+  }
+}
+
+/// Expire edit: no interaction is in flight, so the channel endpoint works and
+/// also carries the disabled buttons.
+fn edit_ask_expired(state: State, correlation_id: String) -> Result(Nil, String) {
+  case db.get_external_ask(state.db_subject, correlation_id) {
+    Ok(Some(row)) ->
+      state.edit(
+        row.channel_id,
+        row.message_id,
+        "**Expired** — no decision within TTL (ask " <> correlation_id <> ")",
+        disabled_buttons(row),
+      )
     _ -> Ok(Nil)
   }
 }

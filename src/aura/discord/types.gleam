@@ -227,10 +227,13 @@ pub fn approve_reject_buttons(
 
 /// Build an action row of buttons for an external (hook-layer) ask.
 /// custom_id format: "xask|{correlation_id}|{choice}" (see ADR 038).
-/// The first button is green (style 3), the rest grey (style 2).
+/// The first button is green (style 3), the rest grey (style 2). When
+/// `disabled` is true the buttons render greyed out and unclickable, marking
+/// the ask as already answered.
 pub fn hook_ask_buttons(
   correlation_id: String,
   labels: List(String),
+  disabled: Bool,
 ) -> json.Json {
   let buttons =
     list.index_map(labels, fn(label, index) {
@@ -248,6 +251,7 @@ pub fn hook_ask_buttons(
             hook_protocol.encode_ask_custom_id(correlation_id, label),
           ),
         ),
+        #("disabled", json.bool(disabled)),
       ])
     })
   json.array(

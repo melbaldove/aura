@@ -14,7 +14,8 @@ import gleeunit/should
 type FakeNet {
   FakeNet(
     posts: Subject(#(String, String, json.Json)),
-    edits: Subject(#(String, String, String)),
+    edits: Subject(#(String, String, String, json.Json)),
+    webhook_edits: Subject(#(String, String, json.Json)),
   )
 }
 
@@ -22,18 +23,31 @@ fn fake_net(post_result: Result(String, String)) -> #(
   FakeNet,
   external_asks.PostFn,
   external_asks.EditFn,
+  external_asks.WebhookEditFn,
 ) {
   let posts = process.new_subject()
   let edits = process.new_subject()
+  let webhook_edits = process.new_subject()
   let post_fn = fn(channel: String, text: String, buttons: json.Json) {
     process.send(posts, #(channel, text, buttons))
     post_result
   }
-  let edit_fn = fn(channel: String, message_id: String, body: String) {
-    process.send(edits, #(channel, message_id, body))
-    Ok(Nil)
-  }
-  #(FakeNet(posts: posts, edits: edits), post_fn, edit_fn)
+  let edit_fn =
+    fn(channel: String, message_id: String, body: String, components: json.Json) {
+      process.send(edits, #(channel, message_id, body, components))
+      Ok(Nil)
+    }
+  let webhook_edit_fn =
+    fn(interaction_token: String, body: String, components: json.Json) {
+      process.send(webhook_edits, #(interaction_token, body, components))
+      Ok(Nil)
+    }
+  #(
+    FakeNet(posts: posts, edits: edits, webhook_edits: webhook_edits),
+    post_fn,
+    edit_fn,
+    webhook_edit_fn,
+  )
 }
 
 fn targets() -> List(cognitive_delivery.DeliveryTarget) {
@@ -47,9 +61,10 @@ fn start_asks(
   db_subject: Subject(db.DbMessage),
   post: external_asks.PostFn,
   edit: external_asks.EditFn,
+  webhook_edit: external_asks.WebhookEditFn,
 ) -> Subject(external_asks.Message) {
   let assert Ok(started) =
-    external_asks.start(db_subject, None, targets(), post, edit)
+    external_asks.start(db_subject, None, targets(), post, edit, webhook_edit)
   started.data
 }
 
@@ -73,8 +88,13 @@ fn posted(net: FakeNet) -> #(String, String, json.Json) {
   p
 }
 
-fn edited(net: FakeNet) -> #(String, String, String) {
+fn edited(net: FakeNet) -> #(String, String, String, json.Json) {
   let assert Ok(e) = process.receive(net.edits, 1000)
+  e
+}
+
+fn webhook_edited(net: FakeNet) -> #(String, String, json.Json) {
+  let assert Ok(e) = process.receive(net.webhook_edits, 1000)
   e
 }
 
@@ -95,8 +115,8 @@ fn stop_subject(subject) -> Nil {
 
 pub fn submit_ask_posts_and_resolves_test() {
   let assert Ok(db_subject) = db.start(":memory:")
-  let #(net, post, edit) = fake_net(Ok("msg-1"))
-  let actor = start_asks(db_subject, post, edit)
+  let #(net, post, edit, webhook_edit) = fake_net(Ok("msg-1"))
+  let actor = start_asks(db_subject, post, edit, webhook_edit)
 
   external_asks.get_decision(actor, "precheck") |> should.equal("UNKNOWN")
 
@@ -110,12 +130,13 @@ pub fn submit_ask_posts_and_resolves_test() {
   let assert Ok(Some(stored)) = db.get_external_ask(db_subject, "c1")
   stored.status |> should.equal("pending")
 
-  external_asks.resolve_ask(actor, "c1", "Resolved")
+  external_asks.resolve_ask(actor, "c1", "Resolved", "tok-1")
 
   let assert Ok(line) = process.receive(reply, 1000)
   line |> should.equal("RESOLVED c1 Resolved")
 
-  let #(_, _, edited_body) = edited(net)
+  let #(interaction_token, edited_body, _components) = webhook_edited(net)
+  interaction_token |> should.equal("tok-1")
   edited_body |> string.contains("Resolved") |> should.be_true
 
   let assert Ok(Some(done)) = db.get_external_ask(db_subject, "c1")
@@ -126,10 +147,33 @@ pub fn submit_ask_posts_and_resolves_test() {
   Nil
 }
 
+pub fn resolve_edit_disables_buttons_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let #(net, post, edit, webhook_edit) = fake_net(Ok("msg-1"))
+  let actor = start_asks(db_subject, post, edit, webhook_edit)
+
+  let reply = process.new_subject()
+  external_asks.submit_ask(actor, ask("c1d"), 60_000, reply)
+  let _ = posted(net)
+
+  external_asks.resolve_ask(actor, "c1d", "Resolved", "tok-d")
+
+  let assert Ok(#(_, _, components)) = process.receive(net.webhook_edits, 1000)
+  let components_str = json.to_string(components)
+  string.contains(components_str, "\"disabled\":true")
+  |> should.be_true
+
+  let assert Ok(line) = process.receive(reply, 1000)
+  line |> should.equal("RESOLVED c1d Resolved")
+
+  stop_subject(actor)
+  Nil
+}
+
 pub fn duplicate_ask_attaches_waiter_without_reposting_test() {
   let assert Ok(db_subject) = db.start(":memory:")
-  let #(net, post, edit) = fake_net(Ok("msg1"))
-  let actor = start_asks(db_subject, post, edit)
+  let #(net, post, edit, webhook_edit) = fake_net(Ok("msg1"))
+  let actor = start_asks(db_subject, post, edit, webhook_edit)
 
   let reply1 = process.new_subject()
   let reply2 = process.new_subject()
@@ -138,7 +182,7 @@ pub fn duplicate_ask_attaches_waiter_without_reposting_test() {
 
   let _ = posted(net)
   no_second_post(net)
-  external_asks.resolve_ask(actor, "c2", "Resolved")
+  external_asks.resolve_ask(actor, "c2", "Resolved", "tok-2")
 
   let assert Ok(a) = process.receive(reply1, 1000)
   let assert Ok(b) = process.receive(reply2, 1000)
@@ -151,13 +195,13 @@ pub fn duplicate_ask_attaches_waiter_without_reposting_test() {
 
 pub fn resolved_ask_replays_decision_immediately_test() {
   let assert Ok(db_subject) = db.start(":memory:")
-  let #(net, post, edit) = fake_net(Ok("msg2"))
-  let actor = start_asks(db_subject, post, edit)
+  let #(net, post, edit, webhook_edit) = fake_net(Ok("msg2"))
+  let actor = start_asks(db_subject, post, edit, webhook_edit)
 
   let reply1 = process.new_subject()
   external_asks.submit_ask(actor, ask("c3"), 60_000, reply1)
   let _ = posted(net)
-  external_asks.resolve_ask(actor, "c3", "Yes")
+  external_asks.resolve_ask(actor, "c3", "Yes", "tok-3")
 
   let reply2 = process.new_subject()
   external_asks.submit_ask(actor, ask("c3"), 60_000, reply2)
@@ -171,8 +215,8 @@ pub fn resolved_ask_replays_decision_immediately_test() {
 
 pub fn expire_ask_test() {
   let assert Ok(db_subject) = db.start(":memory:")
-  let #(net, post, edit) = fake_net(Ok("post-1"))
-  let actor = start_asks(db_subject, post, edit)
+  let #(net, post, edit, webhook_edit) = fake_net(Ok("post-1"))
+  let actor = start_asks(db_subject, post, edit, webhook_edit)
 
   let reply = process.new_subject()
   external_asks.submit_ask(actor, ask("c4"), 1, reply)
@@ -183,8 +227,11 @@ pub fn expire_ask_test() {
   let assert Ok(Some(stored)) = db.get_external_ask(db_subject, "c4")
   stored.status |> should.equal("expired")
 
-  let #(_, _, edited_body) = edited(net)
+  let #(_, _, edited_body, components) = edited(net)
   edited_body |> string.contains("Expired") |> should.be_true
+  let components_str = json.to_string(components)
+  string.contains(components_str, "\"disabled\":true")
+  |> should.be_true
 
   stop_subject(actor)
   Nil
@@ -192,15 +239,15 @@ pub fn expire_ask_test() {
 
 pub fn resolve_after_expiry_is_ignored_test() {
   let assert Ok(db_subject) = db.start(":memory:")
-  let #(net, post, edit) = fake_net(Ok("post-1"))
-  let actor = start_asks(db_subject, post, edit)
+  let #(net, post, edit, webhook_edit) = fake_net(Ok("post-1"))
+  let actor = start_asks(db_subject, post, edit, webhook_edit)
 
   let reply = process.new_subject()
   external_asks.submit_ask(actor, ask("c5"), 1, reply)
   let _ = posted(net)
   let assert Ok(_expired) = process.receive(reply, 1000)
 
-  external_asks.resolve_ask(actor, "c5", "Late")
+  external_asks.resolve_ask(actor, "c5", "Late", "tok-late")
 
   let assert Ok(Some(stored)) = db.get_external_ask(db_subject, "c5")
   stored.status |> should.equal("expired")
@@ -214,8 +261,8 @@ pub fn resolve_after_expiry_is_ignored_test() {
 
 pub fn get_decision_states_test() {
   let assert Ok(db_subject) = db.start(":memory:")
-  let #(net, post, edit) = fake_net(Ok("post-1"))
-  let actor = start_asks(db_subject, post, edit)
+  let #(net, post, edit, webhook_edit) = fake_net(Ok("post-1"))
+  let actor = start_asks(db_subject, post, edit, webhook_edit)
 
   external_asks.get_decision(actor, "nope") |> should.equal("UNKNOWN")
 
@@ -225,7 +272,7 @@ pub fn get_decision_states_test() {
 
   external_asks.get_decision(actor, "c6") |> should.equal("PENDING")
 
-  external_asks.resolve_ask(actor, "c6", "Go")
+  external_asks.resolve_ask(actor, "c6", "Go", "tok-6")
   external_asks.get_decision(actor, "c6") |> should.equal("RESOLVED c6 Go")
 
   let reply2 = process.new_subject()
@@ -240,8 +287,8 @@ pub fn get_decision_states_test() {
 
 pub fn post_failure_marks_failed_and_replies_error_test() {
   let assert Ok(db_subject) = db.start(":memory:")
-  let #(net, post, edit) = fake_net(Error("discord 400"))
-  let actor = start_asks(db_subject, post, edit)
+  let #(net, post, edit, webhook_edit) = fake_net(Error("discord 400"))
+  let actor = start_asks(db_subject, post, edit, webhook_edit)
 
   let reply = process.new_subject()
   external_asks.submit_ask(actor, ask("c7"), 60_000, reply)

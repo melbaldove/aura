@@ -174,6 +174,17 @@ pub fn start(
   let event_ingest_subject = event_ingest_started.data
   logging.log(logging.Info, "[supervisor] Event ingest started")
 
+  let app_id = case rest.get_application_id(global_config.discord.token) {
+    Ok(id) -> id
+    Error(err) -> {
+      logging.log(
+        logging.Error,
+        "[supervisor] Failed to resolve application id for ask edits: " <> err,
+      )
+      ""
+    }
+  }
+
   let assert Ok(asks_started) =
     external_asks.start(
       db_subject,
@@ -187,8 +198,22 @@ pub fn start(
           buttons,
         )
       },
-      fn(channel, message_id, body) {
-        rest.edit_message(global_config.discord.token, channel, message_id, body)
+      fn(channel, message_id, body, components) {
+        rest.edit_message_with_components(
+          global_config.discord.token,
+          channel,
+          message_id,
+          body,
+          components,
+        )
+      },
+      fn(interaction_token, body, components) {
+        rest.edit_interaction_response(
+          app_id,
+          interaction_token,
+          body,
+          components,
+        )
       },
     )
   let asks_subject = asks_started.data

@@ -238,13 +238,19 @@ Pending asks live in a new `external_asks` table (correlation ID, source,
 channel, message, text, buttons, status, decision, timestamps), written before
 the Discord message is posted — same ledger discipline as shell approvals.
 
-Ask buttons use a namespaced `custom_id` (e.g. `xask|<channel>|<correlation_id>|<choice>`).
-Brain's interaction handler currently routes only `{action}:{channel}:{id}`
-triplets to channel actors and drops the rest; it gains one clause that
-recognizes the ask namespace and resolves **statelessly**: look up the ask in
-the DB, record the decision, edit the message, and wake the blocked handler if
-one is registered in a small in-memory waiter map. No channel-actor state, so
-no restart window where a click is dropped.
+Ask buttons use a namespaced `custom_id` (`xask|<correlation_id>|<choice>`).
+Brain's interaction handler routes the ask namespace and resolves
+**statelessly**: look up the ask in the DB, record the decision, edit the
+message, and wake the blocked handler if one is registered in a small
+in-memory waiter map. No channel-actor state, so no restart window where a
+click is dropped.
+
+A button click locks the message to the interaction: the immediate channel
+endpoint edit would 400, so the resolve edit goes through the interaction
+webhook (`PATCH /webhooks/{app_id}/{interaction_token}/messages/@original`).
+Both the resolve and the expiry edits re-send the ask's buttons with
+`disabled: true` and a resolved/expired content line, so a message visibly
+shows it was already answered.
 
 ## Restart semantics (extends the ADR 027 pattern)
 

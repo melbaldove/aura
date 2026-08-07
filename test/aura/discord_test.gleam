@@ -63,12 +63,22 @@ pub fn split_to_discord_messages_splits_just_over_limit_into_two_test() {
 
 pub fn hook_ask_buttons_test() {
   let json_str =
-    discord_types.hook_ask_buttons("run-42-ch-1", ["Resolved", "Abort"])
+    discord_types.hook_ask_buttons("run-42-ch-1", ["Resolved", "Abort"], False)
     |> json.to_string
   string.contains(json_str, "xask|run-42-ch-1|Resolved")
   |> should.be_true
   string.contains(json_str, "xask|run-42-ch-1|Abort")
   |> should.be_true
   string.contains(json_str, "\"label\":\"Resolved\"")
+  |> should.be_true
+  string.contains(json_str, "\"disabled\":false")
+  |> should.be_true
+}
+
+pub fn hook_ask_buttons_disabled_test() {
+  let json_str =
+    discord_types.hook_ask_buttons("run-42-ch-1", ["Resolved", "Abort"], True)
+    |> json.to_string
+  string.contains(json_str, "\"disabled\":true")
   |> should.be_true
 }

@@ -95,12 +95,31 @@ pub fn send_message(
   }
 }
 
-/// PATCH /channels/{channel_id}/messages/{message_id} — edit a message.
+/// PATCH /channels/{channel_id}/messages/{message_id} — edit a message,
+/// clearing any components.
 pub fn edit_message(
   token: String,
   channel_id: String,
   message_id: String,
   content: String,
+) -> Result(Nil, String) {
+  edit_message_with_components(
+    token,
+    channel_id,
+    message_id,
+    content,
+    json.array([], fn(x) { x }),
+  )
+}
+
+/// PATCH /channels/{channel_id}/messages/{message_id} — edit a message with a
+/// replacement components payload (e.g. disabled buttons after a click).
+pub fn edit_message_with_components(
+  token: String,
+  channel_id: String,
+  message_id: String,
+  content: String,
+  components: json.Json,
 ) -> Result(Nil, String) {
   logging.log(
     logging.Info,
@@ -110,7 +129,7 @@ pub fn edit_message(
   let body =
     json.object([
       #("content", json.string(content)),
-      #("components", json.array([], fn(x) { x })),
+      #("components", components),
     ])
     |> json.to_string()
   use req <- result.try(authed_request(url, http.Patch, token))
@@ -133,6 +152,68 @@ pub fn edit_message(
       )
       Error(unexpected_status(status, "edit message"))
     }
+  }
+}
+
+/// PATCH /webhooks/{application_id}/{interaction_token}/messages/@original —
+/// edit the message a message-component interaction was attached to. The
+/// interaction token in the URL is the auth; no bot token header is used.
+pub fn edit_interaction_response(
+  application_id: String,
+  interaction_token: String,
+  content: String,
+  components: json.Json,
+) -> Result(Nil, String) {
+  let url =
+    base_url
+    <> "/webhooks/"
+    <> application_id
+    <> "/"
+    <> interaction_token
+    <> "/messages/@original"
+  let body =
+    json.object([
+      #("content", json.string(content)),
+      #("components", components),
+    ])
+    |> json.to_string()
+  use parsed_uri <- result.try(
+    uri.parse(url)
+    |> result.map_error(fn(_) { "Failed to parse URL" }),
+  )
+  use req <- result.try(
+    request.from_uri(parsed_uri)
+    |> result.map_error(fn(_) { "Failed to build request" }),
+  )
+  let req =
+    req
+    |> request.set_method(http.Patch)
+    |> request.set_header("content-type", "application/json")
+    |> request.set_body(body)
+  use resp <- result.try(
+    httpc.send(req)
+    |> result.map_error(fn(_) { "HTTP request failed" }),
+  )
+  case resp.status {
+    200 -> Ok(Nil)
+    status -> Error(unexpected_status(status, "edit interaction response"))
+  }
+}
+
+/// GET /oauth2/applications/@me — the bot's application id (used to address
+/// interaction webhooks).
+pub fn get_application_id(token: String) -> Result(String, String) {
+  let url = api_url("/oauth2/applications/@me")
+  use req <- result.try(authed_request(url, http.Get, token))
+  use resp <- result.try(
+    httpc.send(req)
+    |> result.map_error(fn(_) { "HTTP request failed" }),
+  )
+  case resp.status {
+    200 ->
+      json.parse(resp.body, decode.at(["id"], decode.string))
+      |> result.map_error(fn(_) { "Failed to parse application id" })
+    status -> Error(unexpected_status(status, "oauth2/applications/@me"))
   }
 }
 
