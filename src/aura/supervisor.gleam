@@ -18,6 +18,7 @@ import aura/db_migration
 import aura/discord
 import aura/discord/rest
 import aura/event_ingest
+import aura/external_asks
 import aura/integrations/supervisor as integrations_supervisor
 import aura/mcp/pool as mcp_pool
 import aura/memory
@@ -173,6 +174,26 @@ pub fn start(
   let event_ingest_subject = event_ingest_started.data
   logging.log(logging.Info, "[supervisor] Event ingest started")
 
+  let assert Ok(asks_started) =
+    external_asks.start(
+      db_subject,
+      Some(delivery_subject),
+      delivery_targets,
+      fn(channel, text, buttons) {
+        rest.send_message_with_components(
+          global_config.discord.token,
+          channel,
+          text,
+          buttons,
+        )
+      },
+      fn(channel, message_id, body) {
+        rest.edit_message(global_config.discord.token, channel, message_id, body)
+      },
+    )
+  let asks_subject = asks_started.data
+  logging.log(logging.Info, "[supervisor] External asks started")
+
   // 5. Load validation rules
   let validation_rules = case
     memory.read_file(xdg.config_path(paths, "validations.toml"))
@@ -327,6 +348,7 @@ pub fn start(
       event_ingest_subject: event_ingest_subject,
       cognitive_subject: cognitive_subject,
       delivery_subject: Some(delivery_subject),
+      asks_subject: Some(asks_subject),
       domains: list.map(domain_configs, fn(dc) { dc.0 }),
       dream_model: global_config.models.dream,
       dream_budget_percent: global_config.dreaming_budget_percent,

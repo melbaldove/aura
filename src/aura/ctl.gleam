@@ -9,15 +9,22 @@ import aura/cognitive_smoke
 import aura/cognitive_worker
 import aura/db
 import aura/dreaming
+import aura/event
 import aura/event_ingest
+import aura/external_asks
+import aura/hook_protocol
 import aura/time
 import aura/xdg
+import gleam/dict
 import gleam/erlang/process
 import gleam/int
+import gleam/json
 import gleam/list
 import gleam/option
+import gleam/result
 import gleam/string
 import logging
+import simplifile
 
 // ---------------------------------------------------------------------------
 // FFI
@@ -50,6 +57,7 @@ pub type CtlContext {
     event_ingest_subject: process.Subject(event_ingest.IngestMessage),
     cognitive_subject: process.Subject(cognitive_worker.Message),
     delivery_subject: option.Option(process.Subject(cognitive_delivery.Message)),
+    asks_subject: option.Option(process.Subject(external_asks.Message)),
     domains: List(String),
     dream_model: String,
     dream_budget_percent: Int,
@@ -73,11 +81,63 @@ pub fn start(ctx: CtlContext) -> Result(Nil, String) {
   }
 }
 
+pub fn build_hook_event(
+  source: String,
+  type_: String,
+  subject: String,
+  external_id: String,
+  data: String,
+  id: String,
+  time_ms: Int,
+) -> event.AuraEvent {
+  event.AuraEvent(
+    id: id,
+    source: source,
+    type_: type_,
+    subject: subject,
+    time_ms: time_ms,
+    tags: dict.new(),
+    external_id: external_id,
+    data: data,
+  )
+}
+
+pub fn build_external_ask(
+  source: String,
+  correlation_id: String,
+  target: String,
+  text: String,
+  buttons: List(String),
+  time_ms: Int,
+) -> db.StoredExternalAsk {
+  let buttons_json =
+    json.array(buttons, json.string) |> json.to_string
+  db.StoredExternalAsk(
+    id: correlation_id,
+    source: source,
+    channel_id: target,
+    message_id: "",
+    text: text,
+    buttons_json: buttons_json,
+    status: "pending",
+    decision: "",
+    requested_at_ms: time_ms,
+    updated_at_ms: time_ms,
+  )
+}
+
 /// Handle a single command from a CLI client.
 fn handle_command(command: String, ctx: CtlContext) -> String {
   let trimmed = string.trim(command)
-  case string.split(trimmed, " ") {
-    ["ping"] -> "pong"
+  // Payload commands carry JSON (may contain spaces); parse them off the
+  // first whitespace-delimited token before matching the flat token lists.
+  case string.split_once(trimmed, " ") {
+    Ok(#("event", payload)) -> handle_hook_event(ctx, string.trim(payload))
+    Ok(#("notify", payload)) -> handle_hook_notify(ctx, string.trim(payload))
+    Ok(#("ask", payload)) -> handle_hook_ask(ctx, string.trim(payload))
+    _ ->
+      case string.split(trimmed, " ") {
+        ["ping"] -> "pong"
 
     ["dream"] -> {
       logging.log(logging.Info, "[ctl] Dream triggered via CLI")
@@ -278,10 +338,15 @@ fn handle_command(command: String, ctx: CtlContext) -> String {
       )
     }
 
+    ["decision", cid] -> handle_hook_decision(ctx, cid)
+    ["asks"] -> handle_asks_list(ctx)
+    ["hooks"] -> handle_hooks_list(ctx)
+
     _ ->
       "ERROR: unknown command '"
       <> trimmed
-      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-replay labels, cognitive-replay propose-patches, cognitive-improve propose, cognitive-test deliver-now, cognitive-digest flush, cognitive-delivery retry-dead-letter, cognitive-label <event_id> <label> [expected_attention] [note]"
+      <> "'. Commands: ping, dream, status, cognitive-smoke gmail-rel42, cognitive-eval fixtures, cognitive-replay labels, cognitive-replay propose-patches, cognitive-improve propose, cognitive-test deliver-now, cognitive-digest flush, cognitive-delivery retry-dead-letter, cognitive-label <event_id> <label> [expected_attention] [note], event <json>, notify <json>, ask <json>, decision <correlation_id>, asks, hooks"
+      }
   }
 }
 
@@ -324,6 +389,197 @@ fn handle_cognitive_label(
 // ---------------------------------------------------------------------------
 // Client (runs from the CLI)
 // ---------------------------------------------------------------------------
+
+fn hook_event_id(time_ms: Int) -> String {
+  "ev-" <> int.to_string(time_ms) <> "-" <> random_suffix()
+}
+
+@external(erlang, "erlang", "unique_integer")
+fn erlang_unique_integer() -> Int
+
+fn random_suffix() -> String {
+  let raw = int.to_string(erlang_unique_integer())
+  string.replace(raw, "-", "")
+}
+
+fn handle_hook_event(ctx: CtlContext, payload: String) -> String {
+  case hook_protocol.parse("event " <> payload) {
+    Error(err) -> "ERROR: " <> err
+    Ok(hook_protocol.HookEvent(
+      source: source,
+      type_: type_,
+      subject: subject,
+      external_id: external_id,
+      data: data,
+    )) -> {
+      let now = time.now_ms()
+      let id = hook_event_id(now)
+      let ev =
+        build_hook_event(
+          source,
+          type_,
+          subject,
+          external_id,
+          data,
+          id,
+          now,
+        )
+      event_ingest.ingest(ctx.event_ingest_subject, ev)
+      hook_protocol.resp_ok_event_queued(id)
+    }
+    Ok(_) -> "ERROR: unexpected hook command"
+  }
+}
+
+fn handle_hook_notify(ctx: CtlContext, payload: String) -> String {
+  case hook_protocol.parse("notify " <> payload) {
+    Error(err) -> "ERROR: " <> err
+    Ok(hook_protocol.HookNotify(
+      source: source,
+      rule: rule,
+      target: target,
+      text: text,
+      external_id: external_id,
+    )) -> {
+      let now = time.now_ms()
+      let event_id = hook_event_id(now)
+      let prefixed = hook_protocol.apply_provenance(source, rule, text)
+      let audit =
+        event.AuraEvent(
+          id: event_id,
+          source: source,
+          type_: "hook.notify",
+          subject: prefixed,
+          time_ms: now,
+          tags: dict.new(),
+          external_id: external_id,
+          data: "",
+        )
+      case db.insert_event(ctx.db_subject, audit) {
+        Ok(False) -> hook_protocol.resp_ok_deduped()
+        Ok(True) ->
+          case ctx.delivery_subject {
+            option.None -> "ERROR: cognitive delivery actor unavailable"
+            option.Some(delivery_subject) ->
+              case
+                cognitive_delivery.deliver_hook_notify(
+                  delivery_subject,
+                  event_id,
+                  source,
+                  target,
+                  prefixed,
+                )
+              {
+                Ok(_) -> hook_protocol.resp_delivered(event_id)
+                Error(err) -> "ERROR: " <> err
+              }
+          }
+        Error(err) -> "ERROR: " <> err
+      }
+    }
+    Ok(_) -> "ERROR: unexpected hook command"
+  }
+}
+
+fn handle_hook_ask(ctx: CtlContext, payload: String) -> String {
+  case hook_protocol.parse("ask " <> payload) {
+    Error(err) -> "ERROR: " <> err
+    Ok(hook_protocol.HookAsk(
+      source: source,
+      rule: rule,
+      correlation_id: correlation_id,
+      target: target,
+      text: text,
+      buttons: buttons,
+      ttl_minutes: ttl_minutes,
+    )) ->
+      case ctx.asks_subject {
+        option.None -> "ERROR: external asks actor unavailable"
+        option.Some(asks_subject) -> {
+          let now = time.now_ms()
+          let prefixed = hook_protocol.apply_provenance(source, rule, text)
+          let ask = build_external_ask(source, correlation_id, target, prefixed, buttons, now)
+          let reply = process.new_subject()
+          let _ = external_asks.submit_ask(asks_subject, ask, ttl_minutes * 60_000, reply)
+          case process.receive(reply, ttl_minutes * 60_000 + 10_000) {
+            Ok(line) -> line
+            Error(_) -> hook_protocol.resp_error("ask waiter timed out locally")
+          }
+        }
+      }
+    Ok(_) -> "ERROR: unexpected hook command"
+  }
+}
+
+fn handle_hook_decision(ctx: CtlContext, correlation_id: String) -> String {
+  case ctx.asks_subject {
+    option.None -> "ERROR: external asks actor unavailable"
+    option.Some(asks_subject) -> external_asks.get_decision(asks_subject, correlation_id)
+  }
+}
+
+fn handle_asks_list(ctx: CtlContext) -> String {
+  case db.list_external_asks(ctx.db_subject, 20) {
+    Error(err) -> "ERROR: " <> err
+    Ok(asks) -> {
+      let lines =
+        list.map(asks, fn(ask) {
+          let now = time.now_ms()
+          let age_min = { now - ask.requested_at_ms } / 60_000
+          ask.id
+            <> " "
+            <> ask.status
+            <> " "
+            <> ask.source
+            <> " "
+            <> case ask.decision {
+              "" -> "-"
+              d -> d
+            }
+            <> " "
+            <> int.to_string(age_min)
+            <> "m"
+        })
+      case lines {
+        [] -> "OK: no asks"
+        _ -> string.join(lines, "\n")
+      }
+    }
+  }
+}
+
+fn handle_hooks_list(ctx: CtlContext) -> String {
+  let hooks_dir = xdg.config_path(ctx.paths, "hooks")
+  let rulesets =
+    simplifile.read_directory(hooks_dir)
+    |> result.map(fn(entries) {
+      entries
+      |> list.filter(fn(entry) { string.ends_with(entry, ".toml") })
+      |> list.map(fn(entry) { string.drop_start(entry, string.length(entry) - 5) })
+    })
+    |> result.unwrap([])
+  let ruleset_names = string.join(rulesets, ", ")
+  let sources =
+    case db.list_event_sources(ctx.db_subject) {
+      Error(_) -> []
+      Ok(rows) ->
+        list.map(rows, fn(row) {
+          let #(source, count, last_ms) = row
+          let now = time.now_ms()
+          let age_min = { now - last_ms } / 60_000
+          source
+            <> " events="
+            <> int.to_string(count)
+            <> " last="
+            <> int.to_string(age_min)
+            <> "m"
+        })
+    }
+  "rulesets: " <> ruleset_names <> case sources {
+    [] -> ""
+    _ -> "\n" <> string.join(sources, "\n")
+  }
+}
 
 /// Send a command to the running Aura daemon via Unix socket.
 pub fn send(paths: xdg.Paths, command: String) -> Result(String, String) {

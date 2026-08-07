@@ -1,4 +1,6 @@
 import aura
+import aura/ctl
+import gleam/string
 import gleeunit
 import gleeunit/should
 
@@ -67,4 +69,41 @@ pub fn parse_args_tolerates_leading_dash_dash_test() {
 pub fn parse_args_dispatches_start_explicitly_test() {
   aura.parse_args_for_test(["start"])
   |> should.equal(aura.CliStart)
+}
+
+pub fn build_hook_event_maps_fields_test() {
+  let ev =
+    ctl.build_hook_event(
+      "linkedin",
+      "hook.event",
+      "challenge",
+      "lid-9",
+      "{\"n\":1}",
+      "ev-1-2",
+      1000,
+    )
+  ev.source |> should.equal("linkedin")
+  ev.id |> should.equal("ev-1-2")
+  ev.type_ |> should.equal("hook.event")
+  ev.external_id |> should.equal("lid-9")
+  ev.time_ms |> should.equal(1000)
+}
+
+pub fn build_external_ask_maps_hook_fields_test() {
+  let ask =
+    ctl.build_external_ask(
+      "linkedin",
+      "c1",
+      "default",
+      "Solve it",
+      ["Resolved", "Abort"],
+      2000,
+    )
+  ask.id |> should.equal("c1")
+  ask.source |> should.equal("linkedin")
+  ask.channel_id |> should.equal("default")
+  ask.text |> should.equal("Solve it")
+  ask.status |> should.equal("pending")
+  ask.buttons_json |> string.contains("Resolved") |> should.be_true
+  ask.requested_at_ms |> should.equal(2000)
 }
