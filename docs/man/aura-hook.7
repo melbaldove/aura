@@ -1,0 +1,146 @@
+.TH AURA\-HOOK 7 "2026-08-07" "Aura 0.1.0" "Aura Manual"
+.SH NAME
+aura\-hook \- external hook rules: stream alerts, events, and asks into Aura
+.SH SYNOPSIS
+.B aura hook run \-\-rules <name.toml> \-\- <command>
+.SH DESCRIPTION
+Standalone processes can reach Aura over its local control socket by running a
+command through a hook ruleset. Aura tails the command's stdout, writes every
+line to a log, matches lines against your rules, and fires the resulting
+actions (an \fBevent\fR into the cognitive pipeline, a direct \fBnotify\fR
+message, or a \fBask\fR that posts Discord buttons and waits for a decision).
+.PP
+The wrapper exits with the child command's exit code. Hook commands need no
+Discord access and no credentials; they speak over
+~/.local/state/aura/aura.sock (mode 0600).
+.SH RULES FILES
+Rules live at ~/.config/aura/hooks/<name>.toml. A bare ruleset name passed to
+\-\-rules resolves to that path; an explicit path (containing a slash) is used
+as\-is.
+.PP
+A rules file has a header naming the source, then one or more
+.B [[rule]]
+tables. Every rule binds a regex \fBmatch\fR against each output line, a
+\fBlane\fR, rendered \fBtext\fR, and a \fBtarget\fR.
+.PP
+.nf
+name = "my-collector"          # log file: ~/.local/state/aura/hooks/my-collector.log
+source = "collector"           # provenance tag; must be non-empty
+
+[[rule]]
+name = "blocked"               # provenance: [hook:collector/blocked]
+match = "BLOCKED: (.+)"        # regex against each stdout/stderr line
+lane = "ask"                   # event | notify | ask
+target = "default"             # default | domain:<name>
+text = "The collector is blocked: {1}. Resolve it in the browser."
+buttons = ["Resolved", "Abort"]
+ttl_minutes = 30               # optional, default 60
+
+[[rule]]
+name = "progress"
+match = "PROGRESS (\\\\d+)"
+lane = "event"                 # goes through the cognitive pipeline
+target = "default"
+text = "Collector progress: {1}"
+
+[[rule]]
+name = "finished"
+match = "DONE"
+lane = "notify"                # direct message, no model in the loop
+target = "domain:projects"
+text = "The collector finished."
+.fi
+.SS Required fields per rule
+.TP
+.B name
+Unique within the file; used in provenance and the external id.
+.TP
+.B match
+Regular expression compiled at load time. An invalid pattern is a load error,
+not a runtime surprise.
+.TP
+.B lane
+One of \fBevent\fR, \fBnotify\fR, \fBask\fR. A rule with any other value fails
+to load.
+.TP
+.B target
+.B default
+or
+.B domain:<name>
+(must match a configured delivery target).
+.TP
+.B text
+Template rendered from the match (see TEMPLATES).
+.SS Optional fields
+.TP
+.B buttons
+List of button labels for \fBlane = "ask"\fR. Defaults to ["Resolved", "Abort"].
+.TP
+.B ttl_minutes
+How long an ask stays clickable. Default 60.
+.TP
+.B external_id
+Template used as the dedupe key for event/notify (default
+\fB<source>:<rule>:<rendered text>\fR) and as the correlation id for ask
+(default \fB<source>-<rule>-<millis>\fR).
+.SH TEMPLATES
+Text and external_id templates substitute:
+.PP
+.nf
+{line}  the whole output line
+{0}     the whole regex match
+{1}..   capture groups, left to right
+.fi
+.PP
+Referencing a group that does not exist is a render error: the wrapper logs it
+rather than silently dropping the action. To escape a literal brace, write a
+non\-numeric token (for example "{not-a-group}") which is left verbatim.
+.SH LANES
+.TP
+.B event
+Subject goes through event_ingest and the cognitive pipeline (dedupe, model
+attention decision, delivery). Use for progress and ambient signals where the
+model judges urgency.
+.TP
+.B notify
+Delivered directly to the target (deduped, ledgered), prefixed with
+[hook:<source>/<rule>] provenance. No model in the loop. Use for time\-critical
+alerts.
+.TP
+.B ask
+Posts Discord buttons for the target and blocks until a button is clicked, the
+TTL expires, or Aura is unreachable. On resolution the chosen label is written
+to ~/.local/state/aura/hooks/decisions/<correlation_id> for the calling process
+to poll. Transient socket failures are retried with backoff until the TTL.
+.SH FILES
+.TP
+~/.config/aura/hooks/<name>.toml
+Rules definitions.
+.TP
+~/.local/state/aura/hooks/<name>.log
+Tee of every line the wrapped command printed.
+.TP
+~/.local/state/aura/hooks/decisions/<correlation_id>
+Materialized choice when an ask resolves.
+.SH INTROSPECTION
+.B aura hooks
+Lists registered rulesets (from the hooks config directory) and recent event
+sources with counts. \fBaura asks\fR lists pending and recent asks.
+.SH EXAMPLES
+.IP 1. 4
+Watch a build and alert on failure:
+.PP
+.nf
+aura hook run --rules build -- 'make && make test'
+.fi
+.PP
+with a rule matching "^FAIL" on lane notify.
+.IP 2. 4
+Ad\-hoc rules file:
+.PP
+.nf
+aura hook run --rules /tmp/my-rules.toml -- 'python collector.py'
+.fi
+.SH SEE ALSO
+aura(1), aura\-config(5), docs/architecture/external-hooks.md,
+docs/decisions/038-external-hook-layer.md

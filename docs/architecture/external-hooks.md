@@ -98,6 +98,67 @@ itself author rules conversationally through the existing `propose`/`write_file`
 tools — conversation is configuration. `aura-hook run --rules` may still point
 at an explicit path for ad-hoc runs.
 
+### Writing a rules file (quick start)
+
+A rules file is ordinary TOML: a header naming the source, then one
+`[[rule]]` table per pattern. Example at `~/.config/aura/hooks/collector.toml`:
+
+```toml
+name = "collector"
+source = "my-collector"
+
+[[rule]]
+name = "blocked"
+match = "BLOCKED: (.+)"
+lane = "ask"
+target = "default"
+text = "The collector is blocked: {1}. Resolve it in the browser."
+buttons = ["Resolved", "Abort"]
+ttl_minutes = 30
+
+[[rule]]
+name = "progress"
+match = "PROGRESS (\\d+)"
+lane = "event"
+target = "default"
+text = "Collector progress: {1}"
+
+[[rule]]
+name = "finished"
+match = "DONE"
+lane = "notify"
+target = "domain:projects"
+text = "The collector finished."
+```
+
+Run it against any command that prints matching lines:
+
+```bash
+aura hook run --rules collector -- 'python collector.py'
+```
+
+How it behaves:
+
+- Every stdout/stderr line is appended to
+  `~/.local/state/aura/hooks/collector.log`.
+- A line matching `BLOCKED: <detail>` posts a Discord ask with `Resolved` /
+  `Abort` buttons, stays clickable for 30 minutes, and blocks the tail loop
+  until the user clicks one or the TTL expires. On resolution the chosen label
+  is written to `~/.local/state/aura/hooks/decisions/<correlation_id>`.
+- `PROGRESS <n>` becomes an `event` through the cognitive pipeline (dedupe +
+  model attention decision).
+- `DONE` delivers a direct `notify` message to the `projects` domain channel,
+  prefixed with `[hook:my-collector/finished]` provenance.
+- The wrapper exits with the child command's exit code.
+
+Fields: `name`/`match`/`lane`/`target`/`text` are required; `lane` must be
+`event`, `notify`, or `ask`; `target` is `default` or `domain:<name>`.
+Optional: `buttons` (default `["Resolved", "Abort"]`), `ttl_minutes` (default
+`60`), and `external_id` (a template used as the dedupe key / correlation id).
+Templates substitute `{line}` (the whole line), `{0}` (the whole match), and
+`{1}..` (capture groups). A bad `match` regex or unknown `lane` fails at load
+time, not at runtime. See `man aura-hook` for the full reference.
+
 ## Two lanes
 
 | | Lane 1: `event` | Lane 2: `notify` / `ask` |

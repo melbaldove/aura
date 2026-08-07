@@ -104,7 +104,7 @@ JSON payloads carry `source`, an optional `rule` (for provenance), and
 lane-specific fields; see `docs/architecture/external-hooks.md`. Rules files
 live in `~/.config/aura/hooks/<name>.toml` and are driven by
 `aura hook run --rules <name> -- <command>` (see `src/aura/hook_rules.gleam`,
-`src/aura/hook_run.gleam`).
+`src/aura/hook_run.gleam`). Full reference for writing rules: `man aura-hook`.
 
 ### Message flow
 
