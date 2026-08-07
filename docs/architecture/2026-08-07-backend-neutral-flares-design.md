@@ -194,6 +194,21 @@ The brain owns decomposition, executor selection, manifest policy, completion ch
 
 Executors own the mechanics of one execution attempt. They do not own product policy or final completion.
 
+## Deterministic validation
+
+The model makes semantic judgments. Code checks safety and evidence before a judgment produces an effect.
+
+Executor selection and completion are brain decisions. Each decision passes a narrow deterministic gate before it takes effect:
+
+- Executor compatibility: the selected executor supports every capability the objective requires.
+- Authority: the action stays inside the flare's authority boundary.
+- Blocking gaps: no open gap prevents the transition.
+- Proof presence: the referenced evidence exists and matches the completion requirements.
+
+The gate does not judge whether the work is good. Quality remains model judgment. The gate stops the decision when a required condition is false.
+
+A failed gate does not fail the flare. It records the reason, opens a gap, and returns the decision to the brain with a deterministic explanation.
+
 ## Supervision
 
 The root supervisor owns the flare manager and an execution-attempt supervisor.
@@ -210,9 +225,19 @@ Aura persists the flare identity, objective, executor choice, manifests, transcr
 
 After a process crash, Aura marks the active attempt as `interrupted`. It then reconciles recorded actions with external state.
 
-Aura resumes automatically only when the next action is safe. Aura must not repeat an external write until it knows if the first write took effect. This rule applies to actions such as a message, submission, upload, or payment.
+External effects use an intent ledger in the existing `flare_events` store. There is no new table.
 
-If Aura cannot reconcile an action, it records an `external` or `verification` gap. It asks the user only when the user must make the decision.
+For each external write, such as a message, submission, upload, or payment:
+
+1. Before the call, record `effect_intended` with a stable operation ID.
+2. Execute the write once.
+3. After the call, record `effect_succeeded` with the receipt, or `effect_unknown` when the outcome is not known.
+
+Aura never repeats an external write automatically. After interruption, it uses the ledger:
+
+- Success recorded: do not repeat. Report the recorded outcome.
+- Absence verified: the write did not take effect, so retry is safe.
+- Unknown: create a `verification` or `external` gap. Do not retry automatically. Ask the user when only the user can resolve the uncertainty.
 
 ## Audit and attention
 

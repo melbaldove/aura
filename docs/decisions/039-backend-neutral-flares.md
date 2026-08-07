@@ -65,11 +65,23 @@ User acceptance is required only when the objective needs human judgment or expl
 
 This rule changes the ADR 018 implementation rule that completion is always declared by the user. The durable flare model from ADR 018 remains valid.
 
+### Brain decisions pass a deterministic gate
+
+The model makes semantic judgments. Code checks safety and evidence before a judgment produces an effect.
+
+Executor selection and completion are brain decisions. Before either takes effect, a narrow deterministic gate checks executor compatibility, authority, blocking gaps, and proof presence. The gate does not judge work quality. A failed gate records the reason and opens a gap instead of failing the flare.
+
+### External writes use an intent ledger
+
+Each external write records `effect_intended` before the call and `effect_succeeded` or `effect_unknown` after it, in the existing `flare_events` store. No new table is required.
+
+Aura never repeats an external write automatically. After interruption it retries only when absence is verified. Unknown outcomes create a verification or external gap and require a user decision.
+
 ### Recovery must prevent duplicate external writes
 
 After a crash, Aura marks the active attempt as interrupted. It reconciles the action log with external state before retry.
 
-Aura resumes automatically only when the next action is safe. Aura does not blindly repeat an external write when the first outcome is unknown.
+Aura resumes automatically only when the next action is safe. Aura does not blindly repeat an external write when the first outcome is unknown. The intent ledger is the mechanism for this rule.
 
 ### Active attempts are supervised
 
