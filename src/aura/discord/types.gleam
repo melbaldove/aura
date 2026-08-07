@@ -1,3 +1,4 @@
+import aura/hook_protocol
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -218,6 +219,42 @@ pub fn approve_reject_buttons(
             fn(x) { x },
           ),
         ),
+      ]),
+    ],
+    fn(x) { x },
+  )
+}
+
+/// Build an action row of buttons for an external (hook-layer) ask.
+/// custom_id format: "xask|{correlation_id}|{choice}" (see ADR 038).
+/// The first button is green (style 3), the rest grey (style 2).
+pub fn hook_ask_buttons(
+  correlation_id: String,
+  labels: List(String),
+) -> json.Json {
+  let buttons =
+    list.index_map(labels, fn(label, index) {
+      let style = case index {
+        0 -> 3
+        _ -> 2
+      }
+      json.object([
+        #("type", json.int(2)),
+        #("style", json.int(style)),
+        #("label", json.string(label)),
+        #(
+          "custom_id",
+          json.string(
+            hook_protocol.encode_ask_custom_id(correlation_id, label),
+          ),
+        ),
+      ])
+    })
+  json.array(
+    [
+      json.object([
+        #("type", json.int(1)),
+        #("components", json.preprocessed_array(buttons)),
       ]),
     ],
     fn(x) { x },

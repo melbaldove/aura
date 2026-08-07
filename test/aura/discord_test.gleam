@@ -1,6 +1,7 @@
 import aura/discord
 import aura/discord/message as discord_message
 import aura/discord/types as discord_types
+import gleam/json
 import gleam/list
 import gleam/option
 import gleam/string
@@ -57,5 +58,17 @@ pub fn split_to_discord_messages_splits_just_over_limit_into_two_test() {
   list.all(chunks, fn(chunk) {
     string.length(chunk) <= discord_message.discord_max_chars
   })
+  |> should.be_true
+}
+
+pub fn hook_ask_buttons_test() {
+  let json_str =
+    discord_types.hook_ask_buttons("run-42-ch-1", ["Resolved", "Abort"])
+    |> json.to_string
+  string.contains(json_str, "xask|run-42-ch-1|Resolved")
+  |> should.be_true
+  string.contains(json_str, "xask|run-42-ch-1|Abort")
+  |> should.be_true
+  string.contains(json_str, "\"label\":\"Resolved\"")
   |> should.be_true
 }
