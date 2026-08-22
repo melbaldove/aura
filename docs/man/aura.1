@@ -15,6 +15,14 @@ flares, scheduled tasks, and domain\-partitioned knowledge
 .br
 .B gleam run \-\- cognitive\-delivery retry\-dead\-letter
 .br
+.B gleam run \-\- monitor run\-once
+.br
+.B gleam run \-\- oauth start \-\-connector gmail|calendar \-\-preparation ID \-\-configuration REF \-\-client REF
+.br
+.B gleam run \-\- oauth status \-\-session REF
+.br
+.B gleam run \-\- connector\-read run\-once \-\-authorization ID \-\-connector gmail|calendar
+.br
 .B bash scripts/deploy.sh
 .SH DESCRIPTION
 Aura is an OTP application.
@@ -82,6 +90,29 @@ General\-purpose shell execution with layered security.
 See
 .BR aura\-diagnostics (7).
 .SS Control commands
+.TP
+.B gleam run \-\- oauth start \-\-connector gmail|calendar \-\-preparation ID \-\-configuration REF \-\-client REF
+Start one loopback OAuth session for the exact connector, preparation
+authorization, disabled configuration, and installed client binding.
+The compact JSON output contains only the opaque session reference, expiry,
+and Google authorization URL. The command cannot enable a connector.
+.TP
+.B gleam run \-\- oauth status \-\-session REF
+Return only the durable OAuth phase and a bounded error class.
+The command does not return a code, verifier, token, client secret, or callback
+state.
+.TP
+.B gleam run \-\- connector\-read run\-once \-\-authorization ID \-\-connector gmail|calendar
+Run one exact enabled connector through the same supervised reader that the
+runtime tick uses. Limits, scope, endpoints, domain, and concern come from the
+immutable authorization. The command accepts no overrides.
+.TP
+.B gleam run \-\- monitor run\-once
+Claim at most one authorized Codex-owned attention item through the local ctl
+socket. The command reads controlled XDG runtime and capability files. It emits
+no output when no item is ready. It otherwise emits one compact JSON envelope.
+It does not create a Scheduled task, call a provider, use Discord, or inject
+content into active Voice.
 .TP
 .B gleam run \-\- cognitive\-smoke gmail\-rel42
 Send a synthetic Gmail\-shaped event to the running daemon over the local Unix

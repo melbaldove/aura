@@ -4,10 +4,14 @@
 //// the mechanical effects: duplicate protection, JSONL delivery state,
 //// immediate Discord sends, digest flushing, and operator dead-letter retry.
 
+import aura/attention_queue
 import aura/cognitive_decision
 import aura/db
+import aura/delivery/discord_compat
 import aura/discord/message as discord_message
 import aura/memory
+import aura/operating_contracts
+import aura/operational_audit
 import aura/time
 import aura/transport.{type Transport}
 import aura/xdg
@@ -29,6 +33,10 @@ pub type DeliveryTarget {
 
 pub type Message {
   Deliver(cognitive_decision.DecisionEnvelope)
+  DeliverAuthorized(
+    cognitive_decision.DecisionEnvelope,
+    operating_contracts.CanaryAuthorizationV1,
+  )
   FlushDigest
   RetryDeadLetters(reply: Subject(Result(RetrySummary, String)))
   SuppressEvent(event_id: String, reason: String)
@@ -47,6 +55,7 @@ pub type Message {
     text: String,
     reply: Subject(Result(Nil, String)),
   )
+  DrainAttention
   Tick
 }
 
@@ -113,6 +122,18 @@ pub fn start_with(
   digest_windows: List(String),
   report_to: Option(Subject(Report)),
 ) -> Result(actor.Started(Subject(Message)), actor.StartError) {
+  builder(paths, discord, targets, digest_windows, None, report_to)
+  |> actor.start
+}
+
+fn builder(
+  paths: xdg.Paths,
+  discord: Transport,
+  targets: List(DeliveryTarget),
+  digest_windows: List(String),
+  history_db_subject: Option(Subject(db.DbMessage)),
+  report_to: Option(Subject(Report)),
+) -> actor.Builder(State, Message, Subject(Message)) {
   actor.new_with_initialiser(5000, fn(self_subject) {
     let state =
       State(
@@ -120,17 +141,18 @@ pub fn start_with(
         discord: discord,
         targets: targets,
         digest_windows: digest_windows,
-        history_db_subject: None,
+        history_db_subject: history_db_subject,
         self_subject: self_subject,
         last_digest_window: "",
         report_to: report_to,
       )
 
+    reconcile_interrupted_deliveries(state)
+    process.send(self_subject, DrainAttention)
     process.send_after(self_subject, 60_000, Tick)
     Ok(actor.initialised(state) |> actor.returning(self_subject))
   })
   |> actor.on_message(handle_message)
-  |> actor.start
 }
 
 /// Start cognitive delivery with a DB-backed history sink for successful
@@ -143,23 +165,36 @@ pub fn start_with_history(
   history_db_subject: Subject(db.DbMessage),
   report_to: Option(Subject(Report)),
 ) -> Result(actor.Started(Subject(Message)), actor.StartError) {
-  actor.new_with_initialiser(5000, fn(self_subject) {
-    let state =
-      State(
-        paths: paths,
-        discord: discord,
-        targets: targets,
-        digest_windows: digest_windows,
-        history_db_subject: Some(history_db_subject),
-        self_subject: self_subject,
-        last_digest_window: "",
-        report_to: report_to,
-      )
+  builder(
+    paths,
+    discord,
+    targets,
+    digest_windows,
+    Some(history_db_subject),
+    report_to,
+  )
+  |> actor.start
+}
 
-    process.send_after(self_subject, 60_000, Tick)
-    Ok(actor.initialised(state) |> actor.returning(self_subject))
-  })
-  |> actor.on_message(handle_message)
+/// Start named cognitive delivery for use in a restart tree.
+pub fn start_named_with_history(
+  name: process.Name(Message),
+  paths: xdg.Paths,
+  discord: Transport,
+  targets: List(DeliveryTarget),
+  digest_windows: List(String),
+  history_db_subject: Subject(db.DbMessage),
+  report_to: Option(Subject(Report)),
+) -> Result(actor.Started(Subject(Message)), actor.StartError) {
+  builder(
+    paths,
+    discord,
+    targets,
+    digest_windows,
+    Some(history_db_subject),
+    report_to,
+  )
+  |> actor.named(name)
   |> actor.start
 }
 
@@ -168,6 +203,15 @@ pub fn deliver(
   decision: cognitive_decision.DecisionEnvelope,
 ) -> Nil {
   process.send(subject, Deliver(decision))
+}
+
+/// Enqueue one validated decision for an authorized Codex monitor route.
+pub fn deliver_authorized(
+  subject: Subject(Message),
+  decision: cognitive_decision.DecisionEnvelope,
+  authorization: operating_contracts.CanaryAuthorizationV1,
+) -> Nil {
+  process.send(subject, DeliverAuthorized(decision, authorization))
 }
 
 /// Deliver a hook-layer notify (lane 2, direct): send to the channel for the
@@ -203,7 +247,7 @@ pub fn record_hook_delivery(
   channel_id: String,
   text: String,
 ) -> Result(Nil, String) {
-  process.call(subject, 5_000, fn(reply) {
+  process.call(subject, 5000, fn(reply) {
     RecordHookDelivery(
       event_id: event_id,
       source: source,
@@ -268,6 +312,11 @@ fn handle_message(state: State, message: Message) -> actor.Next(State, Message) 
       actor.continue(state)
     }
 
+    DeliverAuthorized(decision, authorization) -> {
+      enqueue_authorized_decision(state, decision, authorization)
+      actor.continue(state)
+    }
+
     FlushDigest -> {
       flush_digest_entries(state)
       actor.continue(state)
@@ -284,18 +333,33 @@ fn handle_message(state: State, message: Message) -> actor.Next(State, Message) 
     }
 
     DeliverHookNotify(event_id:, source:, target:, text:, reply:) -> {
-      let result = deliver_hook_notify_message(state, event_id, source, target, text)
+      let result =
+        deliver_hook_notify_message(state, event_id, source, target, text)
       process.send(reply, result)
       actor.continue(state)
     }
 
     RecordHookDelivery(event_id:, source:, target:, channel_id:, text:, reply:) -> {
-      record_hook_delivery_message(state, event_id, source, target, channel_id, text)
-      process.send(reply, Ok(Nil))
+      let result =
+        record_hook_delivery_message(
+          state,
+          event_id,
+          source,
+          target,
+          channel_id,
+          text,
+        )
+      process.send(reply, result)
+      actor.continue(state)
+    }
+
+    DrainAttention -> {
+      drain_attention_queue(state)
       actor.continue(state)
     }
 
     Tick -> {
+      drain_attention_queue(state)
       let current = current_window()
       let current_key = current_window_key()
       let due =
@@ -320,6 +384,29 @@ fn deliver_decision(
   state: State,
   decision: cognitive_decision.DecisionEnvelope,
 ) -> Nil {
+  case delivery_effect_unknown(state.paths, decision.event_id) {
+    Error(error) ->
+      emit_ledger_failure(
+        state,
+        decision.event_id,
+        decision.delivery.target,
+        error,
+      )
+    Ok(True) ->
+      emit_persistence_failure(
+        state,
+        decision.event_id,
+        decision.delivery.target,
+        "prior delivery effect is unknown; verify the target before retry",
+      )
+    Ok(False) -> deliver_decision_if_known(state, decision)
+  }
+}
+
+fn deliver_decision_if_known(
+  state: State,
+  decision: cognitive_decision.DecisionEnvelope,
+) -> Nil {
   case event_seen(state.paths, decision.event_id) {
     Ok(True) ->
       emit_report(
@@ -333,31 +420,36 @@ fn deliver_decision(
       )
 
     Error(err) -> {
-      let _ = append_decision_state(state, decision, "failed", "", err)
-      emit_report(
+      emit_ledger_failure(
         state,
-        Report(
-          event_id: decision.event_id,
-          status: Failed,
-          target: decision.delivery.target,
-          error: err,
-        ),
+        decision.event_id,
+        decision.delivery.target,
+        err,
       )
     }
 
     Ok(False) -> {
       case decision.attention.action {
         "record" -> {
-          let _ = append_decision_state(state, decision, "recorded", "", "")
-          emit_report(
-            state,
-            Report(
-              event_id: decision.event_id,
-              status: Recorded,
-              target: decision.delivery.target,
-              error: "",
-            ),
-          )
+          case append_decision_state(state, decision, "recorded", "", "") {
+            Ok(Nil) ->
+              emit_report(
+                state,
+                Report(
+                  event_id: decision.event_id,
+                  status: Recorded,
+                  target: decision.delivery.target,
+                  error: "",
+                ),
+              )
+            Error(error) ->
+              emit_ledger_failure(
+                state,
+                decision.event_id,
+                decision.delivery.target,
+                error,
+              )
+          }
         }
 
         "digest" -> queue_digest(state, decision)
@@ -388,94 +480,408 @@ fn queue_digest(
 ) -> Nil {
   case resolve_target(state.targets, decision.delivery.target) {
     Error(err) -> {
-      let _ = append_decision_state(state, decision, "dead_letter", "", err)
-      emit_report(
+      emit_transition_result(
         state,
-        Report(
-          event_id: decision.event_id,
-          status: DeadLetter,
-          target: decision.delivery.target,
-          error: err,
-        ),
+        decision,
+        "dead_letter",
+        "",
+        err,
+        DeadLetter,
       )
     }
 
     Ok(target) -> {
-      let _ =
-        append_decision_state(state, decision, "queued", target.channel_id, "")
+      emit_transition_result(
+        state,
+        decision,
+        "queued",
+        target.channel_id,
+        "",
+        Queued,
+      )
+    }
+  }
+}
+
+fn emit_transition_result(
+  state: State,
+  decision: cognitive_decision.DecisionEnvelope,
+  ledger_status: String,
+  channel_id: String,
+  error: String,
+  report_status: Status,
+) -> Nil {
+  case
+    append_decision_state(state, decision, ledger_status, channel_id, error)
+  {
+    Ok(Nil) ->
       emit_report(
         state,
         Report(
           event_id: decision.event_id,
-          status: Queued,
+          status: report_status,
           target: decision.delivery.target,
-          error: "",
+          error: error,
         ),
       )
-    }
+    Error(ledger_error) ->
+      emit_ledger_failure(
+        state,
+        decision.event_id,
+        decision.delivery.target,
+        ledger_error,
+      )
   }
+}
+
+fn emit_ledger_failure(
+  state: State,
+  event_id: String,
+  target: String,
+  error: String,
+) -> Nil {
+  emit_persistence_failure(
+    state,
+    event_id,
+    target,
+    "delivery ledger write failed: " <> error,
+  )
+}
+
+fn emit_persistence_failure(
+  state: State,
+  event_id: String,
+  target: String,
+  error: String,
+) -> Nil {
+  logging.log(
+    logging.Error,
+    "[cognitive_delivery] event_id=" <> event_id <> " " <> error,
+  )
+  emit_report(
+    state,
+    Report(event_id: event_id, status: Failed, target: target, error: error),
+  )
 }
 
 fn send_immediate(
   state: State,
   decision: cognitive_decision.DecisionEnvelope,
 ) -> Nil {
-  case resolve_target(state.targets, decision.delivery.target) {
-    Error(err) -> {
-      let _ = append_decision_state(state, decision, "dead_letter", "", err)
-      emit_report(
+  case state.history_db_subject {
+    None ->
+      emit_persistence_failure(
         state,
-        Report(
-          event_id: decision.event_id,
-          status: DeadLetter,
-          target: decision.delivery.target,
-          error: err,
-        ),
+        decision.event_id,
+        decision.delivery.target,
+        "attention queue database is unavailable",
       )
+    Some(db_subject) -> {
+      let now = time.now_ms()
+      case attention_queue.from_decision(decision, now) {
+        Error(error) ->
+          emit_persistence_failure(
+            state,
+            decision.event_id,
+            decision.delivery.target,
+            error,
+          )
+        Ok(request) ->
+          case db.enqueue_attention(db_subject, request) {
+            Error(error) ->
+              emit_persistence_failure(
+                state,
+                decision.event_id,
+                decision.delivery.target,
+                error,
+              )
+            Ok(item) ->
+              case item.state {
+                "pending" | "deferred" -> drain_attention_queue(state)
+                "delivered" | "acknowledged" ->
+                  emit_report(
+                    state,
+                    Report(
+                      event_id: decision.event_id,
+                      status: DuplicateSuppressed,
+                      target: decision.delivery.target,
+                      error: "",
+                    ),
+                  )
+                _ ->
+                  emit_report(
+                    state,
+                    Report(
+                      event_id: decision.event_id,
+                      status: Failed,
+                      target: decision.delivery.target,
+                      error: "attention item is " <> item.state,
+                    ),
+                  )
+              }
+          }
+      }
     }
+  }
+}
 
+fn enqueue_authorized_decision(
+  state: State,
+  decision: cognitive_decision.DecisionEnvelope,
+  authorization: operating_contracts.CanaryAuthorizationV1,
+) -> Nil {
+  case state.history_db_subject {
+    None ->
+      emit_persistence_failure(
+        state,
+        decision.event_id,
+        authorization.attention_target,
+        "attention queue database is unavailable",
+      )
+    Some(db_subject) ->
+      case
+        attention_queue.from_authorized_decision(
+          decision,
+          authorization,
+          time.now_ms(),
+        )
+      {
+        Error(error) ->
+          emit_persistence_failure(
+            state,
+            decision.event_id,
+            authorization.attention_target,
+            error,
+          )
+        Ok(request) ->
+          case
+            db.enqueue_authorized_attention(
+              db_subject,
+              request,
+              authorization.authorization_id,
+            )
+          {
+            Error(error) ->
+              emit_persistence_failure(
+                state,
+                decision.event_id,
+                authorization.attention_target,
+                error,
+              )
+            Ok(_) ->
+              emit_report(
+                state,
+                Report(
+                  event_id: decision.event_id,
+                  status: Queued,
+                  target: authorization.attention_target,
+                  error: "",
+                ),
+              )
+          }
+      }
+  }
+}
+
+fn drain_attention_queue(state: State) -> Nil {
+  case state.history_db_subject {
+    None -> Nil
+    Some(db_subject) -> {
+      let now = time.now_ms()
+      let expired =
+        db.expire_attention(db_subject, attention_queue.delivery_owner, now)
+      case expired {
+        Error(error) ->
+          logging.log(
+            logging.Error,
+            "[attention_queue] expiry failed: " <> error,
+          )
+        Ok(_) -> Nil
+      }
+      case
+        db.recover_attention(db_subject, attention_queue.delivery_owner, now)
+      {
+        Error(error) ->
+          logging.log(
+            logging.Error,
+            "[attention_queue] recovery failed: " <> error,
+          )
+        Ok(_) ->
+          case
+            db.claim_attention(
+              db_subject,
+              attention_queue.delivery_owner,
+              "cognitive_delivery",
+              60_000,
+              now,
+            )
+          {
+            Error(error) ->
+              logging.log(
+                logging.Error,
+                "[attention_queue] claim failed: " <> error,
+              )
+            Ok(None) -> Nil
+            Ok(Some(claim)) -> {
+              deliver_claimed_attention(state, db_subject, claim)
+              drain_attention_queue(state)
+            }
+          }
+      }
+    }
+  }
+}
+
+fn deliver_claimed_attention(
+  state: State,
+  db_subject: Subject(db.DbMessage),
+  claim: attention_queue.Claim,
+) -> Nil {
+  let item = claim.item
+  case resolve_target(state.targets, item.delivery_target) {
+    Error(error) -> {
+      let now = time.now_ms()
+      case
+        db.reschedule_attention(
+          db_subject,
+          claim.lease_token,
+          error,
+          now + 60_000,
+          now,
+        )
+      {
+        Error(persistence_error) ->
+          emit_persistence_failure(
+            state,
+            item.decision_id,
+            item.delivery_target,
+            "reschedule failed: " <> persistence_error,
+          )
+        Ok(Nil) ->
+          emit_report(
+            state,
+            Report(
+              event_id: item.decision_id,
+              status: Failed,
+              target: item.delivery_target,
+              error:,
+            ),
+          )
+      }
+    }
     Ok(target) -> {
-      let content = format_immediate(decision)
-      case send_discord_chunks(state.discord, target.channel_id, content) {
-        Ok(_) -> {
-          persist_front_surface_message(state, target.channel_id, content)
-          let _ =
-            append_decision_state(
-              state,
-              decision,
-              "delivered",
-              target.channel_id,
-              "",
-            )
-          emit_report(
+      let now = time.now_ms()
+      case
+        db.renew_attention_lease(db_subject, claim.lease_token, 60_000, now)
+      {
+        Error(error) ->
+          emit_persistence_failure(
             state,
-            Report(
-              event_id: decision.event_id,
-              status: Delivered,
-              target: decision.delivery.target,
-              error: "",
-            ),
+            item.decision_id,
+            item.delivery_target,
+            error,
           )
-        }
-        Error(err) -> {
-          let _ =
-            append_decision_state(
-              state,
-              decision,
-              "dead_letter",
-              target.channel_id,
-              err,
-            )
-          emit_report(
-            state,
-            Report(
-              event_id: decision.event_id,
-              status: DeadLetter,
-              target: decision.delivery.target,
-              error: err,
-            ),
-          )
-        }
+        Ok(Nil) ->
+          case db.begin_attention_delivery(db_subject, claim.lease_token, now) {
+            Error(error) ->
+              emit_persistence_failure(
+                state,
+                item.decision_id,
+                item.delivery_target,
+                error,
+              )
+            Ok(Nil) -> {
+              let content = format_attention_item(item)
+              case
+                discord_compat.deliver(
+                  state.discord,
+                  target.channel_id,
+                  content,
+                )
+              {
+                discord_compat.Complete(visible_content:, receipts:) ->
+                  case
+                    db.complete_attention_delivery(
+                      db_subject,
+                      claim.lease_token,
+                      target.channel_id,
+                      visible_content,
+                      receipts,
+                      time.now_ms(),
+                    )
+                  {
+                    Error(error) ->
+                      emit_persistence_failure(
+                        state,
+                        item.decision_id,
+                        item.delivery_target,
+                        "queue outcome failed after send: " <> error,
+                      )
+                    Ok(Nil) -> {
+                      append_attention_ledger(
+                        state,
+                        item,
+                        "delivered",
+                        target.channel_id,
+                        "",
+                      )
+                      emit_report(
+                        state,
+                        Report(
+                          event_id: item.decision_id,
+                          status: Delivered,
+                          target: item.delivery_target,
+                          error: "",
+                        ),
+                      )
+                    }
+                  }
+                discord_compat.EffectUnknown(
+                  visible_content:,
+                  receipts:,
+                  error:,
+                ) ->
+                  case
+                    db.mark_attention_effect_unknown(
+                      db_subject,
+                      claim.lease_token,
+                      target.channel_id,
+                      visible_content,
+                      receipts,
+                      error,
+                      time.now_ms(),
+                    )
+                  {
+                    Error(persistence_error) ->
+                      emit_persistence_failure(
+                        state,
+                        item.decision_id,
+                        item.delivery_target,
+                        "effect_unknown persistence failed: "
+                          <> persistence_error,
+                      )
+                    Ok(Nil) -> {
+                      append_attention_ledger(
+                        state,
+                        item,
+                        "effect_unknown",
+                        target.channel_id,
+                        error,
+                      )
+                      emit_report(
+                        state,
+                        Report(
+                          event_id: item.decision_id,
+                          status: Failed,
+                          target: item.delivery_target,
+                          error: "effect_unknown: " <> error,
+                        ),
+                      )
+                    }
+                  }
+              }
+            }
+          }
       }
     }
   }
@@ -488,54 +894,95 @@ fn deliver_hook_notify_message(
   target: String,
   text: String,
 ) -> Result(String, String) {
-  case event_seen(state.paths, event_id) {
-    Ok(True) -> Ok("deduped")
-    Error(err) -> Error(err)
-    Ok(False) ->
-      case resolve_target(state.targets, target) {
-        Error(err) -> {
-          let _ =
-            append_hook_ledger(
-              state.paths,
-              event_id,
-              source,
-              "surface_now",
-              "",
-              text,
-              "dead_letter",
-              err,
-            )
-          Error(err)
-        }
-        Ok(resolved) ->
+  use effect_unknown <- result.try(delivery_effect_unknown(
+    state.paths,
+    event_id,
+  ))
+  case effect_unknown {
+    True ->
+      Error("prior delivery effect is unknown; verify the target before retry")
+    False ->
+      case event_seen(state.paths, event_id) {
+        Ok(True) -> Ok("deduped")
+        Error(err) -> Error(err)
+        Ok(False) ->
+          deliver_unseen_hook_notify(state, event_id, source, target, text)
+      }
+  }
+}
+
+fn deliver_unseen_hook_notify(
+  state: State,
+  event_id: String,
+  source: String,
+  target: String,
+  text: String,
+) -> Result(String, String) {
+  case resolve_target(state.targets, target) {
+    Error(err) -> {
+      use _ <- result.try(append_hook_ledger(
+        state,
+        event_id,
+        source,
+        "surface_now",
+        target,
+        "",
+        text,
+        "dead_letter",
+        err,
+      ))
+      Error(err)
+    }
+    Ok(resolved) ->
+      case
+        append_hook_ledger(
+          state,
+          event_id,
+          source,
+          "surface_now",
+          target,
+          resolved.channel_id,
+          text,
+          "sending",
+          "",
+        )
+      {
+        Error(error) -> Error("delivery ledger write failed: " <> error)
+        Ok(Nil) ->
           case send_discord_chunks(state.discord, resolved.channel_id, text) {
-            Error(err) -> {
-              let _ =
-                append_hook_ledger(
-                  state.paths,
-                  event_id,
-                  source,
-                  "surface_now",
-                  resolved.channel_id,
-                  text,
-                  "dead_letter",
-                  err,
-                )
-              Error(err)
+            Error(error) -> {
+              let #(ledger_status, _) = send_failure_transition(error)
+              use _ <- result.try(append_hook_ledger(
+                state,
+                event_id,
+                source,
+                "surface_now",
+                target,
+                resolved.channel_id,
+                text,
+                ledger_status,
+                error,
+              ))
+              Error(error)
             }
             Ok(_) -> {
-              persist_front_surface_message(state, resolved.channel_id, text)
-              let _ =
-                append_hook_ledger(
-                  state.paths,
-                  event_id,
-                  source,
-                  "surface_now",
-                  resolved.channel_id,
-                  text,
-                  "delivered",
-                  "",
-                )
+              use _ <- result.try(persist_front_surface_message(
+                state,
+                event_id,
+                resolved.channel_id,
+                text,
+              ))
+              use _ <- result.try(append_hook_ledger(
+                state,
+                event_id,
+                source,
+                "surface_now",
+                target,
+                resolved.channel_id,
+                text,
+                "delivered",
+                "",
+              ))
               emit_report(
                 state,
                 Report(
@@ -559,45 +1006,52 @@ fn record_hook_delivery_message(
   target: String,
   channel_id: String,
   text: String,
-) -> Nil {
+) -> Result(Nil, String) {
   case event_seen(state.paths, event_id) {
-    Ok(True) -> Nil
-    _ -> {
-      persist_front_surface_message(state, channel_id, text)
-      let _ =
-        append_hook_ledger(
-          state.paths,
-          event_id,
-          source,
-          "ask_now",
-          channel_id,
-          text,
-          "delivered",
-          "",
-        )
-      Nil
+    Error(error) -> Error(error)
+    Ok(True) -> Ok(Nil)
+    Ok(False) -> {
+      use _ <- result.try(persist_front_surface_message(
+        state,
+        event_id,
+        channel_id,
+        text,
+      ))
+      append_hook_ledger(
+        state,
+        event_id,
+        source,
+        "ask_now",
+        target,
+        channel_id,
+        text,
+        "delivered",
+        "",
+      )
     }
   }
 }
 
 fn append_hook_ledger(
-  paths: xdg.Paths,
+  state: State,
   event_id: String,
   source: String,
   attention_action: String,
+  target: String,
   channel_id: String,
   text: String,
   status: String,
   error: String,
 ) -> Result(Nil, String) {
-  append_ledger(
-    paths,
+  let now = time.now_ms()
+  use _ <- result.try(append_ledger(
+    state.paths,
     json.object([
-      #("timestamp_ms", json.int(time.now_ms())),
+      #("timestamp_ms", json.int(now)),
       #("event_id", json.string(event_id)),
       #("status", json.string(status)),
       #("attention_action", json.string(attention_action)),
-      #("target", json.string("")),
+      #("target", json.string(target)),
       #("channel_id", json.string(channel_id)),
       #("summary", json.string(text)),
       #("rationale", json.string("hook-declared: " <> source)),
@@ -606,7 +1060,8 @@ fn append_hook_ledger(
       #("gaps", json.array([], json.string)),
       #("error", json.string(error)),
     ]),
-  )
+  ))
+  append_delivery_transition_audit(state, event_id, status, now)
 }
 
 /// Resolve a hook notify/ask target id against the given targets list.
@@ -624,10 +1079,6 @@ pub fn resolve_target(
   }
 }
 
-fn targets_target(state: State, target_id: String) -> Result(DeliveryTarget, String) {
-  resolve_target(state.targets, target_id)
-}
-
 fn send_discord_chunks(
   discord: Transport,
   channel_id: String,
@@ -637,6 +1088,7 @@ fn send_discord_chunks(
     discord,
     channel_id,
     discord_message.split_to_discord_messages(content),
+    False,
   )
 }
 
@@ -644,13 +1096,27 @@ fn send_discord_chunk_list(
   discord: Transport,
   channel_id: String,
   chunks: List(String),
+  sent_any: Bool,
 ) -> Result(Nil, String) {
   case chunks {
     [] -> Ok(Nil)
     [chunk, ..rest] -> {
-      use _ <- result.try(discord.send_message(channel_id, chunk))
-      send_discord_chunk_list(discord, channel_id, rest)
+      case discord.send_message(channel_id, chunk) {
+        Ok(_) -> send_discord_chunk_list(discord, channel_id, rest, True)
+        Error(error) ->
+          case sent_any {
+            True -> Error("effect_unknown: partial Discord delivery: " <> error)
+            False -> Error(error)
+          }
+      }
     }
+  }
+}
+
+fn send_failure_transition(error: String) -> #(String, Status) {
+  case string.starts_with(error, "effect_unknown:") {
+    True -> #("effect_unknown", Failed)
+    False -> #("dead_letter", DeadLetter)
   }
 }
 
@@ -724,52 +1190,80 @@ fn send_digest_group(
         "" -> {
           let err = "queued digest entry has no channel_id"
           list.each(entries, fn(entry) {
-            let _ = append_entry_state(state.paths, entry, "dead_letter", err)
-            emit_report(
+            emit_entry_transition_result(
               state,
-              Report(
-                event_id: entry.event_id,
-                status: DeadLetter,
-                target: target_id,
-                error: err,
-              ),
+              entry,
+              entry.channel_id,
+              "dead_letter",
+              err,
+              DeadLetter,
             )
           })
         }
 
         _ -> {
           let content = format_digest(entries)
-          case send_discord_chunks(state.discord, channel_id, content) {
-            Ok(_) -> {
-              persist_front_surface_message(state, channel_id, content)
+          case begin_entries_delivery(state, entries, channel_id) {
+            Error(error) ->
               list.each(entries, fn(entry) {
-                let _ = append_entry_state(state.paths, entry, "delivered", "")
-                emit_report(
-                  state,
-                  Report(
-                    event_id: entry.event_id,
-                    status: Delivered,
-                    target: target_id,
-                    error: "",
-                  ),
-                )
+                emit_ledger_failure(state, entry.event_id, target_id, error)
               })
-            }
+            Ok(Nil) ->
+              case send_discord_chunks(state.discord, channel_id, content) {
+                Ok(_) -> {
+                  case
+                    persist_front_surface_message(
+                      state,
+                      first.event_id,
+                      channel_id,
+                      content,
+                    )
+                  {
+                    Error(error) ->
+                      list.each(entries, fn(entry) {
+                        let _ =
+                          emit_entry_transition_result(
+                            state,
+                            entry,
+                            channel_id,
+                            "effect_unknown",
+                            "history write failed after send: " <> error,
+                            Failed,
+                          )
+                        Nil
+                      })
+                    Ok(Nil) ->
+                      list.each(entries, fn(entry) {
+                        let _ =
+                          emit_entry_transition_result(
+                            state,
+                            entry,
+                            channel_id,
+                            "delivered",
+                            "",
+                            Delivered,
+                          )
+                        Nil
+                      })
+                  }
+                }
 
-            Error(err) ->
-              list.each(entries, fn(entry) {
-                let _ =
-                  append_entry_state(state.paths, entry, "dead_letter", err)
-                emit_report(
-                  state,
-                  Report(
-                    event_id: entry.event_id,
-                    status: DeadLetter,
-                    target: target_id,
-                    error: err,
-                  ),
-                )
-              })
+                Error(err) ->
+                  list.each(entries, fn(entry) {
+                    let #(ledger_status, report_status) =
+                      send_failure_transition(err)
+                    let _ =
+                      emit_entry_transition_result(
+                        state,
+                        entry,
+                        channel_id,
+                        ledger_status,
+                        err,
+                        report_status,
+                      )
+                    Nil
+                  })
+              }
           }
         }
       }
@@ -825,84 +1319,113 @@ fn retry_digest_group(
         Error(err) -> {
           list.each(entries, fn(entry) {
             let _ =
-              append_entry_state_with_channel(
-                state.paths,
+              emit_entry_transition_result(
+                state,
                 entry,
-                "dead_letter",
                 "",
+                "dead_letter",
                 err,
+                DeadLetter,
               )
-            emit_report(
-              state,
-              Report(
-                event_id: entry.event_id,
-                status: DeadLetter,
-                target: target_id,
-                error: err,
-              ),
-            )
           })
           RetrySummary(..summary, failed: summary.failed + list.length(entries))
         }
 
         Ok(target) -> {
           let content = format_digest(entries)
-          case send_discord_chunks(state.discord, target.channel_id, content) {
-            Ok(_) -> {
-              persist_front_surface_message(state, target.channel_id, content)
+          case begin_entries_delivery(state, entries, target.channel_id) {
+            Error(error) -> {
               list.each(entries, fn(entry) {
-                let _ =
-                  append_entry_state_with_channel(
-                    state.paths,
-                    entry,
-                    "delivered",
-                    target.channel_id,
-                    "",
-                  )
-                emit_report(
-                  state,
-                  Report(
-                    event_id: entry.event_id,
-                    status: Delivered,
-                    target: target_id,
-                    error: "",
-                  ),
-                )
-              })
-              RetrySummary(
-                ..summary,
-                delivered: summary.delivered + list.length(entries),
-              )
-            }
-
-            Error(err) -> {
-              list.each(entries, fn(entry) {
-                let _ =
-                  append_entry_state_with_channel(
-                    state.paths,
-                    entry,
-                    "dead_letter",
-                    target.channel_id,
-                    err,
-                  )
-                emit_report(
-                  state,
-                  Report(
-                    event_id: entry.event_id,
-                    status: DeadLetter,
-                    target: target_id,
-                    error: err,
-                  ),
-                )
+                emit_ledger_failure(state, entry.event_id, target_id, error)
               })
               RetrySummary(
                 ..summary,
                 failed: summary.failed + list.length(entries),
               )
             }
+            Ok(Nil) ->
+              retry_marked_digest_group(
+                state,
+                target.channel_id,
+                entries,
+                content,
+                summary,
+              )
           }
         }
       }
+    }
+  }
+}
+
+fn retry_marked_digest_group(
+  state: State,
+  channel_id: String,
+  entries: List(LedgerEntry),
+  content: String,
+  summary: RetrySummary,
+) -> RetrySummary {
+  let history_event_id = case entries {
+    [first, ..] -> first.event_id
+    [] -> ""
+  }
+  case send_discord_chunks(state.discord, channel_id, content) {
+    Ok(_) ->
+      case
+        persist_front_surface_message(
+          state,
+          history_event_id,
+          channel_id,
+          content,
+        )
+      {
+        Error(error) -> {
+          list.each(entries, fn(entry) {
+            let _ =
+              emit_entry_transition_result(
+                state,
+                entry,
+                channel_id,
+                "effect_unknown",
+                "history write failed after send: " <> error,
+                Failed,
+              )
+            Nil
+          })
+          RetrySummary(..summary, failed: summary.failed + list.length(entries))
+        }
+        Ok(Nil) ->
+          list.fold(entries, summary, fn(acc, entry) {
+            case
+              emit_entry_transition_result(
+                state,
+                entry,
+                channel_id,
+                "delivered",
+                "",
+                Delivered,
+              )
+            {
+              True -> RetrySummary(..acc, delivered: acc.delivered + 1)
+              False -> RetrySummary(..acc, failed: acc.failed + 1)
+            }
+          })
+      }
+
+    Error(err) -> {
+      let #(ledger_status, report_status) = send_failure_transition(err)
+      list.each(entries, fn(entry) {
+        let _ =
+          emit_entry_transition_result(
+            state,
+            entry,
+            channel_id,
+            ledger_status,
+            err,
+            report_status,
+          )
+      })
+      RetrySummary(..summary, failed: summary.failed + list.length(entries))
     }
   }
 }
@@ -927,72 +1450,47 @@ fn retry_immediate_entry(
   entry: LedgerEntry,
   summary: RetrySummary,
 ) -> RetrySummary {
-  case resolve_target(state.targets, entry.target) {
-    Error(err) -> {
-      let _ =
-        append_entry_state_with_channel(
-          state.paths,
-          entry,
-          "dead_letter",
-          "",
-          err,
+  case state.history_db_subject {
+    None -> RetrySummary(..summary, failed: summary.failed + 1)
+    Some(db_subject) -> {
+      let now = time.now_ms()
+      let domain_id = case string.starts_with(entry.target, "domain:") {
+        True -> string.replace(entry.target, "domain:", "")
+        False -> "global"
+      }
+      let request =
+        attention_queue.EnqueueRequest(
+          queue_id: "attention:" <> entry.event_id,
+          decision_id: entry.event_id,
+          domain_id:,
+          concern_id: None,
+          event_refs: [entry.event_id],
+          action: entry.attention_action,
+          summary: entry.summary,
+          rationale: entry.rationale,
+          why_now: None,
+          deferral_cost: None,
+          why_not_digest: None,
+          authority_request: case entry.authority_required {
+            "" | "none" -> None
+            value -> Some(value)
+          },
+          citations: entry.citations,
+          delivery_owner: attention_queue.delivery_owner,
+          delivery_target: entry.target,
+          delivery_key: "cognitive:" <> entry.event_id,
+          available_at: now,
+          expires_at: None,
         )
-      emit_report(
-        state,
-        Report(
-          event_id: entry.event_id,
-          status: DeadLetter,
-          target: entry.target,
-          error: err,
-        ),
-      )
-      RetrySummary(..summary, failed: summary.failed + 1)
-    }
-
-    Ok(target) -> {
-      let content = format_retry_immediate(entry)
-      case send_discord_chunks(state.discord, target.channel_id, content) {
-        Ok(_) -> {
-          persist_front_surface_message(state, target.channel_id, content)
-          let _ =
-            append_entry_state_with_channel(
-              state.paths,
-              entry,
-              "delivered",
-              target.channel_id,
-              "",
-            )
-          emit_report(
-            state,
-            Report(
-              event_id: entry.event_id,
-              status: Delivered,
-              target: entry.target,
-              error: "",
-            ),
-          )
-          RetrySummary(..summary, delivered: summary.delivered + 1)
-        }
-
-        Error(err) -> {
-          let _ =
-            append_entry_state_with_channel(
-              state.paths,
-              entry,
-              "dead_letter",
-              target.channel_id,
-              err,
-            )
-          emit_report(
-            state,
-            Report(
-              event_id: entry.event_id,
-              status: DeadLetter,
-              target: entry.target,
-              error: err,
-            ),
-          )
-          RetrySummary(..summary, failed: summary.failed + 1)
+      case db.enqueue_attention(db_subject, request) {
+        Error(_) -> RetrySummary(..summary, failed: summary.failed + 1)
+        Ok(item) -> {
+          drain_attention_queue(state)
+          case db.get_attention(db_subject, item.queue_id) {
+            Ok(finished) if finished.state == "delivered" ->
+              RetrySummary(..summary, delivered: summary.delivered + 1)
+            _ -> RetrySummary(..summary, failed: summary.failed + 1)
+          }
         }
       }
     }
@@ -1001,48 +1499,25 @@ fn retry_immediate_entry(
 
 fn persist_front_surface_message(
   state: State,
+  event_id: String,
   channel_id: String,
   content: String,
-) -> Nil {
+) -> Result(Nil, String) {
   case state.history_db_subject {
-    None -> Nil
+    None -> Ok(Nil)
     Some(db_subject) -> {
       let now = time.now_ms()
-      case db.resolve_conversation(db_subject, "discord", channel_id, now) {
-        Ok(conversation_id) -> {
-          case
-            db.append_message(
-              db_subject,
-              conversation_id,
-              "assistant",
-              content,
-              "aura",
-              "Aura",
-              now,
-            )
-          {
-            Ok(_) -> {
-              let _ = db.update_last_active(db_subject, conversation_id, now)
-              Nil
-            }
-            Error(err) ->
-              logging.log(
-                logging.Error,
-                "[cognitive_delivery] history append failed for channel "
-                  <> channel_id
-                  <> ": "
-                  <> err,
-              )
-          }
-        }
-        Error(err) ->
-          logging.log(
-            logging.Error,
-            "[cognitive_delivery] history conversation resolve failed for channel "
-              <> channel_id
-              <> ": "
-              <> err,
-          )
+      case
+        db.append_delivery_message_with_audit(
+          db_subject,
+          channel_id,
+          event_id,
+          content,
+          now,
+        )
+      {
+        Ok(Nil) -> Ok(Nil)
+        Error(err) -> Error("channel " <> channel_id <> ": " <> err)
       }
     }
   }
@@ -1075,6 +1550,74 @@ pub fn format_immediate(decision: cognitive_decision.DecisionEnvelope) -> String
   <> decision.event_id
 }
 
+fn format_attention_item(item: operating_contracts.AttentionQueueItem) -> String {
+  let header = case item.action {
+    "ask_now" -> "**Aura needs a decision**"
+    _ -> "**Aura noticed something attention-worthy**"
+  }
+  header
+  <> "\n\n"
+  <> item.summary
+  <> "\n\nRationale: "
+  <> item.rationale
+  <> optional_line("Why now", item.why_now)
+  <> optional_line("Deferral cost", item.deferral_cost)
+  <> optional_line("Why digest is insufficient", item.why_not_digest)
+  <> optional_line("Authority", item.authority_request)
+  <> "\nCitations: "
+  <> string.join(item.citations, ", ")
+  <> "\nEvent: "
+  <> item.decision_id
+}
+
+fn optional_line(label: String, value: Option(String)) -> String {
+  case value {
+    None -> ""
+    Some(text) -> "\n" <> label <> ": " <> text
+  }
+}
+
+fn append_attention_ledger(
+  state: State,
+  item: operating_contracts.AttentionQueueItem,
+  status: String,
+  channel_id: String,
+  error: String,
+) -> Nil {
+  let write =
+    append_ledger(
+      state.paths,
+      json.object([
+        #("timestamp_ms", json.int(time.now_ms())),
+        #("event_id", json.string(item.decision_id)),
+        #("status", json.string(status)),
+        #("attention_action", json.string(item.action)),
+        #("target", json.string(item.delivery_target)),
+        #("channel_id", json.string(channel_id)),
+        #("summary", json.string(item.summary)),
+        #("rationale", json.string(item.rationale)),
+        #(
+          "authority_required",
+          json.string(item.authority_request |> option.unwrap("none")),
+        ),
+        #("citations", json.array(item.citations, json.string)),
+        #("gaps", json.array([], json.string)),
+        #("error", json.string(error)),
+      ]),
+    )
+  case write {
+    Ok(Nil) -> Nil
+    Error(problem) ->
+      logging.log(
+        logging.Error,
+        "[attention_queue] compatibility ledger failed for "
+          <> item.queue_id
+          <> ": "
+          <> problem,
+      )
+  }
+}
+
 fn format_digest(entries: List(LedgerEntry)) -> String {
   let lines =
     entries
@@ -1093,28 +1636,6 @@ fn format_digest(entries: List(LedgerEntry)) -> String {
     })
 
   "**Aura digest**\n\n" <> string.join(lines, "\n")
-}
-
-fn format_retry_immediate(entry: LedgerEntry) -> String {
-  let header = case entry.attention_action {
-    "ask_now" -> "**Aura needs a decision**"
-    _ -> "**Aura noticed something attention-worthy**"
-  }
-
-  header
-  <> "\n\n"
-  <> entry.summary
-  <> "\n\nRationale: "
-  <> entry.rationale
-  <> case entry.authority_required {
-    "none" | "" -> ""
-    other -> "\nAuthority: " <> other
-  }
-  <> gaps_block(entry.gaps)
-  <> "\nCitations: "
-  <> string.join(entry.citations, ", ")
-  <> "\nEvent: "
-  <> entry.event_id
 }
 
 fn authority_reason(authority: cognitive_decision.AuthorityDecision) -> String {
@@ -1138,10 +1659,11 @@ fn append_decision_state(
   channel_id: String,
   error: String,
 ) -> Result(Nil, String) {
-  append_ledger(
+  let now = time.now_ms()
+  use _ <- result.try(append_ledger(
     state.paths,
     json.object([
-      #("timestamp_ms", json.int(time.now_ms())),
+      #("timestamp_ms", json.int(now)),
       #("event_id", json.string(decision.event_id)),
       #("status", json.string(status)),
       #("attention_action", json.string(decision.attention.action)),
@@ -1154,29 +1676,22 @@ fn append_decision_state(
       #("gaps", json.array(decision.gaps, json.string)),
       #("error", json.string(error)),
     ]),
-  )
-}
-
-fn append_entry_state(
-  paths: xdg.Paths,
-  entry: LedgerEntry,
-  status: String,
-  error: String,
-) -> Result(Nil, String) {
-  append_entry_state_with_channel(paths, entry, status, entry.channel_id, error)
+  ))
+  append_delivery_transition_audit(state, decision.event_id, status, now)
 }
 
 fn append_entry_state_with_channel(
-  paths: xdg.Paths,
+  state: State,
   entry: LedgerEntry,
   status: String,
   channel_id: String,
   error: String,
 ) -> Result(Nil, String) {
-  append_ledger(
-    paths,
+  let now = time.now_ms()
+  use _ <- result.try(append_ledger(
+    state.paths,
     json.object([
-      #("timestamp_ms", json.int(time.now_ms())),
+      #("timestamp_ms", json.int(now)),
       #("event_id", json.string(entry.event_id)),
       #("status", json.string(status)),
       #("attention_action", json.string(entry.attention_action)),
@@ -1189,7 +1704,96 @@ fn append_entry_state_with_channel(
       #("gaps", json.array(entry.gaps, json.string)),
       #("error", json.string(error)),
     ]),
-  )
+  ))
+  append_delivery_transition_audit(state, entry.event_id, status, now)
+}
+
+fn append_delivery_transition_audit(
+  state: State,
+  event_id: String,
+  status: String,
+  occurred_at: Int,
+) -> Result(Nil, String) {
+  case state.history_db_subject {
+    None -> Ok(Nil)
+    Some(db_subject) ->
+      db.append_operational_audit(
+        db_subject,
+        operational_audit.Record(
+          schema_version: 1,
+          audit_id: "",
+          record_type: case status {
+            "sending" -> "external_effect_intent"
+            "delivered" -> "external_effect_outcome"
+            _ -> "state_transition"
+          },
+          actor: "aura",
+          source: "cognitive_delivery",
+          action: "delivery." <> status,
+          target_type: "delivery",
+          target_id: event_id,
+          before_version: None,
+          after_version: None,
+          idempotency_key: None,
+          evidence_refs: [event_id],
+          proof_refs: [],
+          authority_ref: None,
+          result: case status {
+            "failed" | "dead_letter" | "effect_unknown" -> "failed"
+            "sending" -> "pending"
+            _ -> "succeeded"
+          },
+          error_code: None,
+          occurred_at:,
+        ),
+      )
+  }
+}
+
+fn emit_entry_transition_result(
+  state: State,
+  entry: LedgerEntry,
+  channel_id: String,
+  ledger_status: String,
+  error: String,
+  report_status: Status,
+) -> Bool {
+  case
+    append_entry_state_with_channel(
+      state,
+      entry,
+      ledger_status,
+      channel_id,
+      error,
+    )
+  {
+    Ok(Nil) -> {
+      emit_report(
+        state,
+        Report(
+          event_id: entry.event_id,
+          status: report_status,
+          target: entry.target,
+          error: error,
+        ),
+      )
+      True
+    }
+    Error(ledger_error) -> {
+      emit_ledger_failure(state, entry.event_id, entry.target, ledger_error)
+      False
+    }
+  }
+}
+
+fn begin_entries_delivery(
+  state: State,
+  entries: List(LedgerEntry),
+  channel_id: String,
+) -> Result(Nil, String) {
+  list.try_each(entries, fn(entry) {
+    append_entry_state_with_channel(state, entry, "sending", channel_id, "")
+  })
 }
 
 fn append_ledger(paths: xdg.Paths, value: json.Json) -> Result(Nil, String) {
@@ -1216,6 +1820,83 @@ fn event_seen(paths: xdg.Paths, event_id: String) -> Result(Bool, String) {
       Ok(string.contains(content, "\"event_id\":\"" <> event_id <> "\""))
     }
     Error(err) -> Error(string.inspect(err))
+  }
+}
+
+fn delivery_effect_unknown(
+  paths: xdg.Paths,
+  event_id: String,
+) -> Result(Bool, String) {
+  use entries <- result.try(read_ledger_entries(paths))
+  case
+    entries
+    |> latest_entries
+    |> list.find(fn(entry) { entry.event_id == event_id })
+  {
+    Ok(entry) ->
+      Ok(entry.status == "sending" || entry.status == "effect_unknown")
+    Error(_) -> Ok(False)
+  }
+}
+
+fn reconcile_interrupted_deliveries(state: State) -> Nil {
+  case read_ledger_entries(state.paths) {
+    Error(error) ->
+      logging.log(
+        logging.Error,
+        "[cognitive_delivery] failed to inspect interrupted deliveries: "
+          <> error,
+      )
+    Ok(entries) ->
+      entries
+      |> latest_entries
+      |> list.filter(fn(entry) {
+        entry.status == "sending" || entry.status == "effect_unknown"
+      })
+      |> list.each(fn(entry) {
+        let error =
+          "delivery was interrupted; effect is unknown; verify the target before retry"
+        case entry.status {
+          "sending" ->
+            case
+              append_entry_state_with_channel(
+                state,
+                entry,
+                "effect_unknown",
+                entry.channel_id,
+                error,
+              )
+            {
+              Ok(Nil) ->
+                emit_report(
+                  state,
+                  Report(
+                    event_id: entry.event_id,
+                    status: Failed,
+                    target: entry.target,
+                    error: error,
+                  ),
+                )
+              Error(ledger_error) ->
+                emit_ledger_failure(
+                  state,
+                  entry.event_id,
+                  entry.target,
+                  ledger_error,
+                )
+            }
+          _ ->
+            emit_report(
+              state,
+              Report(
+                event_id: entry.event_id,
+                status: Failed,
+                target: entry.target,
+                error: error,
+              ),
+            )
+        }
+      })
   }
 }
 

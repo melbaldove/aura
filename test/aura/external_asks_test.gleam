@@ -3,14 +3,13 @@ import aura/db
 import aura/external_asks
 import aura/time
 import gleam/erlang/process.{type Subject}
-import gleam/option.{None, Some}
 import gleam/json
+import gleam/option.{None, Some}
 import gleam/string
 import gleeunit/should
 
 /// PostFn / EditFn type aliases are public on the external_asks module; here
 /// we only construct concrete functions.
-
 type FakeNet {
   FakeNet(
     posts: Subject(#(String, String, json.Json)),
@@ -19,7 +18,9 @@ type FakeNet {
   )
 }
 
-fn fake_net(post_result: Result(String, String)) -> #(
+fn fake_net(
+  post_result: Result(String, String),
+) -> #(
   FakeNet,
   external_asks.PostFn,
   external_asks.EditFn,
@@ -32,16 +33,23 @@ fn fake_net(post_result: Result(String, String)) -> #(
     process.send(posts, #(channel, text, buttons))
     post_result
   }
-  let edit_fn =
-    fn(channel: String, message_id: String, body: String, components: json.Json) {
-      process.send(edits, #(channel, message_id, body, components))
-      Ok(Nil)
-    }
-  let webhook_edit_fn =
-    fn(interaction_token: String, body: String, components: json.Json) {
-      process.send(webhook_edits, #(interaction_token, body, components))
-      Ok(Nil)
-    }
+  let edit_fn = fn(
+    channel: String,
+    message_id: String,
+    body: String,
+    components: json.Json,
+  ) {
+    process.send(edits, #(channel, message_id, body, components))
+    Ok(Nil)
+  }
+  let webhook_edit_fn = fn(
+    interaction_token: String,
+    body: String,
+    components: json.Json,
+  ) {
+    process.send(webhook_edits, #(interaction_token, body, components))
+    Ok(Nil)
+  }
   #(
     FakeNet(posts: posts, edits: edits, webhook_edits: webhook_edits),
     post_fn,
@@ -142,6 +150,13 @@ pub fn submit_ask_posts_and_resolves_test() {
   let assert Ok(Some(done)) = db.get_external_ask(db_subject, "c1")
   done.status |> should.equal("resolved")
   done.decision |> should.equal("Resolved")
+  let assert [created, intent, reference, resolved] =
+    db.list_operational_audit(db_subject, "ask", "c1")
+    |> should.be_ok
+  created.action |> should.equal("ask.created")
+  intent.action |> should.equal("ask.delivery_intent")
+  reference.action |> should.equal("ask.delivery_reference_set")
+  resolved.action |> should.equal("ask.resolved")
 
   stop_subject(actor)
   Nil
@@ -285,7 +300,7 @@ pub fn get_decision_states_test() {
   Nil
 }
 
-pub fn post_failure_marks_failed_and_replies_error_test() {
+pub fn post_failure_marks_effect_unknown_and_replies_error_test() {
   let assert Ok(db_subject) = db.start(":memory:")
   let #(net, post, edit, webhook_edit) = fake_net(Error("discord 400"))
   let actor = start_asks(db_subject, post, edit, webhook_edit)
@@ -297,7 +312,13 @@ pub fn post_failure_marks_failed_and_replies_error_test() {
   line |> string.contains("ERROR:") |> should.be_true
 
   let assert Ok(Some(stored)) = db.get_external_ask(db_subject, "c7")
-  stored.status |> should.equal("failed")
+  stored.status |> should.equal("effect_unknown")
+  let audit = db.list_operational_audit(db_subject, "ask", "c7") |> should.be_ok
+  let assert [created, intent, state_unknown, effect_unknown] = audit
+  created.action |> should.equal("ask.created")
+  intent.action |> should.equal("ask.delivery_intent")
+  state_unknown.action |> should.equal("ask.effect_unknown")
+  effect_unknown.action |> should.equal("ask.delivery_effect_unknown")
 
   stop_subject(actor)
   Nil

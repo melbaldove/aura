@@ -173,6 +173,100 @@ pub fn build_loads_user_and_domain_context_as_citable_text_refs_test() {
   Nil
 }
 
+pub fn selected_context_loads_only_requested_domain_and_concern_test() {
+  let #(base, paths) = temp_paths("cognitive-context-selected")
+  let _ = simplifile.create_directory_all(xdg.domain_config_dir(paths, "hy"))
+  let _ =
+    simplifile.create_directory_all(xdg.domain_config_dir(paths, "personal"))
+  let _ = simplifile.create_directory_all(xdg.domain_state_dir(paths, "hy"))
+  let _ =
+    simplifile.create_directory_all(xdg.domain_state_dir(paths, "personal"))
+  let _ = simplifile.create_directory_all(xdg.domain_concerns_dir(paths, "hy"))
+  let _ =
+    simplifile.create_directory_all(xdg.domain_concerns_dir(paths, "personal"))
+  let _ =
+    simplifile.write(
+      xdg.domain_config_dir(paths, "hy") <> "/AGENTS.md",
+      "Selected instructions.",
+    )
+  let _ =
+    simplifile.write(
+      xdg.domain_config_dir(paths, "personal") <> "/AGENTS.md",
+      "Unselected instructions.",
+    )
+  let _ =
+    simplifile.write(
+      xdg.domain_concerns_dir(paths, "hy") <> "/delivery.md",
+      "# Selected concern",
+    )
+  let _ =
+    simplifile.write(
+      xdg.domain_concerns_dir(paths, "personal") <> "/household.md",
+      "# Unselected concern",
+    )
+
+  let observation = sample_observation()
+  let packet =
+    cognitive_context.build_selected(
+      paths,
+      observation,
+      cognitive_event.extract_evidence(observation),
+      "hy",
+      "delivery",
+    )
+    |> should.be_ok
+  let rendered = cognitive_context.render(packet)
+
+  rendered |> string.contains("Selected instructions.") |> should.be_true
+  rendered |> string.contains("Selected concern") |> should.be_true
+  rendered |> string.contains("Unselected instructions.") |> should.be_false
+  rendered |> string.contains("Unselected concern") |> should.be_false
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn production_decision_builder_selects_manifest_domain_context_test() {
+  let #(base, paths) = temp_paths("cognitive-context-production-selected")
+  let _ =
+    simplifile.create_directory_all(xdg.domain_data_dir(paths, "consulting"))
+  let _ =
+    simplifile.create_directory_all(xdg.domain_concerns_dir(paths, "consulting"))
+  let _ =
+    simplifile.write(
+      xdg.domain_manifest_path(paths, "consulting"),
+      "{\"schema_version\":1,\"domain_id\":\"domain:consulting\",\"slug\":\"consulting\",\"display_name\":\"Consulting\",\"aliases\":[\"advisory\"],\"purpose\":\"Bounded client work.\",\"status\":\"active\",\"context_refs\":[],\"default_authority_policy_ref\":null,\"cwd\":null,\"compatibility_transports\":[],\"version\":1,\"created_at\":1,\"updated_at\":1}",
+    )
+  let _ =
+    simplifile.write(
+      xdg.domain_concerns_dir(paths, "consulting") <> "/offer.md",
+      "# Offer concern",
+    )
+  let observation = sample_observation()
+  let tagged =
+    cognitive_event.Observation(
+      ..observation,
+      tags: observation.tags
+        |> dict.insert("domain_slug", "consulting")
+        |> dict.insert("concern_slug", "offer"),
+    )
+  let packet =
+    cognitive_context.build_with_delivery_targets_and_digest_windows(
+      paths,
+      tagged,
+      cognitive_event.extract_evidence(tagged),
+      ["default"],
+      [],
+    )
+    |> should.be_ok
+  let rendered = cognitive_context.render(packet)
+  rendered |> string.contains("Bounded client work.") |> should.be_true
+  rendered |> string.contains("Offer concern") |> should.be_true
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
 pub fn learned_notification_preference_is_visible_to_cognitive_context_test() {
   let #(base, paths) = temp_paths("cognitive-context-learned-preference")
   let _ = simplifile.create_directory_all(paths.config)

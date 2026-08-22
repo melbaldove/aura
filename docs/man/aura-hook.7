@@ -7,8 +7,8 @@ aura\-hook \- external hook rules: stream alerts, events, and asks into Aura
 Standalone processes can reach Aura over its local control socket by running a
 command through a hook ruleset. Aura tails the command's stdout, writes every
 line to a log, matches lines against your rules, and fires the resulting
-actions (an \fBevent\fR into the cognitive pipeline, a direct \fBnotify\fR
-message, or a \fBask\fR that posts Discord buttons and waits for a decision).
+actions (an \fBevent\fR or \fBnotify\fR into the cognitive pipeline, or an
+\fBask\fR that posts Discord buttons and waits for a decision).
 .PP
 The wrapper exits with the child command's exit code. Hook commands need no
 Discord access and no credentials; they speak over
@@ -46,7 +46,7 @@ text = "Collector progress: {1}"
 [[rule]]
 name = "finished"
 match = "DONE"
-lane = "notify"                # direct message, no model in the loop
+lane = "notify"                # approved notification, policy evaluated
 target = "domain:projects"
 text = "The collector finished."
 .fi
@@ -103,9 +103,9 @@ attention decision, delivery). Use for progress and ambient signals where the
 model judges urgency.
 .TP
 .B notify
-Delivered directly to the target (deduped, ledgered), prefixed with
-[hook:<source>/<rule>] provenance. No model in the loop. Use for time\-critical
-alerts.
+Normalized as evidence and sent through the cognitive attention policy. The
+evidence is deduped, audited, and prefixed with [hook:<source>/<rule>]
+provenance. Use for a notification that a hook rule explicitly approves.
 .TP
 .B ask
 Posts Discord buttons for the target and blocks until a button is clicked, the

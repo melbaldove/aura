@@ -45,6 +45,15 @@ pub fn handback_injects_system_message_into_turn_test() {
       started_at_ms: 0,
       updated_at_ms: 0,
       awaiting_response: False,
+      work_state: flare_manager.Running,
+      executor_kind: flare_manager.Acp,
+      dispatch_id: "",
+      capability_manifest: "{}",
+      context_manifest: "{}",
+      authority_boundary: "{}",
+      final_result: "",
+      final_proof: "",
+      archived: False,
     ),
   )
 
@@ -126,6 +135,14 @@ pub fn handback_with_sensitive_path_is_sanitized_before_persisting_test() {
         session_id: "",
         created_at_ms: 0,
         updated_at_ms: 0,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
 
@@ -148,6 +165,15 @@ pub fn handback_with_sensitive_path_is_sanitized_before_persisting_test() {
       started_at_ms: 0,
       updated_at_ms: 0,
       awaiting_response: False,
+      work_state: flare_manager.Running,
+      executor_kind: flare_manager.Acp,
+      dispatch_id: "",
+      capability_manifest: "{}",
+      context_manifest: "{}",
+      authority_boundary: "{}",
+      final_result: "",
+      final_proof: "",
+      archived: False,
     ),
   )
   fake_llm.script_text_response(sys.fake_llm, "handback acknowledged")

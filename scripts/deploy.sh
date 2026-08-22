@@ -17,7 +17,7 @@ rsync -av gleam.toml manifest.toml "${REMOTE}:${REMOTE_DIR}/"
 
 echo "==> Syncing source + tests..."
 rsync -av --delete \
-  --include='*.gleam' --include='*.erl' --include='*/' --exclude='*' \
+  --include='*.gleam' --include='*.erl' --include='*.c' --include='*/' --exclude='*' \
   src/ "${REMOTE}:${REMOTE_DIR}/src/"
 rsync -av --delete \
   --include='*.gleam' --include='*.erl' --include='*/' --exclude='*' \
@@ -54,8 +54,11 @@ ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && cd ${REMOTE_DIR} && gleam clean &&
 echo "==> Fixing esqlite NIF (OTP 27+)..."
 ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && cd ${REMOTE_DIR}/build/dev/erlang/esqlite/ebin && erlc -o . ../src/esqlite3.erl ../src/esqlite3_nif.erl"
 
+echo "==> Building the confined secret NIF..."
+ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && cd ${REMOTE_DIR} && bash scripts/build-secret-nif.sh"
+
 echo "==> Recompiling Erlang FFI beams..."
-ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && cd ${REMOTE_DIR}/build/dev/erlang/aura && for f in _gleam_artefacts/aura_*_ffi.erl; do erlc -o ebin \"\$f\" && echo \"  compiled \$(basename \$f)\"; done"
+ssh "$REMOTE" "export PATH=${RPATH}:\$PATH && cd ${REMOTE_DIR}/build/dev/erlang/aura && for f in _gleam_artefacts/aura_*_ffi.erl _gleam_artefacts/aura_*_nif.erl; do erlc -o ebin \"\$f\" && echo \"  compiled \$(basename \$f)\"; done"
 
 echo "==> Installing man pages..."
 ssh "$REMOTE" "bash ${REMOTE_DIR}/scripts/install-man-pages.sh"

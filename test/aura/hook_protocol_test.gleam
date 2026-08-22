@@ -1,9 +1,47 @@
 import aura/hook_protocol
+import aura/operating_contracts
+import gleam/dict
+import gleam/option
 import gleeunit
 import gleeunit/should
 
 pub fn main() {
   gleeunit.main()
+}
+
+pub fn hook_event_adapter_uses_common_evidence_contract_test() {
+  let envelope =
+    hook_protocol.event_to_evidence(
+      "source-a",
+      "record.changed",
+      "Compact summary",
+      "external-1",
+      "{\"status\":\"open\"}",
+      "event-1",
+      1000,
+    )
+  envelope.source_kind |> should.equal("hook")
+  envelope.event_type |> should.equal("record.changed")
+  envelope.raw_ref |> should.equal(option.Some("hook://source-a/external-1"))
+  let assert Ok(operating_contracts.StructuredString("hook_event")) =
+    dict.get(envelope.resource, "kind")
+}
+
+pub fn approved_notify_adapter_uses_common_evidence_contract_test() {
+  let envelope =
+    hook_protocol.notify_to_evidence(
+      "source-a",
+      "rule-a",
+      "compatibility-target",
+      "Review this item",
+      "external-2",
+      "event-2",
+      1000,
+    )
+  envelope.source_kind |> should.equal("hook")
+  envelope.event_type |> should.equal("hook.notify")
+  let assert Ok(operating_contracts.StructuredBool(True)) =
+    dict.get(envelope.normalized_data, "approved_direct")
 }
 
 pub fn parse_event_command_test() {
@@ -73,13 +111,15 @@ pub fn provenance_prefix_test() {
 pub fn parse_notify_with_rule_field_test() {
   let line =
     "notify {\"source\":\"linkedin\",\"rule\":\"challenge\",\"target\":\"t\",\"text\":\"x\",\"external_id\":\"e\"}"
-  let assert Ok(hook_protocol.HookNotify(..) as cmd1) = hook_protocol.parse(line)
+  let assert Ok(hook_protocol.HookNotify(..) as cmd1) =
+    hook_protocol.parse(line)
   cmd1.rule |> should.equal("challenge")
   cmd1.text |> should.equal("x")
 
   let line2 =
     "notify {\"source\":\"linkedin\",\"target\":\"t\",\"text\":\"x\",\"external_id\":\"e\"}"
-  let assert Ok(hook_protocol.HookNotify(..) as cmd2) = hook_protocol.parse(line2)
+  let assert Ok(hook_protocol.HookNotify(..) as cmd2) =
+    hook_protocol.parse(line2)
   cmd2.rule |> should.equal("")
 }
 

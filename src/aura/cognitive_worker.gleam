@@ -109,6 +109,7 @@ pub fn start_with(
       "default",
     ],
     [],
+    None,
   )
 }
 
@@ -130,6 +131,7 @@ pub fn start_with_delivery(
     Some(delivery_subject),
     delivery_targets,
     digest_windows,
+    None,
   )
 }
 
@@ -154,6 +156,30 @@ pub fn start_with_delivery_and_report(
     Some(delivery_subject),
     delivery_targets,
     digest_windows,
+    None,
+  )
+}
+
+/// Start named cognitive work for use in a restart tree.
+pub fn start_named_with_delivery(
+  name: process.Name(Message),
+  db_subject: Subject(db.DbMessage),
+  paths: xdg.Paths,
+  llm_config: llm.LlmConfig,
+  delivery_subject: Subject(cognitive_delivery.Message),
+  delivery_targets: List(String),
+  digest_windows: List(String),
+) -> Result(actor.Started(Subject(Message)), actor.StartError) {
+  start_with_options(
+    db_subject,
+    paths,
+    llm_config,
+    llm_client.production().chat_text,
+    None,
+    Some(delivery_subject),
+    delivery_targets,
+    digest_windows,
+    Some(name),
   )
 }
 
@@ -167,23 +193,29 @@ fn start_with_options(
   delivery_subject: Option(Subject(cognitive_delivery.Message)),
   delivery_targets: List(String),
   digest_windows: List(String),
+  name: Option(process.Name(Message)),
 ) -> Result(actor.Started(Subject(Message)), actor.StartError) {
-  actor.new_with_initialiser(5000, fn(self_subject) {
-    let state =
-      State(
-        db_subject: db_subject,
-        paths: paths,
-        llm_config: llm_config,
-        chat_text: chat_text,
-        report_to: report_to,
-        delivery_subject: delivery_subject,
-        delivery_targets: delivery_targets,
-        digest_windows: digest_windows,
-      )
-    Ok(actor.initialised(state) |> actor.returning(self_subject))
-  })
-  |> actor.on_message(handle_message)
-  |> actor.start
+  let builder =
+    actor.new_with_initialiser(5000, fn(self_subject) {
+      let state =
+        State(
+          db_subject: db_subject,
+          paths: paths,
+          llm_config: llm_config,
+          chat_text: chat_text,
+          report_to: report_to,
+          delivery_subject: delivery_subject,
+          delivery_targets: delivery_targets,
+          digest_windows: digest_windows,
+        )
+      Ok(actor.initialised(state) |> actor.returning(self_subject))
+    })
+    |> actor.on_message(handle_message)
+
+  case name {
+    Some(name) -> builder |> actor.named(name) |> actor.start
+    None -> actor.start(builder)
+  }
 }
 
 /// Supervised child spec for the production worker.

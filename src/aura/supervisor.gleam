@@ -12,6 +12,8 @@ import aura/clients/skill_runner
 import aura/cognitive_delivery
 import aura/cognitive_worker
 import aura/config
+import aura/connector_runtime
+import aura/core_supervision
 import aura/ctl
 import aura/db
 import aura/db_migration
@@ -19,7 +21,7 @@ import aura/discord
 import aura/discord/rest
 import aura/event_ingest
 import aura/external_asks
-import aura/integrations/supervisor as integrations_supervisor
+import aura/google_oauth_runtime
 import aura/mcp/pool as mcp_pool
 import aura/memory
 import aura/models
@@ -37,7 +39,9 @@ import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/otp/actor
 import gleam/otp/static_supervisor
+import gleam/otp/supervision
 import gleam/result
 import gleam/string
 import logging
@@ -72,26 +76,7 @@ pub fn start(
       <> " skills",
   )
 
-  // 3. Start database
-  use db_subject <- result.try(
-    db.start(xdg.db_path(paths))
-    |> result.map_error(fn(e) { "Failed to start database: " <> e }),
-  )
-  logging.log(logging.Info, "[supervisor] Database started")
-
-  // Migrate JSONL files if they exist
-  case db_migration.migrate_jsonl(db_subject, paths.data) {
-    Ok(0) -> logging.log(logging.Info, "[supervisor] No JSONL files to migrate")
-    Ok(n) ->
-      logging.log(
-        logging.Info,
-        "[supervisor] Migrated " <> int.to_string(n) <> " messages from JSONL",
-      )
-    Error(e) ->
-      logging.log(logging.Error, "[supervisor] JSONL migration error: " <> e)
-  }
-
-  // 4. Resolve Discord channel name → ID mapping
+  // 3. Resolve Discord channel name → ID mapping
   let channel_map = case
     rest.list_channels(global_config.discord.token, global_config.discord.guild)
   {
@@ -136,18 +121,6 @@ pub fn start(
   ]
   let delivery_target_ids =
     cognitive_delivery.allowed_target_ids(delivery_targets)
-  let assert Ok(delivery_started) =
-    cognitive_delivery.start_with_history(
-      paths,
-      discord_client_val,
-      delivery_targets,
-      global_config.notifications.digest_windows,
-      db_subject,
-      None,
-    )
-  let delivery_subject = delivery_started.data
-  logging.log(logging.Info, "[supervisor] Cognitive delivery started")
-
   use cognitive_llm_config <- result.try(
     models.build_llm_config_with_codex_reasoning_effort(
       global_config.models.brain,
@@ -157,23 +130,6 @@ pub fn start(
       "Failed to configure cognitive worker model: " <> e
     }),
   )
-  let assert Ok(cognitive_started) =
-    cognitive_worker.start_with_delivery(
-      db_subject,
-      paths,
-      cognitive_llm_config,
-      delivery_subject,
-      delivery_target_ids,
-      global_config.notifications.digest_windows,
-    )
-  let cognitive_subject = cognitive_started.data
-  logging.log(logging.Info, "[supervisor] Cognitive worker started")
-
-  let assert Ok(event_ingest_started) =
-    event_ingest.start_with_cognitive(db_subject, Some(cognitive_subject))
-  let event_ingest_subject = event_ingest_started.data
-  logging.log(logging.Info, "[supervisor] Event ingest started")
-
   let app_id = case rest.get_application_id(global_config.discord.token) {
     Ok(id) -> id
     Error(err) -> {
@@ -185,39 +141,30 @@ pub fn start(
     }
   }
 
-  let assert Ok(asks_started) =
-    external_asks.start(
-      db_subject,
-      Some(delivery_subject),
-      delivery_targets,
-      fn(channel, text, buttons) {
-        rest.send_message_with_components(
-          global_config.discord.token,
-          channel,
-          text,
-          buttons,
-        )
-      },
-      fn(channel, message_id, body, components) {
-        rest.edit_message_with_components(
-          global_config.discord.token,
-          channel,
-          message_id,
-          body,
-          components,
-        )
-      },
-      fn(interaction_token, body, components) {
-        rest.edit_interaction_response(
-          app_id,
-          interaction_token,
-          body,
-          components,
-        )
-      },
-    )
-  let asks_subject = asks_started.data
-  logging.log(logging.Info, "[supervisor] External asks started")
+  let db_name = process.new_name("aura_database")
+  let delivery_name = process.new_name("aura_cognitive_delivery")
+  let cognitive_name = process.new_name("aura_cognitive_worker")
+  let event_ingest_name = process.new_name("aura_event_ingest")
+  let asks_name = process.new_name("aura_external_asks")
+  let flare_name = process.new_name("aura_flare_manager")
+  let channel_supervisor_name = process.new_name("aura_channel_supervisor")
+  let brain_name = process.new_name("aura_brain")
+  let scheduler_name = process.new_name("aura_scheduler")
+  let connector_runtime_name = process.new_name("aura_connector_runtime")
+  let google_oauth_runtime_name = process.new_name("aura_google_oauth_runtime")
+
+  let db_subject = process.named_subject(db_name)
+  let delivery_subject = process.named_subject(delivery_name)
+  let cognitive_subject = process.named_subject(cognitive_name)
+  let event_ingest_subject = process.named_subject(event_ingest_name)
+  let asks_subject = process.named_subject(asks_name)
+  let flare_subject = process.named_subject(flare_name)
+  let channel_sup = process.named_subject(channel_supervisor_name)
+  let brain_subject = process.named_subject(brain_name)
+  let scheduler_subject = process.named_subject(scheduler_name)
+  let connector_runtime_subject = process.named_subject(connector_runtime_name)
+  let google_oauth_runtime_subject =
+    process.named_subject(google_oauth_runtime_name)
 
   // 5. Load validation rules
   let validation_rules = case
@@ -252,7 +199,7 @@ pub fn start(
     }
   }
 
-  // 5b. Start flare manager actor (with placeholder callback — brain not started yet)
+  // 5b. Resolve the flare transport before the core tree starts.
   let acp_transport =
     transport.parse(
       global_config.acp_transport,
@@ -260,20 +207,7 @@ pub fn start(
       global_config.acp_agent_name,
       global_config.acp_command,
     )
-  use flare_subject <- result.try(flare_manager.start(
-    global_config.acp_global_max_concurrent,
-    global_config.models.monitor,
-    fn(_event) { Nil },
-    acp_transport,
-    db_subject,
-  ))
-  logging.log(logging.Info, "[supervisor] Flare manager started")
-
-  // 6. Start channel_supervisor (sibling of brain under root supervisor)
-  let assert Ok(channel_sup) = channel_supervisor.start()
-  logging.log(logging.Info, "[supervisor] Channel supervisor started")
-
-  // 6. Start brain (with flare_subject and channel_supervisor)
+  // 6. Build the brain dependencies before the core tree starts.
   let llm_client_val = llm_client.production()
   let skill_runner_val = skill_runner.production()
   let browser_runner_val = browser_runner.production()
@@ -288,8 +222,8 @@ pub fn start(
       ])
     None -> dict.from_list([#(discord.platform_name, discord_client_val)])
   }
-  use brain_subject <- result.try(
-    brain.start(brain.BrainConfig(
+  let brain_config =
+    brain.BrainConfig(
       global: global_config,
       paths: paths,
       soul: soul,
@@ -306,22 +240,24 @@ pub fn start(
       browser_runner: browser_runner_val,
       channel_supervisor: channel_sup,
       review_runner: review_runner.default(),
-    )),
-  )
-  logging.log(logging.Info, "[supervisor] Brain started")
+    )
 
-  // 6b. Wire flare events to brain
-  process.send(
-    flare_subject,
-    flare_manager.SetBrainCallback(fn(event) {
-      process.send(brain_subject, brain.AcpEvent(event))
-    }),
-  )
-
-  // 7. Start scheduler
+  // 7. Build the scheduler callbacks before the core tree starts.
   let schedules_path = xdg.config_path(paths, "schedules.toml")
   let on_finding = fn(finding: notification.Finding) {
-    process.send(brain_subject, brain.HeartbeatFinding(finding))
+    case
+      event_ingest.submit_evidence(
+        event_ingest_subject,
+        scheduler.finding_to_evidence(finding, time.now_ms()),
+      )
+    {
+      Ok(_) -> Nil
+      Error(error) ->
+        logging.log(
+          logging.Error,
+          "[scheduler] Failed to submit finding evidence: " <> error,
+        )
+    }
   }
   let on_rekindle = fn(flare_id: String, context: String) {
     case flare_manager.rekindle(flare_subject, flare_id, context) {
@@ -337,68 +273,193 @@ pub fn start(
         )
     }
   }
-  case scheduler.start(schedules_path, all_skills, on_finding, on_rekindle) {
-    Ok(scheduler_subject) -> {
-      logging.log(logging.Info, "[supervisor] Scheduler started")
+  let dream_config =
+    scheduler.DreamScheduleConfig(
+      cron: global_config.dreaming_cron,
+      model_spec: global_config.models.dream,
+      paths: paths,
+      db_subject: db_subject,
+      domains: list.map(domain_configs, fn(dc) { dc.0 }),
+      budget_percent: global_config.dreaming_budget_percent,
+      brain_context: global_config.brain_context,
+    )
+
+  let database_spec =
+    supervision.worker(fn() {
+      use started <- result.try(db.start_named(xdg.db_path(paths), db_name))
+      case db_migration.migrate_jsonl(started.data, paths.data) {
+        Ok(0) -> {
+          logging.log(logging.Info, "[supervisor] No JSONL files to migrate")
+          Ok(started)
+        }
+        Ok(count) -> {
+          logging.log(
+            logging.Info,
+            "[supervisor] Migrated "
+              <> int.to_string(count)
+              <> " messages from JSONL",
+          )
+          Ok(started)
+        }
+        Error(error) ->
+          Error(actor.InitFailed("JSONL migration failed: " <> error))
+      }
+    })
+    |> supervision.map_data(fn(_) { Nil })
+
+  let delivery_spec =
+    supervision.worker(fn() {
+      cognitive_delivery.start_named_with_history(
+        delivery_name,
+        paths,
+        discord_client_val,
+        delivery_targets,
+        global_config.notifications.digest_windows,
+        db_subject,
+        None,
+      )
+    })
+    |> supervision.map_data(fn(_) { Nil })
+
+  let cognitive_spec =
+    supervision.worker(fn() {
+      cognitive_worker.start_named_with_delivery(
+        cognitive_name,
+        db_subject,
+        paths,
+        cognitive_llm_config,
+        delivery_subject,
+        delivery_target_ids,
+        global_config.notifications.digest_windows,
+      )
+    })
+    |> supervision.map_data(fn(_) { Nil })
+
+  let event_ingest_spec =
+    supervision.worker(fn() {
+      event_ingest.start_named_with_cognitive(
+        event_ingest_name,
+        db_subject,
+        Some(cognitive_subject),
+      )
+    })
+    |> supervision.map_data(fn(_) { Nil })
+
+  let asks_spec =
+    supervision.worker(fn() {
+      external_asks.start_named(
+        asks_name,
+        db_subject,
+        Some(delivery_subject),
+        delivery_targets,
+        fn(channel, text, buttons) {
+          rest.send_message_with_components(
+            global_config.discord.token,
+            channel,
+            text,
+            buttons,
+          )
+        },
+        fn(channel, message_id, body, components) {
+          rest.edit_message_with_components(
+            global_config.discord.token,
+            channel,
+            message_id,
+            body,
+            components,
+          )
+        },
+        fn(interaction_token, body, components) {
+          rest.edit_interaction_response(
+            app_id,
+            interaction_token,
+            body,
+            components,
+          )
+        },
+      )
+    })
+    |> supervision.map_data(fn(_) { Nil })
+
+  let flare_spec =
+    supervision.worker(fn() {
+      flare_manager.start_named(
+        flare_name,
+        global_config.acp_global_max_concurrent,
+        global_config.models.monitor,
+        fn(event) { process.send(brain_subject, brain.AcpEvent(event)) },
+        acp_transport,
+        db_subject,
+      )
+    })
+    |> supervision.map_data(fn(_) { Nil })
+
+  let channel_supervisor_spec =
+    supervision.worker(fn() {
+      channel_supervisor.start_named(channel_supervisor_name)
+    })
+    |> supervision.map_data(fn(_) { Nil })
+
+  let brain_spec =
+    supervision.worker(fn() {
+      brain.start_named(brain_name, brain_config)
+      |> result.map_error(actor.InitFailed)
+    })
+    |> supervision.map_data(fn(_) { Nil })
+
+  let scheduler_spec =
+    supervision.worker(fn() {
+      use started <- result.try(scheduler.start_named(
+        scheduler_name,
+        schedules_path,
+        all_skills,
+        on_finding,
+        on_rekindle,
+      ))
       process.send(brain_subject, brain.SetScheduler(scheduler_subject))
       process.send(brain_subject, brain.SetExternalAsks(asks_subject))
       process.send(scheduler_subject, scheduler.SetFlareSubject(flare_subject))
-
-      // Configure dreaming schedule
-      let dream_config =
-        scheduler.DreamScheduleConfig(
-          cron: global_config.dreaming_cron,
-          model_spec: global_config.models.dream,
-          paths: paths,
-          db_subject: db_subject,
-          domains: list.map(domain_configs, fn(dc) { dc.0 }),
-          budget_percent: global_config.dreaming_budget_percent,
-          brain_context: global_config.brain_context,
-        )
       process.send(scheduler_subject, scheduler.SetDreamConfig(dream_config))
-    }
-    Error(e) -> {
-      logging.log(
-        logging.Error,
-        "[supervisor] Failed to start scheduler: " <> e,
-      )
-      Nil
-    }
-  }
+      Ok(started)
+    })
+    |> supervision.map_data(fn(_) { Nil })
 
-  // 8. Start control socket for CLI commands
-  case
-    ctl.start(ctl.CtlContext(
-      paths: paths,
-      db_subject: db_subject,
-      event_ingest_subject: event_ingest_subject,
-      cognitive_subject: cognitive_subject,
-      delivery_subject: Some(delivery_subject),
-      asks_subject: Some(asks_subject),
-      domains: list.map(domain_configs, fn(dc) { dc.0 }),
-      dream_model: global_config.models.dream,
-      dream_budget_percent: global_config.dreaming_budget_percent,
-      brain_context: global_config.brain_context,
-      started_at_ms: time.now_ms(),
-    ))
-  {
-    Ok(_) -> Nil
-    Error(e) ->
-      logging.log(logging.Error, "[supervisor] Failed to start ctl: " <> e)
-  }
+  let core_children =
+    core_supervision.CoreChildren(
+      database: database_spec,
+      cognitive_delivery: delivery_spec,
+      cognitive_worker: cognitive_spec,
+      event_ingest: event_ingest_spec,
+      external_asks: asks_spec,
+      flare_manager: flare_spec,
+      channel_supervisor: channel_supervisor_spec,
+      brain: brain_spec,
+      scheduler: scheduler_spec,
+    )
 
-  // 9. Start OTP supervisor with gateway + MCP pool as supervised children
+  // 8. Start the core tree and the compatibility transports.
   let discord_config = global_config.discord
 
   let base_tree =
     static_supervisor.new(static_supervisor.OneForOne)
     |> static_supervisor.restart_tolerance(intensity: 10, period: 60)
+    |> static_supervisor.auto_shutdown(static_supervisor.AnySignificant)
+    |> static_supervisor.add(core_supervision.supervised(core_children))
+    |> static_supervisor.add(connector_runtime.supervised_with_google(
+      connector_runtime_name,
+      db_subject,
+      event_ingest_subject,
+      paths,
+      global_config.connector_configurations,
+    ))
+    |> static_supervisor.add(google_oauth_runtime.supervised_production(
+      google_oauth_runtime_name,
+      db_subject,
+      paths,
+      global_config.connector_configurations,
+    ))
     |> static_supervisor.add(poller.supervised(discord_config, brain_subject))
     |> static_supervisor.add(mcp_pool.supervised(global_config.mcp))
-    |> static_supervisor.add(integrations_supervisor.supervised(
-      event_ingest_subject,
-      db_subject,
-    ))
 
   let with_blather = case global_config.blather {
     Some(b) -> {
@@ -419,9 +480,31 @@ pub fn start(
   case result {
     Ok(started) -> {
       logging.log(logging.Info, "Aura supervisor started")
-      // Bootstrap initial integrations from config (runs after the
-      // factory_supervisor is registered and ready for start_child).
-      integrations_supervisor.bootstrap(global_config.integrations)
+      case
+        ctl.start(ctl.CtlContext(
+          paths: paths,
+          db_subject: db_subject,
+          event_ingest_subject: event_ingest_subject,
+          cognitive_subject: cognitive_subject,
+          delivery_subject: Some(delivery_subject),
+          asks_subject: Some(asks_subject),
+          oauth_subject: google_oauth_runtime_subject,
+          connector_runtime_subject: connector_runtime_subject,
+          connector_configurations: global_config.connector_configurations,
+          domains: list.map(domain_configs, fn(dc) { dc.0 }),
+          dream_model: global_config.models.dream,
+          dream_budget_percent: global_config.dreaming_budget_percent,
+          brain_context: global_config.brain_context,
+          started_at_ms: time.now_ms(),
+        ))
+      {
+        Ok(_) -> Nil
+        Error(error) ->
+          logging.log(
+            logging.Error,
+            "[supervisor] Failed to start ctl: " <> error,
+          )
+      }
       Ok(started.pid)
     }
     Error(e) -> Error("Failed to start supervisor: " <> string.inspect(e))

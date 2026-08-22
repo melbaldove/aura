@@ -3,8 +3,10 @@ import aura/db
 import aura/dream_effect
 import aura/event
 import aura/llm
+import aura/operating_contracts
 import aura/time
 import gleam/dict
+import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
 import gleam/list
@@ -389,6 +391,14 @@ pub fn upsert_and_load_flare_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 1000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
   let assert Ok(flares) = db.load_flares(subject, False)
@@ -397,6 +407,259 @@ pub fn upsert_and_load_flare_test() {
   f.id |> should.equal("f1")
   f.label |> should.equal("Test flare")
   f.status |> should.equal("active")
+}
+
+pub fn upsert_and_load_flare_with_neutral_fields_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f-neu",
+        label: "neutral",
+        status: "queued",
+        domain: "d",
+        thread_id: "t",
+        original_prompt: "p",
+        execution: "{}",
+        triggers: "{}",
+        tools: "{}",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1,
+        updated_at_ms: 2,
+        dispatch_id: "dispatch-1",
+        executor_kind: "aura",
+        capability_manifest: "{\"tools\":[\"browser\"]}",
+        context_manifest: "{\"objective\":\"x\"}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
+      ),
+    )
+  let assert Ok([loaded]) = db.load_flares(subject, False)
+  loaded.dispatch_id |> should.equal("dispatch-1")
+  loaded.executor_kind |> should.equal("aura")
+  loaded.capability_manifest |> should.equal("{\"tools\":[\"browser\"]}")
+  loaded.archived |> should.equal(False)
+  process.send(subject, db.Shutdown)
+}
+
+pub fn append_and_list_flare_events_assigns_sequence_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(_) =
+    db.append_flare_event(
+      subject,
+      db.StoredFlareEvent(
+        id: 0,
+        flare_id: "f1",
+        attempt_id: 1,
+        sequence: 0,
+        event_type: "flare_created",
+        payload: "{}",
+        created_at_ms: 1,
+      ),
+    )
+  let assert Ok(_) =
+    db.append_flare_event(
+      subject,
+      db.StoredFlareEvent(
+        id: 0,
+        flare_id: "f1",
+        attempt_id: 1,
+        sequence: 0,
+        event_type: "attempt_started",
+        payload: "{}",
+        created_at_ms: 2,
+      ),
+    )
+  let assert Ok(events) = db.list_flare_events(subject, "f1")
+  list.length(events) |> should.equal(2)
+  list.map(events, fn(e) { e.sequence }) |> should.equal([1, 2])
+  process.send(subject, db.Shutdown)
+}
+
+pub fn flare_creation_rolls_back_when_audit_event_fails_test() {
+  let path =
+    "/tmp/aura-flare-create-transaction-"
+    <> int.to_string(time.now_ms())
+    <> ".db"
+  let _ = simplifile.delete(path)
+  let assert Ok(subject) = db.start(path)
+  let assert Ok(conn) = sqlight.open(path)
+  let assert Ok(_) = sqlight.exec("DROP TABLE flare_events", on: conn)
+
+  let result =
+    db.upsert_flare_with_event(
+      subject,
+      db.StoredFlare(
+        id: "f-atomic",
+        label: "atomic",
+        status: "active",
+        domain: "test",
+        thread_id: "thread",
+        original_prompt: "prompt",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1,
+        updated_at_ms: 1,
+        dispatch_id: "dispatch",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
+      ),
+      db.StoredFlareEvent(
+        id: 0,
+        flare_id: "f-atomic",
+        attempt_id: 0,
+        sequence: 0,
+        event_type: "flare_created",
+        payload: "{}",
+        created_at_ms: 1,
+      ),
+    )
+
+  result |> should.be_error
+  let assert Ok(flares) = db.load_flares(subject, False)
+  flares |> should.equal([])
+
+  process.send(subject, db.Shutdown)
+  let _ = simplifile.delete(path)
+}
+
+pub fn flare_state_and_operational_audit_commit_together_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(Nil) =
+    db.upsert_flare_with_event(
+      subject,
+      db.StoredFlare(
+        id: "f-audited",
+        label: "audited",
+        status: "active",
+        domain: "test",
+        thread_id: "thread",
+        original_prompt: "prompt",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1,
+        updated_at_ms: 1,
+        dispatch_id: "dispatch",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
+      ),
+      db.StoredFlareEvent(
+        id: 0,
+        flare_id: "f-audited",
+        attempt_id: 0,
+        sequence: 0,
+        event_type: "flare_created",
+        payload: "{}",
+        created_at_ms: 1,
+      ),
+    )
+  let assert [_] = db.load_flares(subject, False) |> should.be_ok
+  let assert [audit] =
+    db.list_operational_audit(subject, "flare", "f-audited")
+    |> should.be_ok
+  audit.action |> should.equal("flare.flare_created")
+  process.send(subject, db.Shutdown)
+}
+
+pub fn flare_attempt_rolls_back_when_audit_event_fails_test() {
+  let path =
+    "/tmp/aura-flare-attempt-transaction-"
+    <> int.to_string(time.now_ms())
+    <> ".db"
+  let _ = simplifile.delete(path)
+  let assert Ok(subject) = db.start(path)
+  let assert Ok(conn) = sqlight.open(path)
+  let assert Ok(_) = sqlight.exec("DROP TABLE flare_events", on: conn)
+
+  let result =
+    db.create_flare_attempt_with_event(
+      subject,
+      db.StoredFlareAttempt(
+        id: 0,
+        flare_id: "f-atomic-attempt",
+        executor_kind: "acp",
+        status: "waiting",
+        runtime_reference: "",
+        checkpoint: "",
+        started_at_ms: 1,
+        ended_at_ms: 0,
+        failure: "",
+      ),
+      db.StoredFlareEvent(
+        id: 0,
+        flare_id: "f-atomic-attempt",
+        attempt_id: 0,
+        sequence: 0,
+        event_type: "attempt_backfilled",
+        payload: "{}",
+        created_at_ms: 1,
+      ),
+    )
+
+  result |> should.be_error
+  let assert Ok(attempts) = db.list_flare_attempts(subject, "f-atomic-attempt")
+  attempts |> should.equal([])
+
+  process.send(subject, db.Shutdown)
+  let _ = simplifile.delete(path)
+}
+
+pub fn create_update_list_flare_attempts_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(attempt_id) =
+    db.create_flare_attempt(
+      subject,
+      db.StoredFlareAttempt(
+        id: 0,
+        flare_id: "f1",
+        executor_kind: "acp",
+        status: "running",
+        runtime_reference: "ref",
+        checkpoint: "",
+        started_at_ms: 1,
+        ended_at_ms: 0,
+        failure: "",
+      ),
+    )
+  let assert Ok(_) =
+    db.update_flare_attempt(
+      subject,
+      db.StoredFlareAttempt(
+        id: attempt_id,
+        flare_id: "f1",
+        executor_kind: "acp",
+        status: "interrupted",
+        runtime_reference: "ref",
+        checkpoint: "",
+        started_at_ms: 1,
+        ended_at_ms: 2,
+        failure: "",
+      ),
+    )
+  let assert Ok([attempt]) = db.list_flare_attempts(subject, "f1")
+  attempt.id |> should.equal(attempt_id)
+  attempt.status |> should.equal("interrupted")
+  process.send(subject, db.Shutdown)
 }
 
 pub fn load_flares_excludes_archived_test() {
@@ -418,6 +681,14 @@ pub fn load_flares_excludes_archived_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 1000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
   let assert Ok(_) =
@@ -437,12 +708,84 @@ pub fn load_flares_excludes_archived_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 1000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: True,
       ),
     )
   let assert Ok(all) = db.load_flares(subject, False)
   list.length(all) |> should.equal(2)
   let assert Ok(active_only) = db.load_flares(subject, True)
   list.length(active_only) |> should.equal(1)
+}
+
+pub fn load_flares_excludes_legacy_status_archived_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f1",
+        label: "Active",
+        status: "active",
+        domain: "work",
+        thread_id: "ch1",
+        original_prompt: "Do stuff",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 1000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
+      ),
+    )
+  let assert Ok(_) =
+    db.upsert_flare(
+      subject,
+      db.StoredFlare(
+        id: "f2",
+        label: "Archived by status only",
+        status: "archived",
+        domain: "work",
+        thread_id: "ch2",
+        original_prompt: "Old stuff",
+        execution: "{}",
+        triggers: "[]",
+        tools: "[]",
+        workspace: "",
+        session_id: "",
+        created_at_ms: 1000,
+        updated_at_ms: 1000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
+      ),
+    )
+  let assert Ok(all) = db.load_flares(subject, False)
+  list.length(all) |> should.equal(2)
+  let assert Ok(active_only) = db.load_flares(subject, True)
+  list.length(active_only) |> should.equal(1)
+  let assert [active] = active_only
+  active.id |> should.equal("f1")
 }
 
 pub fn update_flare_status_test() {
@@ -464,6 +807,14 @@ pub fn update_flare_status_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 1000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
   let assert Ok(_) = db.update_flare_status(subject, "f1", "parked", 2000)
@@ -492,6 +843,14 @@ pub fn update_flare_session_id_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 1000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
   let assert Ok(_) = db.update_flare_session_id(subject, "f1", "sess-123", 2000)
@@ -898,6 +1257,14 @@ pub fn update_flare_result_test() {
         session_id: "sess-1",
         created_at_ms: 1000,
         updated_at_ms: 1000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
 
@@ -916,6 +1283,10 @@ pub fn update_flare_result_test() {
   let assert [#(label, result)] = outcomes
   label |> should.equal("Build feature")
   result |> should.equal("Feature built successfully")
+  let assert [audit] =
+    db.list_operational_audit(subject, "flare", "f-res-1")
+    |> should.be_ok
+  audit.action |> should.equal("flare.result_updated")
 
   process.send(subject, db.Shutdown)
 }
@@ -940,6 +1311,14 @@ pub fn update_flare_result_updates_timestamp_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 1000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
 
@@ -978,6 +1357,14 @@ pub fn get_flare_outcomes_filters_by_domain_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 2000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
   let assert Ok(Nil) =
@@ -1000,6 +1387,14 @@ pub fn get_flare_outcomes_filters_by_domain_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 3000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
   let assert Ok(Nil) =
@@ -1034,6 +1429,14 @@ pub fn get_flare_outcomes_filters_by_since_ms_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 1000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
   let assert Ok(Nil) =
@@ -1056,6 +1459,14 @@ pub fn get_flare_outcomes_filters_by_since_ms_test() {
         session_id: "",
         created_at_ms: 2000,
         updated_at_ms: 3000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
   let assert Ok(Nil) =
@@ -1091,6 +1502,14 @@ pub fn get_flare_outcomes_excludes_null_result_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 2000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
 
@@ -1112,6 +1531,14 @@ pub fn get_flare_outcomes_excludes_null_result_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 3000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
   let assert Ok(Nil) =
@@ -1145,6 +1572,14 @@ pub fn get_flare_outcomes_ordered_by_updated_at_asc_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 5000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
   let assert Ok(Nil) =
@@ -1167,6 +1602,14 @@ pub fn get_flare_outcomes_ordered_by_updated_at_asc_test() {
         session_id: "",
         created_at_ms: 1000,
         updated_at_ms: 2000,
+        dispatch_id: "",
+        executor_kind: "acp",
+        capability_manifest: "{}",
+        context_manifest: "{}",
+        authority_boundary: "{}",
+        final_result: "",
+        final_proof: "",
+        archived: False,
       ),
     )
   let assert Ok(Nil) =
@@ -1584,7 +2027,11 @@ pub fn shell_approval_status_update_is_pending_only_test() {
   process.send(subject, db.Shutdown)
 }
 
-fn sample_external_ask(id: String, status: String, decision: String) -> db.StoredExternalAsk {
+fn sample_external_ask(
+  id: String,
+  status: String,
+  decision: String,
+) -> db.StoredExternalAsk {
   db.StoredExternalAsk(
     id: id,
     source: "linkedin",
@@ -1599,7 +2046,10 @@ fn sample_external_ask(id: String, status: String, decision: String) -> db.Store
   )
 }
 
-fn sample_external_ask_at(id: String, requested_at_ms: Int) -> db.StoredExternalAsk {
+fn sample_external_ask_at(
+  id: String,
+  requested_at_ms: Int,
+) -> db.StoredExternalAsk {
   db.StoredExternalAsk(
     id: id,
     source: "linkedin",
@@ -1626,11 +2076,21 @@ pub fn external_ask_roundtrip_test() {
   fetched.source |> should.equal("linkedin")
 
   let assert Ok(True) =
-    db.update_external_ask_decision(subject, "ask-1", "resolved", "Resolved", 2000)
+    db.update_external_ask_decision(
+      subject,
+      "ask-1",
+      "resolved",
+      "Resolved",
+      2000,
+    )
 
   let assert Ok(Some(resolved)) = db.get_external_ask(subject, "ask-1")
   resolved.status |> should.equal("resolved")
   resolved.decision |> should.equal("Resolved")
+
+  let audit = db.list_operational_audit(subject, "ask", "ask-1") |> should.be_ok
+  list.map(audit, fn(row) { row.action })
+  |> should.equal(["ask.created", "ask.resolved"])
 
   // Conditional update only fires on pending
   let assert Ok(False) =
@@ -1644,7 +2104,8 @@ pub fn external_ask_idempotent_insert_test() {
 
   let ask = sample_external_ask("ask-1", "pending", "")
   let assert Ok(True) = db.save_external_ask(subject, ask)
-  let assert Ok(False) = db.save_external_ask(subject, sample_external_ask("ask-1", "pending", ""))
+  let assert Ok(False) =
+    db.save_external_ask(subject, sample_external_ask("ask-1", "pending", ""))
 
   let assert Ok(Some(_)) = db.get_external_ask(subject, "ask-1")
 
@@ -1654,9 +2115,12 @@ pub fn external_ask_idempotent_insert_test() {
 pub fn list_recent_external_asks_test() {
   let assert Ok(subject) = db.start(":memory:")
 
-  let assert Ok(_) = db.save_external_ask(subject, sample_external_ask_at("ask-1", 1000))
-  let assert Ok(_) = db.save_external_ask(subject, sample_external_ask_at("ask-2", 2000))
-  let assert Ok(_) = db.save_external_ask(subject, sample_external_ask_at("ask-3", 3000))
+  let assert Ok(_) =
+    db.save_external_ask(subject, sample_external_ask_at("ask-1", 1000))
+  let assert Ok(_) =
+    db.save_external_ask(subject, sample_external_ask_at("ask-2", 2000))
+  let assert Ok(_) =
+    db.save_external_ask(subject, sample_external_ask_at("ask-3", 3000))
 
   let assert Ok(asks) = db.list_external_asks(subject, 20)
   list.length(asks) |> should.equal(3)
@@ -1668,9 +2132,12 @@ pub fn list_recent_external_asks_test() {
 pub fn list_event_sources_test() {
   let assert Ok(subject) = db.start(":memory:")
 
-  let assert Ok(True) = db.insert_event(subject, sample_event("e1", "gmail", "m1", "a", 1000))
-  let assert Ok(True) = db.insert_event(subject, sample_event("e2", "linkedin", "m2", "b", 2000))
-  let assert Ok(True) = db.insert_event(subject, sample_event("e3", "linkedin", "m3", "c", 3000))
+  let assert Ok(True) =
+    db.insert_event(subject, sample_event("e1", "gmail", "m1", "a", 1000))
+  let assert Ok(True) =
+    db.insert_event(subject, sample_event("e2", "linkedin", "m2", "b", 2000))
+  let assert Ok(True) =
+    db.insert_event(subject, sample_event("e3", "linkedin", "m3", "c", 3000))
 
   let assert Ok(sources) = db.list_event_sources(subject)
   list.length(sources) |> should.equal(2)
@@ -1679,4 +2146,207 @@ pub fn list_event_sources_test() {
   linkedin.1 |> should.equal(2)
 
   process.send(subject, db.Shutdown)
+}
+
+pub fn concern_link_mutation_replay_returns_original_receipt_test() {
+  let assert Ok(subject) = db.start(":memory:")
+
+  let assert Ok(first) =
+    db.link_concern_idempotently(
+      subject,
+      "mutation-key-1",
+      "concern-1",
+      "evidence",
+      "event-1",
+      "{\"linked\":true}",
+      1000,
+    )
+  let assert Ok(replayed) =
+    db.link_concern_idempotently(
+      subject,
+      "mutation-key-1",
+      "concern-1",
+      "evidence",
+      "event-1",
+      "{\"linked\":false}",
+      2000,
+    )
+  replayed |> should.equal(first)
+
+  let assert Ok(links) = db.list_concern_links(subject, "concern-1")
+  links |> should.equal([#("evidence", "event-1")])
+  let assert Ok(audit) =
+    db.list_operational_audit(subject, "concern", "concern-1")
+  list.length(audit) |> should.equal(1)
+  process.send(subject, db.Shutdown)
+}
+
+pub fn concern_link_mutation_changed_payload_conflicts_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  let assert Ok(_) =
+    db.link_concern_idempotently(
+      subject,
+      "mutation-key-1",
+      "concern-1",
+      "evidence",
+      "event-1",
+      "{\"linked\":true}",
+      1000,
+    )
+
+  db.link_concern_idempotently(
+    subject,
+    "mutation-key-1",
+    "concern-1",
+    "evidence",
+    "event-2",
+    "{\"linked\":true}",
+    2000,
+  )
+  |> should.equal(Error("idempotency_conflict"))
+  let assert Ok(links) = db.list_concern_links(subject, "concern-1")
+  links |> should.equal([#("evidence", "event-1")])
+  process.send(subject, db.Shutdown)
+}
+
+pub fn concern_link_mutation_rejects_empty_idempotency_key_test() {
+  let assert Ok(subject) = db.start(":memory:")
+  db.link_concern_idempotently(
+    subject,
+    " ",
+    "concern-1",
+    "evidence",
+    "event-1",
+    "{\"linked\":true}",
+    1000,
+  )
+  |> should.equal(Error("invalid_idempotency_key"))
+  db.list_concern_links(subject, "concern-1")
+  |> should.equal(Ok([]))
+  process.send(subject, db.Shutdown)
+}
+
+pub fn event_and_audit_write_roll_back_together_test() {
+  let path =
+    "/tmp/aura-event-audit-transaction-"
+    <> int.to_string(time.now_ms())
+    <> ".db"
+  let _ = simplifile.delete(path)
+  let assert Ok(subject) = db.start(path)
+  let assert Ok(conn) = sqlight.open(path)
+  let assert Ok(_) = sqlight.exec("DROP TABLE operational_audit", conn)
+  let _ = sqlight.close(conn)
+
+  db.insert_event(subject, sample_event("audit-fail", "system", "a", "b", 1000))
+  |> should.be_error
+  db.get_event(subject, "audit-fail")
+  |> should.equal(Ok(None))
+
+  process.send(subject, db.Shutdown)
+  let _ = simplifile.delete(path)
+}
+
+pub fn normalized_evidence_and_audit_write_roll_back_together_test() {
+  let path =
+    "/tmp/aura-evidence-audit-transaction-"
+    <> int.to_string(time.now_ms())
+    <> ".db"
+  let _ = simplifile.delete(path)
+  let assert Ok(subject) = db.start(path)
+  let assert Ok(conn) = sqlight.open(path)
+  let assert Ok(_) = sqlight.exec("DROP TABLE operational_audit", conn)
+  let envelope =
+    operating_contracts.EvidenceEvent(
+      schema_version: 1,
+      event_id: "evidence-audit-fail",
+      source: "synthetic",
+      source_kind: "connector",
+      event_type: "record.changed",
+      external_id: Some("resource-audit-fail"),
+      resource: dict.from_list([
+        #("kind", operating_contracts.StructuredString("record")),
+        #("id", operating_contracts.StructuredString("resource-audit-fail")),
+      ]),
+      observed_at: 1000,
+      summary: "Audit failure fixture.",
+      normalized_data: dict.new(),
+      raw_ref: Some("opaque://fixture/audit-fail"),
+      content_hash: "hash-audit-fail",
+      provenance: dict.new(),
+      candidate_domain_refs: [],
+      candidate_concern_refs: [],
+      verification_status: "verified",
+    )
+
+  db.insert_normalized_evidence(subject, envelope, []) |> should.be_error
+  db.get_event(subject, "evidence-audit-fail") |> should.equal(Ok(None))
+  db.get_stored_evidence(subject, "evidence-audit-fail")
+  |> should.equal(Ok(None))
+
+  process.send(subject, db.Shutdown)
+  let _ = sqlight.close(conn)
+  let _ = simplifile.delete(path)
+}
+
+pub fn delivery_history_rolls_back_when_audit_write_fails_test() {
+  let path =
+    "/tmp/aura-delivery-history-audit-" <> int.to_string(time.now_ms()) <> ".db"
+  let _ = simplifile.delete(path)
+  let assert Ok(subject) = db.start(path)
+  let assert Ok(conn) = sqlight.open(path)
+  let assert Ok(_) = sqlight.exec("DROP TABLE operational_audit", on: conn)
+
+  db.append_delivery_message_with_audit(
+    subject,
+    "channel-1",
+    "event-1",
+    "compatibility message",
+    1000,
+  )
+  |> should.be_error
+  sqlight.query(
+    "SELECT COUNT(*) FROM messages",
+    on: conn,
+    with: [],
+    expecting: decode.at([0], decode.int),
+  )
+  |> should.equal(Ok([0]))
+
+  process.send(subject, db.Shutdown)
+  let _ = sqlight.close(conn)
+  let _ = simplifile.delete(path)
+}
+
+pub fn ask_and_receipt_state_roll_back_when_audit_write_fails_test() {
+  let path =
+    "/tmp/aura-ask-receipt-audit-" <> int.to_string(time.now_ms()) <> ".db"
+  let _ = simplifile.delete(path)
+  let assert Ok(subject) = db.start(path)
+  let assert Ok(conn) = sqlight.open(path)
+  let assert Ok(_) = sqlight.exec("DROP TABLE operational_audit", on: conn)
+
+  db.save_external_ask(
+    subject,
+    sample_external_ask("ask-rollback", "pending", ""),
+  )
+  |> should.be_error
+  db.get_external_ask(subject, "ask-rollback")
+  |> should.equal(Ok(None))
+
+  db.link_concern_idempotently(
+    subject,
+    "mutation-rollback",
+    "concern-1",
+    "evidence",
+    "event-1",
+    "{\"linked\":true}",
+    1000,
+  )
+  |> should.be_error
+  db.list_concern_links(subject, "concern-1")
+  |> should.equal(Ok([]))
+
+  process.send(subject, db.Shutdown)
+  let _ = sqlight.close(conn)
+  let _ = simplifile.delete(path)
 }

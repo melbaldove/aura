@@ -29,6 +29,76 @@ pub type FlareStatus {
   Failed(reason: String)
 }
 
+/// Durable work-state model per ADR 039. `archived` is roster visibility, not
+/// a work state — it lives on the flare record as a separate flag.
+///
+/// The work_state field on `FlareRecord` is memory-only today: it is not a DB
+/// column, and `flare_to_stored` drops it. On load it is derived from the
+/// persisted status. Persisting it as a first-class column lands with a later
+/// task.
+pub type WorkState {
+  Queued
+  Running
+  Waiting
+  Paused
+  Interrupted
+  Completed
+  WorkStateFailed(reason: String)
+  Cancelled
+}
+
+/// How a flare executes. The brain selects this automatically and logs it.
+pub type ExecutorKind {
+  Acp
+  Aura
+}
+
+pub fn work_state_to_string(state: WorkState) -> String {
+  case state {
+    Queued -> "queued"
+    Running -> "running"
+    Waiting -> "waiting"
+    Paused -> "paused"
+    Interrupted -> "interrupted"
+    Completed -> "completed"
+    WorkStateFailed(reason) -> "failed:" <> reason
+    Cancelled -> "cancelled"
+  }
+}
+
+pub fn work_state_from_string(s: String) -> Result(WorkState, Nil) {
+  case s {
+    "queued" -> Ok(Queued)
+    "running" -> Ok(Running)
+    "waiting" -> Ok(Waiting)
+    "paused" -> Ok(Paused)
+    "interrupted" -> Ok(Interrupted)
+    "completed" -> Ok(Completed)
+    "cancelled" -> Ok(Cancelled)
+    _ ->
+      case string.starts_with(s, "failed:") {
+        True ->
+          Ok(WorkStateFailed(string.drop_start(s, string.length("failed:"))))
+        False -> Error(Nil)
+      }
+  }
+}
+
+pub fn executor_kind_to_string(kind: ExecutorKind) -> String {
+  case kind {
+    Acp -> "acp"
+    Aura -> "aura"
+  }
+}
+
+pub fn executor_kind_from_string(s: String) -> Result(ExecutorKind, Nil) {
+  case s {
+    "acp" -> Ok(Acp)
+    "aura" -> Ok(Aura)
+    _ -> Error(Nil)
+  }
+}
+
 /// Policy decision for the flare(prompt) tool. Pure — no I/O.
 pub type PromptAction {
   SendToLive(session_name: String)
@@ -109,6 +179,16 @@ pub type FlareRecord {
     started_at_ms: Int,
     updated_at_ms: Int,
     awaiting_response: Bool,
+    // ADR 039 neutral fields
+    work_state: WorkState,
+    executor_kind: ExecutorKind,
+    dispatch_id: String,
+    capability_manifest: String,
+    context_manifest: String,
+    authority_boundary: String,
+    final_result: String,
+    final_proof: String,
+    archived: Bool,
   )
 }
 
@@ -124,6 +204,7 @@ pub type FlareMsg {
     triggers_json: String,
     tools_json: String,
     workspace: String,
+    dispatch_id: String,
   )
   Archive(reply_to: process.Subject(Result(Nil, String)), flare_id: String)
   GetFlare(
@@ -496,6 +577,37 @@ pub fn ignite(
       triggers_json: triggers_json,
       tools_json: tools_json,
       workspace: workspace,
+      dispatch_id: "",
+    )
+  })
+}
+
+/// Ignite a flare and tag it with a `dispatch_id` so sibling flares from the
+/// same brain fan-out can be grouped later.
+pub fn ignite_with_dispatch_id(
+  subject: process.Subject(FlareMsg),
+  label: String,
+  domain: String,
+  thread_id: String,
+  prompt: String,
+  dispatch_id: String,
+  execution_json: String,
+  triggers_json: String,
+  tools_json: String,
+  workspace: String,
+) -> Result(String, String) {
+  process.call(subject, 10_000, fn(reply_to) {
+    Ignite(
+      reply_to: reply_to,
+      label: label,
+      domain: domain,
+      thread_id: thread_id,
+      prompt: prompt,
+      execution_json: execution_json,
+      triggers_json: triggers_json,
+      tools_json: tools_json,
+      workspace: workspace,
+      dispatch_id: dispatch_id,
     )
   })
 }
@@ -638,37 +750,71 @@ pub fn start(
   acp_transport: transport.Transport,
   db_subject: process.Subject(db.DbMessage),
 ) -> Result(process.Subject(FlareMsg), String) {
-  let builder =
-    actor.new_with_initialiser(10_000, fn(self_subject) {
-      let #(flares, session_to_flare) =
-        recover_flares(
-          self_subject,
-          monitor_model,
-          on_brain_event,
-          acp_transport,
-          db_subject,
-        )
-
-      let state =
-        FlareManagerState(
-          flares: flares,
-          session_to_flare: session_to_flare,
-          max_concurrent: max_concurrent,
-          db_subject: db_subject,
-          monitor_model: monitor_model,
-          on_brain_event: on_brain_event,
-          self_subject: self_subject,
-          transport: acp_transport,
-        )
-      Ok(actor.initialised(state) |> actor.returning(self_subject))
-    })
-    |> actor.on_message(handle_message)
-
-  case actor.start(builder) {
+  case
+    actor.start(builder(
+      max_concurrent,
+      monitor_model,
+      on_brain_event,
+      acp_transport,
+      db_subject,
+    ))
+  {
     Ok(started) -> Ok(started.data)
     Error(err) ->
       Error("Failed to start flare manager actor: " <> string.inspect(err))
   }
+}
+
+fn builder(
+  max_concurrent: Int,
+  monitor_model: String,
+  on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
+  acp_transport: transport.Transport,
+  db_subject: process.Subject(db.DbMessage),
+) -> actor.Builder(FlareManagerState, FlareMsg, process.Subject(FlareMsg)) {
+  actor.new_with_initialiser(10_000, fn(self_subject) {
+    use #(flares, session_to_flare) <- result.try(recover_flares(
+      self_subject,
+      monitor_model,
+      on_brain_event,
+      acp_transport,
+      db_subject,
+    ))
+
+    let state =
+      FlareManagerState(
+        flares: flares,
+        session_to_flare: session_to_flare,
+        max_concurrent: max_concurrent,
+        db_subject: db_subject,
+        monitor_model: monitor_model,
+        on_brain_event: on_brain_event,
+        self_subject: self_subject,
+        transport: acp_transport,
+      )
+    Ok(actor.initialised(state) |> actor.returning(self_subject))
+  })
+  |> actor.on_message(handle_message)
+}
+
+/// Start a named flare manager for use in a restart tree.
+pub fn start_named(
+  name: process.Name(FlareMsg),
+  max_concurrent: Int,
+  monitor_model: String,
+  on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
+  acp_transport: transport.Transport,
+  db_subject: process.Subject(db.DbMessage),
+) -> Result(actor.Started(process.Subject(FlareMsg)), actor.StartError) {
+  builder(
+    max_concurrent,
+    monitor_model,
+    on_brain_event,
+    acp_transport,
+    db_subject,
+  )
+  |> actor.named(name)
+  |> actor.start
 }
 
 // ---------------------------------------------------------------------------
@@ -690,6 +836,7 @@ fn handle_message(
       triggers_json:,
       tools_json:,
       workspace:,
+      dispatch_id:,
     ) -> {
       let #(new_state, result) =
         handle_ignite(
@@ -702,6 +849,7 @@ fn handle_message(
           triggers_json,
           tools_json,
           workspace,
+          dispatch_id,
         )
       process.send(reply_to, result)
       actor.continue(new_state)
@@ -820,6 +968,7 @@ fn handle_ignite(
   triggers_json: String,
   tools_json: String,
   workspace: String,
+  dispatch_id: String,
 ) -> #(FlareManagerState, Result(String, String)) {
   case execution_from_json(execution_json) {
     Error(e) -> #(state, Error("Invalid flare execution metadata: " <> e))
@@ -845,25 +994,31 @@ fn handle_ignite(
           started_at_ms: now,
           updated_at_ms: now,
           awaiting_response: False,
+          work_state: Queued,
+          executor_kind: Acp,
+          dispatch_id: dispatch_id,
+          capability_manifest: "{}",
+          context_manifest: "{}",
+          authority_boundary: "{}",
+          final_result: "",
+          final_proof: "",
+          archived: False,
         )
 
-      let stored =
-        db.StoredFlare(
-          id: flare_id,
-          label: label,
-          status: status_to_string(flare.status),
-          domain: domain,
-          thread_id: thread_id,
-          original_prompt: prompt,
-          execution: execution_json,
-          triggers: triggers_json,
-          tools: tools_json,
-          workspace: workspace,
-          session_id: "",
+      let stored = flare_to_stored(flare)
+      let creation_event =
+        db.StoredFlareEvent(
+          id: 0,
+          flare_id: flare_id,
+          attempt_id: 0,
+          sequence: 0,
+          event_type: "flare_created",
+          payload: "{\"dispatch_id\":\"" <> dispatch_id <> "\"}",
           created_at_ms: now,
-          updated_at_ms: now,
         )
-      case db.upsert_flare(state.db_subject, stored) {
+      case
+        db.upsert_flare_with_event(state.db_subject, stored, creation_event)
+      {
         Ok(_) -> {
           let new_flares = dict.insert(state.flares, flare_id, flare)
           let new_state = FlareManagerState(..state, flares: new_flares)
@@ -904,11 +1059,10 @@ fn handle_archive(
             FlareRecord(..flare, status: Archived, updated_at_ms: now)
 
           case
-            db.update_flare_status(
+            db.upsert_flare_with_event(
               state.db_subject,
-              flare_id,
-              status_to_string(Archived),
-              now,
+              flare_to_stored(updated),
+              transition_event(updated, "flare_archived", now),
             )
           {
             Error(e) -> {
@@ -1071,14 +1225,16 @@ fn handle_dispatch(
                       handle: Some(result.handle),
                       thread_id: thread_id,
                       status: Active,
+                      work_state: Running,
                       updated_at_ms: now,
                       awaiting_response: True,
                     )
 
                   case
-                    db.upsert_flare(
+                    db.upsert_flare_with_event(
                       state.db_subject,
                       flare_to_stored(updated_flare),
+                      transition_event(updated_flare, "flare_dispatched", now),
                     )
                   {
                     Error(e) -> {
@@ -1150,9 +1306,22 @@ fn handle_kill(
               Error("Kill failed for " <> session_name <> ": " <> e),
             )
             Ok(_) -> {
-              let new_state =
-                update_flare_status(state, flare.id, Failed("killed"))
-              #(new_state, Ok(Nil))
+              case
+                transition_flare_status(
+                  state,
+                  flare,
+                  Failed("killed"),
+                  "flare_failed",
+                )
+              {
+                Ok(new_state) -> #(new_state, Ok(Nil))
+                Error(error) -> #(
+                  state,
+                  Error(
+                    "Session stopped but status persistence failed: " <> error,
+                  ),
+                )
+              }
             }
           }
         }
@@ -1254,12 +1423,17 @@ fn handle_park(
               triggers_json: triggers_json,
               handle: None,
               session_name: "",
+              work_state: Running,
               updated_at_ms: now,
             )
 
-          // Full upsert to persist triggers and status
-          let stored = flare_to_stored(updated)
-          case db.upsert_flare(state.db_subject, stored) {
+          case
+            db.upsert_flare_with_event(
+              state.db_subject,
+              flare_to_stored(updated),
+              transition_event(updated, "flare_parked", now),
+            )
+          {
             Ok(_) -> {
               let new_flares = dict.insert(state.flares, flare_id, updated)
               let new_session_to_flare = case flare.session_name {
@@ -1374,14 +1548,20 @@ fn handle_rekindle(
                               session_id: result.run_id,
                               handle: Some(result.handle),
                               status: Active,
+                              work_state: Running,
                               updated_at_ms: now,
                               awaiting_response: True,
                             )
 
                           case
-                            db.upsert_flare(
+                            db.upsert_flare_with_event(
                               state.db_subject,
                               flare_to_stored(updated_flare),
+                              transition_event(
+                                updated_flare,
+                                "flare_rekindled",
+                                now,
+                              ),
                             )
                           {
                             Error(e) -> {
@@ -1471,6 +1651,14 @@ fn flare_to_stored(flare: FlareRecord) -> db.StoredFlare {
     session_id: flare.session_id,
     created_at_ms: flare.started_at_ms,
     updated_at_ms: flare.updated_at_ms,
+    dispatch_id: flare.dispatch_id,
+    executor_kind: executor_kind_to_string(flare.executor_kind),
+    capability_manifest: flare.capability_manifest,
+    context_manifest: flare.context_manifest,
+    authority_boundary: flare.authority_boundary,
+    final_result: flare.final_result,
+    final_proof: flare.final_proof,
+    archived: flare.archived,
   )
 }
 
@@ -1489,19 +1677,50 @@ fn handle_monitor_event(
       should_forward_monitor_event(state, event),
     )
     acp_monitor.AcpCompleted(..) -> {
-      let updated = update_flare_for_session(state, session_name, Archived)
-      #(updated, True)
+      case
+        transition_flare_for_session(
+          state,
+          session_name,
+          Archived,
+          "flare_archived",
+        )
+      {
+        Ok(updated) -> #(updated, True)
+        Error(error) -> {
+          forward_transition_failure(state, event, error)
+          #(state, False)
+        }
+      }
     }
     acp_monitor.AcpTurnCompleted(..) -> {
       // Turn completed but the flare is not done. Park it so a future user
       // reply rekindles explicitly instead of deploy recovery auto-reprompting.
-      let updated = park_flare_after_handback(state, session_name)
-      #(updated, True)
+      case park_flare_after_handback(state, session_name) {
+        Ok(updated) -> #(updated, True)
+        Error(error) -> {
+          forward_transition_failure(state, event, error)
+          #(state, False)
+        }
+      }
     }
     acp_monitor.AcpFailed(_, _, reason) -> {
-      let updated =
-        update_flare_for_session(state, session_name, Failed(reason))
-      #(updated, should_forward_monitor_event(state, event))
+      case
+        transition_flare_for_session(
+          state,
+          session_name,
+          Failed(reason),
+          "flare_failed",
+        )
+      {
+        Ok(updated) -> #(updated, should_forward_monitor_event(state, event))
+        Error(error) -> {
+          logging.log(
+            logging.Error,
+            "[flare] Failed to persist failure transition: " <> error,
+          )
+          #(state, should_forward_monitor_event(state, event))
+        }
+      }
     }
     acp_monitor.AcpProgress(..) -> #(
       state,
@@ -1524,9 +1743,9 @@ fn handle_monitor_event(
 fn park_flare_after_handback(
   state: FlareManagerState,
   session_name: String,
-) -> FlareManagerState {
+) -> Result(FlareManagerState, String) {
   case lookup_flare_by_session(state, session_name) {
-    Error(_) -> state
+    Error(_) -> Error("Flare not found for session " <> session_name)
     Ok(flare) -> {
       let now = time.now_ms()
       // Keep the in-memory session mapping so the brain can resolve and route
@@ -1537,30 +1756,47 @@ fn park_flare_after_handback(
           status: Parked,
           awaiting_response: False,
           handle: None,
+          work_state: Running,
           updated_at_ms: now,
         )
-      case db.upsert_flare(state.db_subject, flare_to_stored(updated)) {
+      let event = transition_event(updated, "flare_parked", now)
+      case
+        db.upsert_flare_with_event(
+          state.db_subject,
+          flare_to_stored(updated),
+          event,
+        )
+      {
         Ok(_) ->
-          FlareManagerState(
-            ..state,
-            flares: dict.insert(state.flares, flare.id, updated),
+          Ok(
+            FlareManagerState(
+              ..state,
+              flares: dict.insert(state.flares, flare.id, updated),
+            ),
           )
-        Error(e) -> {
-          logging.log(
-            logging.Error,
-            "[flare] Failed to persist handback park for "
-              <> flare.id
-              <> ": "
-              <> e,
-          )
-          FlareManagerState(
-            ..state,
-            flares: dict.insert(state.flares, flare.id, updated),
-          )
-        }
+        Error(error) -> Error(error)
       }
     }
   }
+}
+
+fn forward_transition_failure(
+  state: FlareManagerState,
+  event: acp_monitor.AcpEvent,
+  error: String,
+) -> Nil {
+  let session_name = event_session_name(event)
+  let domain = case event {
+    acp_monitor.AcpStarted(_, domain, _) -> domain
+    acp_monitor.AcpAlert(_, domain, _, _) -> domain
+    acp_monitor.AcpCompleted(_, domain, _, _) -> domain
+    acp_monitor.AcpTurnCompleted(_, domain, _) -> domain
+    acp_monitor.AcpFailed(_, domain, _) -> domain
+    acp_monitor.AcpProgress(_, domain, _, _, _, _) -> domain
+  }
+  let reason = "Aura could not persist the flare transition: " <> error
+  logging.log(logging.Error, "[flare] " <> reason)
+  state.on_brain_event(acp_monitor.AcpFailed(session_name, domain, reason))
 }
 
 fn should_forward_monitor_event(
@@ -1629,50 +1865,33 @@ fn lookup_flare_by_session(
   }
 }
 
-/// Update a flare's status by flare_id, persisting to SQLite.
-fn update_flare_status(
+fn transition_flare_status(
   state: FlareManagerState,
-  flare_id: String,
+  flare: FlareRecord,
   new_status: FlareStatus,
-) -> FlareManagerState {
-  case dict.get(state.flares, flare_id) {
-    Error(_) -> {
-      logging.log(
-        logging.Info,
-        "[flare] Warning: status update for unknown flare " <> flare_id,
-      )
-      state
-    }
-    Ok(flare) -> {
-      let now = time.now_ms()
-      logging.log(
-        logging.Info,
-        "[flare] "
-          <> flare_id
-          <> " status: "
-          <> status_to_string(flare.status)
-          <> " -> "
-          <> status_to_string(new_status),
-      )
-      let updated = FlareRecord(..flare, status: new_status, updated_at_ms: now)
+  event_type: String,
+) -> Result(FlareManagerState, String) {
+  let now = time.now_ms()
+  logging.log(
+    logging.Info,
+    "[flare] "
+      <> flare.id
+      <> " status: "
+      <> status_to_string(flare.status)
+      <> " -> "
+      <> status_to_string(new_status),
+  )
+  let updated = FlareRecord(..flare, status: new_status, updated_at_ms: now)
 
-      case
-        db.update_flare_status(
-          state.db_subject,
-          flare_id,
-          status_to_string(new_status),
-          now,
-        )
-      {
-        Ok(_) -> Nil
-        Error(e) ->
-          logging.log(
-            logging.Error,
-            "[flare] Failed to persist status update: " <> e,
-          )
-      }
-
-      // Clear session mapping for terminal states
+  case
+    db.upsert_flare_with_event(
+      state.db_subject,
+      flare_to_stored(updated),
+      transition_event(updated, event_type, now),
+    )
+  {
+    Error(error) -> Error(error)
+    Ok(_) -> {
       let new_session_to_flare = case new_status {
         Failed(_) | Archived ->
           case flare.session_name {
@@ -1681,33 +1900,43 @@ fn update_flare_status(
           }
         _ -> state.session_to_flare
       }
-
-      let new_flares = dict.insert(state.flares, flare_id, updated)
-      FlareManagerState(
-        ..state,
-        flares: new_flares,
-        session_to_flare: new_session_to_flare,
+      Ok(
+        FlareManagerState(
+          ..state,
+          flares: dict.insert(state.flares, flare.id, updated),
+          session_to_flare: new_session_to_flare,
+        ),
       )
     }
   }
 }
 
-/// Update a flare's status by looking up the session_name first.
-fn update_flare_for_session(
+fn transition_flare_for_session(
   state: FlareManagerState,
   session_name: String,
   new_status: FlareStatus,
-) -> FlareManagerState {
-  case dict.get(state.session_to_flare, session_name) {
-    Ok(flare_id) -> update_flare_status(state, flare_id, new_status)
-    Error(_) -> {
-      logging.log(
-        logging.Info,
-        "[flare] Warning: event for unknown session " <> session_name,
-      )
-      state
-    }
+  event_type: String,
+) -> Result(FlareManagerState, String) {
+  case lookup_flare_by_session(state, session_name) {
+    Ok(flare) -> transition_flare_status(state, flare, new_status, event_type)
+    Error(_) -> Error("Flare not found for session " <> session_name)
   }
+}
+
+fn transition_event(
+  flare: FlareRecord,
+  event_type: String,
+  now: Int,
+) -> db.StoredFlareEvent {
+  db.StoredFlareEvent(
+    id: 0,
+    flare_id: flare.id,
+    attempt_id: 0,
+    sequence: 0,
+    event_type: event_type,
+    payload: "{\"status\":\"" <> status_to_string(flare.status) <> "\"}",
+    created_at_ms: now,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -1720,18 +1949,27 @@ fn recover_flares(
   on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
   acp_transport: transport.Transport,
   db_subject: process.Subject(db.DbMessage),
-) -> #(Dict(String, FlareRecord), Dict(String, String)) {
-  case db.load_flares(db_subject, True) {
+) -> Result(#(Dict(String, FlareRecord), Dict(String, String)), String) {
+  case db.load_flares(db_subject, False) {
     Error(err) -> {
       logging.log(
         logging.Error,
         "[flare] Failed to load flares from DB: " <> err,
       )
-      #(dict.new(), dict.new())
+      Error("failed to load flares: " <> err)
     }
-    Ok(stored_flares) -> {
+    Ok(all_stored_flares) -> {
+      use _ <- result.try(
+        list.try_each(all_stored_flares, fn(flare) {
+          backfill_attempt_for_flare(db_subject, flare)
+        }),
+      )
+      let stored_flares =
+        list.filter(all_stored_flares, fn(flare) {
+          !flare.archived && flare.status != "archived"
+        })
       case stored_flares {
-        [] -> #(dict.new(), dict.new())
+        [] -> Ok(#(dict.new(), dict.new()))
         _ -> {
           logging.log(
             logging.Info,
@@ -1739,8 +1977,8 @@ fn recover_flares(
               <> int.to_string(list.length(stored_flares))
               <> " flare(s)...",
           )
-          let pairs =
-            list.map(stored_flares, fn(sf) {
+          use pairs <- result.try(
+            list.try_map(stored_flares, fn(sf) {
               recover_single_flare(
                 sf,
                 self_subject,
@@ -1749,7 +1987,8 @@ fn recover_flares(
                 acp_transport,
                 db_subject,
               )
-            })
+            }),
+          )
           let flare_dict =
             list.map(pairs, fn(p) { #({ p.0 }.id, p.0) })
             |> dict.from_list
@@ -1775,10 +2014,68 @@ fn recover_flares(
               ),
             )
           })
-          #(flare_dict, session_dict)
+          Ok(#(flare_dict, session_dict))
         }
       }
     }
+  }
+}
+
+/// One-time migration: a legacy flare stored no attempt records. Create a
+/// single ACP attempt from its persisted execution data so every flare has a
+/// durable attempt history before the backend-neutral executor lands.
+fn backfill_attempt_for_flare(
+  db_subject: process.Subject(db.DbMessage),
+  sf: db.StoredFlare,
+) -> Result(Nil, String) {
+  case db.list_flare_attempts(db_subject, sf.id) {
+    Ok([]) -> {
+      let now = time.now_ms()
+      let #(attempt_status, ended_at_ms, failure) = case sf.status {
+        "active" -> #("running", 0, "")
+        "parked" -> #("waiting", 0, "")
+        "archived" -> #("completed", sf.updated_at_ms, "")
+        status ->
+          case string.starts_with(status, "failed:") {
+            True -> #("failed", sf.updated_at_ms, string.drop_start(status, 7))
+            False -> #("waiting", 0, "")
+          }
+      }
+      let backfill_event =
+        db.StoredFlareEvent(
+          id: 0,
+          flare_id: sf.id,
+          attempt_id: 0,
+          sequence: 0,
+          event_type: "attempt_backfilled",
+          payload: "{\"from\":\"legacy\"}",
+          created_at_ms: now,
+        )
+      case
+        db.create_flare_attempt_with_event(
+          db_subject,
+          db.StoredFlareAttempt(
+            id: 0,
+            flare_id: sf.id,
+            executor_kind: "acp",
+            status: attempt_status,
+            runtime_reference: sf.session_id,
+            checkpoint: "",
+            started_at_ms: sf.created_at_ms,
+            ended_at_ms: ended_at_ms,
+            failure: failure,
+          ),
+          backfill_event,
+        )
+      {
+        Ok(_) -> Ok(Nil)
+        Error(e) ->
+          Error("failed to backfill attempt for " <> sf.id <> ": " <> e)
+      }
+    }
+    Ok(_) -> Ok(Nil)
+    Error(error) -> Error(error)
+    // already has attempt(s) — idempotent
   }
 }
 
@@ -1792,7 +2089,7 @@ fn recover_single_flare(
   _on_brain_event: fn(acp_monitor.AcpEvent) -> Nil,
   acp_transport: transport.Transport,
   db_subject: process.Subject(db.DbMessage),
-) -> #(FlareRecord, String, Bool) {
+) -> Result(#(FlareRecord, String, Bool), String) {
   let stored_status = status_from_string(sf.status)
   let session_name = tmux.build_session_name(sf.domain, sf.id)
 
@@ -1805,15 +2102,26 @@ fn recover_single_flare(
             logging.Error,
             "[flare] Cannot recover " <> sf.id <> ": " <> reason,
           )
-          let _ =
-            db.update_flare_status(
-              db_subject,
-              sf.id,
-              status_to_string(Failed(reason)),
-              time.now_ms(),
+          let now = time.now_ms()
+          let flare =
+            FlareRecord(
+              ..stored_flare_to_record(sf, Failed(reason), "", None),
+              updated_at_ms: now,
             )
-          let flare = stored_flare_to_record(sf, Failed(reason), "", None)
-          #(flare, "", False)
+          use _ <- result.try(
+            db.upsert_flare_with_event(
+              db_subject,
+              flare_to_stored(flare),
+              transition_event(flare, "flare_failed", now),
+            )
+            |> result.map_error(fn(error) {
+              "failed to persist recovery failure for "
+              <> sf.id
+              <> ": "
+              <> error
+            }),
+          )
+          Ok(#(flare, "", False))
         }
         Ok(recovery_transport) -> {
           // Check if the original transport session is still alive.
@@ -1850,7 +2158,7 @@ fn recover_single_flare(
               }
               let flare =
                 stored_flare_to_record(sf, Active, session_name, handle)
-              #(flare, session_name, False)
+              Ok(#(flare, session_name, False))
             }
             False -> {
               // Process died (deploy/restart) — caller schedules staggered rekindle
@@ -1864,7 +2172,7 @@ fn recover_single_flare(
               )
               // Load as Parked so rekindle guard passes (rejects Active)
               let flare = stored_flare_to_record(sf, Parked, "", None)
-              #(flare, "", True)
+              Ok(#(flare, "", True))
             }
           }
         }
@@ -1877,7 +2185,7 @@ fn recover_single_flare(
         "[flare] Loading parked flare: " <> sf.id <> " (" <> sf.label <> ")",
       )
       let flare = stored_flare_to_record(sf, Parked, "", None)
-      #(flare, "", False)
+      Ok(#(flare, "", False))
     }
     Failed(reason) -> {
       // Load failed flares into memory for visibility
@@ -1886,12 +2194,12 @@ fn recover_single_flare(
         "[flare] Loading failed flare: " <> sf.id <> " (" <> sf.label <> ")",
       )
       let flare = stored_flare_to_record(sf, Failed(reason), "", None)
-      #(flare, "", False)
+      Ok(#(flare, "", False))
     }
     Archived -> {
       // Shouldn't reach here (excluded by load_flares), but handle gracefully
       let flare = stored_flare_to_record(sf, Archived, "", None)
-      #(flare, "", False)
+      Ok(#(flare, "", False))
     }
   }
 }
@@ -1920,6 +2228,23 @@ fn stored_flare_to_record(
     started_at_ms: sf.created_at_ms,
     updated_at_ms: sf.updated_at_ms,
     awaiting_response: False,
+    work_state: case status {
+      Active -> Running
+      Parked -> Waiting
+      Failed(reason) -> WorkStateFailed(reason)
+      Archived -> Completed
+    },
+    executor_kind: case executor_kind_from_string(sf.executor_kind) {
+      Ok(kind) -> kind
+      Error(_) -> Acp
+    },
+    dispatch_id: sf.dispatch_id,
+    capability_manifest: sf.capability_manifest,
+    context_manifest: sf.context_manifest,
+    authority_boundary: sf.authority_boundary,
+    final_result: sf.final_result,
+    final_proof: sf.final_proof,
+    archived: sf.archived,
   )
 }
 

@@ -50,6 +50,39 @@ pub fn build(
   build_with_delivery_targets(paths, observation, evidence, ["none", "default"])
 }
 
+/// Build decision context for one selected domain and concern only.
+/// Global user, memory, state, and policy context remains available.
+pub fn build_selected(
+  paths: xdg.Paths,
+  observation: cognitive_event.Observation,
+  evidence: cognitive_event.EvidenceBundle,
+  domain_slug: String,
+  concern_slug: String,
+) -> Result(ContextPacket, String) {
+  use policies <- result.try(load_policies(paths))
+  use global_context <- result.try(load_global_context_files(paths))
+  use selected_domain <- result.try(load_selected_domain_context(
+    paths,
+    domain_slug,
+  ))
+  use selected_concern <- result.try(load_selected_concern(
+    paths,
+    domain_slug,
+    concern_slug,
+  ))
+  Ok(ContextPacket(
+    observation:,
+    evidence:,
+    policies:,
+    context_files: list.append(global_context, selected_domain),
+    concerns: [selected_concern],
+    delivery_targets: ["none", "default"],
+    digest_windows: [],
+    current_local_time: time.now_datetime_string(),
+    recent_decisions: "",
+  ))
+}
+
 /// Build the model context packet with explicit delivery targets.
 pub fn build_with_delivery_targets(
   paths: xdg.Paths,
@@ -76,21 +109,44 @@ pub fn build_with_delivery_targets_and_digest_windows(
   delivery_targets: List(String),
   digest_windows: List(String),
 ) -> Result(ContextPacket, String) {
-  use policies <- result.try(load_policies(paths))
-  use context_files <- result.try(load_context_files(paths))
-  use concerns <- result.try(load_concerns(paths))
+  case
+    dict.get(observation.tags, "domain_slug"),
+    dict.get(observation.tags, "concern_slug")
+  {
+    Ok(domain_slug), Ok(concern_slug) -> {
+      use selected <- result.try(build_selected(
+        paths,
+        observation,
+        evidence,
+        domain_slug,
+        concern_slug,
+      ))
+      Ok(
+        ContextPacket(
+          ..selected,
+          delivery_targets: normalize_delivery_targets(delivery_targets),
+          digest_windows: normalize_digest_windows(digest_windows),
+        ),
+      )
+    }
+    _, _ -> {
+      use policies <- result.try(load_policies(paths))
+      use context_files <- result.try(load_context_files(paths))
+      use concerns <- result.try(load_concerns(paths))
 
-  Ok(ContextPacket(
-    observation: observation,
-    evidence: evidence,
-    policies: policies,
-    context_files: context_files,
-    concerns: concerns,
-    delivery_targets: normalize_delivery_targets(delivery_targets),
-    digest_windows: normalize_digest_windows(digest_windows),
-    current_local_time: time.now_datetime_string(),
-    recent_decisions: "",
-  ))
+      Ok(ContextPacket(
+        observation: observation,
+        evidence: evidence,
+        policies: policies,
+        context_files: context_files,
+        concerns: concerns,
+        delivery_targets: normalize_delivery_targets(delivery_targets),
+        digest_windows: normalize_digest_windows(digest_windows),
+        current_local_time: time.now_datetime_string(),
+        recent_decisions: "",
+      ))
+    }
+  }
 }
 
 /// Render a compact, citable context packet for the cognitive model.
@@ -268,6 +324,21 @@ fn load_domain_context_for_name(
   |> result.map(flatten_context_lists)
 }
 
+fn load_selected_domain_context(
+  paths: xdg.Paths,
+  name: String,
+) -> Result(List(ContextFile), String) {
+  use legacy_context <- result.try(load_domain_context_for_name(paths, name))
+  use manifest_context <- result.try(
+    load_context_file_spec(#(
+      "Domain " <> name <> " operational record",
+      xdg.domain_manifest_path(paths, name),
+      "domain:" <> name <> ":operational-record",
+    )),
+  )
+  Ok(list.append(manifest_context, legacy_context))
+}
+
 fn load_context_file_spec(
   spec: #(String, String, String),
 ) -> Result(List(ContextFile), String) {
@@ -335,6 +406,54 @@ fn load_concerns(paths: xdg.Paths) -> Result(List(ConcernFile), String) {
       })
     }
     _ -> Ok([])
+  }
+}
+
+fn load_selected_concern(
+  paths: xdg.Paths,
+  domain_slug: String,
+  concern_slug: String,
+) -> Result(ConcernFile, String) {
+  let domain_path =
+    xdg.domain_concerns_dir(paths, domain_slug) <> "/" <> concern_slug <> ".md"
+  let legacy_path = xdg.concerns_dir(paths) <> "/" <> concern_slug <> ".md"
+  case simplifile.read(domain_path) {
+    Ok(content) ->
+      Ok(ConcernFile(
+        name: concern_slug <> ".md",
+        path: domain_path,
+        source_ref: "domains/"
+          <> domain_slug
+          <> "/concerns/"
+          <> concern_slug
+          <> ".md",
+        content:,
+      ))
+    Error(simplifile.Enoent) ->
+      case simplifile.read(legacy_path) {
+        Ok(content) ->
+          Ok(ConcernFile(
+            name: concern_slug <> ".md",
+            path: legacy_path,
+            source_ref: "concerns/" <> concern_slug <> ".md",
+            content:,
+          ))
+        Error(simplifile.Enoent) -> Error("Concern not found: " <> concern_slug)
+        Error(error) ->
+          Error(
+            "Failed to read concern file "
+            <> legacy_path
+            <> ": "
+            <> string.inspect(error),
+          )
+      }
+    Error(error) ->
+      Error(
+        "Failed to read concern file "
+        <> domain_path
+        <> ": "
+        <> string.inspect(error),
+      )
   }
 }
 

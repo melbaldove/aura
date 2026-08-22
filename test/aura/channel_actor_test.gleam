@@ -1049,6 +1049,32 @@ pub fn stream_error_exhausts_retries_fails_turn_test() {
   |> should.be_true
 }
 
+/// Regression: StreamError retry must replay the exact messages last sent to
+/// the LLM (`turn.messages_at_llm_call`), including actor-injected system
+/// prompts (attention followup, repair), not the rebuilt incremental list
+/// (`conversation ++ new_messages`) which omits those prompts.
+pub fn stream_error_retry_replays_stored_messages_test() {
+  let state = channel_actor.initial_state_for_test("ch-retry-injected")
+  let injected = [llm.SystemMessage("injected directive")]
+  let with_injected =
+    channel_actor.with_fake_stream_turn_messages_at_llm_call(state, injected)
+  let #(_, effects) =
+    channel_actor.transition(
+      with_injected,
+      channel_actor.StreamError("rate limit"),
+    )
+  let retry_messages =
+    list.find_map(effects, fn(effect) {
+      case effect {
+        channel_actor.ScheduleRetry(messages, _) -> Ok(messages)
+        _ -> Error(Nil)
+      }
+    })
+    |> should.be_ok
+  // The full stored list (with the injected prompt), not `conversation ++ []`.
+  retry_messages |> should.equal(injected)
+}
+
 // --- Task 14: cancel + per-tool deadline -------------------------------------
 
 pub fn stream_tool_call_arms_scoped_deadline_test() {
@@ -1342,6 +1368,15 @@ pub fn system_prompt_includes_flare_context_when_in_flare_thread_test() {
       started_at_ms: now,
       updated_at_ms: now,
       awaiting_response: False,
+      work_state: flare_manager.Running,
+      executor_kind: flare_manager.Acp,
+      dispatch_id: "",
+      capability_manifest: "{}",
+      context_manifest: "{}",
+      authority_boundary: "{}",
+      final_result: "",
+      final_proof: "",
+      archived: False,
     ),
   )
   fake_llm.script_text_response(sys.fake_llm, "ok")

@@ -38,6 +38,15 @@ fn register_active_flare(sys: test_harness.TestSystem) -> Nil {
       started_at_ms: now,
       updated_at_ms: now,
       awaiting_response: True,
+      work_state: flare_manager.Running,
+      executor_kind: flare_manager.Acp,
+      dispatch_id: "",
+      capability_manifest: "{}",
+      context_manifest: "{}",
+      authority_boundary: "{}",
+      final_result: "",
+      final_proof: "",
+      archived: False,
     ),
   )
 }
@@ -168,6 +177,15 @@ pub fn acp_alert_ignored_after_handback_when_flare_is_idle_test() {
       started_at_ms: now,
       updated_at_ms: now,
       awaiting_response: False,
+      work_state: flare_manager.Running,
+      executor_kind: flare_manager.Acp,
+      dispatch_id: "",
+      capability_manifest: "{}",
+      context_manifest: "{}",
+      authority_boundary: "{}",
+      final_result: "",
+      final_proof: "",
+      archived: False,
     ),
   )
 

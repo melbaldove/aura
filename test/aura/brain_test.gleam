@@ -89,6 +89,16 @@ pub fn build_system_prompt_includes_soul_content_test() {
   prompt |> string.contains("No domains") |> should.be_true
 }
 
+pub fn build_system_prompt_omits_retired_gmail_setup_test() {
+  let prompt =
+    system_prompt.build_system_prompt("You are Aura.", [], [], "", "")
+
+  prompt |> string.contains("connect_gmail_start") |> should.be_false
+  prompt |> string.contains("set_gmail_oauth_credentials") |> should.be_false
+  prompt |> string.contains("[oauth.gmail]") |> should.be_false
+  prompt |> string.contains("[[integrations]]") |> should.be_false
+}
+
 pub fn build_system_prompt_includes_natural_cognitive_feedback_rule_test() {
   let prompt =
     system_prompt.build_system_prompt("You are Aura.", [], [], "", "")

@@ -41,6 +41,40 @@ digest_windows = ["07:35", "09:10", "11:10", "15:00"]
 timezone = "Asia/Manila"
 urgent_bypass = true
 .fi
+.SH READ-ONLY CONNECTOR CONFIGURATION
+Gmail REST and Google Calendar REST use disabled-by-default
+.B [[connector_configurations]]
+records. A configuration record does not enable a connector. A matching
+immutable authorization and enabled SQLite activation record are also required.
+.PP
+.nf
+[[connector_configurations]]
+configuration_ref = "configuration:gmail-personal-life"
+connector_id = "gmail"
+oauth_client_ref = "oauth-client:reviewed-client"
+credential_ref = "credential:gmail-reviewed-account"
+resource_ref = "resource:gmail-primary"
+oauth_scope = "https://www.googleapis.com/auth/gmail.readonly"
+configuration_hash = "<reviewed-sha256>"
+.fi
+.PP
+For Calendar, set
+.B connector_id
+to
+.B calendar
+and use only
+.BR https://www.googleapis.com/auth/calendar.readonly .
+Unknown fields, a different OAuth scope, or a changed configuration hash fail
+closed. The raw client secret and token must not occur in this file.
+.PP
+The retired
+.B [[integrations]]
+Gmail IMAP format is rejected. Aura does not read or migrate an obsolete Gmail
+token into the REST path.
+.PP
+The Codex monitor package uses controlled XDG files with mode 0600. The runtime
+configuration contains only the capability hash. The raw capability is in a
+separate hash-derived file. Neither file permits active Voice injection.
 .SH CLAUDE CODE PERMISSIONS
 Location: ~/.claude/settings.json on the host running claude\-agent\-acp.
 .PP

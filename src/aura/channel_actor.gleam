@@ -1,6 +1,7 @@
 //// Per-channel actor that runs turns concurrently across channels.
 
 import aura/acp/flare_manager
+import aura/agent_loop
 import aura/attachment
 import aura/brain_tools
 import aura/browser
@@ -12,7 +13,6 @@ import aura/cognitive_episode_context
 import aura/compressor
 import aura/conversation
 import aura/db
-import aura/discord
 import aura/discord/message as discord_message
 import aura/domain
 import aura/llm
@@ -1415,46 +1415,71 @@ pub fn transition(
             False -> finalize_turn(state, turn, content, prompt_tokens)
           }
         }
-        Ok([first_call, ..rest]) -> {
-          let tool_start_trace =
-            conversation.ToolTrace(
-              name: first_call.name,
-              args: first_call.arguments,
-              result: "",
-              is_error: False,
+        Ok([_first_call, ..]) -> {
+          // Delegate the tool-batch decision to the agent-loop engine: it
+          // selects which tool spawns and owns the iteration state. With empty
+          // capabilities it always emits SpawnTool(first_call).
+          let engine = engine_state_for_turn(turn)
+          let #(next_engine, actions) =
+            agent_loop.step(
+              engine,
+              agent_loop.StreamComplete(content, tool_calls_json),
             )
-          let new_turn =
-            TurnState(
-              ..turn,
-              accumulated_tool_calls: [first_call, ..rest],
-              pending_tool_results: dict.new(),
-              worker_kind: ToolWorker(first_call.name, first_call.id),
-            )
-          let next_state = ChannelState(..state, turn: Some(new_turn))
+          let mapped_turn = turn_from_engine_state(turn, next_engine)
           let summary =
             LogStreamSummary(
               turn.stream_stats,
               "complete",
               string.length(content),
             )
-          case blocked_tool_call_result(new_turn, first_call) {
-            Some(error) -> {
-              let #(blocked_state, blocked_effects) =
-                transition(next_state, ToolResult(first_call.id, error, True))
-              #(blocked_state, [summary, ..blocked_effects])
+          case actions {
+            [agent_loop.SpawnTool(first_call)] -> {
+              let new_turn =
+                TurnState(
+                  ..mapped_turn,
+                  worker_kind: ToolWorker(first_call.name, first_call.id),
+                )
+              let next_state = ChannelState(..state, turn: Some(new_turn))
+              case blocked_tool_call_result(new_turn, first_call) {
+                Some(error) -> {
+                  let #(blocked_state, blocked_effects) =
+                    transition(
+                      next_state,
+                      ToolResult(first_call.id, error, True),
+                    )
+                  #(blocked_state, [summary, ..blocked_effects])
+                }
+                None -> {
+                  let tool_start_trace =
+                    conversation.ToolTrace(
+                      name: first_call.name,
+                      args: first_call.arguments,
+                      result: "",
+                      is_error: False,
+                    )
+                  #(next_state, [
+                    DiscordEdit(
+                      turn.discord_msg_id,
+                      format_progress(
+                        turn.accumulated_content,
+                        list.append(turn.traces, [tool_start_trace]),
+                      ),
+                    ),
+                    SpawnToolWorker(first_call),
+                    ScheduleToolDeadline(first_call.id, 600_000),
+                    summary,
+                  ])
+                }
+              }
             }
-            None -> #(next_state, [
-              DiscordEdit(
-                turn.discord_msg_id,
-                format_progress(
-                  turn.accumulated_content,
-                  list.append(turn.traces, [tool_start_trace]),
-                ),
-              ),
-              SpawnToolWorker(first_call),
-              ScheduleToolDeadline(first_call.id, 600_000),
-              summary,
-            ])
+            _ ->
+              // Cannot happen with empty capabilities. Fail loudly rather than
+              // silently drift from the engine contract.
+              fail_turn_internal(
+                state,
+                mapped_turn,
+                "unexpected agent-loop action after stream complete",
+              )
           }
         }
       }
@@ -1474,154 +1499,127 @@ pub fn transition(
         _, _ -> #(original_turn, [])
       }
       let state = ChannelState(..state, turn: Some(turn))
-      let new_pending =
-        dict.insert(turn.pending_tool_results, call_id, #(result, is_error))
-      let trace =
-        conversation.ToolTrace(
-          name: find_tool_name(turn.accumulated_tool_calls, call_id),
-          args: find_tool_args(turn.accumulated_tool_calls, call_id),
-          result: result,
-          is_error: is_error,
+      // Delegate tool-result sequencing to the agent-loop engine: it owns the
+      // pending/iteration/trace decisions and emits the action to apply.
+      let engine = engine_state_for_turn(turn)
+      let #(next_engine, actions) =
+        agent_loop.step(
+          engine,
+          agent_loop.ToolResult(call_id, result, is_error),
         )
-      let new_traces = list.append(turn.traces, [trace])
-      let #(next_state, effects) = case
-        all_tool_calls_resolved(turn.accumulated_tool_calls, new_pending)
-      {
-        False -> {
-          case find_next_unresolved(turn.accumulated_tool_calls, new_pending) {
-            Some(next_call) -> {
-              let next_tool_trace =
-                conversation.ToolTrace(
-                  name: next_call.name,
-                  args: next_call.arguments,
-                  result: "",
-                  is_error: False,
-                )
-              let new_turn =
+      let new_turn = turn_from_engine_state(turn, next_engine)
+      let #(next_state, effects) = case actions {
+        [agent_loop.SpawnTool(next_call)] -> {
+          let next_tool_trace =
+            conversation.ToolTrace(
+              name: next_call.name,
+              args: next_call.arguments,
+              result: "",
+              is_error: False,
+            )
+          let tool_turn =
+            TurnState(
+              ..new_turn,
+              worker_kind: ToolWorker(next_call.name, next_call.id),
+            )
+          let next_state = ChannelState(..state, turn: Some(tool_turn))
+          case blocked_tool_call_result(tool_turn, next_call) {
+            Some(error) ->
+              transition(next_state, ToolResult(next_call.id, error, True))
+            None -> #(next_state, [
+              DiscordEdit(
+                turn.discord_msg_id,
+                format_progress(
+                  turn.accumulated_content,
+                  list.append(new_turn.traces, [next_tool_trace]),
+                ),
+              ),
+              SpawnToolWorker(next_call),
+              ScheduleToolDeadline(next_call.id, 600_000),
+            ])
+          }
+        }
+        [agent_loop.SpawnStream(engine_messages)] -> {
+          let needs_attention_followup =
+            needs_attention_memory_followup(engine_messages)
+          let stream_reset =
+            TurnState(
+              ..new_turn,
+              accumulated_content: "",
+              accumulated_tool_calls: [],
+              pending_tool_results: dict.new(),
+              new_messages: engine_messages,
+              stream_retry_count: 0,
+              stream_stats: StreamStats(
+                start_ms: 0,
+                reasoning_count: 0,
+                delta_count: 0,
+                last_heartbeat_ms: 0,
+              ),
+            )
+          case should_finalize_after_attention_memory(engine_messages) {
+            True ->
+              finalize_turn(
+                state,
+                stream_reset,
+                "Saved the attention preference.",
+                0,
+              )
+            False -> {
+              let new_messages = case needs_attention_followup {
+                True ->
+                  list.append(engine_messages, [
+                    llm.SystemMessage(attention_memory_followup_prompt),
+                  ])
+                False -> engine_messages
+              }
+              let next_llm_messages =
+                list.append(state.conversation, new_messages)
+              let stream_turn =
                 TurnState(
-                  ..turn,
-                  pending_tool_results: new_pending,
-                  traces: new_traces,
-                  worker_kind: ToolWorker(next_call.name, next_call.id),
+                  ..stream_reset,
+                  messages_at_llm_call: next_llm_messages,
+                  worker_kind: StreamWorker,
                 )
-              let next_state = ChannelState(..state, turn: Some(new_turn))
-              case blocked_tool_call_result(new_turn, next_call) {
-                Some(error) ->
-                  transition(next_state, ToolResult(next_call.id, error, True))
-                None -> #(next_state, [
+              let progress_effects = case needs_attention_followup {
+                True -> []
+                False -> [
                   DiscordEdit(
                     turn.discord_msg_id,
-                    format_progress(
-                      turn.accumulated_content,
-                      list.append(new_traces, [next_tool_trace]),
-                    ),
+                    format_progress(turn.accumulated_content, new_turn.traces),
                   ),
-                  SpawnToolWorker(next_call),
-                  ScheduleToolDeadline(next_call.id, 600_000),
-                ])
+                ]
               }
+              #(
+                ChannelState(..state, turn: Some(stream_turn)),
+                list.append(progress_effects, [
+                  SpawnStreamWorker(next_llm_messages),
+                ]),
+              )
             }
-            None -> {
+          }
+        }
+        [agent_loop.Fail(reason)] -> {
+          case reason {
+            "tool_result inconsistency" ->
               logging.log(
                 logging.Error,
                 "[channel "
                   <> state.channel_id
                   <> "] ToolResult inconsistency: not all resolved but no next unresolved found",
               )
-              fail_turn_internal(state, turn, "tool_result inconsistency")
-            }
+            _ -> Nil
           }
+          fail_turn_internal(state, new_turn, reason)
         }
-        True -> {
-          // Guard against runaway tool loops.
-          case turn.iteration + 1 >= max_tool_iterations {
-            True ->
-              fail_turn_internal(
-                state,
-                turn,
-                "Tool loop exceeded maximum iterations",
-              )
-            False -> {
-              let tool_result_messages =
-                list.map(turn.accumulated_tool_calls, fn(call) {
-                  case dict.get(new_pending, call.id) {
-                    Ok(#(text, _)) -> llm.ToolResultMessage(call.id, text)
-                    Error(_) -> llm.ToolResultMessage(call.id, "")
-                  }
-                })
-              let new_messages =
-                list.flatten([
-                  turn.new_messages,
-                  [
-                    llm.AssistantToolCallMessage(
-                      turn.accumulated_content,
-                      turn.accumulated_tool_calls,
-                    ),
-                  ],
-                  tool_result_messages,
-                ])
-              let needs_attention_followup =
-                needs_attention_memory_followup(new_messages)
-              let new_turn =
-                TurnState(
-                  ..turn,
-                  iteration: turn.iteration + 1,
-                  accumulated_content: "",
-                  accumulated_tool_calls: [],
-                  pending_tool_results: dict.new(),
-                  new_messages: new_messages,
-                  traces: new_traces,
-                  stream_retry_count: 0,
-                  stream_stats: StreamStats(
-                    start_ms: 0,
-                    reasoning_count: 0,
-                    delta_count: 0,
-                    last_heartbeat_ms: 0,
-                  ),
-                )
-              case should_finalize_after_attention_memory(new_messages) {
-                True ->
-                  finalize_turn(
-                    state,
-                    new_turn,
-                    "Saved the attention preference.",
-                    0,
-                  )
-                False -> {
-                  let new_messages = case needs_attention_followup {
-                    True ->
-                      list.append(new_messages, [
-                        llm.SystemMessage(attention_memory_followup_prompt),
-                      ])
-                    False -> new_messages
-                  }
-                  let next_llm_messages =
-                    list.append(state.conversation, new_messages)
-                  let stream_turn =
-                    TurnState(
-                      ..new_turn,
-                      messages_at_llm_call: next_llm_messages,
-                      worker_kind: StreamWorker,
-                    )
-                  let progress_effects = case needs_attention_followup {
-                    True -> []
-                    False -> [
-                      DiscordEdit(
-                        turn.discord_msg_id,
-                        format_progress(turn.accumulated_content, new_traces),
-                      ),
-                    ]
-                  }
-                  #(
-                    ChannelState(..state, turn: Some(stream_turn)),
-                    list.append(progress_effects, [
-                      SpawnStreamWorker(next_llm_messages),
-                    ]),
-                  )
-                }
-              }
-            }
-          }
+        _ -> {
+          logging.log(
+            logging.Error,
+            "[channel "
+              <> state.channel_id
+              <> "] unexpected agent-loop actions from ToolResult",
+          )
+          fail_turn_internal(state, new_turn, "unexpected agent-loop action")
         }
       }
       #(next_state, list.append(deadline_effects, effects))
@@ -1630,39 +1628,42 @@ pub fn transition(
 
     // --- stream error retry ----------------------------------------
     StreamError(reason), Some(turn) -> {
-      case turn.stream_retry_count < max_stream_retries {
-        True -> {
-          let new_retry = turn.stream_retry_count + 1
-          let backoff_ms = case new_retry {
-            1 -> 0
-            2 -> 500
-            _ -> 2000
-          }
-          // Reset streaming state on retry so stale partial content from the
-          // failed stream does not bleed into the new attempt.
-          let new_turn =
-            TurnState(
-              ..turn,
-              stream_retry_count: new_retry,
-              accumulated_content: "",
-              accumulated_tool_calls: [],
-              pending_tool_results: dict.new(),
-            )
-          #(ChannelState(..state, turn: Some(new_turn)), [
-            ScheduleRetry(turn.messages_at_llm_call, backoff_ms),
+      // Delegate the retry guard and backoff decision to the agent-loop engine.
+      let engine = engine_state_for_turn(turn)
+      let #(next_engine, actions) =
+        agent_loop.step(engine, agent_loop.StreamError(reason))
+      let new_turn = turn_from_engine_state(turn, next_engine)
+      case actions {
+        [agent_loop.RetryStream(_, backoff_ms)] -> {
+          // Retry replays the exact messages last sent to the LLM, including
+          // any actor-injected system prompts (attention followup, repair),
+          // so the retried call keeps the same directives. The engine's
+          // incremental messages field omits those prompts; the stored
+          // messages_at_llm_call (preserved by the record spread) is the
+          // full list.
+          let full_messages = turn.messages_at_llm_call
+          let retry_turn =
+            TurnState(..new_turn, messages_at_llm_call: full_messages)
+          #(ChannelState(..state, turn: Some(retry_turn)), [
+            ScheduleRetry(full_messages, backoff_ms),
             LogStreamSummary(
               turn.stream_stats,
-              "retry-" <> int.to_string(new_retry),
+              "retry-" <> int.to_string(next_engine.stream_retry_count),
               string.length(turn.accumulated_content),
             ),
           ])
         }
-        False ->
-          fail_turn_internal(
-            state,
-            turn,
-            "stream exhausted retries: " <> reason,
+        [agent_loop.Fail(fail_reason)] ->
+          fail_turn_internal(state, new_turn, fail_reason)
+        _ -> {
+          logging.log(
+            logging.Error,
+            "[channel "
+              <> state.channel_id
+              <> "] unexpected agent-loop actions after stream error",
           )
+          fail_turn_internal(state, new_turn, "unexpected agent-loop action")
+        }
       }
     }
     StreamError(_), None -> #(state, [])
@@ -1948,37 +1949,40 @@ const record_cognitive_feedback_is_internal_error = "Error: record_cognitive_fee
 
 const standing_attention_after_event_search_error = "Error: You already found plausible recent events with search_events in this turn. Use one returned Event ID with memory(target='attention', event_id=..., expected_attention=...), or ask one clarifying question if multiple matches remain. Do not use scope='standing' after search_events found event matches."
 
-/// True when every accumulated tool call has a result recorded in `pending`.
-fn all_tool_calls_resolved(
-  calls: List(llm.ToolCall),
-  pending: Dict(String, #(String, Bool)),
-) -> Bool {
-  list.all(calls, fn(c) { dict.has_key(pending, c.id) })
+/// Build the engine state from the current turn. Capabilities are empty (the
+/// brain is the full-authority channel agent; flare scoping happens in the
+/// aura_executor).
+fn engine_state_for_turn(turn: TurnState) -> agent_loop.LoopState {
+  agent_loop.LoopState(
+    messages: turn.new_messages,
+    iteration: turn.iteration,
+    accumulated_content: turn.accumulated_content,
+    accumulated_tool_calls: turn.accumulated_tool_calls,
+    pending_tool_results: turn.pending_tool_results,
+    traces: turn.traces,
+    stream_retry_count: turn.stream_retry_count,
+    capabilities: [],
+    max_iterations: max_tool_iterations,
+    max_stream_retries: max_stream_retries,
+  )
 }
 
-/// Find the first tool call that hasn't been resolved in `pending`.
-fn find_next_unresolved(
-  calls: List(llm.ToolCall),
-  pending: Dict(String, #(String, Bool)),
-) -> Option(llm.ToolCall) {
-  list.find(calls, fn(c) { !dict.has_key(pending, c.id) })
-  |> option.from_result
-}
-
-/// Look up the tool name by call id in the accumulated tool calls.
-fn find_tool_name(calls: List(llm.ToolCall), id: String) -> String {
-  case list.find(calls, fn(c) { c.id == id }) {
-    Ok(c) -> c.name
-    Error(_) -> "unknown"
-  }
-}
-
-/// Look up the original tool-call arguments by call id.
-fn find_tool_args(calls: List(llm.ToolCall), id: String) -> String {
-  case list.find(calls, fn(c) { c.id == id }) {
-    Ok(c) -> c.arguments
-    Error(_) -> ""
-  }
+/// Map the engine state back onto the turn after a pure decision. The engine's
+/// messages field IS turn.new_messages (incremental), so it maps back directly.
+fn turn_from_engine_state(
+  turn: TurnState,
+  engine: agent_loop.LoopState,
+) -> TurnState {
+  TurnState(
+    ..turn,
+    iteration: engine.iteration,
+    accumulated_content: engine.accumulated_content,
+    accumulated_tool_calls: engine.accumulated_tool_calls,
+    pending_tool_results: engine.pending_tool_results,
+    traces: engine.traces,
+    stream_retry_count: engine.stream_retry_count,
+    new_messages: engine.messages,
+  )
 }
 
 fn blocked_tool_call_result(
@@ -2990,6 +2994,19 @@ pub fn with_fake_stream_turn_at_retry(
 ) -> ChannelState {
   let fake_turn =
     TurnState(..fresh_fake_turn(StreamWorker), stream_retry_count: n)
+  ChannelState(..state, turn: Some(fake_turn))
+}
+
+/// Build a state with a fake stream turn whose stored `messages_at_llm_call`
+/// includes `injected` messages (e.g. actor-injected system prompts) while
+/// `new_messages` stays empty. Exercises the retry-replays-stored-messages
+/// path in `StreamError` transitions.
+pub fn with_fake_stream_turn_messages_at_llm_call(
+  state: ChannelState,
+  injected: List(llm.Message),
+) -> ChannelState {
+  let fake_turn =
+    TurnState(..fresh_fake_turn(StreamWorker), messages_at_llm_call: injected)
   ChannelState(..state, turn: Some(fake_turn))
 }
 

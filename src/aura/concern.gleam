@@ -1,8 +1,12 @@
+import aura/db
+import aura/operational_audit
 import aura/structured_memory
 import aura/time
 import aura/xdg
+import gleam/erlang/process
 import gleam/int
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import simplifile
@@ -33,6 +37,116 @@ pub type TrackResult {
     action: String,
     title: String,
   )
+}
+
+/// One domain-scoped or legacy concern loaded for compatibility.
+pub type LoadedConcern {
+  LoadedConcern(path: String, source_ref: String, content: String)
+}
+
+/// Load one concern for a selected domain. A domain-scoped concern takes
+/// precedence. A legacy global concern remains readable as a fallback.
+pub fn load_for_domain(
+  paths: xdg.Paths,
+  domain_slug: String,
+  concern_slug: String,
+) -> Result(LoadedConcern, String) {
+  use _ <- result.try(validate_slug(domain_slug))
+  use _ <- result.try(validate_slug(concern_slug))
+  let domain_path =
+    xdg.domain_concerns_dir(paths, domain_slug) <> "/" <> concern_slug <> ".md"
+  let legacy_path = xdg.concerns_dir(paths) <> "/" <> concern_slug <> ".md"
+  case simplifile.read(domain_path) {
+    Ok(content) ->
+      Ok(LoadedConcern(
+        path: domain_path,
+        source_ref: "domains/"
+          <> domain_slug
+          <> "/concerns/"
+          <> concern_slug
+          <> ".md",
+        content:,
+      ))
+    Error(simplifile.Enoent) ->
+      read_loaded_concern(
+        legacy_path,
+        "concerns/" <> concern_slug <> ".md",
+        concern_slug,
+      )
+    Error(error) ->
+      Error(
+        "Failed to read concern file "
+        <> domain_path
+        <> ": "
+        <> string.inspect(error),
+      )
+  }
+}
+
+/// Copy one legacy global concern into an explicit target domain. The legacy
+/// file remains unchanged for rollback and compatibility.
+pub fn migrate_legacy(
+  paths: xdg.Paths,
+  concern_slug: String,
+  target_domain_slug: String,
+) -> Result(LoadedConcern, String) {
+  use _ <- result.try(case string.trim(target_domain_slug) == "" {
+    True -> Error("target_domain_required")
+    False -> Ok(Nil)
+  })
+  use _ <- result.try(validate_slug(target_domain_slug))
+  use _ <- result.try(validate_slug(concern_slug))
+  let target_path =
+    xdg.domain_concerns_dir(paths, target_domain_slug)
+    <> "/"
+    <> concern_slug
+    <> ".md"
+  case simplifile.is_file(target_path) {
+    Ok(True) -> load_for_domain(paths, target_domain_slug, concern_slug)
+    _ -> {
+      let legacy_path = xdg.concerns_dir(paths) <> "/" <> concern_slug <> ".md"
+      use legacy <- result.try(read_loaded_concern(
+        legacy_path,
+        "concerns/" <> concern_slug <> ".md",
+        concern_slug,
+      ))
+      use _ <- result.try(
+        simplifile.create_directory_all(xdg.domain_concerns_dir(
+          paths,
+          target_domain_slug,
+        ))
+        |> result.map_error(fn(error) {
+          "Failed to create domain concerns directory: "
+          <> string.inspect(error)
+        }),
+      )
+      use _ <- result.try(
+        simplifile.write(target_path, legacy.content)
+        |> result.map_error(fn(error) {
+          "Failed to write migrated concern "
+          <> target_path
+          <> ": "
+          <> string.inspect(error)
+        }),
+      )
+      load_for_domain(paths, target_domain_slug, concern_slug)
+    }
+  }
+}
+
+fn read_loaded_concern(
+  path: String,
+  source_ref: String,
+  concern_slug: String,
+) -> Result(LoadedConcern, String) {
+  case simplifile.read(path) {
+    Ok(content) -> Ok(LoadedConcern(path:, source_ref:, content:))
+    Error(simplifile.Enoent) -> Error("Concern not found: " <> concern_slug)
+    Error(error) ->
+      Error(
+        "Failed to read concern file " <> path <> ": " <> string.inspect(error),
+      )
+  }
 }
 
 /// Apply a track request by writing an ordinary markdown concern file.
@@ -91,6 +205,127 @@ pub fn apply(
     action: action,
     title: title,
   ))
+}
+
+/// Apply a concern change and append compact intent and outcome audit records.
+/// The audit records contain references only. They do not contain concern text.
+pub fn apply_with_audit(
+  paths: xdg.Paths,
+  db_subject: process.Subject(db.DbMessage),
+  request: TrackRequest,
+) -> Result(TrackResult, String) {
+  let action = string.lowercase(string.trim(request.action))
+  let slug = string.lowercase(string.trim(request.slug))
+  use _ <- result.try(validate_action(action))
+  use _ <- result.try(validate_slug(slug))
+  let now = time.now_ms()
+  use _ <- result.try(db.append_operational_audit(
+    db_subject,
+    operational_audit.Record(
+      schema_version: 1,
+      audit_id: "",
+      record_type: "external_effect_intent",
+      actor: "aura",
+      source: "track_tool",
+      action: "concern." <> action <> ".intent",
+      target_type: "concern",
+      target_id: slug,
+      before_version: None,
+      after_version: None,
+      idempotency_key: None,
+      evidence_refs: [],
+      proof_refs: [],
+      authority_ref: None,
+      result: "pending",
+      error_code: None,
+      occurred_at: now,
+    ),
+  ))
+
+  case apply(paths, request) {
+    Ok(track_result) -> {
+      case
+        db.append_operational_audit(
+          db_subject,
+          operational_audit.Record(
+            schema_version: 1,
+            audit_id: "",
+            record_type: "external_effect_outcome",
+            actor: "aura",
+            source: "track_tool",
+            action: "concern." <> action <> ".outcome",
+            target_type: "concern",
+            target_id: slug,
+            before_version: None,
+            after_version: None,
+            idempotency_key: None,
+            evidence_refs: [track_result.source_ref],
+            proof_refs: [],
+            authority_ref: None,
+            result: "succeeded",
+            error_code: None,
+            occurred_at: time.now_ms(),
+          ),
+        )
+      {
+        Ok(Nil) -> Ok(track_result)
+        Error(outcome_error) -> {
+          let _ =
+            db.append_operational_audit(
+              db_subject,
+              operational_audit.Record(
+                schema_version: 1,
+                audit_id: "",
+                record_type: "external_effect_outcome",
+                actor: "aura",
+                source: "track_tool",
+                action: "concern." <> action <> ".effect_unknown",
+                target_type: "concern",
+                target_id: slug,
+                before_version: None,
+                after_version: None,
+                idempotency_key: None,
+                evidence_refs: [track_result.source_ref],
+                proof_refs: [],
+                authority_ref: None,
+                result: "effect_unknown",
+                error_code: Some("outcome_audit_failed"),
+                occurred_at: time.now_ms(),
+              ),
+            )
+          Error(
+            "effect_unknown: concern file changed but Aura could not persist the outcome audit: "
+            <> outcome_error,
+          )
+        }
+      }
+    }
+    Error(error) -> {
+      use _ <- result.try(db.append_operational_audit(
+        db_subject,
+        operational_audit.Record(
+          schema_version: 1,
+          audit_id: "",
+          record_type: "external_effect_outcome",
+          actor: "aura",
+          source: "track_tool",
+          action: "concern." <> action <> ".outcome",
+          target_type: "concern",
+          target_id: slug,
+          before_version: None,
+          after_version: None,
+          idempotency_key: None,
+          evidence_refs: [],
+          proof_refs: [],
+          authority_ref: None,
+          result: "failed",
+          error_code: None,
+          occurred_at: time.now_ms(),
+        ),
+      ))
+      Error(error)
+    }
+  }
 }
 
 fn validate_action(action: String) -> Result(Nil, String) {

@@ -138,6 +138,60 @@ max_concurrent = 2
   ws.acp_timeout |> should.equal(1800)
 }
 
+pub fn parse_transport_independent_domain_config_test() {
+  let toml =
+    "
+domain_id = \"domain:personal-life\"
+name = \"Personal Life\"
+description = \"Personal commitments and household operations.\"
+aliases = [\"home\", \"personal\"]
+purpose = \"Keep personal commitments coherent.\"
+status = \"active\"
+"
+
+  let cfg = config.parse_domain(toml) |> should.be_ok
+
+  cfg.domain_id |> should.equal("domain:personal-life")
+  cfg.aliases |> should.equal(["home", "personal"])
+  cfg.purpose |> should.equal("Keep personal commitments coherent.")
+  cfg.status |> should.equal("active")
+  cfg.cwd |> should.equal("")
+  cfg.tools |> should.equal([])
+  cfg.discord_channel |> should.equal("")
+}
+
+pub fn parse_domain_rejects_malformed_optional_legacy_fields_test() {
+  config.parse_domain(
+    "name = \"ops\"\ndescription = \"Operations\"\ntools = \"jira\"\n",
+  )
+  |> should.be_error
+  config.parse_domain(
+    "name = \"ops\"\ndescription = \"Operations\"\n[discord]\nchannel = 42\n",
+  )
+  |> should.be_error
+}
+
+pub fn parse_legacy_domain_derives_stable_operational_fields_test() {
+  let toml =
+    "
+name = \"Delivery Operations\"
+description = \"Delivery work.\"
+cwd = \"/tmp/delivery\"
+tools = [\"jira\"]
+
+[discord]
+channel = \"delivery\"
+"
+
+  let cfg = config.parse_domain(toml) |> should.be_ok
+
+  cfg.domain_id |> should.equal("domain:delivery-operations")
+  cfg.aliases |> should.equal([])
+  cfg.purpose |> should.equal("Delivery work.")
+  cfg.status |> should.equal("active")
+  cfg.discord_channel |> should.equal("delivery")
+}
+
 pub fn parse_domain_config_with_blather_channel_test() {
   let toml =
     "

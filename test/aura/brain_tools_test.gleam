@@ -198,6 +198,26 @@ pub fn built_in_tools_no_acp_dispatch_test() {
   has_acp |> should.be_false
 }
 
+pub fn built_in_tools_do_not_expose_retired_gmail_imap_setup_test() {
+  let tools = brain_tools.make_built_in_tools()
+  let retired = [
+    "set_gmail_oauth_credentials",
+    "connect_gmail_start",
+    "connect_gmail_complete",
+  ]
+
+  retired
+  |> list.each(fn(retired_name) {
+    tools
+    |> list.any(fn(tool) {
+      case tool {
+        llm.ToolDefinition(name: name, ..) -> name == retired_name
+      }
+    })
+    |> should.be_false
+  })
+}
+
 pub fn built_in_tools_include_track_test() {
   let tools = brain_tools.make_built_in_tools()
   let has_track =
@@ -381,6 +401,15 @@ fn active_flare_for_tool_test(session_name: String) -> flare_manager.FlareRecord
     started_at_ms: 0,
     updated_at_ms: 0,
     awaiting_response: True,
+    work_state: flare_manager.Running,
+    executor_kind: flare_manager.Acp,
+    dispatch_id: "",
+    capability_manifest: "{}",
+    context_manifest: "{}",
+    authority_boundary: "{}",
+    final_result: "",
+    final_proof: "",
+    archived: False,
   )
 }
 
@@ -486,6 +515,14 @@ pub fn flare_status_includes_latest_agent_response_test() {
       session_id: "",
       created_at_ms: 0,
       updated_at_ms: 0,
+      dispatch_id: "",
+      executor_kind: "acp",
+      capability_manifest: "{}",
+      context_manifest: "{}",
+      authority_boundary: "{}",
+      final_result: "",
+      final_proof: "",
+      archived: False,
     )
   db.upsert_flare(db_subject, stored) |> should.be_ok
   db.update_flare_result(
@@ -842,7 +879,8 @@ fn run_track_tool(ctx: brain_tools.ToolContext, args_json: String) -> String {
 pub fn track_tool_starts_concern_file_test() {
   let base = "/tmp/aura-track-tool-" <> test_helpers.random_suffix()
   let _ = simplifile.delete_all([base])
-  let ctx = track_ctx(base)
+  let assert Ok(db_subject) = db.start(":memory:")
+  let ctx = brain_tools.ToolContext(..track_ctx(base), db_subject: db_subject)
 
   let out =
     run_track_tool(
@@ -858,6 +896,7 @@ pub fn track_tool_starts_concern_file_test() {
   content |> string.contains("Status: active") |> should.be_true
   content |> string.contains("Jira CICS-342") |> should.be_true
 
+  process.send(db_subject, db.Shutdown)
   let _ = simplifile.delete_all([base])
   Nil
 }

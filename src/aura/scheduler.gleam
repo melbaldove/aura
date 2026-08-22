@@ -7,6 +7,7 @@ import aura/dreaming
 import aura/llm
 import aura/models
 import aura/notification
+import aura/operating_contracts
 import aura/skill
 import aura/time
 import aura/tools
@@ -454,54 +455,10 @@ pub fn start(
   on_finding: fn(notification.Finding) -> Nil,
   on_rekindle: fn(String, String) -> Nil,
 ) -> Result(process.Subject(SchedulerMessage), String) {
-  let toml_content = case simplifile.read(config_path) {
-    Ok(content) -> content
-    Error(_) -> ""
-  }
-
-  let entries = case parse_schedules(toml_content) {
-    Ok(configs) ->
-      list.map(configs, fn(c) { ScheduleEntry(config: c, last_run_ms: 0) })
-    Error(e) -> {
-      logging.log(logging.Error, "[scheduler] Failed to parse schedules: " <> e)
-      []
-    }
-  }
-  validate_schedules(entries)
-
-  let builder =
-    actor.new_with_initialiser(5000, fn(subject) {
-      let state =
-        SchedulerState(
-          entries: entries,
-          skills: skills,
-          on_finding: on_finding,
-          on_rekindle: on_rekindle,
-          config_path: config_path,
-          self_subject: subject,
-          running: dict.new(),
-          flare_subject: None,
-          dream_config: None,
-          last_dream_ms: 0,
-        )
-
-      // Schedule first tick after 60 seconds
-      process.send_after(subject, 60_000, Tick)
-
-      let selector =
-        process.new_selector()
-        |> process.select(subject)
-        |> process.select_monitors(ScheduleWorkerDown)
-
-      Ok(
-        actor.initialised(state)
-        |> actor.selecting(selector)
-        |> actor.returning(subject),
-      )
-    })
-    |> actor.on_message(handle_message)
-
-  case actor.start(builder) {
+  let entries = load_schedule_entries(config_path)
+  case
+    actor.start(builder(config_path, skills, on_finding, on_rekindle, entries))
+  {
     Ok(started) -> {
       logging.log(
         logging.Info,
@@ -514,6 +471,82 @@ pub fn start(
     Error(err) ->
       Error("Failed to start scheduler actor: " <> string.inspect(err))
   }
+}
+
+fn load_schedule_entries(config_path: String) -> List(ScheduleEntry) {
+  let toml_content = simplifile.read(config_path) |> result.unwrap("")
+  let entries = case parse_schedules(toml_content) {
+    Ok(configs) ->
+      list.map(configs, fn(config) {
+        ScheduleEntry(config: config, last_run_ms: 0)
+      })
+    Error(error) -> {
+      logging.log(
+        logging.Error,
+        "[scheduler] Failed to parse schedules: " <> error,
+      )
+      []
+    }
+  }
+  validate_schedules(entries)
+  entries
+}
+
+fn builder(
+  config_path: String,
+  skills: List(skill.SkillInfo),
+  on_finding: fn(notification.Finding) -> Nil,
+  on_rekindle: fn(String, String) -> Nil,
+  entries: List(ScheduleEntry),
+) -> actor.Builder(
+  SchedulerState,
+  SchedulerMessage,
+  process.Subject(SchedulerMessage),
+) {
+  actor.new_with_initialiser(5000, fn(subject) {
+    let state =
+      SchedulerState(
+        entries: entries,
+        skills: skills,
+        on_finding: on_finding,
+        on_rekindle: on_rekindle,
+        config_path: config_path,
+        self_subject: subject,
+        running: dict.new(),
+        flare_subject: None,
+        dream_config: None,
+        last_dream_ms: 0,
+      )
+
+    // Schedule first tick after 60 seconds
+    process.send_after(subject, 60_000, Tick)
+
+    let selector =
+      process.new_selector()
+      |> process.select(subject)
+      |> process.select_monitors(ScheduleWorkerDown)
+
+    Ok(
+      actor.initialised(state)
+      |> actor.selecting(selector)
+      |> actor.returning(subject),
+    )
+  })
+  |> actor.on_message(handle_message)
+}
+
+/// Start a named scheduler for use in a restart tree.
+pub fn start_named(
+  name: process.Name(SchedulerMessage),
+  config_path: String,
+  skills: List(skill.SkillInfo),
+  on_finding: fn(notification.Finding) -> Nil,
+  on_rekindle: fn(String, String) -> Nil,
+) -> Result(actor.Started(process.Subject(SchedulerMessage)), actor.StartError) {
+  let entries = load_schedule_entries(config_path)
+  builder(config_path, skills, on_finding, on_rekindle, entries)
+  |> actor.named(name)
+  |> actor.start
 }
 
 fn handle_message(
@@ -855,6 +888,51 @@ fn emit_findings(
       )
     on_finding(finding)
   })
+}
+
+/// Normalize one scheduler finding for the common evidence decision path.
+pub fn finding_to_evidence(
+  finding: notification.Finding,
+  observed_at: Int,
+) -> operating_contracts.EvidenceEvent {
+  let external_id =
+    finding.source <> ":" <> finding.domain <> ":" <> int.to_string(observed_at)
+  operating_contracts.EvidenceEvent(
+    schema_version: 1,
+    event_id: "schedule:" <> external_id,
+    source: finding.source,
+    source_kind: "schedule",
+    event_type: "schedule.finding",
+    external_id: Some(external_id),
+    resource: dict.from_list([
+      #("kind", operating_contracts.StructuredString("schedule_finding")),
+      #("id", operating_contracts.StructuredString(external_id)),
+    ]),
+    observed_at:,
+    summary: finding.summary,
+    normalized_data: dict.from_list([
+      #(
+        "urgency",
+        operating_contracts.StructuredString(urgency_name(finding.urgency)),
+      ),
+    ]),
+    raw_ref: Some("schedule://" <> finding.source <> "/" <> external_id),
+    content_hash: external_id,
+    provenance: dict.from_list([
+      #("adapter", operating_contracts.StructuredString("aura.scheduler")),
+    ]),
+    candidate_domain_refs: ["domain:" <> finding.domain],
+    candidate_concern_refs: [],
+    verification_status: "unverified",
+  )
+}
+
+fn urgency_name(urgency: notification.Urgency) -> String {
+  case urgency {
+    notification.Urgent -> "urgent"
+    notification.Normal -> "normal"
+    notification.Low -> "low"
+  }
 }
 
 // ---------------------------------------------------------------------------

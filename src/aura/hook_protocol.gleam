@@ -4,10 +4,13 @@
 //// IO. Every function here is testable without a terminal.
 
 import aura/mcp/jsonrpc
-import gleam/dynamic.{nil as dynamic_nil, type Dynamic}
+import aura/operating_contracts
+import gleam/dict
+import gleam/dynamic.{nil as dynamic_nil}
 import gleam/dynamic/decode
 import gleam/json
 import gleam/list
+import gleam/option
 import gleam/result
 import gleam/string
 
@@ -45,6 +48,86 @@ pub const default_ttl_minutes = 60
 const text_limit = 1800
 
 const default_buttons = ["Resolved", "Abort"]
+
+/// Normalize one hook event before it enters the common evidence path.
+pub fn event_to_evidence(
+  source: String,
+  type_: String,
+  subject: String,
+  external_id: String,
+  data: String,
+  event_id: String,
+  observed_at: Int,
+) -> operating_contracts.EvidenceEvent {
+  operating_contracts.EvidenceEvent(
+    schema_version: 1,
+    event_id: event_id,
+    source: source,
+    source_kind: "hook",
+    event_type: type_,
+    external_id: option.Some(external_id),
+    resource: dict.from_list([
+      #("kind", operating_contracts.StructuredString("hook_event")),
+      #("id", operating_contracts.StructuredString(external_id)),
+    ]),
+    observed_at: observed_at,
+    summary: subject,
+    normalized_data: dict.from_list([
+      #("payload", operating_contracts.StructuredString(data)),
+    ]),
+    raw_ref: option.Some("hook://" <> source <> "/" <> external_id),
+    content_hash: external_id,
+    provenance: dict.from_list([
+      #("adapter", operating_contracts.StructuredString("aura.hook")),
+    ]),
+    candidate_domain_refs: [],
+    candidate_concern_refs: [],
+    verification_status: "unverified",
+  )
+}
+
+/// Normalize one approved direct notification before policy evaluation.
+pub fn notify_to_evidence(
+  source: String,
+  rule: String,
+  target: String,
+  text: String,
+  external_id: String,
+  event_id: String,
+  observed_at: Int,
+) -> operating_contracts.EvidenceEvent {
+  let resource_id = case external_id {
+    "" -> event_id
+    value -> value
+  }
+  operating_contracts.EvidenceEvent(
+    schema_version: 1,
+    event_id: event_id,
+    source: source,
+    source_kind: "hook",
+    event_type: "hook.notify",
+    external_id: option.Some(resource_id),
+    resource: dict.from_list([
+      #("kind", operating_contracts.StructuredString("hook_notification")),
+      #("id", operating_contracts.StructuredString(resource_id)),
+    ]),
+    observed_at: observed_at,
+    summary: apply_provenance(source, rule, text),
+    normalized_data: dict.from_list([
+      #("approved_direct", operating_contracts.StructuredBool(True)),
+      #("target", operating_contracts.StructuredString(target)),
+    ]),
+    raw_ref: option.Some("hook://" <> source <> "/" <> resource_id),
+    content_hash: resource_id,
+    provenance: dict.from_list([
+      #("adapter", operating_contracts.StructuredString("aura.hook")),
+      #("rule", operating_contracts.StructuredString(rule)),
+    ]),
+    candidate_domain_refs: [],
+    candidate_concern_refs: [],
+    verification_status: "verified",
+  )
+}
 
 /// Prepend `[hook:<source>/<rule>]` (or `[hook:<source>]` when there is no
 /// rule) provenance to lane-2 message text. Applied once at the ctl boundary
@@ -101,11 +184,10 @@ fn parse_event(payload: String) -> Result(HookCommand, String) {
     use data <- decode.optional_field("data", dynamic_nil(), decode.dynamic)
     decode.success(#(source, type_, subject, external_id, data))
   }
-  let parsed =
-    case json.parse(payload, using: decoder) {
-      Ok(v) -> Ok(v)
-      Error(e) -> Error("invalid event payload: " <> string.inspect(e))
-    }
+  let parsed = case json.parse(payload, using: decoder) {
+    Ok(v) -> Ok(v)
+    Error(e) -> Error("invalid event payload: " <> string.inspect(e))
+  }
   use #(source, type_, subject, external_id, data) <- result.try(parsed)
   use _ <- result.try(validate_source(source))
   use _ <- result.try(validate_id_field("external_id", external_id))
@@ -131,11 +213,10 @@ fn parse_notify(payload: String) -> Result(HookCommand, String) {
     use external_id <- decode.optional_field("external_id", "", decode.string)
     decode.success(#(source, rule, target, text, external_id))
   }
-  let parsed =
-    case json.parse(payload, using: decoder) {
-      Ok(v) -> Ok(v)
-      Error(e) -> Error("invalid notify payload: " <> string.inspect(e))
-    }
+  let parsed = case json.parse(payload, using: decoder) {
+    Ok(v) -> Ok(v)
+    Error(e) -> Error("invalid notify payload: " <> string.inspect(e))
+  }
   use #(source, rule, target, text, external_id) <- result.try(parsed)
   use _ <- result.try(validate_source(source))
   use _ <- result.try(validate_id_field("external_id", external_id))
@@ -167,17 +248,23 @@ fn parse_ask(payload: String) -> Result(HookCommand, String) {
       default_ttl_minutes,
       decode.int,
     )
-    decode.success(
-      #(source, rule, correlation_id, target, text, buttons, ttl_minutes),
-    )
+    decode.success(#(
+      source,
+      rule,
+      correlation_id,
+      target,
+      text,
+      buttons,
+      ttl_minutes,
+    ))
   }
-  let parsed =
-    case json.parse(payload, using: decoder) {
-      Ok(v) -> Ok(v)
-      Error(e) -> Error("invalid ask payload: " <> string.inspect(e))
-    }
-  use #(source, rule, correlation_id, target, text, buttons, ttl_minutes) <-
-    result.try(parsed)
+  let parsed = case json.parse(payload, using: decoder) {
+    Ok(v) -> Ok(v)
+    Error(e) -> Error("invalid ask payload: " <> string.inspect(e))
+  }
+  use #(source, rule, correlation_id, target, text, buttons, ttl_minutes) <- result.try(
+    parsed,
+  )
   use _ <- result.try(validate_source(source))
   use _ <- result.try(validate_id_field("correlation_id", correlation_id))
   use _ <- result.try(validate_target(target))

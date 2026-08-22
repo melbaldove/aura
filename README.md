@@ -12,12 +12,9 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Every 
 
 - **Domains** — isolated knowledge partitions, one per area of your life. Each has its own instructions, memory, state, and Discord channel. The brain sees across all of them.
 - **Flares** — long-running coding-agent sessions dispatched via ACP. Active / parked / failed lifecycle with SQLite persistence, recovery on restart, and rekindle on schedule.
-- **Memory** — active review persists state and knowledge every N turns; nightly dreaming consolidates the archive offline, promotes durable facts, enforces a token budget, and writes compact before/after reports for auditability.
-- **Concern tracking** — Aura can internally track durable objects of care, work, watch, or risk from natural conversation and ambient events using ordinary markdown state files.
+- **Memory** — active review persists state and knowledge every N turns; nightly dreaming consolidates the archive offline, promotes durable facts, and enforces a token budget.
 - **Skills** — language-agnostic CLI tools. Drop a script in a directory, it becomes a capability the LLM can call.
-- **Self-diagnosis** — ships with man pages plus live cognitive smoke/eval/replay, natural correction capture, replay-aware improvement proposals, delivery probe, digest flush, and delivery dead-letter retry commands. The brain reads them via the shell tool when it needs to understand its own behavior.
-- **Attention feedback** — ordinary feedback about recent Aura notifications is grounded in the messages Aura actually sent, then saved through attention memory with replay evidence when a concrete event is resolved.
-- **External hooks** — standalone processes stream alerts, events, and button-asks into Aura over the local ctl socket (`aura hook run` + rules files), so scripts can surface attention and request decisions without Discord access. Writing rules: `man aura-hook` or `docs/architecture/external-hooks.md`.
+- **Self-diagnosis** — ships with man pages. The brain reads them via the shell tool when it needs to understand its own behavior.
 - **Shell approvals** — dangerous shell commands require Discord button approval; unresolved approvals are invalidated visibly after actor restart.
 - **Pluggable gateways and ACP transports** — Discord first; multi-platform conversation schema from day one.
 
@@ -27,10 +24,8 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Every 
 - Erlang/OTP 27+
 - tmux
 - A Discord bot token ([create one here](https://discord.com/developers/applications))
-- LLM credentials: `ZAI_API_KEY`, `ANTHROPIC_API_KEY`, or Codex CLI ChatGPT login for `openai-codex/*`
-- Codex auth for the default ACP adapter: Codex login state, `CODEX_API_KEY`, or `OPENAI_API_KEY`
+- An LLM API key (ZAI/GLM or Anthropic/Claude)
 - agent-browser (npm) for the browser tool: `npm install -g agent-browser && agent-browser install`
-- ACP adapters for flares: `@zed-industries/codex-acp` and `@agentclientprotocol/claude-agent-acp` are bootstrapped by `scripts/deploy.sh`
 
 ### Nix Dev Shell
 
@@ -70,7 +65,6 @@ supervisor (OneForOne)
 ├── db                   SQLite actor — serializes all DB reads/writes
 ├── event_ingest         Normalizes, tags, and persists integration events
 ├── cognitive_worker     Async model-backed decision harness for events
-├── cognitive_delivery   Validated attention delivery, digest queue, ledger, history writes
 ├── poller               Gateway WebSocket (Discord first, pluggable)
 ├── flare_manager        Flare lifecycle — roster, dispatch, monitor, persist
 ├── channel_supervisor   Hosts one actor per Discord channel
@@ -97,11 +91,6 @@ A.U.R.A. follows the XDG Base Directory specification:
 ~/.local/share/aura/               # Data
   aura.db                            # Conversations (SQLite)
   cognitive/decisions.jsonl          # Validated cognitive decisions
-  cognitive/deliveries.jsonl         # Cognitive delivery ledger and dead letters
-  cognitive/labels.jsonl             # Human replay labels
-  cognitive/patch-proposals/*.md     # Reviewable policy/concern patch briefs
-  cognitive/improvement-proposals/*.md # Replay-backed improvement reports
-  dream_reports/*.md                 # Dream cycle counts, action candidates, and memory effects
   skills/<name>/SKILL.md             # Skills
   domains/<name>/MEMORY.md           # Durable domain knowledge
   domains/<name>/repos/              # Project repositories
@@ -122,11 +111,7 @@ See [docs/CONFIG.md](docs/CONFIG.md) for the full reference.
 [discord]
 token = "${AURA_DISCORD_TOKEN}"
 guild = "your-guild-id"
-default_channel = "general"
-
-[blather]
-url = "http://10.0.0.2:18100/api"
-api_key = "${BLATHER_API_KEY}"
+default_channel = "aura"
 
 [models]
 brain = "zai/glm-5.1"
@@ -136,16 +121,9 @@ vision = "zai/glm-5v-turbo"
 dream = "zai/glm-5.1"
 heartbeat = "zai/glm-5-turbo"
 monitor = "zai/glm-5-turbo"
-codex_reasoning_effort = "medium"
-
-# Experimental: use Codex OAuth subscription auth for Aura's orchestrator.
-# Run `codex login` first. File-backed Codex CLI auth is refreshed by Aura.
-# brain = "openai-codex/gpt-5.5"
 
 [acp]
 global_max_concurrent = 4
-transport = "stdio"
-command = "codex-acp"
 
 [memory]
 review_interval = 10
@@ -166,14 +144,11 @@ tools = ["linear", "google"]
 
 [discord]
 channel = "my-project"
-
-[blather]
-channel = "blather-channel-id"
 ```
 
 ## Flares ([Agent Communication Protocol](https://agentcommunicationprotocol.dev))
 
-A flare is a long-running agent session. A.U.R.A. is an ACP client — it dispatches flares via the open standard, subscribes to their event stream, and reports structured progress updates. The default stdio adapter is Codex via `codex-acp`; Claude Code is installed as `claude-agent-acp` and can be selected with `[acp].command`. See [docs/ACP.md](docs/ACP.md) for the adapter support path.
+A flare is a long-running agent session. A.U.R.A. is an ACP client — it dispatches flares via the open standard, subscribes to their SSE event stream, and reports structured progress updates. Any ACP-compatible agent works (Claude Code, Codex, Gemini CLI), and multiple transports are pluggable (stdio, tmux).
 
 Flares persist across restarts: the roster is written to SQLite and recovered on boot. Parked flares can be rekindled on a schedule.
 

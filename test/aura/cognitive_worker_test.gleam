@@ -305,11 +305,12 @@ pub fn worker_sends_validated_decision_to_delivery_test() {
   let delivery_reports = process.new_subject()
   let delivery_targets = [cognitive_delivery.default_target("aura-channel")]
   let assert Ok(delivery_started) =
-    cognitive_delivery.start_with(
+    cognitive_delivery.start_with_history(
       paths,
       discord,
       delivery_targets,
       [],
+      db_subject,
       Some(delivery_reports),
     )
   let worker_reports = process.new_subject()

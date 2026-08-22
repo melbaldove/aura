@@ -22,13 +22,17 @@ import aura/cognitive_worker
 import aura/db
 import aura/event
 import aura/event_tagger
+import aura/evidence
+import aura/operating_contracts
 import aura/time
 import gleam/dict
 import gleam/erlang/process.{type Subject}
 import gleam/int
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision
+import gleam/result
 import logging
 
 // ---------------------------------------------------------------------------
@@ -37,6 +41,26 @@ import logging
 
 pub type IngestMessage {
   Ingest(event: event.AuraEvent)
+  SubmitEvidence(
+    envelope: operating_contracts.EvidenceEvent,
+    reply_to: Subject(Result(db.EvidenceInsert, String)),
+  )
+  SubmitAuthorizedEvidence(
+    context: operating_contracts.ConnectorSubmissionContext,
+    envelope: operating_contracts.EvidenceEvent,
+    reply_to: Subject(Result(Option(db.EvidenceInsert), String)),
+  )
+  SubmitAuthorizedEvidenceBatch(
+    context: operating_contracts.ConnectorSubmissionContext,
+    envelopes: List(operating_contracts.EvidenceEvent),
+    reply_to: Subject(Result(Option(List(db.EvidenceInsert)), String)),
+  )
+  SubmitAuthorizedEvidenceBatchWithCheckpoint(
+    context: operating_contracts.ConnectorSubmissionContext,
+    envelopes: List(operating_contracts.EvidenceEvent),
+    checkpoint: db.ConnectorCheckpointUpdate,
+    reply_to: Subject(Result(Option(List(db.EvidenceInsert)), String)),
+  )
 }
 
 type State {
@@ -65,12 +89,30 @@ pub fn start_with_cognitive(
   db_subject: Subject(db.DbMessage),
   cognitive_subject: Option(Subject(cognitive_worker.Message)),
 ) -> Result(actor.Started(Subject(IngestMessage)), actor.StartError) {
+  builder(db_subject, cognitive_subject)
+  |> actor.start
+}
+
+fn builder(
+  db_subject: Subject(db.DbMessage),
+  cognitive_subject: Option(Subject(cognitive_worker.Message)),
+) -> actor.Builder(State, IngestMessage, Subject(IngestMessage)) {
   actor.new_with_initialiser(5000, fn(self_subject) {
     let state =
       State(db_subject: db_subject, cognitive_subject: cognitive_subject)
     Ok(actor.initialised(state) |> actor.returning(self_subject))
   })
   |> actor.on_message(handle_message)
+}
+
+/// Start named event ingestion for use in a restart tree.
+pub fn start_named_with_cognitive(
+  name: process.Name(IngestMessage),
+  db_subject: Subject(db.DbMessage),
+  cognitive_subject: Option(Subject(cognitive_worker.Message)),
+) -> Result(actor.Started(Subject(IngestMessage)), actor.StartError) {
+  builder(db_subject, cognitive_subject)
+  |> actor.named(name)
   |> actor.start
 }
 
@@ -86,6 +128,55 @@ pub fn supervised(
 /// normalized, tagged, or persisted.
 pub fn ingest(subject: Subject(IngestMessage), event: event.AuraEvent) -> Nil {
   process.send(subject, Ingest(event: event))
+}
+
+/// Submit normalized evidence and return the canonical event identity.
+pub fn submit_evidence(
+  subject: Subject(IngestMessage),
+  envelope: operating_contracts.EvidenceEvent,
+) -> Result(db.EvidenceInsert, String) {
+  process.call(subject, 10_000, fn(reply_to) {
+    SubmitEvidence(envelope:, reply_to:)
+  })
+}
+
+/// Submit evidence only after its connector read has started.
+pub fn submit_authorized_evidence(
+  subject: Subject(IngestMessage),
+  context: operating_contracts.ConnectorSubmissionContext,
+  envelope: operating_contracts.EvidenceEvent,
+) -> Result(Option(db.EvidenceInsert), String) {
+  process.call(subject, 10_000, fn(reply_to) {
+    SubmitAuthorizedEvidence(context:, envelope:, reply_to:)
+  })
+}
+
+/// Submit one normalized evidence batch under one started connector read.
+pub fn submit_authorized_evidence_batch(
+  subject: Subject(IngestMessage),
+  context: operating_contracts.ConnectorSubmissionContext,
+  envelopes: List(operating_contracts.EvidenceEvent),
+) -> Result(Option(List(db.EvidenceInsert)), String) {
+  process.call(subject, 10_000, fn(reply_to) {
+    SubmitAuthorizedEvidenceBatch(context:, envelopes:, reply_to:)
+  })
+}
+
+/// Submit one evidence batch and its connector checkpoint atomically.
+pub fn submit_authorized_evidence_batch_with_checkpoint(
+  subject: Subject(IngestMessage),
+  context: operating_contracts.ConnectorSubmissionContext,
+  envelopes: List(operating_contracts.EvidenceEvent),
+  checkpoint: db.ConnectorCheckpointUpdate,
+) -> Result(Option(List(db.EvidenceInsert)), String) {
+  process.call(subject, 10_000, fn(reply_to) {
+    SubmitAuthorizedEvidenceBatchWithCheckpoint(
+      context:,
+      envelopes:,
+      checkpoint:,
+      reply_to:,
+    )
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +212,99 @@ fn handle_message(
               <> err,
           )
       }
+      actor.continue(state)
+    }
+    SubmitEvidence(envelope:, reply_to:) -> {
+      let outcome = {
+        use normalized <- result.try(evidence.normalize(envelope))
+        use links <- result.try(evidence.evaluate_concern_links(normalized))
+        db.insert_normalized_evidence(state.db_subject, normalized, links)
+      }
+      case outcome {
+        Ok(inserted) if inserted.inserted ->
+          notify_cognitive(state.cognitive_subject, inserted.event_id)
+        _ -> Nil
+      }
+      process.send(reply_to, outcome)
+      actor.continue(state)
+    }
+    SubmitAuthorizedEvidence(context:, envelope:, reply_to:) -> {
+      let outcome = {
+        use normalized <- result.try(evidence.normalize(envelope))
+        use links <- result.try(evidence.evaluate_concern_links(normalized))
+        db.submit_authorized_connector_evidence(
+          state.db_subject,
+          context,
+          normalized,
+          links,
+        )
+      }
+      case outcome {
+        Ok(Some(inserted)) if inserted.inserted ->
+          notify_cognitive(state.cognitive_subject, inserted.event_id)
+        _ -> Nil
+      }
+      process.send(reply_to, outcome)
+      actor.continue(state)
+    }
+    SubmitAuthorizedEvidenceBatch(context:, envelopes:, reply_to:) -> {
+      let outcome = {
+        use normalized <- result.try(list.try_map(envelopes, evidence.normalize))
+        use evidence_items <- result.try(
+          list.try_map(normalized, fn(envelope) {
+            use links <- result.try(evidence.evaluate_concern_links(envelope))
+            Ok(#(envelope, links))
+          }),
+        )
+        db.submit_authorized_connector_evidence_batch(
+          state.db_subject,
+          context,
+          evidence_items,
+        )
+      }
+      case outcome {
+        Ok(Some(inserted)) ->
+          inserted
+          |> list.filter(fn(value) { value.inserted })
+          |> list.each(fn(value) {
+            notify_cognitive(state.cognitive_subject, value.event_id)
+          })
+        _ -> Nil
+      }
+      process.send(reply_to, outcome)
+      actor.continue(state)
+    }
+    SubmitAuthorizedEvidenceBatchWithCheckpoint(
+      context:,
+      envelopes:,
+      checkpoint:,
+      reply_to:,
+    ) -> {
+      let outcome = {
+        use normalized <- result.try(list.try_map(envelopes, evidence.normalize))
+        use evidence_items <- result.try(
+          list.try_map(normalized, fn(envelope) {
+            use links <- result.try(evidence.evaluate_concern_links(envelope))
+            Ok(#(envelope, links))
+          }),
+        )
+        db.submit_authorized_connector_evidence_batch_with_checkpoint(
+          state.db_subject,
+          context,
+          evidence_items,
+          checkpoint,
+        )
+      }
+      case outcome {
+        Ok(Some(inserted)) ->
+          inserted
+          |> list.filter(fn(value) { value.inserted })
+          |> list.each(fn(value) {
+            notify_cognitive(state.cognitive_subject, value.event_id)
+          })
+        _ -> Nil
+      }
+      process.send(reply_to, outcome)
       actor.continue(state)
     }
   }

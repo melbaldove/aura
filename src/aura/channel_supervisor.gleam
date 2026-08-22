@@ -47,6 +47,15 @@ type SupervisorState {
 
 /// Start the channel supervisor actor.
 pub fn start() -> Result(Subject(SupervisorMessage), actor.StartError) {
+  actor.start(builder())
+  |> result.map(fn(started) { started.data })
+}
+
+fn builder() -> actor.Builder(
+  SupervisorState,
+  SupervisorMessage,
+  Subject(SupervisorMessage),
+) {
   actor.new_with_initialiser(5000, fn(self_subject) {
     let state = SupervisorState(children: dict.new(), self: self_subject)
     let selector =
@@ -60,8 +69,15 @@ pub fn start() -> Result(Subject(SupervisorMessage), actor.StartError) {
     )
   })
   |> actor.on_message(handle_message)
+}
+
+/// Start a named channel supervisor for use in a restart tree.
+pub fn start_named(
+  name: process.Name(SupervisorMessage),
+) -> Result(actor.Started(Subject(SupervisorMessage)), actor.StartError) {
+  builder()
+  |> actor.named(name)
   |> actor.start
-  |> result.map(fn(started) { started.data })
 }
 
 /// Return the existing actor subject for `channel_key`, or start a new one

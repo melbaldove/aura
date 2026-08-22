@@ -28,6 +28,16 @@ pub fn browser_module_compiles_test() {
   browser.Navigate |> should.equal(browser.Navigate)
 }
 
+pub fn browser_ffi_runs_agent_browser_without_node_test() {
+  run_with_fake_agent_browser()
+  |> should.equal(
+    Ok("--session ffi-test --session-name ffi-test --json snapshot -c"),
+  )
+}
+
+@external(erlang, "aura_browser_ffi_test_helpers", "run_with_fake_agent_browser")
+fn run_with_fake_agent_browser() -> Result(String, String)
+
 pub fn resolve_session_uses_channel_when_arg_empty_test() {
   browser.resolve_session("", "1234567890")
   |> should.equal(Ok("aura-ch-1234567890"))

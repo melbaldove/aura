@@ -64,6 +64,36 @@ pub fn env_path(paths: Paths) -> String {
   paths.config <> "/.env"
 }
 
+/// Resolve the private directory for connector credential files.
+pub fn connector_credentials_dir(paths: Paths) -> String {
+  paths.config <> "/credentials/connectors"
+}
+
+/// Resolve the private directory for installed Google OAuth client records.
+pub fn google_oauth_clients_dir(paths: Paths) -> String {
+  paths.config <> "/credentials/google/oauth-clients"
+}
+
+/// Resolve the private directory for immutable Google OAuth client sets.
+pub fn google_oauth_client_sets_dir(paths: Paths) -> String {
+  paths.config <> "/credentials/google/client-sets"
+}
+
+/// Resolve the private directory for Codex monitor capability files.
+pub fn monitor_capabilities_dir(paths: Paths) -> String {
+  paths.config <> "/credentials/monitors"
+}
+
+/// Resolve one capability file from its persisted SHA-256 digest.
+pub fn monitor_capability_path(paths: Paths, digest: String) -> String {
+  monitor_capabilities_dir(paths) <> "/" <> digest <> ".capability"
+}
+
+/// Resolve the private configuration for the local Codex monitor runtime.
+pub fn codex_monitor_runtime_config_path(paths: Paths) -> String {
+  paths.config <> "/monitors/personal-life-codex.json"
+}
+
 pub fn soul_path(paths: Paths) -> String {
   paths.config <> "/SOUL.md"
 }
@@ -112,6 +142,11 @@ pub fn concerns_dir(paths: Paths) -> String {
   paths.state <> "/concerns"
 }
 
+/// Resolve the directory for concerns owned by one operational domain.
+pub fn domain_concerns_dir(paths: Paths, domain_slug: String) -> String {
+  domain_state_dir(paths, domain_slug) <> "/concerns"
+}
+
 pub fn db_path(paths: Paths) -> String {
   paths.data <> "/aura.db"
 }
@@ -130,6 +165,11 @@ pub fn domain_config_dir(paths: Paths, name: String) -> String {
 
 pub fn domain_data_dir(paths: Paths, name: String) -> String {
   paths.data <> "/domains/" <> name
+}
+
+/// Resolve the transport-independent operational manifest for one domain.
+pub fn domain_manifest_path(paths: Paths, domain_slug: String) -> String {
+  domain_data_dir(paths, domain_slug) <> "/domain.json"
 }
 
 pub fn domain_state_dir(paths: Paths, name: String) -> String {

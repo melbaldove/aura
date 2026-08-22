@@ -70,9 +70,15 @@ type RawAtom {
 pub fn from_event(e: event.AuraEvent) -> Observation {
   let actors =
     [
-      tag_value(e.tags, "from"),
-      tag_value(e.tags, "to"),
-      tag_value(e.tags, "author"),
+      first_present(
+        tag_value(e.tags, "from"),
+        normalized_string(e.data, "from"),
+      ),
+      first_present(tag_value(e.tags, "to"), normalized_string(e.data, "to")),
+      first_present(
+        tag_value(e.tags, "author"),
+        normalized_string(e.data, "author"),
+      ),
     ]
     |> list.filter(fn(value) { value != "" })
 
@@ -80,7 +86,10 @@ pub fn from_event(e: event.AuraEvent) -> Observation {
     id: e.id,
     source: e.source,
     resource_id: e.external_id,
-    resource_type: resource_type_for(e.source, e.type_),
+    resource_type: case tag_value(e.tags, "resource_kind") {
+      "" -> "external_resource"
+      kind -> kind
+    },
     event_type: e.type_,
     event_time_ms: e.time_ms,
     actors: actors,
@@ -88,16 +97,34 @@ pub fn from_event(e: event.AuraEvent) -> Observation {
     text: event_text(e),
     state_before: "",
     state_after: "",
-    raw_ref: e.source <> ":" <> e.external_id,
+    raw_ref: first_present(
+      json_string(e.data, ["raw_ref"]),
+      e.source <> ":" <> e.external_id,
+    ),
     raw_data: e.data,
   )
 }
 
 fn event_text(e: event.AuraEvent) -> String {
-  let body_text = json_string(e.data, ["body_text"])
+  let body_text =
+    first_present(
+      json_string(e.data, ["body_text"]),
+      normalized_string(e.data, "body_text"),
+    )
   case body_text {
     "" -> e.subject
     body -> "Subject: " <> e.subject <> "\n\nBody:\n" <> body
+  }
+}
+
+fn normalized_string(data: String, key: String) -> String {
+  json_string(data, ["normalized_data", key])
+}
+
+fn first_present(first: String, fallback: String) -> String {
+  case first {
+    "" -> fallback
+    value -> value
   }
 }
 
@@ -151,39 +178,6 @@ pub fn extract_evidence(observation: Observation) -> EvidenceBundle {
     resource_refs: resource_refs(atoms),
     raw_refs: [observation.raw_ref],
   )
-}
-
-fn resource_type_for(source: String, event_type: String) -> String {
-  let lowered = string.lowercase(source <> " " <> event_type)
-  case string.contains(lowered, "gmail") {
-    True -> "email"
-    False ->
-      case
-        string.contains(lowered, "linear") || string.contains(lowered, "jira")
-      {
-        True -> "ticket"
-        False ->
-          case string.contains(lowered, "calendar") {
-            True -> "calendar_event"
-            False ->
-              case
-                string.contains(lowered, "github")
-                || string.contains(lowered, "git")
-              {
-                True -> "repository_event"
-                False ->
-                  case string.contains(lowered, "ci") {
-                    True -> "verification_event"
-                    False ->
-                      case string.contains(lowered, "world") {
-                        True -> "world_state"
-                        False -> "external_resource"
-                      }
-                  }
-              }
-          }
-      }
-  }
 }
 
 fn tag_value(tags: dict.Dict(String, String), key: String) -> String {
@@ -305,6 +299,23 @@ fn extract_json_atoms(data: String) -> List(RawAtom) {
         json_atom(payload, "branch", ["branch"]),
         json_atom(payload, "commit_sha", ["commit"]),
         json_atom(payload, "commit_sha", ["sha"]),
+        json_atom(payload, "actor_email", ["normalized_data", "from"]),
+        json_atom(payload, "actor_email", ["normalized_data", "to"]),
+        json_atom(payload, "actor_email", ["normalized_data", "author"]),
+        json_atom(payload, "message_id", ["normalized_data", "message_id"]),
+        json_atom(payload, "thread_id", ["normalized_data", "thread_id"]),
+        json_atom(payload, "resource_id", ["normalized_data", "resource_id"]),
+        json_atom(payload, "status", ["normalized_data", "status"]),
+        json_atom(payload, "status", ["normalized_data", "conclusion"]),
+        json_atom(payload, "url", ["normalized_data", "url"]),
+        json_atom(payload, "url", ["normalized_data", "html_url"]),
+        json_atom(payload, "text", ["normalized_data", "body_text"]),
+        json_atom(payload, "datetime", ["normalized_data", "date"]),
+        json_atom(payload, "datetime", ["normalized_data", "start"]),
+        json_atom(payload, "datetime", ["normalized_data", "end"]),
+        json_atom(payload, "branch", ["normalized_data", "branch"]),
+        json_atom(payload, "commit_sha", ["normalized_data", "commit"]),
+        json_atom(payload, "commit_sha", ["normalized_data", "sha"]),
       ]
       |> list.filter_map(fn(result) { result })
     Error(_) -> []

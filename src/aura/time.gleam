@@ -1,4 +1,5 @@
 import gleam/int
+import gleam/string
 
 /// Current time in milliseconds since epoch.
 pub fn now_ms() -> Int {
@@ -66,6 +67,41 @@ pub fn format_ms_rfc3339_utc(ms: Int) -> String {
   <> "Z"
 }
 
+/// Parse one bounded RFC 3339 UTC timestamp into epoch milliseconds.
+pub fn parse_rfc3339_utc_ms(value: String) -> Result(Int, Nil) {
+  case
+    value != ""
+    && string.byte_size(value) <= 64
+    && string.ends_with(value, "Z")
+    && !string.contains(value, "\n")
+    && !string.contains(value, "\r")
+  {
+    True -> parse_rfc3339_ms_ffi(value)
+    False -> Error(Nil)
+  }
+}
+
+/// Parse one bounded RFC 3339 timestamp with `Z` or a numeric offset.
+pub fn parse_rfc3339_ms(value: String) -> Result(Int, Nil) {
+  case
+    value != ""
+    && string.byte_size(value) <= 64
+    && !string.contains(value, "\n")
+    && !string.contains(value, "\r")
+  {
+    True -> parse_rfc3339_ms_ffi(value)
+    False -> Error(Nil)
+  }
+}
+
+/// Return true only for one valid Gregorian `YYYY-MM-DD` date.
+pub fn valid_calendar_date(value: String) -> Bool {
+  case string.byte_size(value) == 10 {
+    True -> valid_calendar_date_ffi(value)
+    False -> False
+  }
+}
+
 fn pad_zero(n: Int) -> String {
   case n < 10 {
     True -> "0" <> int.to_string(n)
@@ -75,6 +111,12 @@ fn pad_zero(n: Int) -> String {
 
 @external(erlang, "aura_time_ffi", "system_time_ms")
 fn system_time_ms_ffi() -> Int
+
+@external(erlang, "aura_time_ffi", "parse_rfc3339_ms")
+fn parse_rfc3339_ms_ffi(value: String) -> Result(Int, Nil)
+
+@external(erlang, "aura_time_ffi", "valid_calendar_date")
+fn valid_calendar_date_ffi(value: String) -> Bool
 
 @external(erlang, "calendar", "local_time")
 fn erlang_localtime() -> #(#(Int, Int, Int), #(Int, Int, Int))

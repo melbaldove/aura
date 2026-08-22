@@ -5,7 +5,6 @@ import aura/brain_tools
 import aura/channel_actor
 import aura/channel_supervisor
 import aura/clients/browser_runner.{type BrowserRunner}
-import aura/clients/discord as discord_client
 import aura/clients/llm_client.{type LLMClient}
 import aura/clients/skill_runner.{type SkillRunner}
 import aura/config
@@ -68,7 +67,6 @@ pub type RouteDecision {
 pub type BrainMessage {
   HandleMessage(message.IncomingMessage)
   UpdateDomains(List(DomainInfo))
-  HeartbeatFinding(notification.Finding)
   DeliverDigest
   AcpEvent(acp_monitor.AcpEvent)
   PostWelcome(channel_id: String)
@@ -188,7 +186,8 @@ pub fn route_custom_id(custom_id: String) -> CustomIdRoute {
     Ok(#(cid, choice)) -> RouteExternalAsk(cid, choice)
     Error(_) ->
       case string.split(custom_id, ":") {
-        [action, ch, approval_id] -> RouteChannelApproval(action, ch, approval_id)
+        [action, ch, approval_id] ->
+          RouteChannelApproval(action, ch, approval_id)
         _ -> RouteUnknown
       }
   }
@@ -205,6 +204,22 @@ fn thread_key(platform: String, channel_id: String) -> String {
 pub fn start(
   brain_config: BrainConfig,
 ) -> Result(process.Subject(BrainMessage), String) {
+  start_actor(brain_config, None)
+  |> result.map(fn(started) { started.data })
+}
+
+/// Start a named brain actor for use in a restart tree.
+pub fn start_named(
+  name: process.Name(BrainMessage),
+  brain_config: BrainConfig,
+) -> Result(actor.Started(process.Subject(BrainMessage)), String) {
+  start_actor(brain_config, Some(name))
+}
+
+fn start_actor(
+  brain_config: BrainConfig,
+  name: Option(process.Name(BrainMessage)),
+) -> Result(actor.Started(process.Subject(BrainMessage)), String) {
   let config = brain_config.global
   // Build LLM config from brain model spec
   use llm_config <- result.try(
@@ -263,13 +278,17 @@ pub fn start(
       review_runner: brain_config.review_runner,
     )
 
-  actor.new_with_initialiser(10_000, fn(self_subject) {
-    let state = BrainState(..base_state, self_subject: Some(self_subject))
-    Ok(actor.initialised(state) |> actor.returning(self_subject))
-  })
-  |> actor.on_message(handle_message)
-  |> actor.start
-  |> result.map(fn(started) { started.data })
+  let builder =
+    actor.new_with_initialiser(10_000, fn(self_subject) {
+      let state = BrainState(..base_state, self_subject: Some(self_subject))
+      Ok(actor.initialised(state) |> actor.returning(self_subject))
+    })
+    |> actor.on_message(handle_message)
+
+  case name {
+    Some(name) -> builder |> actor.named(name) |> actor.start
+    None -> actor.start(builder)
+  }
   |> result.map_error(fn(err) {
     "Failed to start brain actor: " <> string.inspect(err)
   })
@@ -449,28 +468,6 @@ fn handle_message(
           <> " entries",
       )
       actor.continue(BrainState(..state, domains: domains))
-    }
-    HeartbeatFinding(finding) -> {
-      case notification.is_urgent(finding) {
-        True -> {
-          // Post urgent findings immediately
-          let channel = resolve_finding_channel(state, finding)
-          process.spawn_unlinked(fn() {
-            send_discord_response(
-              state.discord,
-              channel,
-              "**URGENT** [" <> finding.source <> "] " <> finding.summary,
-            )
-          })
-          actor.continue(state)
-        }
-        False -> {
-          // Queue for digest
-          let new_queue =
-            notification.enqueue(state.notification_queue, finding)
-          actor.continue(BrainState(..state, notification_queue: new_queue))
-        }
-      }
     }
     DeliverDigest -> {
       let #(findings, new_queue) = notification.drain(state.notification_queue)
@@ -1413,13 +1410,6 @@ fn route_handback_to_channel_actor(
         "[brain] Handback for unknown flare: " <> session_name,
       )
   }
-}
-
-fn resolve_finding_channel(
-  state: BrainState,
-  finding: notification.Finding,
-) -> String {
-  resolve_domain_channel(state, finding.domain)
 }
 
 fn send_discord_response(

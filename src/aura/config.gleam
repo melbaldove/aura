@@ -1,10 +1,11 @@
-import aura/cron
 import aura/codex_reasoning
+import aura/cron
 import aura/env
-import aura/integrations/gmail
-import aura/oauth
+import gleam/bit_array
+import gleam/crypto
 import gleam/dict
 import gleam/int
+import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -87,17 +88,27 @@ pub type McpConfig {
   McpConfig(servers: List(McpServerConfig))
 }
 
-/// A single `[[integrations]]` entry, dispatched by its `type` field.
-/// Each variant carries the runtime config type from the corresponding
-/// integration module so the supervisor can call `<module>.supervised(config, ingest)`
-/// without redoing the parse.
-pub type IntegrationConfig {
-  GmailIntegration(config: gmail.GmailConfig)
+/// Compatibility marker for the retired legacy integration section.
+///
+/// Any configured `[[integrations]]` entry is rejected. REST connectors use
+/// disabled-by-default `[[connector_configurations]]` records instead.
+pub type IntegrationsConfig {
+  IntegrationsConfig
 }
 
-/// Aggregate of all parsed `[[integrations]]` blocks.
-pub type IntegrationsConfig {
-  IntegrationsConfig(integrations: List(IntegrationConfig))
+/// One disabled-by-default REST connector configuration.
+///
+/// This record contains opaque references only. It cannot enable a connector.
+pub type ConnectorConfiguration {
+  ConnectorConfiguration(
+    configuration_ref: String,
+    connector_id: String,
+    oauth_client_ref: String,
+    credential_ref: String,
+    resource_ref: String,
+    oauth_scope: String,
+    configuration_hash: String,
+  )
 }
 
 /// Top-level configuration loaded from the global `config.toml`.
@@ -119,14 +130,19 @@ pub type GlobalConfig {
     dreaming_budget_percent: Int,
     mcp: McpConfig,
     integrations: IntegrationsConfig,
+    connector_configurations: List(ConnectorConfiguration),
   )
 }
 
 /// Per-domain configuration loaded from each domain's `config.toml`.
 pub type DomainConfig {
   DomainConfig(
+    domain_id: String,
     name: String,
     description: String,
+    aliases: List(String),
+    purpose: String,
+    status: String,
     cwd: String,
     tools: List(String),
     discord_channel: String,
@@ -179,15 +195,20 @@ pub fn default_global() -> GlobalConfig {
     dreaming_cron: "0 4 * * *",
     dreaming_budget_percent: 10,
     mcp: McpConfig(servers: []),
-    integrations: IntegrationsConfig(integrations: []),
+    integrations: IntegrationsConfig,
+    connector_configurations: [],
   )
 }
 
 /// Return a `DomainConfig` with all fields set to empty/zero defaults.
 pub fn default_domain() -> DomainConfig {
   DomainConfig(
+    domain_id: "",
     name: "",
     description: "",
+    aliases: [],
+    purpose: "",
+    status: "active",
     cwd: "",
     tools: [],
     discord_channel: "",
@@ -348,6 +369,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
 
   use mcp <- result.try(parse_mcp(doc))
   use integrations <- result.try(parse_integrations(doc))
+  use connector_configurations <- result.try(parse_connector_configurations(doc))
   use blather <- result.try(parse_blather(doc))
 
   Ok(GlobalConfig(
@@ -388,6 +410,7 @@ pub fn parse_global(toml_string: String) -> Result(GlobalConfig, String) {
     dreaming_budget_percent: dreaming_budget_percent,
     mcp: mcp,
     integrations: integrations,
+    connector_configurations: connector_configurations,
   ))
 }
 
@@ -590,139 +613,192 @@ fn expand_env(value: String, context: String) -> Result(String, String) {
 // [[integrations]] parsing
 // ---------------------------------------------------------------------------
 
-/// Parse the `[[integrations]]` array-of-tables. Missing section is valid
-/// and yields an empty list. Each entry is dispatched by its `type` field
-/// to a per-integration parser.
+/// Parse disabled-by-default REST connector configurations.
+///
+/// These records select opaque references. They do not declare activation.
+fn parse_connector_configurations(
+  doc: dict.Dict(String, tom.Toml),
+) -> Result(List(ConnectorConfiguration), String) {
+  case tom.get_array(doc, ["connector_configurations"]) {
+    Error(_) -> Ok([])
+    Ok(entries) ->
+      entries
+      |> list.try_map(fn(entry) {
+        case entry {
+          tom.Table(fields) -> parse_connector_configuration(fields)
+          tom.InlineTable(fields) -> parse_connector_configuration(fields)
+          _ -> Error("[[connector_configurations]] entry must be a table")
+        }
+      })
+      |> result.try(fn(configurations) {
+        case unique_connector_configuration_refs(configurations) {
+          True -> Ok(configurations)
+          False -> Error("duplicate connector configuration_ref")
+        }
+      })
+  }
+}
+
+fn parse_connector_configuration(
+  fields: dict.Dict(String, tom.Toml),
+) -> Result(ConnectorConfiguration, String) {
+  let prefix = "[[connector_configurations]]"
+  use _ <- result.try(reject_connector_configuration_secrets(fields, prefix))
+  use configuration_ref <- result.try(required_string(
+    fields,
+    "configuration_ref",
+    prefix,
+  ))
+  use connector_id <- result.try(required_string(fields, "connector_id", prefix))
+  use oauth_client_ref <- result.try(required_string(
+    fields,
+    "oauth_client_ref",
+    prefix,
+  ))
+  use credential_ref <- result.try(required_string(
+    fields,
+    "credential_ref",
+    prefix,
+  ))
+  use resource_ref <- result.try(required_string(fields, "resource_ref", prefix))
+  use oauth_scope <- result.try(required_string(fields, "oauth_scope", prefix))
+  use _ <- result.try(require_connector_configuration_reference(
+    "configuration_ref",
+    "configuration:",
+    configuration_ref,
+  ))
+  use _ <- result.try(require_connector_configuration_reference(
+    "oauth_client_ref",
+    "oauth-client:",
+    oauth_client_ref,
+  ))
+  use _ <- result.try(require_connector_configuration_reference(
+    "credential_ref",
+    "credential:",
+    credential_ref,
+  ))
+  use _ <- result.try(require_connector_configuration_reference(
+    "resource_ref",
+    "resource:",
+    resource_ref,
+  ))
+  use _ <- result.try(validate_read_only_connector_scope(
+    connector_id,
+    oauth_scope,
+  ))
+  let configuration_hash =
+    connector_configuration_hash(
+      configuration_ref,
+      connector_id,
+      oauth_client_ref,
+      credential_ref,
+      resource_ref,
+      oauth_scope,
+    )
+  Ok(ConnectorConfiguration(
+    configuration_ref:,
+    connector_id:,
+    oauth_client_ref:,
+    credential_ref:,
+    resource_ref:,
+    oauth_scope:,
+    configuration_hash:,
+  ))
+}
+
+fn reject_connector_configuration_secrets(
+  fields: dict.Dict(String, tom.Toml),
+  prefix: String,
+) -> Result(Nil, String) {
+  let forbidden = [
+    "enabled",
+    "oauth_client_id",
+    "oauth_client_secret",
+    "access_token",
+    "refresh_token",
+    "token",
+    "discord",
+    "discord_channel",
+  ]
+  case list.find(forbidden, fn(key) { dict.has_key(fields, key) }) {
+    Ok(key) -> Error(prefix <> " must not contain " <> key)
+    Error(_) -> Ok(Nil)
+  }
+}
+
+fn require_connector_configuration_reference(
+  name: String,
+  prefix: String,
+  value: String,
+) -> Result(Nil, String) {
+  case
+    string.starts_with(value, prefix)
+    && string.length(value) <= 256
+    && string.trim(value) == value
+    && !string.contains(value, " ")
+    && !string.contains(value, "\n")
+  {
+    True -> Ok(Nil)
+    False -> Error("invalid " <> name)
+  }
+}
+
+fn validate_read_only_connector_scope(
+  connector_id: String,
+  oauth_scope: String,
+) -> Result(Nil, String) {
+  case connector_id, oauth_scope {
+    "gmail", "https://www.googleapis.com/auth/gmail.readonly" -> Ok(Nil)
+    "calendar", "https://www.googleapis.com/auth/calendar.readonly" -> Ok(Nil)
+    "gmail", _ -> Error("unsupported connector OAuth scope")
+    "calendar", _ -> Error("unsupported connector OAuth scope")
+    _, _ -> Error("unsupported connector configuration")
+  }
+}
+
+fn unique_connector_configuration_refs(
+  configurations: List(ConnectorConfiguration),
+) -> Bool {
+  configurations
+  |> list.map(fn(configuration) { configuration.configuration_ref })
+  |> list.unique
+  |> list.length
+  == list.length(configurations)
+}
+
+/// Return the stable hash for fields that control one connector client.
+pub fn connector_configuration_hash(
+  configuration_ref: String,
+  connector_id: String,
+  oauth_client_ref: String,
+  credential_ref: String,
+  resource_ref: String,
+  oauth_scope: String,
+) -> String {
+  json.object([
+    #("configuration_ref", json.string(configuration_ref)),
+    #("connector_id", json.string(connector_id)),
+    #("credential_ref", json.string(credential_ref)),
+    #("oauth_client_ref", json.string(oauth_client_ref)),
+    #("oauth_scope", json.string(oauth_scope)),
+    #("resource_ref", json.string(resource_ref)),
+  ])
+  |> json.to_string
+  |> fn(canonical) { crypto.hash(crypto.Sha256, <<canonical:utf8>>) }
+  |> bit_array.base16_encode
+  |> string.lowercase
+}
+
+/// Reject the retired legacy integration section.
 fn parse_integrations(
   doc: dict.Dict(String, tom.Toml),
 ) -> Result(IntegrationsConfig, String) {
-  // OAuth app credentials are shared by all Gmail integrations on this
-  // machine — one `[oauth.gmail]` section, many per-account blocks. The
-  // per-account block can still override via its own `oauth_client_id` /
-  // `oauth_client_secret` keys if ever needed, but normally doesn't.
-  let gmail_oauth_defaults = parse_gmail_oauth_defaults(doc)
   case tom.get_array(doc, ["integrations"]) {
-    Error(_) -> Ok(IntegrationsConfig(integrations: []))
-    Ok(entries) -> {
-      use integrations <- result.try(
-        list.try_map(entries, fn(entry) {
-          case entry {
-            tom.Table(fields) -> parse_integration(fields, gmail_oauth_defaults)
-            tom.InlineTable(fields) ->
-              parse_integration(fields, gmail_oauth_defaults)
-            _ -> Error("[[integrations]] entry must be a table")
-          }
-        }),
-      )
-      Ok(IntegrationsConfig(integrations: integrations))
-    }
-  }
-}
-
-fn parse_gmail_oauth_defaults(
-  doc: dict.Dict(String, tom.Toml),
-) -> #(String, String) {
-  let cid = case tom.get_string(doc, ["oauth", "gmail", "client_id"]) {
-    Ok(c) -> c
-    Error(_) -> ""
-  }
-  let secret = case tom.get_string(doc, ["oauth", "gmail", "client_secret"]) {
-    Ok(s) -> s
-    Error(_) -> ""
-  }
-  #(cid, secret)
-}
-
-fn parse_integration(
-  fields: dict.Dict(String, tom.Toml),
-  gmail_oauth_defaults: #(String, String),
-) -> Result(IntegrationConfig, String) {
-  use type_ <- result.try(case tom.get_string(fields, ["type"]) {
-    Ok(t) -> Ok(t)
-    Error(_) -> Error("[[integrations]] missing type")
-  })
-  case type_ {
-    "gmail" -> parse_gmail_integration(fields, gmail_oauth_defaults)
-    other ->
+    Error(_) -> Ok(IntegrationsConfig)
+    Ok(_) ->
       Error(
-        "[[integrations]] unsupported type: "
-        <> other
-        <> " (phase 1.5 supports only gmail)",
+        "[[integrations]] is retired; use disabled connector_configurations",
       )
-  }
-}
-
-fn parse_gmail_integration(
-  fields: dict.Dict(String, tom.Toml),
-  gmail_oauth_defaults: #(String, String),
-) -> Result(IntegrationConfig, String) {
-  let prefix = "[[integrations]] type=gmail"
-  let #(default_cid, default_secret) = gmail_oauth_defaults
-
-  use name <- result.try(required_string(fields, "name", prefix))
-  use user_email <- result.try(required_string(fields, "user_email", prefix))
-  use token_path <- result.try(required_string(fields, "token_path", prefix))
-
-  use client_id <- result.try(resolve_oauth_field(
-    fields,
-    "oauth_client_id",
-    default_cid,
-    prefix,
-  ))
-  use client_secret <- result.try(resolve_oauth_field(
-    fields,
-    "oauth_client_secret",
-    default_secret,
-    prefix,
-  ))
-  let token_endpoint = case tom.get_string(fields, ["oauth_token_endpoint"]) {
-    Ok(ep) -> ep
-    Error(_) -> "https://oauth2.googleapis.com/token"
-  }
-
-  Ok(
-    GmailIntegration(config: gmail.GmailConfig(
-      name: name,
-      user_email: user_email,
-      oauth: oauth.OAuthConfig(
-        client_id: client_id,
-        client_secret: client_secret,
-        token_endpoint: token_endpoint,
-      ),
-      token_path: token_path,
-    )),
-  )
-}
-
-/// Resolve an OAuth field: prefer per-integration value (with env-var
-/// expansion), fall back to the top-level `[oauth.gmail]` default.
-/// Returns Error only when both sources yield an empty string — matching
-/// the old "required_string" behavior without the dead-end when env vars
-/// aren't set but the user has `[oauth.gmail]` configured.
-fn resolve_oauth_field(
-  fields: dict.Dict(String, tom.Toml),
-  key: String,
-  fallback: String,
-  prefix: String,
-) -> Result(String, String) {
-  let from_block = case tom.get_string(fields, [key]) {
-    Ok(raw) ->
-      case expand_env(raw, prefix <> " " <> key) {
-        Ok(v) -> v
-        Error(_) -> ""
-      }
-    Error(_) -> ""
-  }
-  case from_block, fallback {
-    "", "" ->
-      Error(
-        prefix
-        <> ": "
-        <> key
-        <> " is empty and no [oauth.gmail] fallback is configured",
-      )
-    "", fb -> Ok(fb)
-    v, _ -> Ok(v)
   }
 }
 
@@ -738,9 +814,8 @@ fn required_string(
   }
 }
 
-/// Parse a TOML string into a `DomainConfig`. Optional fields
-/// Optional fields (`model.domain`, `acp.timeout`,
-/// `acp.max_concurrent`) fall back to sensible defaults when absent.
+/// Parse a TOML string into a `DomainConfig`. Operational domain fields and
+/// legacy development and transport fields are independent and optional.
 pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
   use doc <- result.try(
     tom.parse(toml_string)
@@ -755,19 +830,38 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     tom.get_string(doc, ["description"])
     |> result.map_error(fn(_) { "Missing description" }),
   )
-  use cwd <- result.try(
-    tom.get_string(doc, ["cwd"])
-    |> result.map_error(fn(_) { "Missing cwd" }),
-  )
-  use tools_raw <- result.try(
-    tom.get_array(doc, ["tools"])
-    |> result.map_error(fn(_) { "Missing tools" }),
-  )
-
-  use discord_channel <- result.try(
-    tom.get_string(doc, ["discord", "channel"])
-    |> result.map_error(fn(_) { "Missing discord.channel" }),
-  )
+  use domain_id <- result.try(optional_domain_string(
+    doc,
+    ["domain_id"],
+    "domain_id",
+    "domain:" <> normalize_domain_slug(name),
+  ))
+  use aliases <- result.try(optional_domain_string_array(
+    doc,
+    ["aliases"],
+    "aliases",
+  ))
+  use purpose <- result.try(optional_domain_string(
+    doc,
+    ["purpose"],
+    "purpose",
+    description,
+  ))
+  use status_raw <- result.try(optional_domain_string(
+    doc,
+    ["status"],
+    "status",
+    "active",
+  ))
+  use status <- result.try(parse_domain_status(status_raw))
+  use cwd <- result.try(optional_domain_string(doc, ["cwd"], "cwd", ""))
+  use tools <- result.try(optional_domain_string_array(doc, ["tools"], "tools"))
+  use discord_channel <- result.try(optional_domain_string(
+    doc,
+    ["discord", "channel"],
+    "discord.channel",
+    "",
+  ))
   use blather_channel <- result.try(parse_domain_blather(doc))
 
   let model_domain =
@@ -812,10 +906,14 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     |> result.unwrap("")
 
   Ok(DomainConfig(
+    domain_id: domain_id,
     name: name,
     description: description,
+    aliases: aliases,
+    purpose: purpose,
+    status: status,
     cwd: cwd,
-    tools: extract_toml_strings(tools_raw),
+    tools: tools,
     discord_channel: discord_channel,
     blather_channel: blather_channel,
     model_domain: model_domain,
@@ -829,6 +927,82 @@ pub fn parse_domain(toml_string: String) -> Result(DomainConfig, String) {
     acp_server_url: acp_server_url,
     acp_agent_name: acp_agent_name,
   ))
+}
+
+fn optional_domain_string(
+  doc: dict.Dict(String, tom.Toml),
+  path: List(String),
+  label: String,
+  default: String,
+) -> Result(String, String) {
+  case tom.get_string(doc, path) {
+    Ok(value) -> Ok(value)
+    Error(tom.NotFound(_)) -> Ok(default)
+    Error(_) -> Error("Invalid domain field: " <> label <> " must be a string")
+  }
+}
+
+fn optional_domain_string_array(
+  doc: dict.Dict(String, tom.Toml),
+  path: List(String),
+  label: String,
+) -> Result(List(String), String) {
+  case tom.get_array(doc, path) {
+    Error(tom.NotFound(_)) -> Ok([])
+    Error(_) -> Error("Invalid domain field: " <> label <> " must be an array")
+    Ok(values) ->
+      values
+      |> list.try_map(fn(value) {
+        case value {
+          tom.String(text) -> Ok(text)
+          _ ->
+            Error("Invalid domain field: " <> label <> " must contain strings")
+        }
+      })
+  }
+}
+
+/// Convert a display name or alias to one stable lowercase domain slug.
+pub fn normalize_domain_slug(value: String) -> String {
+  value
+  |> string.trim
+  |> string.lowercase
+  |> string.to_graphemes
+  |> list.fold(#("", False), fn(state, char) {
+    let #(output, previous_dash) = state
+    case is_domain_slug_char(char) {
+      True -> #(output <> char, False)
+      False if output == "" || previous_dash -> #(output, previous_dash)
+      False -> #(output <> "-", True)
+    }
+  })
+  |> fn(state) { state.0 }
+  |> remove_trailing_domain_dash
+}
+
+fn remove_trailing_domain_dash(value: String) -> String {
+  case string.ends_with(value, "-") {
+    True -> string.drop_end(value, 1)
+    False -> value
+  }
+}
+
+fn is_domain_slug_char(char: String) -> Bool {
+  list.contains(
+    [
+      "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o",
+      "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3",
+      "4", "5", "6", "7", "8", "9",
+    ],
+    char,
+  )
+}
+
+fn parse_domain_status(value: String) -> Result(String, String) {
+  case value {
+    "active" | "paused" | "archived" -> Ok(value)
+    _ -> Error("Invalid domain status: " <> value)
+  }
 }
 
 fn parse_domain_blather(

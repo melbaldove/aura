@@ -1,7 +1,10 @@
 import aura/cognitive_event
 import aura/event
+import aura/evidence
+import aura/operating_contracts
 import gleam/dict
 import gleam/list
+import gleam/option
 import gleam/string
 import gleeunit
 import gleeunit/should
@@ -36,7 +39,10 @@ pub fn from_event_projects_source_neutral_observation_test() {
       "email.received",
       "Release REL-42 tomorrow",
       "{\"from\":\"alice@example.com\",\"thread_id\":\"t-1\"}",
-      dict.from_list([#("from", "alice@example.com")]),
+      dict.from_list([
+        #("from", "alice@example.com"),
+        #("resource_kind", "email"),
+      ]),
     )
 
   let observation = cognitive_event.from_event(e)
@@ -48,6 +54,43 @@ pub fn from_event_projects_source_neutral_observation_test() {
   observation.event_type |> should.equal("email.received")
   observation.actors |> should.equal(["alice@example.com"])
   observation.raw_ref |> should.equal("gmail:ext-1")
+}
+
+pub fn normalized_evidence_keeps_compact_body_and_raw_reference_test() {
+  let envelope =
+    operating_contracts.EvidenceEvent(
+      schema_version: 1,
+      event_id: "normalized-event",
+      source: "synthetic",
+      source_kind: "connector",
+      event_type: "message.received",
+      external_id: option.Some("message-1"),
+      resource: dict.from_list([
+        #("kind", operating_contracts.StructuredString("message")),
+        #("id", operating_contracts.StructuredString("message-1")),
+      ]),
+      observed_at: 1000,
+      summary: "Compact subject",
+      normalized_data: dict.from_list([
+        #("from", operating_contracts.StructuredString("actor@example.com")),
+        #("body_text", operating_contracts.StructuredString("Compact body")),
+      ]),
+      raw_ref: option.Some("opaque://message/1"),
+      content_hash: "hash-1",
+      provenance: dict.new(),
+      candidate_domain_refs: [],
+      candidate_concern_refs: [],
+      verification_status: "verified",
+    )
+  let event = evidence.to_legacy_event(envelope) |> should.be_ok
+  let observation = cognitive_event.from_event(event)
+  observation.actors |> should.equal(["actor@example.com"])
+  observation.text
+  |> should.equal("Subject: Compact subject\n\nBody:\nCompact body")
+  observation.raw_ref |> should.equal("opaque://message/1")
+  let bundle = cognitive_event.extract_evidence(observation)
+  has_atom(bundle, "actor_email", "actor@example.com") |> should.be_true
+  has_atom(bundle, "text", "Compact body") |> should.be_true
 }
 
 pub fn extract_evidence_finds_gmail_atoms_test() {

@@ -12,25 +12,31 @@ import aura/db
 import aura/discord/types as discord_types
 import aura/event
 import aura/hook_protocol
+import aura/operational_audit
 import aura/time
 import gleam/dict.{type Dict}
+import gleam/dynamic/decode
 import gleam/erlang/process.{type Subject}
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
-import gleam/dynamic/decode
 import logging
 
 /// Post a Discord button message; returns the new message id.
-pub type PostFn = fn(String, String, json.Json) -> Result(String, String)
+pub type PostFn =
+  fn(String, String, json.Json) -> Result(String, String)
+
 /// Edit an existing Discord message via the channel messages endpoint.
-pub type EditFn = fn(String, String, String, json.Json) -> Result(Nil, String)
+pub type EditFn =
+  fn(String, String, String, json.Json) -> Result(Nil, String)
+
 /// Edit a Discord message via the interaction webhook (PATCH @original),
 /// used right after a button click where the channel endpoint is locked.
 /// Args: interaction_token, content, components.
-pub type WebhookEditFn = fn(String, String, json.Json) -> Result(Nil, String)
+pub type WebhookEditFn =
+  fn(String, String, json.Json) -> Result(Nil, String)
 
 pub type Message {
   SubmitAsk(ask: db.StoredExternalAsk, ttl_ms: Int, reply_to: Subject(String))
@@ -60,6 +66,18 @@ pub fn start(
   edit: EditFn,
   webhook_edit: WebhookEditFn,
 ) -> Result(actor.Started(Subject(Message)), actor.StartError) {
+  builder(db_subject, delivery_subject, targets, post, edit, webhook_edit)
+  |> actor.start
+}
+
+fn builder(
+  db_subject: Subject(db.DbMessage),
+  delivery_subject: Option(Subject(cognitive_delivery.Message)),
+  targets: List(cognitive_delivery.DeliveryTarget),
+  post: PostFn,
+  edit: EditFn,
+  webhook_edit: WebhookEditFn,
+) -> actor.Builder(State, Message, Subject(Message)) {
   actor.new_with_initialiser(5000, fn(self_subject) {
     let state =
       State(
@@ -75,6 +93,20 @@ pub fn start(
     Ok(actor.initialised(state) |> actor.returning(self_subject))
   })
   |> actor.on_message(handle_message)
+}
+
+/// Start named external asks for use in a restart tree.
+pub fn start_named(
+  name: process.Name(Message),
+  db_subject: Subject(db.DbMessage),
+  delivery_subject: Option(Subject(cognitive_delivery.Message)),
+  targets: List(cognitive_delivery.DeliveryTarget),
+  post: PostFn,
+  edit: EditFn,
+  webhook_edit: WebhookEditFn,
+) -> Result(actor.Started(Subject(Message)), actor.StartError) {
+  builder(db_subject, delivery_subject, targets, post, edit, webhook_edit)
+  |> actor.named(name)
   |> actor.start
 }
 
@@ -118,9 +150,10 @@ pub fn get_decision(subject: Subject(Message), correlation_id: String) -> String
     subject,
     GetDecision(correlation_id: correlation_id, reply_to: reply),
   )
-  process.receive(reply, 5_000)
+  process.receive(reply, 5000)
   |> result.unwrap(hook_protocol.resp_error("get decision timed out"))
 }
+
 fn handle_message(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
     SubmitAsk(ask: ask, ttl_ms: ttl_ms, reply_to: reply_to) ->
@@ -130,8 +163,7 @@ fn handle_message(state: State, message: Message) -> actor.Next(State, Message) 
       correlation_id: correlation_id,
       choice: choice,
       interaction_token: interaction_token,
-    ) ->
-      handle_resolve(state, correlation_id, choice, interaction_token)
+    ) -> handle_resolve(state, correlation_id, choice, interaction_token)
 
     ExpireAsk(correlation_id: correlation_id) ->
       handle_expire(state, correlation_id)
@@ -143,7 +175,6 @@ fn handle_message(state: State, message: Message) -> actor.Next(State, Message) 
     }
   }
 }
-
 
 fn handle_submit(
   state: State,
@@ -186,26 +217,81 @@ fn submit(
               parse_button_labels(ask.buttons_json),
               False,
             )
-          case state.post(target.channel_id, ask.text, buttons) {
+          case
+            append_ask_effect_audit(
+              state,
+              ask,
+              "ask.delivery_intent",
+              "external_effect_intent",
+              "pending",
+            )
+          {
             Error(err) -> {
               let _ = mark_failed(state, ask.id, err)
               process.send(reply_to, hook_protocol.resp_error(err))
               actor.continue(state)
             }
-            Ok(message_id) -> {
-              let now = time.now_ms()
-              let _ = db.update_external_ask_message_id(
-                state.db_subject,
-                ask.id,
-                message_id,
-                now,
-              )
-              process.send_after(state.self_subject, ttl_ms, ExpireAsk(ask.id))
-              audit_ask(state, ask)
-              record_delivery(state, ask, target.channel_id)
-              let state = attach_waiter(state, ask.id, reply_to)
-              actor.continue(state)
-            }
+            Ok(Nil) ->
+              case state.post(target.channel_id, ask.text, buttons) {
+                Error(err) -> {
+                  let persistence_error = case
+                    mark_effect_unknown(state, ask, err)
+                  {
+                    Ok(_) -> ""
+                    Error(error) -> "; persistence error: " <> error
+                  }
+                  process.send(
+                    reply_to,
+                    hook_protocol.resp_error(
+                      "effect_unknown: Discord post result is uncertain: "
+                      <> err
+                      <> persistence_error,
+                    ),
+                  )
+                  actor.continue(state)
+                }
+                Ok(message_id) -> {
+                  let now = time.now_ms()
+                  case
+                    db.update_external_ask_message_id(
+                      state.db_subject,
+                      ask.id,
+                      message_id,
+                      now,
+                    )
+                  {
+                    Error(error) -> {
+                      let _ =
+                        append_ask_effect_audit(
+                          state,
+                          ask,
+                          "ask.delivery_effect_unknown",
+                          "external_effect_outcome",
+                          "effect_unknown",
+                        )
+                      process.send(
+                        reply_to,
+                        hook_protocol.resp_error(
+                          "effect_unknown: Discord accepted the ask but Aura could not persist its delivery reference: "
+                          <> error,
+                        ),
+                      )
+                      actor.continue(state)
+                    }
+                    Ok(Nil) -> {
+                      process.send_after(
+                        state.self_subject,
+                        ttl_ms,
+                        ExpireAsk(ask.id),
+                      )
+                      audit_ask(state, ask)
+                      record_delivery(state, ask, target.channel_id)
+                      let state = attach_waiter(state, ask.id, reply_to)
+                      actor.continue(state)
+                    }
+                  }
+                }
+              }
           }
         }
       }
@@ -214,6 +300,37 @@ fn submit(
       actor.continue(state)
     }
   }
+}
+
+fn append_ask_effect_audit(
+  state: State,
+  ask: db.StoredExternalAsk,
+  action: String,
+  record_type: String,
+  result_value: String,
+) -> Result(Nil, String) {
+  db.append_operational_audit(
+    state.db_subject,
+    operational_audit.Record(
+      schema_version: 1,
+      audit_id: "",
+      record_type:,
+      actor: "aura",
+      source: "external_asks",
+      action:,
+      target_type: "ask",
+      target_id: ask.id,
+      before_version: None,
+      after_version: None,
+      idempotency_key: None,
+      evidence_refs: [],
+      proof_refs: [],
+      authority_ref: None,
+      result: result_value,
+      error_code: None,
+      occurred_at: time.now_ms(),
+    ),
+  )
 }
 
 fn attach_wait(
@@ -228,8 +345,7 @@ fn attach_wait(
     }
     Ok(Some(row)) ->
       case row.status {
-        "pending" ->
-          actor.continue(attach_waiter(state, id, reply_to))
+        "pending" -> actor.continue(attach_waiter(state, id, reply_to))
         "resolved" -> {
           process.send(
             reply_to,
@@ -242,7 +358,10 @@ fn attach_wait(
           actor.continue(state)
         }
         _ -> {
-          process.send(reply_to, hook_protocol.resp_error("ask " <> row.id <> " is " <> row.status))
+          process.send(
+            reply_to,
+            hook_protocol.resp_error("ask " <> row.id <> " is " <> row.status),
+          )
           actor.continue(state)
         }
       }
@@ -254,15 +373,41 @@ fn attach_wait(
 }
 
 fn mark_failed(state: State, id: String, reason: String) -> Result(Bool, String) {
-  let _ = db.update_external_ask_decision(
+  use updated <- result.try(db.update_external_ask_decision(
     state.db_subject,
     id,
     "failed",
     "",
     time.now_ms(),
-  )
+  ))
   logging.log(logging.Info, "[external_ask] " <> id <> " failed: " <> reason)
-  Ok(True)
+  Ok(updated)
+}
+
+fn mark_effect_unknown(
+  state: State,
+  ask: db.StoredExternalAsk,
+  reason: String,
+) -> Result(Bool, String) {
+  use updated <- result.try(db.update_external_ask_decision(
+    state.db_subject,
+    ask.id,
+    "effect_unknown",
+    "",
+    time.now_ms(),
+  ))
+  use _ <- result.try(append_ask_effect_audit(
+    state,
+    ask,
+    "ask.delivery_effect_unknown",
+    "external_effect_outcome",
+    "effect_unknown",
+  ))
+  logging.log(
+    logging.Error,
+    "[external_ask] " <> ask.id <> " delivery effect is unknown: " <> reason,
+  )
+  Ok(updated)
 }
 
 fn audit_ask(state: State, ask: db.StoredExternalAsk) -> Nil {
@@ -296,15 +441,26 @@ fn record_delivery(
 ) -> Nil {
   case state.delivery {
     Some(delivery_subject) -> {
-      let _ = cognitive_delivery.record_hook_delivery(
-        delivery_subject,
-        ask.id,
-        ask.source,
-        ask.channel_id,
-        channel_id,
-        ask.text,
-      )
-      Nil
+      case
+        cognitive_delivery.record_hook_delivery(
+          delivery_subject,
+          ask.id,
+          ask.source,
+          ask.channel_id,
+          channel_id,
+          ask.text,
+        )
+      {
+        Ok(Nil) -> Nil
+        Error(error) ->
+          logging.log(
+            logging.Error,
+            "[external_ask] Delivery audit failed for "
+              <> ask.id
+              <> ": "
+              <> error,
+          )
+      }
     }
     None -> Nil
   }
@@ -316,26 +472,24 @@ fn handle_resolve(
   choice: String,
   interaction_token: String,
 ) -> actor.Next(State, Message) {
-  let updated = db.update_external_ask_decision(
-    state.db_subject,
-    correlation_id,
-    "resolved",
-    choice,
-    time.now_ms(),
-  )
+  let updated =
+    db.update_external_ask_decision(
+      state.db_subject,
+      correlation_id,
+      "resolved",
+      choice,
+      time.now_ms(),
+    )
   case updated {
     Ok(True) -> {
-      let _ = edit_ask_resolved(
-        state,
-        correlation_id,
-        choice,
-        interaction_token,
-      )
-      let state = notify_waiters(
-        state,
-        correlation_id,
-        hook_protocol.resp_resolved(correlation_id, choice),
-      )
+      let _ =
+        edit_ask_resolved(state, correlation_id, choice, interaction_token)
+      let state =
+        notify_waiters(
+          state,
+          correlation_id,
+          hook_protocol.resp_resolved(correlation_id, choice),
+        )
       actor.continue(state)
     }
     Ok(False) -> {
@@ -359,21 +513,23 @@ fn handle_expire(
   state: State,
   correlation_id: String,
 ) -> actor.Next(State, Message) {
-  let updated = db.update_external_ask_decision(
-    state.db_subject,
-    correlation_id,
-    "expired",
-    "",
-    time.now_ms(),
-  )
+  let updated =
+    db.update_external_ask_decision(
+      state.db_subject,
+      correlation_id,
+      "expired",
+      "",
+      time.now_ms(),
+    )
   case updated {
     Ok(True) -> {
       let _ = edit_ask_expired(state, correlation_id)
-      let state = notify_waiters(
-        state,
-        correlation_id,
-        hook_protocol.resp_expired(correlation_id),
-      )
+      let state =
+        notify_waiters(
+          state,
+          correlation_id,
+          hook_protocol.resp_expired(correlation_id),
+        )
       actor.continue(state)
     }
     Ok(False) -> {
@@ -439,7 +595,10 @@ fn edit_ask_expired(state: State, correlation_id: String) -> Result(Nil, String)
 
 fn attach_waiter(state: State, id: String, reply_to: Subject(String)) -> State {
   let existing = dict.get(state.waiters, id) |> result.unwrap([])
-  State(..state, waiters: dict.insert(state.waiters, id, [reply_to, ..existing]))
+  State(
+    ..state,
+    waiters: dict.insert(state.waiters, id, [reply_to, ..existing]),
+  )
 }
 
 fn notify_waiters(state: State, id: String, line: String) -> State {

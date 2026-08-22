@@ -6,6 +6,14 @@ import gleam/result
 import gleam/string
 import gleeunit/should
 
+pub fn legacy_gmail_imap_configuration_is_rejected_test() {
+  config.parse_global(
+    base_global_toml()
+    <> "\n[[integrations]]\ntype = \"gmail\"\nname = \"legacy\"\nuser_email = \"user@example.test\"\ntoken_path = \"/tmp/token\"\n",
+  )
+  |> should.be_error
+}
+
 pub fn resolve_env_var_test() {
   set_env("TEST_AURA_TOKEN", "secret123")
 
@@ -152,13 +160,83 @@ transport = \"stdio\"
 pub fn parse_empty_integrations_returns_empty_list_test() {
   let toml = base_global_toml()
   let assert Ok(cfg) = config.parse_global(toml)
-  let config.IntegrationsConfig(integrations) = cfg.integrations
-  list.length(integrations) |> should.equal(0)
+  cfg.integrations |> should.equal(config.IntegrationsConfig)
+}
+
+pub fn connector_configurations_are_disabled_by_default_test() {
+  let toml = base_global_toml() <> "
+[[connector_configurations]]
+configuration_ref = \"configuration:gmail-test\"
+connector_id = \"gmail\"
+oauth_client_ref = \"oauth-client:test\"
+credential_ref = \"credential:test\"
+resource_ref = \"resource:test\"
+oauth_scope = \"https://www.googleapis.com/auth/gmail.readonly\"
+
+[[connector_configurations]]
+configuration_ref = \"configuration:calendar-test\"
+connector_id = \"calendar\"
+oauth_client_ref = \"oauth-client:test\"
+credential_ref = \"credential:test\"
+resource_ref = \"resource:test\"
+oauth_scope = \"https://www.googleapis.com/auth/calendar.readonly\"
+"
+  let cfg = config.parse_global(toml) |> should.be_ok
+  cfg.connector_configurations
+  |> list.map(fn(configuration) { configuration.connector_id })
+  |> should.equal(["gmail", "calendar"])
+  cfg.connector_configurations
+  |> list.each(fn(configuration) {
+    configuration.configuration_hash |> should.not_equal("")
+  })
+}
+
+pub fn connector_configurations_reject_secrets_enablement_and_duplicate_ids_test() {
+  let enabled = base_global_toml() <> "
+[[connector_configurations]]
+configuration_ref = \"configuration:gmail-test\"
+connector_id = \"gmail\"
+oauth_client_ref = \"oauth-client:test\"
+credential_ref = \"credential:test\"
+resource_ref = \"resource:test\"
+oauth_scope = \"https://www.googleapis.com/auth/gmail.readonly\"
+enabled = true
+"
+  config.parse_global(enabled) |> should.be_error
+
+  let inline_secret = base_global_toml() <> "
+[[connector_configurations]]
+configuration_ref = \"configuration:gmail-test\"
+connector_id = \"gmail\"
+oauth_client_ref = \"oauth-client:test\"
+credential_ref = \"credential:test\"
+resource_ref = \"resource:test\"
+oauth_scope = \"https://www.googleapis.com/auth/gmail.readonly\"
+oauth_client_secret = \"not-permitted\"
+"
+  config.parse_global(inline_secret) |> should.be_error
+
+  let duplicate = base_global_toml() <> "
+[[connector_configurations]]
+configuration_ref = \"configuration:gmail-test\"
+connector_id = \"gmail\"
+oauth_client_ref = \"oauth-client:test\"
+credential_ref = \"credential:test\"
+resource_ref = \"resource:test\"
+oauth_scope = \"https://www.googleapis.com/auth/gmail.readonly\"
+
+[[connector_configurations]]
+configuration_ref = \"configuration:gmail-test\"
+connector_id = \"calendar\"
+oauth_client_ref = \"oauth-client:test\"
+credential_ref = \"credential:test\"
+resource_ref = \"resource:test\"
+oauth_scope = \"https://www.googleapis.com/auth/calendar.readonly\"
+"
+  config.parse_global(duplicate) |> should.be_error
 }
 
 pub fn parse_gmail_integration_test() {
-  set_env("TEST_GMAIL_CID", "client-abc")
-  set_env("TEST_GMAIL_SECRET", "secret-xyz")
   let toml = base_global_toml() <> "
 [[integrations]]
 type = \"gmail\"
@@ -168,17 +246,7 @@ token_path = \"/tmp/gmail-work.json\"
 oauth_client_id = \"${TEST_GMAIL_CID}\"
 oauth_client_secret = \"${TEST_GMAIL_SECRET}\"
 "
-  let assert Ok(cfg) = config.parse_global(toml)
-  let config.IntegrationsConfig(integrations) = cfg.integrations
-  list.length(integrations) |> should.equal(1)
-  let assert [config.GmailIntegration(config: gmail_cfg)] = integrations
-  gmail_cfg.name |> should.equal("gmail-work")
-  gmail_cfg.user_email |> should.equal("alice@example.com")
-  gmail_cfg.token_path |> should.equal("/tmp/gmail-work.json")
-  gmail_cfg.oauth.client_id |> should.equal("client-abc")
-  gmail_cfg.oauth.client_secret |> should.equal("secret-xyz")
-  gmail_cfg.oauth.token_endpoint
-  |> should.equal("https://oauth2.googleapis.com/token")
+  config.parse_global(toml) |> should.be_error
 }
 
 pub fn parse_multiple_gmail_integrations_test() {
@@ -199,9 +267,7 @@ token_path = \"/tmp/gp.json\"
 oauth_client_id = \"cid\"
 oauth_client_secret = \"secret\"
 "
-  let assert Ok(cfg) = config.parse_global(toml)
-  let config.IntegrationsConfig(integrations) = cfg.integrations
-  list.length(integrations) |> should.equal(2)
+  config.parse_global(toml) |> should.be_error
 }
 
 pub fn parse_unsupported_integration_type_returns_error_test() {
@@ -214,8 +280,7 @@ name = \"tg\"
   case result {
     Ok(_) -> should.fail()
     Error(msg) -> {
-      string.contains(msg, "telegram") |> should.be_true
-      string.contains(msg, "unsupported") |> should.be_true
+      string.contains(msg, "retired") |> should.be_true
     }
   }
 }
@@ -229,7 +294,7 @@ name = \"foo\"
   case result {
     Ok(_) -> should.fail()
     Error(msg) -> {
-      string.contains(msg, "missing type") |> should.be_true
+      string.contains(msg, "retired") |> should.be_true
     }
   }
 }
@@ -247,7 +312,7 @@ oauth_client_secret = \"secret\"
   case result {
     Ok(_) -> should.fail()
     Error(msg) -> {
-      string.contains(msg, "name") |> should.be_true
+      string.contains(msg, "retired") |> should.be_true
     }
   }
 }
@@ -269,11 +334,7 @@ name = \"gmail-work\"
 user_email = \"alice@example.com\"
 token_path = \"/tmp/gmail-work.json\"
 "
-  let assert Ok(cfg) = config.parse_global(toml)
-  let config.IntegrationsConfig(integrations) = cfg.integrations
-  let assert [config.GmailIntegration(config: gmail_cfg)] = integrations
-  gmail_cfg.oauth.client_id |> should.equal("top-level-cid")
-  gmail_cfg.oauth.client_secret |> should.equal("top-level-secret")
+  config.parse_global(toml) |> should.be_error
 }
 
 pub fn parse_gmail_per_integration_overrides_oauth_gmail_test() {
@@ -290,11 +351,7 @@ token_path = \"/tmp/gmail-work.json\"
 oauth_client_id = \"override-cid\"
 oauth_client_secret = \"override-secret\"
 "
-  let assert Ok(cfg) = config.parse_global(toml)
-  let config.IntegrationsConfig(integrations) = cfg.integrations
-  let assert [config.GmailIntegration(config: gmail_cfg)] = integrations
-  gmail_cfg.oauth.client_id |> should.equal("override-cid")
-  gmail_cfg.oauth.client_secret |> should.equal("override-secret")
+  config.parse_global(toml) |> should.be_error
 }
 
 pub fn parse_gmail_missing_oauth_anywhere_returns_error_test() {
@@ -309,7 +366,7 @@ token_path = \"/tmp/gmail-work.json\"
   case result {
     Ok(_) -> should.fail()
     Error(msg) -> {
-      string.contains(msg, "oauth_client_id") |> should.be_true
+      string.contains(msg, "retired") |> should.be_true
     }
   }
 }

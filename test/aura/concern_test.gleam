@@ -1,6 +1,9 @@
 import aura/concern
+import aura/db
 import aura/test_helpers
 import aura/xdg
+import gleam/erlang/process
+import gleam/list
 import gleam/string
 import gleeunit
 import gleeunit/should
@@ -54,6 +57,30 @@ pub fn start_creates_markdown_file_test() {
   Nil
 }
 
+pub fn audited_start_writes_compact_intent_and_outcome_test() {
+  let assert Ok(db_subject) = db.start(":memory:")
+  let #(base, paths) = temp_paths("concern-audit")
+
+  concern.apply_with_audit(paths, db_subject, request("start", "cics-342"))
+  |> should.be_ok
+
+  let audit =
+    db.list_operational_audit(db_subject, "concern", "cics-342")
+    |> should.be_ok
+  audit
+  |> list.map(fn(row) { row.action })
+  |> should.equal(["concern.start.intent", "concern.start.outcome"])
+  audit
+  |> list.any(fn(row) {
+    row.action |> string.contains("Payment Reconciliation")
+  })
+  |> should.be_false
+
+  process.send(db_subject, db.Shutdown)
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
 pub fn invalid_slug_rejected_test() {
   let #(base, paths) = temp_paths("concern-invalid-slug")
 
@@ -95,6 +122,44 @@ pub fn close_marks_existing_concern_closed_test() {
   content
   |> string.contains("[close] Resolved by rollback approval")
   |> should.be_true
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn legacy_concern_remains_readable_until_explicit_domain_migration_test() {
+  let #(base, paths) = temp_paths("concern-legacy-migration")
+  concern.apply(paths, request("start", "monthly-close")) |> should.be_ok
+
+  let legacy =
+    concern.load_for_domain(paths, "personal-life", "monthly-close")
+    |> should.be_ok
+  legacy.source_ref |> should.equal("concerns/monthly-close.md")
+  simplifile.is_file(
+    xdg.domain_concerns_dir(paths, "personal-life") <> "/monthly-close.md",
+  )
+  |> should.equal(Ok(False))
+
+  concern.migrate_legacy(paths, "monthly-close", "personal-life")
+  |> should.be_ok
+  simplifile.is_file(xdg.concerns_dir(paths) <> "/monthly-close.md")
+  |> should.equal(Ok(True))
+  let migrated =
+    concern.load_for_domain(paths, "personal-life", "monthly-close")
+    |> should.be_ok
+  migrated.source_ref
+  |> should.equal("domains/personal-life/concerns/monthly-close.md")
+
+  let _ = simplifile.delete_all([base])
+  Nil
+}
+
+pub fn legacy_migration_requires_explicit_target_domain_test() {
+  let #(base, paths) = temp_paths("concern-migration-target")
+  concern.apply(paths, request("start", "monthly-close")) |> should.be_ok
+
+  concern.migrate_legacy(paths, "monthly-close", "")
+  |> should.equal(Error("target_domain_required"))
 
   let _ = simplifile.delete_all([base])
   Nil

@@ -57,8 +57,6 @@ Integration actor
 -> LLM DecisionEnvelope
 -> validator
 -> ~/.local/share/aura/cognitive/decisions.jsonl
--> cognitive_delivery
--> Discord + db.messages
 -> [cognitive] decision_ready log summary
 ```
 
@@ -69,15 +67,7 @@ twice. The cognitive worker loads the persisted event by ID, extracts citable
 evidence, loads ordinary markdown policy/concern context, calls the configured
 brain model for one decision envelope, validates citations/attention proof/
 authority gates/patch paths, and appends accepted decisions to JSONL. It does
-not mutate memory, update `STATE.md`, or dispatch flares. Validated delivery
-decisions flow through `cognitive_delivery`: `record` stays ledger-only,
-`digest` queues until a digest window, and `surface_now` / `ask_now` send to
-Discord immediately. Any successful user-facing cognitive delivery also appends
-the exact sent message to the matching Discord conversation history.
-On later turns in that channel, the brain renders recent successful
-user-facing attention outputs from the delivery ledger plus conversation
-history into prompt context so natural feedback can refer to what Aura actually
-showed before falling back to raw event search.
+not yet notify the user, mutate memory, update `STATE.md`, or dispatch flares.
 Content-bearing integrations must persist decision-sufficient payloads. For
 Gmail, this means the `AuraEvent.data_json` includes envelope fields plus
 bounded `body_text`; subject-only email events are not sufficient for cognitive
@@ -171,12 +161,6 @@ All LLM calls use SSE streaming via an Erlang FFI (`aura_stream_ffi.erl`). The F
 4. For `delta.tool_calls` — accumulates index/id/name/arguments internally
 5. For `reasoning_content` (GLM-5.1) — sends `stream_reasoning` (keeps timeout alive)
 6. On `[DONE]` — sends `{stream_complete, Content, ToolCallsJson}` with the full response
-7. On idle timeout or worker cancellation — cancels the owning `httpc` request by request ID before the stream process exits
-
-Provider transport timeouts remain authoritative: standard OpenAI-compatible
-streams allow 120 seconds of silence and Codex streams allow 600 seconds. The
-Gleam stream worker has a 610-second safety watchdog so it cannot pre-empt the
-Codex transport timeout or leak an async request when forcing cleanup.
 
 ### Tool loop
 
@@ -184,7 +168,7 @@ The brain's `tool_loop_progressive` function:
 
 1. Spawns a streaming LLM call with tool definitions
 2. Collects the response (content + tool calls) via `collect_stream_loop`
-3. If tool calls: executes them, builds compact call/argument traces for Discord, keeps successful raw results out of the user-facing message, and loops
+3. If tool calls: executes them, builds traces, edits Discord with progress, loops
 4. If text only: returns the response for final Discord edit
 5. Max 20 iterations per user message
 
@@ -261,7 +245,7 @@ All downstream systems (conversation loading, search, compression, persistence) 
 |--------|---------|
 | `aura_ws_ffi` | Raw WebSocket (SSL, RFC 6455 framing, passive recv) |
 | `aura_gateway_bridge` | Bridge raw WS messages to Gleam Subject |
-| `aura_stream_ffi` | SSE streaming HTTP with content/tool-call parsing and request-ID cancellation |
+| `aura_stream_ffi` | SSE streaming HTTP with content + tool call parsing |
 | `aura_time_ffi` | `erlang:system_time(millisecond)` |
 | `aura_poller_ffi` | `receive {'EXIT', _, _}` for trap_exits |
 | `aura_skill_ffi` | `os:cmd/1` for skill subprocess invocation |

@@ -1,4 +1,7 @@
+import aura/notification
+import aura/operating_contracts
 import aura/scheduler
+import gleam/dict
 import gleam/int
 import gleam/list
 import gleeunit/should
@@ -355,4 +358,20 @@ pub fn dream_not_due_when_already_ran_this_minute_test() {
 pub fn dream_not_due_with_invalid_cron_test() {
   scheduler.is_dream_due("not a cron", 1_713_232_800_000, 0)
   |> should.be_false
+}
+
+pub fn scheduler_finding_normalizes_to_evidence_instead_of_delivery_test() {
+  let finding =
+    notification.Finding(
+      domain: "operations",
+      summary: "A scheduled check found a change.",
+      urgency: notification.Urgent,
+      source: "daily-check",
+    )
+  let envelope = scheduler.finding_to_evidence(finding, 1000)
+  envelope.source_kind |> should.equal("schedule")
+  envelope.event_type |> should.equal("schedule.finding")
+  envelope.candidate_domain_refs |> should.equal(["domain:operations"])
+  dict.get(envelope.normalized_data, "urgency")
+  |> should.equal(Ok(operating_contracts.StructuredString("urgent")))
 }
