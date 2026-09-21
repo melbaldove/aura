@@ -1,0 +1,126 @@
+# Jev browser loop validation
+
+The loop is optional. Set `AURA_BROWSER_JEV_ENABLED=true` in Aura's environment
+to expose `browser(action="run", goal="...")`. Set `TYPESAFE_API_KEY` and
+`TEXT_MODEL`. `TYPESAFE_MODEL` defaults to `jev-latest`.
+
+For deployment, put these settings in `~/.config/aura/.env` on the host
+running Aura. Set that file's permissions to 0600. Aura reads it at startup,
+so restart the service after a change. Keep the API key outside the repository.
+
+For GPT text entry, set `TEXT_MODEL=openai-codex/gpt-5.6-luna`. This uses Aura's
+existing Codex login, authentication refresh, request format, and stream parser.
+It uses low reasoning. The browser worker owns a bounded text request; progress
+does not extend its deadline, and worker termination cancels the stream.
+No separate text API key or base URL is required for this route.
+
+Other text models use Chat Completions and require `TEXT_MODEL_API_KEY` plus
+`TEXT_MODEL_BASE_URL`. The provider remains configurable.
+
+The browser runner and session resolver keep their current behavior. The new
+loop uses fixed JavaScript to observe DOM nodes and validate their identity.
+It gives a validated node a temporary selector, then calls the existing
+`agent-browser` command. Field entry uses `fill` so it replaces the value.
+The adapter does not use Jev's Browser Harness or create another browser.
+
+This is an adaptation of
+[`jev-ultrafast` revision 1231850](https://github.com/browser-use/jev-ultrafast/tree/1231850a0bf1a0c0341fe408ef1668dbbfdfac46).
+The MIT notice is in `priv/jev.LICENSE`. TypeSafe target indices identify
+observed actions. Each target question offers only actions for its operation.
+
+## Repeatable checks
+
+Run the automated suite with `bash scripts/test.sh`.
+
+Run `gleam run -m browser_jev_smoke` for the real-browser check. This requires
+`agent-browser` and its browser installation. It uses isolated test sessions
+and replaces the local DOM of `https://example.com` with a harmless form.
+The default test supplies deterministic provider responses. It does not make
+paid model requests or use an existing personal login.
+
+The smoke test enters through `brain_tools.execute_tool`. It checks field
+replacement, dropdown selection, and a button click against the actual DOM.
+It then checks a later ordinary tool call, the tab count, session isolation,
+CDP reuse, stale and covered target rejection, and cookie and local-storage
+persistence after a restart. Test sessions are closed on success or failure.
+
+For a live model check, configure the provider variables and run:
+
+```sh
+AURA_JEV_SMOKE_LIVE=true gleam run -m browser_jev_smoke
+```
+
+This mode uses the same fixture and independent result checks. It sends the
+fixture to the configured providers and makes paid requests. Do not put keys
+in the command. Supply them through the process environment.
+
+To test live TypeSafe choices without text generation, also set
+`AURA_JEV_SMOKE_NO_TEXT=true`. This mode starts with a read-only Name field
+already set to Aura. It still checks dropdown selection and submission through
+both session paths. It asserts that the loop made zero text-model requests.
+The configuration loader still requires the selected text provider's settings.
+
+The application needs `priv/jev_browser.js` in its Erlang application directory.
+Gleam links `priv` for a fresh build. If an older local build already has a real
+`build/dev/erlang/aura/priv` directory, copy the `jev*` files into that directory
+or make a clean build. The deployment script includes the source assets.
+
+## Verification limits
+
+The browser smoke test proves local session continuity with test cookie and
+storage values. A task behind a real account login remains unverified. The live
+TypeSafe check covers dropdown selection and submission on this fixture.
+Deterministic provider timings do not measure Jev model speed or general task
+reliability.
+
+The adapter validates the observed node immediately before input. Validation
+and the native input command are separate browser calls. It cannot guarantee
+transactional isolation from another client that changes the same tab during
+that interval. An uncertain command stops the loop without an automatic retry.
+
+## Results on 2026-09-21
+
+- Build and focused checks passed: 113 tests across the browser, Jev client,
+  browser loop, tool dispatcher, and tool worker modules.
+- Erlang release export passed. It contains the browser script, MIT notice,
+  and compiled asset loader.
+- The real-browser smoke test passed with `agent-browser 0.26.0`.
+  Both local-session and CDP runs completed the form with three actions.
+  Cookie and local-storage values survived the test browser restart.
+- The full suite reported 19 failures. A separate checkout of the original
+  commit, `c9bda27`, produced the same 19 failures. They report missing fixture
+  files (`Enoent`) in the existing canary, monitor, Gmail, Calendar, and protocol
+  tests. The compared failure sets contain no new failures.
+- Live TypeSafe choices passed on local and CDP sessions, with independent DOM
+  verification. Each successful run used two actions and three decisions.
+  Measured times were 4.116 seconds and 4.038 seconds, including browser work.
+  These two runs are not a reliability benchmark.
+- Earlier live checks caught a premature DONE with the wrong form result.
+  The adapter now sends one element row per DOM node, with dropdown choices
+  separate from the current value. Operation descriptions and target questions
+  follow the upstream format. A regression test checks this distinction.
+- The full live text-entry check stopped at the text provider. Aura's existing
+  Z.ai credential returned HTTP 429, code 1113: insufficient balance or no
+  resource package. Both the default model and configured model hit that limit.
+  This was resolved for the test by using GPT-5.6 Luna through Aura's existing
+  Codex provider. The new TypeSafe credential was used only in the test process
+  environment.
+- Full live GPT text-entry checks passed with low reasoning. The successful
+  complete smoke run took 12.652 seconds locally and 8.622 seconds over CDP.
+  Each run used three browser actions, four TypeSafe decisions, and one GPT text
+  request. The test independently verified the entered value, selected option,
+  submitted result, session continuity, isolation, and restart persistence.
+- An earlier full attempt completed its local run in 9.539 seconds, then failed
+  while attaching through CDP, before any model call or input on that path.
+  The complete rerun passed. The cause of that attachment failure is unverified.
+- GPT deadline and cancellation tests pass. Repeated stream progress does not
+  extend the deadline, and killing the browser worker cancels its text stream.
+- The optional loop remains disabled by default.
+- The comparison exposed a token-generation error on `about:blank`, where
+  `crypto.randomUUID()` is unavailable. The adapter now uses random bytes as a
+  fallback. The real-browser smoke test checks observation and target
+  preparation on that page. It passed, as did all 113 focused tests and the
+  Erlang release export after this fix.
+
+See [the old-flow comparison](browser-loop-benchmark.md) for the benchmark
+method, measured results, and preliminary failures.

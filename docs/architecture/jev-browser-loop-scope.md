@@ -1,0 +1,159 @@
+# Jev browser loop scope
+
+Status: implemented as an optional loop. Automated and real-browser fixture
+checks pass. Full live TypeSafe and GPT text-generation checks pass on local
+and CDP sessions. A task behind a real account login remains unverified.
+See [validation notes](jev-browser-loop-validation.md).
+
+## User outcome
+
+Given an existing Aura browser session with a saved login, when the user asks
+Aura to complete a supported browser task, Aura runs the Jev decision loop in
+that session and returns the observed result. A later browser call can continue
+from the same page with the same login.
+
+## Current behavior
+
+- `brain_tools.gleam` resolves the session and executes one browser action.
+- `browser.gleam` supplies navigation checks, auth-wall detection, and actions.
+- `BrowserRunner.run` accepts a session, CDP URL, command, arguments, and timeout.
+- `aura_browser_ffi.erl` uses `agent-browser --session` and `--session-name` for
+  local sessions. It uses `--cdp` for an external browser.
+- Session names come from the channel or an explicit name. Local sessions use
+  their own socket directory. The FFI is configured to persist cookies and local
+  storage across daemon restarts.
+
+The real-browser fixture also verifies continuity and restart persistence.
+It uses test cookie and storage values rather than a personal account login.
+
+## Boundary
+
+Keep the session resolver, browser lifecycle, profile storage, socket directories,
+CDP attachment behavior, and current browser actions. Keep Aura's main agent loop
+and conversation state. The new loop executes within one browser tool call.
+
+Do not import Jev's default `Agent` or `Browser` lifecycle. They create a new tab
+through Browser Harness. Port the decision policy and adapt observation and
+execution to Aura's existing runner. Prefer Gleam for the loop and provider
+client, with a fixed JavaScript observation asset where needed. This avoids a
+second browser daemon and a Python runtime dependency.
+
+Reference revision:
+[`1231850`](https://github.com/browser-use/jev-ultrafast/tree/1231850a0bf1a0c0341fe408ef1668dbbfdfac46).
+Preserve the MIT notice for copied code. This is an adaptation of Jev's policy;
+it does not preserve the original browser transport or its measured latency.
+
+## Tool contract
+
+Add `browser(action="run", goal="...", session=..., cdp_url=..., timeout=...)`.
+The initial version starts on the current page. Initial navigation continues to
+use `browser(action="navigate", ...)` and its existing checks.
+
+Resolve the session once. Pass that session and CDP URL to every browser command.
+The new action must not open or close a browser or create a replacement tab.
+
+Make the new action optional and disabled by default. When disabled, omit it
+from the tool instructions and reject direct calls without browser mutations.
+Add configuration for the TypeSafe credential and model, plus the text model.
+Use existing credential and model configuration conventions. Do not pass keys
+through tool arguments. Document that page content is sent to these providers.
+
+The loop observes controls, requests an operation and compatible target from
+TypeSafe, validates the choice, executes it, and observes the result. Request
+text from the configured text model only for `TYPE_TEXT`.
+
+Support `CLICK`, `TYPE_TEXT`, `SELECT`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`,
+`DONE`, and `BLOCKED` where the adapter can execute them correctly. Offer only
+operations supported by the current observation and executor.
+
+Return structured output with status, reason, final URL, a bounded observation,
+executed action count, model-call count, and elapsed time. Distinguish a model
+`DONE` decision from verified task completion. Aura receives a fresh observation
+to assess the result. Live acceptance checks must verify the outcome separately.
+
+## Execution requirements
+
+- Preserve observed element identity. Jev node IDs cannot be treated as Aura
+  `@eN` references. The adapter must use an explicit, validated mapping or fixed
+  code that resolves the original observed nodes.
+- Preserve checks for stale pages, disabled controls, and covered targets.
+  Model output must not become executable JavaScript or arbitrary selectors.
+- Text entry must replace the field value, as Jev expects. Do not assume Aura's
+  existing `type` command has replacement semantics.
+- Count stale retries against the model-call budget. Consume each decision once.
+  Record executed actions before the next observation. If execution is uncertain,
+  return control with that uncertainty; do not repeat the action automatically.
+- Use one elapsed-time deadline for the whole run. Pass the remaining time into
+  browser and provider calls. Start with 30 executed actions and 60 decisions as
+  hard limits. Keep the current timeout argument range; apply it to the whole run.
+- On timeout or worker termination, issue no further browser actions. Verify this
+  at the real worker boundary. An action already sent can have taken effect.
+- Return control on an auth wall or an unsupported workflow. Keep current browser
+  tools available for continuation. Do not restart the goal through an automatic
+  fallback, since earlier steps can have changed the site.
+- Preserve existing navigation checks and detect auth walls in new observations.
+  Browser and provider errors must produce failed tool results, consistent with
+  the current worker's error classification.
+- Keep traces bounded. Record timing and action metadata without storing raw
+  field values, page content, or provider credentials in diagnostic logs.
+
+## Delivery order
+
+### 1. Prove the adapter and session continuity
+
+First run the current browser path and record a baseline. Check the installed
+`agent-browser` commands and response formats. Prove that the existing runner can
+observe and act on the same nodes without changing session handling. Check text
+replacement, target validation, and retained page state.
+
+Then add the smallest path through `browser(action="run")`: observe, make a real
+TypeSafe choice, click or fill, observe, and return. Use a harmless task behind an
+existing login through Aura's normal user interface. Continue with a current
+browser action in a later turn. The result must show the same login and page.
+
+If the runner cannot preserve target identity and required input behavior, stop
+this implementation path and report the exact missing capability. A new session
+manager or browser transport is outside this scope.
+
+### 2. Complete bounded execution
+
+Add the remaining supported operations, limits, provider error handling, and
+return states. Check stale observations and uncertain execution. Test worker
+termination and timeout without a second action. Check that two isolated sessions
+retain different state. An external action in the same session must invalidate a
+stale decision where observable; this change does not promise transactional
+isolation from concurrent external browser clients.
+
+### 3. Validate and make the option available
+
+Check named-session reuse, local restart persistence, and CDP attachment. Verify
+that a failed run leaves the session usable by current tools. Compare a fixed
+task through both loops, with equivalent starting state and independent outcome
+checks. Include initial observation, provider requests, browser commands, and
+waits in timings. Report success rate and elapsed time without assuming Jev's
+published speed carries over. Keep the new loop optional after delivery.
+
+## Expected files
+
+| Area | Expected change |
+| --- | --- |
+| `src/aura/brain_tools.gleam` | New action, arguments, configuration wiring, result handling |
+| `src/aura/browser.gleam` | Dispatch integration and reuse of current browser checks |
+| New browser loop module | Decision state, budgets, execution, bounded results |
+| New TypeSafe client module | Requests, response validation, timeouts |
+| New browser adapter and observation asset | Observed targets, freshness, supported input |
+| `src/aura/jev_client.gleam` and dependency wiring | Environment configuration and injected clients |
+| Browser and tool integration tests | Session continuity, failures, limits, existing behavior |
+| `docs/man/aura-browser.7` and configuration documentation | Usage, limits, provider setup |
+
+Keep `aura_browser_ffi.erl` session selection and lifecycle behavior unchanged.
+Exact new module names can follow the first adapter proof.
+
+## Outside this change
+
+Session migration, a new browser daemon, browser lifecycle changes, a general
+agent-loop rewrite, new persistent job storage, and a demo inspector are excluded.
+Uploads, pop-up tabs, frames, shadow roots, canvas, nested scrolling, and arbitrary
+keyboard widgets are not added to the Jev loop. Existing browser capabilities
+remain available. Automatic default selection is a separate decision after the
+live checks and measurements.

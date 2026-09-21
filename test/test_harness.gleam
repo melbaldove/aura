@@ -20,6 +20,8 @@
 ////     not fail. The fake LLMClient intercepts all streaming calls anyway —
 ////     no real HTTP ever goes out.
 
+import aura/jev_client
+
 import aura/acp/flare_manager
 import aura/acp/transport
 import aura/brain
@@ -627,5 +629,6 @@ pub fn standalone_tool_context() -> brain_tools.ToolContext {
     llm_client: llm_client.production(),
     skill_runner: skill_runner.production(),
     browser_runner: browser_runner.production(),
+    jev_client: jev_client.production(),
   )
 }

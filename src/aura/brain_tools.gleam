@@ -2,6 +2,7 @@ import aura/acp/flare_manager
 import aura/acp/provider
 import aura/acp/types as acp_types
 import aura/browser
+import aura/browser_loop
 import aura/clients/browser_runner.{type BrowserRunner}
 import aura/clients/llm_client.{type LLMClient}
 import aura/clients/skill_runner.{type SkillRunner}
@@ -11,6 +12,7 @@ import aura/db
 import aura/discord/rest
 import aura/discord/types as discord_types
 import aura/event
+import aura/jev_client
 import aura/llm
 import aura/memory
 import aura/path_utils
@@ -122,6 +124,7 @@ pub type ToolContext {
     llm_client: LLMClient,
     skill_runner: SkillRunner,
     browser_runner: BrowserRunner,
+    jev_client: jev_client.Client,
   )
 }
 
@@ -838,6 +841,22 @@ fn execute_tool_dispatch(
     "browser" -> {
       case require_arg(args, "action") {
         Error(e) -> TextResult(e)
+        Ok("run") -> {
+          case
+            browser.resolve_session(get_arg(args, "session"), ctx.channel_id)
+          {
+            Error(e) -> TextResult("Error: " <> e)
+            Ok(session) ->
+              TextResult(browser_loop.execute_with_client(
+                get_arg(args, "goal"),
+                session,
+                get_arg(args, "cdp_url"),
+                parse_timeout_ms(args, 90, 600),
+                ctx.browser_runner,
+                ctx.jev_client,
+              ))
+          }
+        }
         Ok(action_str) -> {
           case browser.parse_action(action_str) {
             Error(e) -> TextResult("Error: " <> e)
@@ -2744,12 +2763,18 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
     ),
     llm.ToolDefinition(
       name: "browser",
-      description: "Control a headless browser. Use for interactive pages (auth, forms, JS-rendered content). For read-only static HTML, prefer web_fetch. Sessions persist cookies/auth across calls within the same Discord thread. First call should be `navigate`. After navigate, a compact snapshot is returned automatically — no separate snapshot call needed unless the page changed.\n\nPages load async. After any state-changing action (navigate, click-that-navigates, press Enter on a form), call `browser(wait, ref=\"@eN\")` for a known target element or `browser(wait, seconds=3)`. Element refs (`@eN`) are only valid for the snapshot that returned them — re-snapshot after navigations. If an action times out, the page is likely still loading; retry with a higher `timeout` arg (e.g. 180). For full patterns, run `shell(command=\"agent-browser skills get core --full\")` — authoritative agent-browser playbook.",
-      parameters: [
+      description: jev_tool_instructions()
+        <> "Control a headless browser. Use for interactive pages (auth, forms, JS-rendered content). For read-only static HTML, prefer web_fetch. Sessions persist cookies/auth across calls within the same Discord thread. First call should be `navigate`. After navigate, a compact snapshot is returned automatically — no separate snapshot call needed unless the page changed.\n\nPages load async. After any state-changing action (navigate, click-that-navigates, press Enter on a form), call `browser(wait, ref=\"@eN\")` for a known target element or `browser(wait, seconds=3)`. Element refs (`@eN`) are only valid for the snapshot that returned them — re-snapshot after navigations. If an action times out, the page is likely still loading; retry with a higher `timeout` arg (e.g. 180). For full patterns, run `shell(command=\"agent-browser skills get core --full\")` — authoritative agent-browser playbook.",
+      parameters: list.append(jev_tool_parameters(), [
         llm.ToolParam(
           name: "action",
           param_type: "string",
-          description: "navigate | snapshot | click | type | press | back | vision | console | wait | upload",
+          description: case jev_client.enabled() {
+            True ->
+              "run | navigate | snapshot | click | type | press | back | vision | console | wait | upload"
+            False ->
+              "navigate | snapshot | click | type | press | back | vision | console | wait | upload"
+          },
           required: True,
         ),
         llm.ToolParam(
@@ -2830,7 +2855,7 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
           description: "Optional CDP endpoint to attach to an already-running browser (BYO auth).",
           required: False,
         ),
-      ],
+      ]),
     ),
     llm.ToolDefinition(
       name: "send_attachment",
@@ -2917,4 +2942,26 @@ pub fn make_built_in_tools() -> List(llm.ToolDefinition) {
       ],
     ),
   ]
+}
+
+fn jev_tool_instructions() -> String {
+  case jev_client.enabled() {
+    False -> ""
+    True ->
+      "For a supported task on the current page, use action=run with a complete goal. This runs a bounded Jev loop in the same session. Navigate first if needed. Timeout applies to the whole run. A done_unverified result requires outcome verification. On blocked, auth_required, or uncertain results, inspect the current page and continue with existing actions. Do not restart a partially executed goal. "
+  }
+}
+
+fn jev_tool_parameters() -> List(llm.ToolParam) {
+  case jev_client.enabled() {
+    False -> []
+    True -> [
+      llm.ToolParam(
+        name: "goal",
+        param_type: "string",
+        description: "Complete goal for action=run on the current page. Maximum 8000 characters.",
+        required: False,
+      ),
+    ]
+  }
 }
