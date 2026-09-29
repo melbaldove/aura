@@ -1,0 +1,150 @@
+#+title: Procurement browser comparison
+
+This test uses buttons and page snapshots that the original browser tool
+supports. It avoids the text-selection and native-option problems found in
+the [[file:browser-loop-benchmark.org][first comparison]].
+
+* Results
+
+Measured on 2026-09-21 with ~agent-browser 0.26.0~ on macOS arm64. Both
+flows passed all three measured trials. Every trial completed the required
+17 clicks, saved the exact $2547 draft, and preserved the session markers.
+No browser-command errors or model stream retries occurred in these six runs.
+
+| Pair | Original flow: GPT-5.6 Sol, low | Jev: TypeSafe jev-latest | Result |
+|---+----+----+---|
+| 1 | 134.328 s | 30.152 s | Both passed |
+| 2 | 153.467 s | 27.002 s | Both passed |
+| 3 | 140.215 s | 29.101 s | Both passed |
+| Median | 140.215 s | 29.101 s | 3/3 each |
+
+The ratio of median completion times is *4.82*. Jev used about *79.2% less
+time* on this fixture. These are successful completion times, not timeout
+durations. Three trials on one application do not establish general speed
+or reliability.
+
+| Pair | Old GPT requests | Old model time | Old browser time | Jev decisions | Jev browser time |
+|---+----+----+----+----+----|
+| 1 | 28 | 128.694 s | 5.575 s | 18 | 15.800 s |
+| 2 | 36 | 147.426 s | 5.992 s | 18 | 14.685 s |
+| 3 | 30 | 134.314 s | 5.835 s | 18 | 16.229 s |
+
+GPT requests account for about 96% of the old flow's total time. The old
+flow used 31, 35, and 32 browser commands. Jev used 87 commands in every
+trial because its adapter observes the page and checks each target before
+clicking. Each Jev run made 18 TypeSafe decisions: 17 clicks and DONE. It
+made zero GPT text requests. TypeSafe request time was not timed separately;
+the remaining Jev elapsed time includes those requests and loop overhead.
+
+The [[file:browser-procurement-benchmark-results.json][raw results]] contain every
+measured and preliminary result, final state, action trace, request timing,
+and source hash. No application or session-handling code changed for this
+new comparison. The optional Jev loop remains disabled by default.
+
+* Task
+
+Create and save an equipment request in a local test application. Compare
+seven laptops and four docks. Apply stock and screen-size filters. Select
+the cheapest products that meet the RAM, battery, warranty, monitor, and
+charging requirements. Set quantities, office, shipping, and budget. Review
+the request and save a draft below $2600.
+
+The correct draft has two Orion 14 laptops and one Harbor Dock. It uses
+Manila office, Standard shipping, and the Engineering budget. The total is
+$2547. The application has 11 views. The shortest successful route takes
+17 clicks. Each view replaces the page content and can change element refs.
+
+* Method
+
+The old flow runs from a detached checkout of pre-Jev commit
+~c9bda279e645788468d0d89dc356e5017d04bf2d~. Its tracked files remain unchanged.
+Only portable test drivers, the test transport helper, and the fixture were
+added. Its own build supplies the original browser dispatcher and agent loop.
+It contains no Jev client. The new flow uses the current checkout and enters
+through ~browser(action="run")~.
+
+Both checkouts use the same driver and fixture. The goal gives requirements,
+not an action sequence or the correct product names. The old flow receives
+the original browser schema and a short browser-only system instruction.
+The test permits snapshots, clicks, and waits. It rejects JavaScript and
+keyboard input from the old model. Jev observes the page with its fixed
+adapter and uses visible click targets. No model receives the fixture source.
+
+Before model trials, a scripted preflight completed all 17 clicks through the
+original dispatcher. It took 11.401 seconds for 34 browser commands, including
+a fresh snapshot before each click. The independent final check passed.
+This checks the browser controls; it is not a model speed measurement.
+
+Each measured trial gets a separate browser session and a 300-second deadline. Timing
+includes observations, model requests, browser commands, and the final loop
+response. It excludes browser startup, fixture setup, and independent final
+verification. Trials run sequentially. Odd pairs run the old flow first;
+even pairs run Jev first.
+
+The independent check reads the exact products, quantities, filters,
+delivery settings, budget, total, and saved state. It also checks the stored
+draft and the session cookie and local-storage markers. A successful trial
+must pass these checks and return without an error.
+
+The measured comparison uses GPT-5.6 Sol with low reasoning for the old
+flow. Sol is available through the existing Codex login. Its supported
+reasoning settings are listed in the official
+[[https://developers.openai.com/api/docs/models/gpt-5.6-sol][model documentation]].
+Jev uses TypeSafe ~jev-latest~ for action decisions. GPT text generation is
+configured but is not needed because this task has no text fields.
+
+* Preliminary trials
+
+The first two pairs used GPT-5.6 Luna with low reasoning and a 180-second
+limit. Neither old-flow trial passed. One reached the limit at 180.003
+seconds after 49 GPT requests. The other stopped at 172.822 seconds after
+53 requests and reported that it could not finish. Its final state lacked
+the dock and delivery settings. The traces show repeated clicks with refs
+from earlier views. The scripted preflight had already shown that the
+required controls worked.
+
+The Jev trials paired with those attempts both passed, in 29.086 and 28.710
+seconds. These results are retained separately from the Sol comparison.
+
+A Sol trial with the same 180-second limit reached the correct review
+screen but stopped before saving. It made 34 GPT requests. Model requests
+used 174.034 seconds; browser commands used about 6 seconds. The final
+comparison therefore gives both flows 300 seconds. The task, fixture,
+browser controls, and prompts did not change. The test driver gained an
+explicit deadline setting and records that setting in each result.
+
+* Limits
+
+This is one simulated application with 11 views in one document. It does
+not measure real page loads, authentication, production conversation history,
+Discord processing, or the outer calls that dispatch and verify the Jev task.
+It does not establish general reliability across websites. Session-handling
+source files remain unchanged.
+
+The fixture was frozen before live trials. Its SHA-256 is
+~0a9c2330c9f1508bab63ee7cdf9b9667c626525fb267cc0d6fa5c8cb70479baa~.
+The shared driver SHA-256 is
+~890c39646f38a36005acf5e51a101bd77dff3a88db94bf5d9c4b7812eb467e5d~.
+
+* Repeat
+
+Add ~test/browser_procurement_benchmark.gleam~,
+~test/aura_browser_benchmark_helpers.erl~, and
+~test/fixtures/browser_procurement.js~ to the original checkout. Run there:
+
+#+begin_src sh
+AURA_BROWSER_BENCHMARK=true AURA_BROWSER_JEV_ENABLED=false \
+  AURA_PROCUREMENT_FLOW=old AURA_PROCUREMENT_PAIR=1 \
+  AURA_PROCUREMENT_GPT_MODEL=openai-codex/gpt-5.6-sol \
+  AURA_PROCUREMENT_REASONING=low \
+  AURA_PROCUREMENT_TIMEOUT_SECONDS=300 \
+  gleam run -m browser_procurement_benchmark
+#+end_src
+
+For Jev, run from the edited checkout. Supply ~TYPESAFE_API_KEY~ through the
+environment. Set ~AURA_BROWSER_JEV_ENABLED=true~,
+~AURA_PROCUREMENT_FLOW=jev~, ~TYPESAFE_MODEL=jev-latest~, and
+~TEXT_MODEL=openai-codex/gpt-5.6-luna~. Keep the other test settings. Each run
+prints one ~RESULT~ JSON object and closes its own browser session. Use
+~AURA_PROCUREMENT_FLOW=preflight~ in the original checkout for the scripted
+control check.

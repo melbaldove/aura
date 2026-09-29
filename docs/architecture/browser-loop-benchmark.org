@@ -1,0 +1,248 @@
+#+title: Browser loop comparison
+
+Measured on 2026-09-21 with ~agent-browser 0.26.0~ on macOS arm64.
+
+See the [[file:browser-procurement-benchmark.org][procurement comparison]] for a
+more complex task that uses the original browser's snapshot and click
+controls. It compares successful old-flow and Jev completion times.
+
+The first comparison ran both flows from the edited checkout. Its old-flow
+results were not a separate pre-Jev revision test. The check below corrects
+that gap. These experiments do not establish a production speedup.
+
+* Pre-Jev revision check
+
+Five additional old-flow trials ran from a separate detached checkout of
+~c9bda279e645788468d0d89dc356e5017d04bf2d~. All tracked files in that checkout
+remained unchanged. Only two test files were added:
+~test/browser_pre_jev_benchmark.gleam~ and
+~test/aura_browser_benchmark_helpers.erl~. Its build did not contain
+~aura@jev_client~. The browser dispatcher, agent loop, and browser FFI loaded
+from that checkout's own build directory.
+
+The comparison checked the following evidence:
+
+- Eight source files match the edited checkout byte for byte: browser actions
+  and session resolution, browser FFI, browser runner, agent loop, LLM requests,
+  streaming transport, model configuration, and Codex authentication.
+- The existing browser dispatch branch in ~brain_tools.gleam~ matches exactly.
+  The added ~run~ branch is outside that existing branch.
+- The compiled browser tool schemas match exactly when the edited checkout
+  generates its schema with Jev disabled. The schema SHA-256 is
+  ~673ce2a1be4bc9e093da8baaa4ada53035df6b71e8578a74ea5b4bfe7152c3f7~.
+- Dependency declarations and locked versions match. The two portable test
+  files also match between checkouts.
+
+This separate rerun kept the same form, GPT-5.6 Luna with low reasoning,
+browser-only prompt, and 60-second deadline. Each trial used its own session.
+It added timing around each model request and browser command. The rerun was
+sequential and was not interleaved with new Jev trials.
+
+| Trial | Total seconds | GPT requests | Model seconds | Browser seconds | Result |
+|---+---+---+---+---+---|
+| 1 | 60.002 | 11 | 32.310 | 27.657 | Timeout |
+| 2 | 60.002 | 14 | 35.365 | 24.616 | Timeout |
+| 3 | 60.004 | 13 | 31.818 | 28.165 | Timeout |
+| 4 | 60.002 | 11 | 31.544 | 28.454 | Timeout |
+| 5 | 60.003 | 17 | 42.310 | 17.685 | Timeout |
+
+The failures reproduce before the Jev edits under this test. This checks
+whether those edits are required to produce the failure. It does not resolve
+the effects of the reduced prompt, test fixture, or browser action behavior.
+The report does not treat these failed runs as successful completion times.
+
+The ~pre_jev_checkout_verification~ section of the
+[[file:browser-loop-benchmark-results.json][raw results]] records the commit,
+source hashes, schema hash, per-request times, action traces, and independent
+verification. To repeat the check, add the two portable test files to a
+checkout of that revision and run:
+
+#+begin_src sh
+AURA_BROWSER_BENCHMARK=true AURA_BROWSER_JEV_ENABLED=false \
+  gleam run -m browser_pre_jev_benchmark
+#+end_src
+
+This uses the existing Codex login and makes no TypeSafe requests. To print
+the browser tool schema without making model or browser requests, run with
+~AURA_BROWSER_BENCHMARK_INSPECT=true~ instead.
+
+* Original edited-checkout experiment
+
+* Browser control diagnosis
+
+A later replay removed GPT from the test and called the pre-Jev browser FFI
+directly with the same form. It confirmed the following behavior with the
+installed ~agent-browser 0.26.0~:
+
+- After focusing Name, ~press Control+A~ returned success but left both
+  selection positions at 3. The next ~type~ changed ~old~ to ~oldAura~.
+- ~Meta+A~, ~Control+a~, ~Meta+a~, and ~ControlOrMeta+A~ also left the text
+  unselected in this replay. Plain ArrowLeft and Backspace did work, so the
+  replay separately confirmed input focus and ordinary key input.
+- Clicking the Blue option returned `DOM.getBoxModel: Could not compute box
+  model`. The selected value remained Red.
+- Native ~fill~ replaced the Name value with Aura. Native ~select~ changed
+  Color to Blue. Both completed without a model request.
+
+The old browser tool exposes ~type~, ~click~, and ~press~, but does not expose
+~fill~ or ~select~. It can use JavaScript through ~console~, but these failed
+trials kept attempting other input sequences. The Jev adapter uses native
+~fill~ and ~select~. Thus, the original comparison mixes form-action support
+and action reliability with loop speed. It is not evidence of GPT being slow
+on successful browser work.
+
+The exact cause of the modifier-shortcut behavior inside the installed runner
+remains unconfirmed. The raw ~browser_control_diagnosis~ records contain the
+commands and observed field values. No session-handling code was changed.
+
+* Original results
+
+The original isolated series completed all five tasks with Jev. The old flow
+reached the 60-second limit in all five trials. These results apply to one
+test form with a browser-only prompt.
+
+| Measure | Old GPT loop | Jev with GPT field text |
+|---+---+---|
+| Verified completions within the deadline | 0/5 | 5/5 |
+| Median successful completion time | No successful trials | 10.000 s |
+| Successful completion range | No successful trials | 7.917–10.613 s |
+| Timeout duration | 60.002–60.004 s | No timeouts |
+| GPT requests per trial | 10–16 | 1 |
+| TypeSafe requests per trial | 0 | 4 |
+
+A ratio between successful completion times cannot be calculated from this
+series because the old flow had no successful trials. The result does not
+establish a general speed or reliability advantage across websites.
+
+* Method
+
+The old flow uses Aura's existing ~agent_loop~ and browser tool dispatcher
+from the edited checkout. Its browser tool definition was generated with the
+Jev feature flag disabled. The mixed-flow driver then restored that flag
+before executing both flows. The old-flow tool description
+and parameters match the original code at ~c9bda27~. GPT-5.6 Luna, with low
+reasoning, chooses the browser actions. It can use all existing browser actions,
+including JavaScript through ~console~.
+
+The new flow enters through ~browser(action="run")~. TypeSafe ~jev-latest~
+chooses actions. GPT-5.6 Luna, with low reasoning, supplies field text.
+Both flows use Aura's current Codex authentication and browser runner.
+
+The task is: “Replace Name with Aura, choose Blue, and click Apply. Stop when
+the result shows Aura blue.” Each trial uses a separate isolated browser session
+with a small test form on ~https://example.com~. Each trial replaces the page DOM with the same
+form. Name starts as ~old~, Color starts as Red, and the result is empty.
+No model receives the fixture source or a prescribed action sequence.
+Each trial navigates to the fixture origin and checks the URL before timing.
+The session name contains a short timestamp and trial identifier to prevent
+reuse. Each trial creates its own cookie and local-storage marker before timing.
+
+Five pairs run in sequence. Odd pairs run the old flow first. Even pairs run
+Jev first. Each trial has a 60-second deadline. Browser commands and model
+requests use the time left before that deadline. Stream progress cannot extend
+the deadline. Failed trials remain in the results.
+
+Timing includes the first observation, model requests, browser commands, and
+the flow's final response. It excludes browser startup, page setup, and the
+independent test check. The test checks the exact Name value, selected option,
+and submitted result. It also checks that the session cookie and local-storage
+marker remain present. The raw result records each check separately.
+A pass requires those checks to pass and the flow to return without an error.
+Timeout durations measure when the trial stopped, not successful completion.
+
+The comparison measures the browser loop. It excludes Discord processing and
+the outer model calls that dispatch and verify ~browser(action="run")~.
+The old flow receives a short browser-only system instruction and the original
+browser tool definition. It does not receive the full production prompt,
+conversation history, or other tools. Thus, these results do not measure total
+user response time or the exact deployed configuration.
+
+* Repeat the comparison
+
+Supply ~TYPESAFE_API_KEY~ through the process environment. Use the existing
+Codex login. Then run:
+
+#+begin_src sh
+AURA_BROWSER_BENCHMARK=true AURA_BROWSER_JEV_ENABLED=true \
+  TEXT_MODEL=openai-codex/gpt-5.6-luna \
+  TYPESAFE_MODEL=jev-latest \
+  gleam run -m browser_loop_benchmark
+#+end_src
+
+The test prints one ~RESULT~ JSON object per trial. It also prints the old
+flow's browser arguments, which contain only test form data. The test closes
+its own browser session when it finishes.
+
+The driver is ~test/browser_loop_benchmark.gleam~. Its test-only Erlang helper
+uses Aura's existing streaming transport and adds a deadline while retaining
+tool calls in each model response.
+
+* Preliminary attempts
+
+The first attempt recorded an old-flow timeout at 60.002 seconds and two Jev
+errors at 0.173 and 0.164 seconds. Both Jev errors occurred before a model
+request. Inspection found the browser on ~about:blank~, where
+~crypto.randomUUID()~ was unavailable. The cause of that page state is not
+confirmed. A second old-flow trial was interrupted to inspect the error.
+
+The adapter now creates tokens with ~crypto.getRandomValues()~ when
+~crypto.randomUUID()~ is unavailable. The real-browser smoke test now checks
+observation and target preparation on ~about:blank~. It passed, along with
+the existing local-session and CDP checks. All 113 focused tests passed, and
+the Erlang release export passed.
+
+The comparison driver now checks the page before every trial and uses a new
+session name for every test invocation. An initial timestamp name exceeded
+the browser socket path limit. That attempt stopped during setup, before any
+timed trial. The shortened name fits the limit.
+
+An initial five-pair series reused one browser session. After old-flow
+timeouts, some Jev trials reported the correct submitted text but failed the
+combined independent check. A diagnostic read also timed out while the old
+flow was stalled. That series cannot exclude interference between trials.
+Its results remain in the raw data. The final series uses a separate session
+for each trial and records individual checks. Production session handling
+is unchanged.
+
+The first isolated attempt stopped during verification after an old-flow
+timeout. Reading ~document.cookie~ raised a ~SecurityError~. Verification now
+handles inaccessible storage and browser transport errors as failed checks,
+so one failed trial does not stop the remaining trials.
+
+These preliminary attempts are separate from the final five pairs below.
+
+* Final trials
+
+All times are in seconds. Setup and independent verification are excluded.
+
+| Pair | Old elapsed | Old result | Jev elapsed | Jev result |
+|---+---+---+---+---|
+| 1 | 60.002 | Timeout | 7.917 | Pass |
+| 2 | 60.002 | Timeout | 10.000 | Pass |
+| 3 | 60.002 | Timeout | 10.587 | Pass |
+| 4 | 60.002 | Timeout | 10.613 | Pass |
+| 5 | 60.004 | Timeout | 9.552 | Pass |
+
+Every Jev trial used three input actions: fill, select, and click. It made
+four TypeSafe decisions, including DONE, and one GPT request for field text.
+Each trial made 17 browser commands when observation and target checks are
+included. All five independent checks found Name ~Aura~, Color ~blue~, result
+~Aura blue~, and both session markers intact.
+
+The old flow made 13, 10, 11, 16, and 12 GPT requests. Its traces include
+dropdown click errors, text entry that appended to the existing value, and
+browser command timeouts. Verification found ~about:blank~ after each final
+old-flow timeout. The cause of that page state is not confirmed. No model
+stream retries occurred in either flow.
+
+The preliminary shared-session series included one successful old-flow trial
+at 50.583 seconds. It also included failed Jev verification checks after
+old-flow timeouts. Those results are preserved separately; they are not pooled
+with the isolated trials.
+
+[[file:browser-loop-benchmark-results.json][Raw results]] contain the final trials,
+individual verification values, old-flow action traces, and preliminary
+attempts. The repeatable driver is ~test/browser_loop_benchmark.gleam~.
+
+The session resolver, browser FFI, and browser runner remain unchanged from
+the original commit. The Jev feature flag remains disabled by default.

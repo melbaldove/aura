@@ -15,6 +15,7 @@ import aura/db
 import aura/discord
 import aura/discord/message as discord_message
 import aura/domain
+import aura/jev_client
 import aura/llm
 import aura/message
 import aura/models
@@ -321,6 +322,7 @@ fn build_initial_state(
       llm_client: deps.llm_client,
       skill_runner: deps.skill_runner,
       browser_runner: deps.browser_runner,
+      jev_client: jev_client.production(),
     )
   let #(history, comp_state) =
     conversation.load_channel_bootstrap(
@@ -525,6 +527,7 @@ fn build_initial_state_for_test(
       llm_client: llm_client.production(),
       skill_runner: skill_runner.production(),
       browser_runner: browser_runner.production(),
+      jev_client: jev_client.production(),
     )
   ChannelState(
     platform: deps.platform,

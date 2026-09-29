@@ -133,6 +133,10 @@ Configured in the launchd plist:
 .IR "bash scripts/deploy.sh" .
 Never manual scp+build.
 .PP
+When the checkout is already on the deployment host, use
+.IR "bash scripts/deploy.sh --local" .
+This skips SSH and file sync. It uses the same build and restart steps.
+.PP
 The script:
 .IP 1. 4
 rsync source .gleam and .erl files to Eisenhower
