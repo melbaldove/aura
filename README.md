@@ -23,6 +23,12 @@ Built on the BEAM. Supervised OTP actors crash and recover independently. Every 
 
 ## Requirements
 
+The optional Jev browser loop runs a complete page task through
+`browser(action="run")` in the existing browser session. See the
+[setup and validation notes](docs/architecture/jev-browser-loop-validation.org).
+Set `AURA_BROWSER_JEV_ENABLED=true`, `TYPESAFE_API_KEY`, and `TEXT_MODEL`
+in `~/.config/aura/.env`, then restart Aura. The loop is disabled by default.
+
 - [Gleam](https://gleam.run) v1.14+
 - Erlang/OTP 27+
 - tmux

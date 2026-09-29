@@ -1,0 +1,2242 @@
+{
+  "date": "2026-09-21",
+  "baseline_commit": "c9bda27",
+  "browser": "agent-browser 0.26.0",
+  "gpt_model": "openai-codex/gpt-5.6-luna",
+  "gpt_reasoning": "low",
+  "typesafe_model": "jev-latest",
+  "deadline_ms": 60000,
+  "final_isolated_trials": [
+    {
+      "pair": 1,
+      "flow": "old",
+      "elapsed_ms": 60002,
+      "verified": false,
+      "verification": {
+        "color": null,
+        "cookie": false,
+        "name": null,
+        "output": null,
+        "storage": false,
+        "url": "about:blank",
+        "verified": false
+      },
+      "browser_commands": 13,
+      "browser_tool_calls": 13,
+      "gpt_calls": 13,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Error: Benchmark deadline",
+      "completed": false,
+      "old_browser_actions": [
+        {
+          "action": "snapshot",
+          "full": "false"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "snapshot",
+          "full": "false"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "click",
+          "ref": "@e5"
+        },
+        {
+          "action": "snapshot",
+          "full": "false"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "Control+A"
+        },
+        {
+          "action": "press",
+          "key": "Backspace"
+        }
+      ],
+      "browser_errors": [
+        "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}",
+        "timeout"
+      ]
+    },
+    {
+      "pair": 1,
+      "flow": "jev",
+      "elapsed_ms": 7917,
+      "verified": true,
+      "verification": {
+        "color": "blue",
+        "cookie": true,
+        "name": "Aura",
+        "output": "Aura blue",
+        "storage": true,
+        "url": "https://example.com/",
+        "verified": true
+      },
+      "browser_commands": 17,
+      "browser_tool_calls": 1,
+      "gpt_calls": 1,
+      "typesafe_calls": 4,
+      "stream_retries": 0,
+      "output": "{\"success\":true,\"status\":\"done_unverified\",\"reason\":\"Model stopped; verify the final observation\",\"verified\":false,\"actions\":3,\"model_calls\":5,\"decisions\":4,\"text_calls\":1,\"elapsed_ms\":7915,\"observation\":{\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"text\":\"Name\\nColor\\nApply\\nAura blue\"}}",
+      "completed": true
+    },
+    {
+      "pair": 2,
+      "flow": "jev",
+      "elapsed_ms": 10000,
+      "verified": true,
+      "verification": {
+        "color": "blue",
+        "cookie": true,
+        "name": "Aura",
+        "output": "Aura blue",
+        "storage": true,
+        "url": "https://example.com/",
+        "verified": true
+      },
+      "browser_commands": 17,
+      "browser_tool_calls": 1,
+      "gpt_calls": 1,
+      "typesafe_calls": 4,
+      "stream_retries": 0,
+      "output": "{\"success\":true,\"status\":\"done_unverified\",\"reason\":\"Model stopped; verify the final observation\",\"verified\":false,\"actions\":3,\"model_calls\":5,\"decisions\":4,\"text_calls\":1,\"elapsed_ms\":10000,\"observation\":{\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"text\":\"Name\\nColor\\nApply\\nAura blue\"}}",
+      "completed": true
+    },
+    {
+      "pair": 2,
+      "flow": "old",
+      "elapsed_ms": 60002,
+      "verified": false,
+      "verification": {
+        "color": null,
+        "cookie": false,
+        "name": null,
+        "output": null,
+        "storage": false,
+        "url": "about:blank",
+        "verified": false
+      },
+      "browser_commands": 10,
+      "browser_tool_calls": 10,
+      "gpt_calls": 10,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Error: Benchmark deadline",
+      "completed": false,
+      "old_browser_actions": [
+        {
+          "action": "snapshot",
+          "full": "true"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "click",
+          "ref": "@e5"
+        },
+        {
+          "action": "snapshot",
+          "full": "true"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "text": "Aura"
+        }
+      ],
+      "browser_errors": [
+        "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}",
+        "timeout"
+      ]
+    },
+    {
+      "pair": 3,
+      "flow": "old",
+      "elapsed_ms": 60002,
+      "verified": false,
+      "verification": {
+        "color": null,
+        "cookie": false,
+        "name": null,
+        "output": null,
+        "storage": false,
+        "url": "about:blank",
+        "verified": false
+      },
+      "browser_commands": 12,
+      "browser_tool_calls": 12,
+      "gpt_calls": 11,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Error: Benchmark deadline",
+      "completed": false,
+      "old_browser_actions": [
+        {
+          "action": "snapshot",
+          "full": "true"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "snapshot",
+          "full": "true"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "CTRL+A"
+        },
+        {
+          "action": "type",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "CTRL+A"
+        },
+        {
+          "action": "type",
+          "text": "Aura"
+        }
+      ],
+      "browser_errors": [
+        "timeout"
+      ]
+    },
+    {
+      "pair": 3,
+      "flow": "jev",
+      "elapsed_ms": 10587,
+      "verified": true,
+      "verification": {
+        "color": "blue",
+        "cookie": true,
+        "name": "Aura",
+        "output": "Aura blue",
+        "storage": true,
+        "url": "https://example.com/",
+        "verified": true
+      },
+      "browser_commands": 17,
+      "browser_tool_calls": 1,
+      "gpt_calls": 1,
+      "typesafe_calls": 4,
+      "stream_retries": 0,
+      "output": "{\"success\":true,\"status\":\"done_unverified\",\"reason\":\"Model stopped; verify the final observation\",\"verified\":false,\"actions\":3,\"model_calls\":5,\"decisions\":4,\"text_calls\":1,\"elapsed_ms\":10586,\"observation\":{\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"text\":\"Name\\nColor\\nApply\\nAura blue\"}}",
+      "completed": true
+    },
+    {
+      "pair": 4,
+      "flow": "jev",
+      "elapsed_ms": 10613,
+      "verified": true,
+      "verification": {
+        "color": "blue",
+        "cookie": true,
+        "name": "Aura",
+        "output": "Aura blue",
+        "storage": true,
+        "url": "https://example.com/",
+        "verified": true
+      },
+      "browser_commands": 17,
+      "browser_tool_calls": 1,
+      "gpt_calls": 1,
+      "typesafe_calls": 4,
+      "stream_retries": 0,
+      "output": "{\"success\":true,\"status\":\"done_unverified\",\"reason\":\"Model stopped; verify the final observation\",\"verified\":false,\"actions\":3,\"model_calls\":5,\"decisions\":4,\"text_calls\":1,\"elapsed_ms\":10613,\"observation\":{\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"text\":\"Name\\nColor\\nApply\\nAura blue\"}}",
+      "completed": true
+    },
+    {
+      "pair": 4,
+      "flow": "old",
+      "elapsed_ms": 60002,
+      "verified": false,
+      "verification": {
+        "color": null,
+        "cookie": false,
+        "name": null,
+        "output": null,
+        "storage": false,
+        "url": "about:blank",
+        "verified": false
+      },
+      "browser_commands": 15,
+      "browser_tool_calls": 16,
+      "gpt_calls": 16,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Error: Benchmark deadline",
+      "completed": false,
+      "old_browser_actions": [
+        {
+          "action": "snapshot",
+          "session": "default"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "click",
+          "ref": "@e5"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "back"
+        }
+      ],
+      "browser_errors": [
+        "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}",
+        "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"Could not locate element with role=textbox name=Name\"}",
+        "timeout"
+      ]
+    },
+    {
+      "pair": 5,
+      "flow": "old",
+      "elapsed_ms": 60004,
+      "verified": false,
+      "verification": {
+        "color": null,
+        "cookie": false,
+        "name": null,
+        "output": null,
+        "storage": false,
+        "url": "about:blank",
+        "verified": false
+      },
+      "browser_commands": 12,
+      "browser_tool_calls": 12,
+      "gpt_calls": 12,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Error: Benchmark deadline",
+      "completed": false,
+      "old_browser_actions": [
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e5"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "Control+A"
+        },
+        {
+          "action": "press",
+          "key": "Backspace"
+        }
+      ],
+      "browser_errors": [
+        "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}",
+        "timeout"
+      ]
+    },
+    {
+      "pair": 5,
+      "flow": "jev",
+      "elapsed_ms": 9552,
+      "verified": true,
+      "verification": {
+        "color": "blue",
+        "cookie": true,
+        "name": "Aura",
+        "output": "Aura blue",
+        "storage": true,
+        "url": "https://example.com/",
+        "verified": true
+      },
+      "browser_commands": 17,
+      "browser_tool_calls": 1,
+      "gpt_calls": 1,
+      "typesafe_calls": 4,
+      "stream_retries": 0,
+      "output": "{\"success\":true,\"status\":\"done_unverified\",\"reason\":\"Model stopped; verify the final observation\",\"verified\":false,\"actions\":3,\"model_calls\":5,\"decisions\":4,\"text_calls\":1,\"elapsed_ms\":9551,\"observation\":{\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"text\":\"Name\\nColor\\nApply\\nAura blue\"}}",
+      "completed": true
+    }
+  ],
+  "preliminary_shared_session_trials": [
+    {
+      "pair": 1,
+      "flow": "old",
+      "elapsed_ms": 50583,
+      "verified": true,
+      "browser_commands": 17,
+      "browser_tool_calls": 17,
+      "gpt_calls": 18,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Done.",
+      "completed": true,
+      "old_browser_actions": [
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "click",
+          "ref": "e2"
+        },
+        {
+          "action": "type",
+          "ref": "e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "e3"
+        },
+        {
+          "action": "click",
+          "ref": "e5"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "click",
+          "ref": "e2"
+        },
+        {
+          "action": "press",
+          "ref": "e2",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "ref": "e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "e3"
+        },
+        {
+          "action": "press",
+          "ref": "e3",
+          "key": "ArrowDown"
+        },
+        {
+          "action": "press",
+          "ref": "e3",
+          "key": "Enter"
+        },
+        {
+          "action": "click",
+          "ref": "e1"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "console",
+          "expression": "(()=>{const i=document.querySelector('input'); const s=document.querySelector('select'); const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(i,'Aura'); i.dispatchEvent(new Event('input',{bubbles:true})); i.dispatchEvent(new Event('change',{bubbles:true})); s.value='blue'; s.dispatchEvent(new Event('change',{bubbles:true})); return {name:i.value,color:s.value}})()"
+        },
+        {
+          "action": "click",
+          "ref": "e1"
+        },
+        {
+          "action": "snapshot"
+        }
+      ],
+      "browser_errors": [
+        "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}"
+      ]
+    },
+    {
+      "pair": 1,
+      "flow": "jev",
+      "elapsed_ms": 10406,
+      "verified": true,
+      "browser_commands": 17,
+      "browser_tool_calls": 1,
+      "gpt_calls": 1,
+      "typesafe_calls": 4,
+      "stream_retries": 0,
+      "output": "{\"success\":true,\"status\":\"done_unverified\",\"reason\":\"Model stopped; verify the final observation\",\"verified\":false,\"actions\":3,\"model_calls\":5,\"decisions\":4,\"text_calls\":1,\"elapsed_ms\":10404,\"observation\":{\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"text\":\"Name\\nColor\\nApply\\nAura blue\"}}",
+      "completed": true
+    },
+    {
+      "pair": 2,
+      "flow": "jev",
+      "elapsed_ms": 8473,
+      "verified": true,
+      "browser_commands": 17,
+      "browser_tool_calls": 1,
+      "gpt_calls": 1,
+      "typesafe_calls": 4,
+      "stream_retries": 0,
+      "output": "{\"success\":true,\"status\":\"done_unverified\",\"reason\":\"Model stopped; verify the final observation\",\"verified\":false,\"actions\":3,\"model_calls\":5,\"decisions\":4,\"text_calls\":1,\"elapsed_ms\":8473,\"observation\":{\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"text\":\"Name\\nColor\\nApply\\nAura blue\"}}",
+      "completed": true
+    },
+    {
+      "pair": 2,
+      "flow": "old",
+      "elapsed_ms": 60002,
+      "verified": false,
+      "browser_commands": 11,
+      "browser_tool_calls": 11,
+      "gpt_calls": 10,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Error: Benchmark deadline",
+      "completed": false,
+      "old_browser_actions": [
+        {
+          "action": "snapshot",
+          "full": "true"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "click",
+          "ref": "@e5"
+        },
+        {
+          "action": "snapshot",
+          "full": "true"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "press",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "text": "Aura"
+        }
+      ],
+      "browser_errors": [
+        "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}",
+        "timeout"
+      ]
+    },
+    {
+      "pair": 3,
+      "flow": "old",
+      "elapsed_ms": 60003,
+      "verified": false,
+      "browser_commands": 13,
+      "browser_tool_calls": 13,
+      "gpt_calls": 13,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Error: Benchmark deadline",
+      "completed": false,
+      "old_browser_actions": [
+        {
+          "action": "snapshot",
+          "full": "false"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "snapshot",
+          "full": "false"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "ref": "@e2",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "click",
+          "ref": "@e5"
+        },
+        {
+          "action": "snapshot",
+          "full": "false"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "ref": "@e2",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        }
+      ],
+      "browser_errors": [
+        "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}",
+        "timeout"
+      ]
+    },
+    {
+      "pair": 3,
+      "flow": "jev",
+      "elapsed_ms": 9122,
+      "verified": false,
+      "browser_commands": 17,
+      "browser_tool_calls": 1,
+      "gpt_calls": 1,
+      "typesafe_calls": 4,
+      "stream_retries": 0,
+      "output": "{\"success\":true,\"status\":\"done_unverified\",\"reason\":\"Model stopped; verify the final observation\",\"verified\":false,\"actions\":3,\"model_calls\":5,\"decisions\":4,\"text_calls\":1,\"elapsed_ms\":9121,\"observation\":{\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"text\":\"Name\\nColor\\nApply\\nAura blue\"}}",
+      "completed": false
+    },
+    {
+      "pair": 4,
+      "flow": "jev",
+      "elapsed_ms": 9300,
+      "verified": false,
+      "browser_commands": 17,
+      "browser_tool_calls": 1,
+      "gpt_calls": 1,
+      "typesafe_calls": 4,
+      "stream_retries": 0,
+      "output": "{\"success\":true,\"status\":\"done_unverified\",\"reason\":\"Model stopped; verify the final observation\",\"verified\":false,\"actions\":3,\"model_calls\":5,\"decisions\":4,\"text_calls\":1,\"elapsed_ms\":9300,\"observation\":{\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"text\":\"Name\\nColor\\nApply\\nAura blue\"}}",
+      "completed": false
+    },
+    {
+      "pair": 4,
+      "flow": "old",
+      "elapsed_ms": 60002,
+      "verified": false,
+      "browser_commands": 13,
+      "browser_tool_calls": 13,
+      "gpt_calls": 13,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Error: Benchmark deadline",
+      "completed": false,
+      "old_browser_actions": [
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "click",
+          "ref": "@e5"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        }
+      ],
+      "browser_errors": [
+        "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}",
+        "timeout"
+      ]
+    },
+    {
+      "pair": 5,
+      "flow": "old",
+      "elapsed_ms": 60002,
+      "verified": false,
+      "browser_commands": 13,
+      "browser_tool_calls": 13,
+      "gpt_calls": 13,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Error: Benchmark deadline",
+      "completed": false,
+      "old_browser_actions": [
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "ref": "@e2",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "click",
+          "ref": "@e5"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "click",
+          "ref": "@e2"
+        },
+        {
+          "action": "press",
+          "ref": "@e2",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        }
+      ],
+      "browser_errors": [
+        "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}",
+        "timeout"
+      ]
+    },
+    {
+      "pair": 5,
+      "flow": "jev",
+      "elapsed_ms": 10051,
+      "verified": false,
+      "browser_commands": 17,
+      "browser_tool_calls": 1,
+      "gpt_calls": 1,
+      "typesafe_calls": 4,
+      "stream_retries": 0,
+      "output": "{\"success\":true,\"status\":\"done_unverified\",\"reason\":\"Model stopped; verify the final observation\",\"verified\":false,\"actions\":3,\"model_calls\":5,\"decisions\":4,\"text_calls\":1,\"elapsed_ms\":10049,\"observation\":{\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"text\":\"Name\\nColor\\nApply\\nAura blue\"}}",
+      "completed": false
+    }
+  ],
+  "preliminary_before_token_fix": [
+    {
+      "pair": 1,
+      "flow": "old",
+      "elapsed_ms": 60002,
+      "verified": false,
+      "browser_commands": 12,
+      "browser_tool_calls": 12,
+      "gpt_calls": 11,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Error: Benchmark deadline",
+      "completed": false,
+      "old_browser_actions": [
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "press",
+          "ref": "@e2",
+          "key": "Control+A"
+        },
+        {
+          "action": "click",
+          "ref": "@e5"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        },
+        {
+          "action": "click",
+          "ref": "@e3"
+        },
+        {
+          "action": "click",
+          "ref": "@e5"
+        },
+        {
+          "action": "snapshot"
+        },
+        {
+          "action": "press",
+          "ref": "@e2",
+          "key": "Control+A"
+        },
+        {
+          "action": "type",
+          "ref": "@e2",
+          "text": "Aura"
+        }
+      ]
+    },
+    {
+      "pair": 1,
+      "flow": "jev",
+      "elapsed_ms": 173,
+      "verified": false,
+      "browser_commands": 1,
+      "browser_tool_calls": 1,
+      "gpt_calls": -1,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Error: {\"success\":false,\"status\":\"error\",\"reason\":\"Browser command failed; execution may be uncertain\",\"verified\":false,\"actions\":0,\"model_calls\":0,\"decisions\":0,\"text_calls\":0,\"elapsed_ms\":171,\"observation\":null}",
+      "completed": false
+    },
+    {
+      "pair": 2,
+      "flow": "jev",
+      "elapsed_ms": 164,
+      "verified": false,
+      "browser_commands": 1,
+      "browser_tool_calls": 1,
+      "gpt_calls": -1,
+      "typesafe_calls": 0,
+      "stream_retries": 0,
+      "output": "Error: {\"success\":false,\"status\":\"error\",\"reason\":\"Browser command failed; execution may be uncertain\",\"verified\":false,\"actions\":0,\"model_calls\":0,\"decisions\":0,\"text_calls\":0,\"elapsed_ms\":164,\"observation\":null}",
+      "completed": false
+    }
+  ],
+  "setup_failure": "An overlong session name stopped setup before any timed trial.",
+  "preliminary_verification_error": "An isolated old-flow timeout was followed by a cookie SecurityError. The driver aborted before recording that trial. Verification now handles page and transport errors as failures.",
+  "original_baseline_execution": "Edited checkout with Jev excluded from the advertised browser schema; not a separate pre-Jev checkout.",
+  "pre_jev_checkout_verification": {
+    "legacy_dispatch_sha256": "4e2d1772e2968f008ba21d86a4d1167d9098a30ba7d2934c1d8f629665eddf1e",
+    "commit": "c9bda279e645788468d0d89dc356e5017d04bf2d",
+    "application_source_modified": false,
+    "test_files_added": [
+      "test/browser_pre_jev_benchmark.gleam",
+      "test/aura_browser_benchmark_helpers.erl"
+    ],
+    "compiled_jev_client_module": "non_existing",
+    "browser_schema_sha256": "673ce2a1be4bc9e093da8baaa4ada53035df6b71e8578a74ea5b4bfe7152c3f7",
+    "identical_source_sha256": {
+      "src/aura/browser.gleam": "5c04d614f728c676560b6195e8124f5b863d230532cfa827ab2dd431b1a16fd9",
+      "src/aura_browser_ffi.erl": "487edd13fe2213d4b8ef76a590b8e631ee6b9b1cfa15d1f7a61a58d07d8bc2a2",
+      "src/aura/clients/browser_runner.gleam": "fe89323a864c40fbaee1576b2e712800bcbc7a1e0ba858a74ee1013b6d1b836b",
+      "src/aura/agent_loop.gleam": "a945273f7709a6b4727956ab04170fa48bbbef1defb7ea53072612ac8a5cedc5",
+      "src/aura/llm.gleam": "3ee0c969248023b0084590386d8a5cfd3ffd7ef2b6cb6d6417cfe5f4db01ae85",
+      "src/aura_stream_ffi.erl": "21dc466bb179cdc53dccf908531c1d6dd6ab7a76b0d762a576a71a87ac587899",
+      "src/aura/models.gleam": "5020185c568a3e87eab740fd02d7c91f7b0bcce8c19dbf8731e1ecc4ac6d3496",
+      "src/aura/codex_auth.gleam": "f0f9d7662c0c454f689651cc3c3a61a11e641bcc1d395aa9460edbef32770b50",
+      "gleam.toml": "bf618b9f835e496c27c533dd616b2253ff81c4608993f27e626a075b3ba738a8",
+      "manifest.toml": "011d409bf65f03c98edf4a57910ddada596cfb715b77499bf549d558a1b10572"
+    },
+    "gpt_model": "openai-codex/gpt-5.6-luna",
+    "reasoning": "low",
+    "deadline_ms": 60000,
+    "trials": [
+      {
+        "pair": 1,
+        "flow": "old",
+        "elapsed_ms": 60002,
+        "verified": false,
+        "verification": {
+          "color": null,
+          "cookie": false,
+          "name": null,
+          "output": null,
+          "storage": false,
+          "url": "about:blank",
+          "verified": false
+        },
+        "browser_commands": 10,
+        "browser_tool_calls": 11,
+        "gpt_calls": 11,
+        "typesafe_calls": 0,
+        "stream_retries": 0,
+        "output": "Error: Benchmark deadline",
+        "completed": false,
+        "old_browser_actions": [
+          {
+            "action": "snapshot",
+            "session": "default",
+            "full": "false"
+          },
+          {
+            "action": "snapshot",
+            "full": "false"
+          },
+          {
+            "action": "click",
+            "ref": "@e2"
+          },
+          {
+            "action": "press",
+            "key": "Control+A"
+          },
+          {
+            "action": "type",
+            "text": "Aura"
+          },
+          {
+            "action": "click",
+            "ref": "@e3"
+          },
+          {
+            "action": "click",
+            "ref": "@e5"
+          },
+          {
+            "action": "snapshot",
+            "full": "false"
+          },
+          {
+            "action": "click",
+            "ref": "@e2"
+          },
+          {
+            "action": "press",
+            "key": "Control+A"
+          },
+          {
+            "action": "type",
+            "text": "Aura"
+          }
+        ],
+        "browser_errors": [
+          "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}",
+          "timeout"
+        ],
+        "model_request_ms": [
+          2404,
+          2043,
+          6882,
+          2643,
+          2601,
+          2401,
+          2180,
+          2699,
+          3436,
+          2092,
+          2929
+        ],
+        "browser_command_ms": [
+          {
+            "command": "snapshot",
+            "elapsed_ms": 182
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 227
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 272
+          },
+          {
+            "command": "type",
+            "elapsed_ms": 181
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 207
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 175
+          },
+          {
+            "command": "snapshot",
+            "elapsed_ms": 174
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 170
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 927
+          },
+          {
+            "command": "type",
+            "elapsed_ms": 25142
+          }
+        ],
+        "model_total_ms": 32310,
+        "browser_total_ms": 27657
+      },
+      {
+        "pair": 2,
+        "flow": "old",
+        "elapsed_ms": 60002,
+        "verified": false,
+        "verification": {
+          "color": null,
+          "cookie": false,
+          "name": null,
+          "output": null,
+          "storage": false,
+          "url": "about:blank",
+          "verified": false
+        },
+        "browser_commands": 14,
+        "browser_tool_calls": 15,
+        "gpt_calls": 14,
+        "typesafe_calls": 0,
+        "stream_retries": 0,
+        "output": "Error: Benchmark deadline",
+        "completed": false,
+        "old_browser_actions": [
+          {
+            "action": "snapshot",
+            "session": "default"
+          },
+          {
+            "action": "snapshot"
+          },
+          {
+            "action": "click",
+            "ref": "e2"
+          },
+          {
+            "action": "click",
+            "ref": "e3"
+          },
+          {
+            "action": "snapshot"
+          },
+          {
+            "action": "press",
+            "ref": "e2",
+            "key": "Control+A"
+          },
+          {
+            "action": "type",
+            "ref": "e2",
+            "text": "Aura"
+          },
+          {
+            "action": "click",
+            "ref": "e3"
+          },
+          {
+            "action": "press",
+            "ref": "e3",
+            "key": "ArrowDown"
+          },
+          {
+            "action": "press",
+            "ref": "e3",
+            "key": "Enter"
+          },
+          {
+            "action": "click",
+            "ref": "e1"
+          },
+          {
+            "action": "snapshot"
+          },
+          {
+            "action": "click",
+            "ref": "e2"
+          },
+          {
+            "action": "press",
+            "ref": "e2",
+            "key": "Control+A"
+          },
+          {
+            "action": "type",
+            "ref": "e2",
+            "text": "Aura"
+          }
+        ],
+        "browser_errors": [
+          "timeout"
+        ],
+        "model_request_ms": [
+          2015,
+          1808,
+          3869,
+          1640,
+          2515,
+          2262,
+          2267,
+          2932,
+          2820,
+          2675,
+          1670,
+          4839,
+          2058,
+          1995
+        ],
+        "browser_command_ms": [
+          {
+            "command": "snapshot",
+            "elapsed_ms": 165
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 171
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 1024
+          },
+          {
+            "command": "snapshot",
+            "elapsed_ms": 174
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 196
+          },
+          {
+            "command": "type",
+            "elapsed_ms": 189
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 171
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 169
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 169
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 166
+          },
+          {
+            "command": "snapshot",
+            "elapsed_ms": 170
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 171
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 484
+          },
+          {
+            "command": "type",
+            "elapsed_ms": 21197
+          }
+        ],
+        "model_total_ms": 35365,
+        "browser_total_ms": 24616
+      },
+      {
+        "pair": 3,
+        "flow": "old",
+        "elapsed_ms": 60004,
+        "verified": false,
+        "verification": {
+          "color": null,
+          "cookie": false,
+          "name": null,
+          "output": null,
+          "storage": false,
+          "url": "about:blank",
+          "verified": false
+        },
+        "browser_commands": 13,
+        "browser_tool_calls": 13,
+        "gpt_calls": 13,
+        "typesafe_calls": 0,
+        "stream_retries": 0,
+        "output": "Error: Benchmark deadline",
+        "completed": false,
+        "old_browser_actions": [
+          {
+            "action": "snapshot"
+          },
+          {
+            "action": "type",
+            "ref": "@e2",
+            "text": "Aura"
+          },
+          {
+            "action": "click",
+            "ref": "@e3"
+          },
+          {
+            "action": "snapshot"
+          },
+          {
+            "action": "click",
+            "ref": "@e2"
+          },
+          {
+            "action": "press",
+            "ref": "@e2",
+            "key": "Control+A"
+          },
+          {
+            "action": "type",
+            "ref": "@e2",
+            "text": "Aura"
+          },
+          {
+            "action": "click",
+            "ref": "@e3"
+          },
+          {
+            "action": "click",
+            "ref": "@e5"
+          },
+          {
+            "action": "snapshot"
+          },
+          {
+            "action": "click",
+            "ref": "@e2"
+          },
+          {
+            "action": "press",
+            "ref": "@e2",
+            "key": "Control+A"
+          },
+          {
+            "action": "type",
+            "ref": "@e2",
+            "text": "Aura"
+          }
+        ],
+        "browser_errors": [
+          "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}",
+          "timeout"
+        ],
+        "model_request_ms": [
+          2207,
+          2038,
+          1677,
+          1716,
+          5329,
+          2843,
+          1932,
+          1495,
+          1925,
+          3544,
+          2792,
+          2264,
+          2056
+        ],
+        "browser_command_ms": [
+          {
+            "command": "snapshot",
+            "elapsed_ms": 165
+          },
+          {
+            "command": "type",
+            "elapsed_ms": 173
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 358
+          },
+          {
+            "command": "snapshot",
+            "elapsed_ms": 169
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 170
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 195
+          },
+          {
+            "command": "type",
+            "elapsed_ms": 178
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 171
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 169
+          },
+          {
+            "command": "snapshot",
+            "elapsed_ms": 169
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 164
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 736
+          },
+          {
+            "command": "type",
+            "elapsed_ms": 25348
+          }
+        ],
+        "model_total_ms": 31818,
+        "browser_total_ms": 28165
+      },
+      {
+        "pair": 4,
+        "flow": "old",
+        "elapsed_ms": 60002,
+        "verified": false,
+        "verification": {
+          "color": null,
+          "cookie": false,
+          "name": null,
+          "output": null,
+          "storage": false,
+          "url": "about:blank",
+          "verified": false
+        },
+        "browser_commands": 10,
+        "browser_tool_calls": 11,
+        "gpt_calls": 11,
+        "typesafe_calls": 0,
+        "stream_retries": 0,
+        "output": "Error: Benchmark deadline",
+        "completed": false,
+        "old_browser_actions": [
+          {
+            "action": "snapshot",
+            "session": "default",
+            "full": "false"
+          },
+          {
+            "action": "snapshot",
+            "full": "false"
+          },
+          {
+            "action": "click",
+            "ref": "@e2"
+          },
+          {
+            "action": "press",
+            "key": "Control+A"
+          },
+          {
+            "action": "type",
+            "text": "Aura"
+          },
+          {
+            "action": "click",
+            "ref": "@e3"
+          },
+          {
+            "action": "click",
+            "ref": "@e5"
+          },
+          {
+            "action": "snapshot",
+            "full": "false"
+          },
+          {
+            "action": "click",
+            "ref": "@e2"
+          },
+          {
+            "action": "press",
+            "key": "Control+A"
+          },
+          {
+            "action": "type",
+            "text": "Aura"
+          }
+        ],
+        "browser_errors": [
+          "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}",
+          "timeout"
+        ],
+        "model_request_ms": [
+          2300,
+          7499,
+          3729,
+          1544,
+          1741,
+          1619,
+          1850,
+          2179,
+          3791,
+          3455,
+          1837
+        ],
+        "browser_command_ms": [
+          {
+            "command": "snapshot",
+            "elapsed_ms": 172
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 170
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 191
+          },
+          {
+            "command": "type",
+            "elapsed_ms": 176
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 172
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 170
+          },
+          {
+            "command": "snapshot",
+            "elapsed_ms": 172
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 171
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 1533
+          },
+          {
+            "command": "type",
+            "elapsed_ms": 25527
+          }
+        ],
+        "model_total_ms": 31544,
+        "browser_total_ms": 28454
+      },
+      {
+        "pair": 5,
+        "flow": "old",
+        "elapsed_ms": 60003,
+        "verified": false,
+        "verification": {
+          "color": null,
+          "cookie": false,
+          "name": null,
+          "output": null,
+          "storage": false,
+          "url": "about:blank",
+          "verified": false
+        },
+        "browser_commands": 17,
+        "browser_tool_calls": 17,
+        "gpt_calls": 17,
+        "typesafe_calls": 0,
+        "stream_retries": 0,
+        "output": "Error: Benchmark deadline",
+        "completed": false,
+        "old_browser_actions": [
+          {
+            "action": "snapshot"
+          },
+          {
+            "action": "type",
+            "ref": "@e2",
+            "text": "Aura"
+          },
+          {
+            "action": "click",
+            "ref": "@e3"
+          },
+          {
+            "action": "snapshot"
+          },
+          {
+            "action": "click",
+            "ref": "@e5"
+          },
+          {
+            "action": "click",
+            "ref": "@e2"
+          },
+          {
+            "action": "press",
+            "ref": "@e2",
+            "key": "Control+A"
+          },
+          {
+            "action": "type",
+            "ref": "@e2",
+            "text": "Aura"
+          },
+          {
+            "action": "click",
+            "ref": "@e3"
+          },
+          {
+            "action": "press",
+            "ref": "@e3",
+            "key": "ArrowDown"
+          },
+          {
+            "action": "press",
+            "ref": "@e3",
+            "key": "Enter"
+          },
+          {
+            "action": "click",
+            "ref": "@e1"
+          },
+          {
+            "action": "wait",
+            "seconds": "1"
+          },
+          {
+            "action": "snapshot"
+          },
+          {
+            "action": "click",
+            "ref": "@e2"
+          },
+          {
+            "action": "press",
+            "ref": "@e2",
+            "key": "Control+A"
+          },
+          {
+            "action": "type",
+            "ref": "@e2",
+            "text": "Aura"
+          }
+        ],
+        "browser_errors": [
+          "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}",
+          "timeout"
+        ],
+        "model_request_ms": [
+          3512,
+          2141,
+          1815,
+          1584,
+          4666,
+          2399,
+          2054,
+          2268,
+          2674,
+          2829,
+          2071,
+          2307,
+          1841,
+          1680,
+          4092,
+          1876,
+          2501
+        ],
+        "browser_command_ms": [
+          {
+            "command": "snapshot",
+            "elapsed_ms": 168
+          },
+          {
+            "command": "type",
+            "elapsed_ms": 162
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 168
+          },
+          {
+            "command": "snapshot",
+            "elapsed_ms": 175
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 189
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 190
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 227
+          },
+          {
+            "command": "type",
+            "elapsed_ms": 179
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 172
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 170
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 169
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 171
+          },
+          {
+            "command": "wait",
+            "elapsed_ms": 1170
+          },
+          {
+            "command": "snapshot",
+            "elapsed_ms": 173
+          },
+          {
+            "command": "click",
+            "elapsed_ms": 165
+          },
+          {
+            "command": "press",
+            "elapsed_ms": 1228
+          },
+          {
+            "command": "type",
+            "elapsed_ms": 12809
+          }
+        ],
+        "model_total_ms": 42310,
+        "browser_total_ms": 17685
+      }
+    ]
+  },
+  "browser_control_diagnosis": {
+    "method": "No-model replay through the pre-Jev browser FFI, using the same synthetic form. All calls ran in isolated test sessions.",
+    "agent_browser_version": "0.26.0",
+    "form_operations": [
+      {
+        "command": "open",
+        "args": [
+          "https://example.com"
+        ],
+        "ms": 1398,
+        "response": "{\"success\":true,\"data\":{\"title\":\"Example Domain\",\"url\":\"https://example.com/\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 305,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":true},\"error\":null}"
+      },
+      {
+        "command": "snapshot",
+        "args": [
+          "-i"
+        ],
+        "ms": 302,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"refs\":{\"e1\":{\"name\":\"Apply\",\"role\":\"button\"},\"e2\":{\"name\":\"Name\",\"role\":\"textbox\"},\"e3\":{\"name\":\"Color\",\"role\":\"combobox\"},\"e4\":{\"name\":\"Red\",\"role\":\"option\"},\"e5\":{\"name\":\"Blue\",\"role\":\"option\"}},\"snapshot\":\"- textbox \\\"Name\\\" [ref=e2]: old\\n- combobox \\\"Color\\\" [expanded=false, ref=e3]: Red\\n  - option \\\"Red\\\" [selected, ref=e4]\\n  - option \\\"Blue\\\" [ref=e5]\\n- button \\\"Apply\\\" [ref=e1]\"},\"error\":null}"
+      },
+      {
+        "command": "click",
+        "args": [
+          "@e2"
+        ],
+        "ms": 1021,
+        "response": "{\"success\":true,\"data\":{\"clicked\":\"@e2\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 288,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"name\",\"color\":\"red\",\"end\":3,\"start\":3,\"url\":\"https://example.com/\",\"value\":\"old\"}},\"error\":null}"
+      },
+      {
+        "command": "press",
+        "args": [
+          "Control+A"
+        ],
+        "ms": 322,
+        "response": "{\"success\":true,\"data\":{\"pressed\":\"Control+A\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 300,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"name\",\"color\":\"red\",\"end\":3,\"start\":3,\"url\":\"https://example.com/\",\"value\":\"old\"}},\"error\":null}"
+      },
+      {
+        "command": "type",
+        "args": [
+          "@e2",
+          "Aura"
+        ],
+        "ms": 310,
+        "response": "{\"success\":true,\"data\":{\"typed\":\"Aura\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 306,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"name\",\"color\":\"red\",\"end\":7,\"start\":7,\"url\":\"https://example.com/\",\"value\":\"oldAura\"}},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 308,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":true},\"error\":null}"
+      },
+      {
+        "command": "press",
+        "args": [
+          "Meta+A"
+        ],
+        "ms": 341,
+        "response": "{\"success\":true,\"data\":{\"pressed\":\"Meta+A\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 319,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"name\",\"color\":\"red\",\"end\":3,\"start\":3,\"url\":\"https://example.com/\",\"value\":\"old\"}},\"error\":null}"
+      },
+      {
+        "command": "type",
+        "args": [
+          "@e2",
+          "Aura"
+        ],
+        "ms": 375,
+        "response": "{\"success\":true,\"data\":{\"typed\":\"Aura\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 340,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"name\",\"color\":\"red\",\"end\":7,\"start\":7,\"url\":\"https://example.com/\",\"value\":\"oldAura\"}},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 307,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":true},\"error\":null}"
+      },
+      {
+        "command": "fill",
+        "args": [
+          "@e2",
+          "Aura"
+        ],
+        "ms": 306,
+        "response": "{\"success\":true,\"data\":{\"filled\":\"@e2\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 328,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"name\",\"color\":\"red\",\"end\":4,\"start\":4,\"url\":\"https://example.com/\",\"value\":\"Aura\"}},\"error\":null}"
+      },
+      {
+        "command": "click",
+        "args": [
+          "#color"
+        ],
+        "ms": 323,
+        "response": "{\"success\":true,\"data\":{\"clicked\":\"#color\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 311,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"color\",\"color\":\"red\",\"end\":4,\"start\":4,\"url\":\"https://example.com/\",\"value\":\"Aura\"}},\"error\":null}"
+      },
+      {
+        "command": "click",
+        "args": [
+          "@e5"
+        ],
+        "ms": 321,
+        "response": "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"CDP error (DOM.getBoxModel): Could not compute box model.\"}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 306,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"color\",\"color\":\"red\",\"end\":4,\"start\":4,\"url\":\"https://example.com/\",\"value\":\"Aura\"}},\"error\":null}"
+      },
+      {
+        "command": "select",
+        "args": [
+          "#color",
+          "blue"
+        ],
+        "ms": 309,
+        "response": "{\"success\":true,\"data\":{\"selected\":[\"blue\"]},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 300,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"color\",\"color\":\"blue\",\"end\":4,\"start\":4,\"url\":\"https://example.com/\",\"value\":\"Aura\"}},\"error\":null}"
+      },
+      {
+        "command": "close",
+        "args": [],
+        "ms": 710,
+        "response": "{\"success\":true,\"data\":{\"closed\":true},\"error\":null}"
+      }
+    ],
+    "keyboard_controls": [
+      {
+        "command": "open",
+        "args": [
+          "https://example.com"
+        ],
+        "ms": 956,
+        "response": "{\"success\":true,\"data\":{\"title\":\"Example Domain\",\"url\":\"https://example.com/\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 313,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":true},\"error\":null}"
+      },
+      {
+        "command": "snapshot",
+        "args": [
+          "-i"
+        ],
+        "ms": 297,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"refs\":{\"e1\":{\"name\":\"Apply\",\"role\":\"button\"},\"e2\":{\"name\":\"Name\",\"role\":\"textbox\"},\"e3\":{\"name\":\"Color\",\"role\":\"combobox\"},\"e4\":{\"name\":\"Red\",\"role\":\"option\"},\"e5\":{\"name\":\"Blue\",\"role\":\"option\"}},\"snapshot\":\"- textbox \\\"Name\\\" [ref=e2]: old\\n- combobox \\\"Color\\\" [expanded=false, ref=e3]: Red\\n  - option \\\"Red\\\" [selected, ref=e4]\\n  - option \\\"Blue\\\" [ref=e5]\\n- button \\\"Apply\\\" [ref=e1]\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 275,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":true},\"error\":null}"
+      },
+      {
+        "command": "press",
+        "args": [
+          "ArrowLeft"
+        ],
+        "ms": 306,
+        "response": "{\"success\":true,\"data\":{\"pressed\":\"ArrowLeft\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 309,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"name\",\"color\":\"red\",\"end\":2,\"start\":2,\"url\":\"https://example.com/\",\"value\":\"old\"}},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 282,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":true},\"error\":null}"
+      },
+      {
+        "command": "press",
+        "args": [
+          "Backspace"
+        ],
+        "ms": 315,
+        "response": "{\"success\":true,\"data\":{\"pressed\":\"Backspace\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 292,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"name\",\"color\":\"red\",\"end\":2,\"start\":2,\"url\":\"https://example.com/\",\"value\":\"ol\"}},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 293,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":true},\"error\":null}"
+      },
+      {
+        "command": "press",
+        "args": [
+          "Control+a"
+        ],
+        "ms": 336,
+        "response": "{\"success\":true,\"data\":{\"pressed\":\"Control+a\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 298,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"name\",\"color\":\"red\",\"end\":3,\"start\":3,\"url\":\"https://example.com/\",\"value\":\"old\"}},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 305,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":true},\"error\":null}"
+      },
+      {
+        "command": "press",
+        "args": [
+          "Meta+a"
+        ],
+        "ms": 318,
+        "response": "{\"success\":true,\"data\":{\"pressed\":\"Meta+a\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 300,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"name\",\"color\":\"red\",\"end\":3,\"start\":3,\"url\":\"https://example.com/\",\"value\":\"old\"}},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 329,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":true},\"error\":null}"
+      },
+      {
+        "command": "press",
+        "args": [
+          "ControlOrMeta+A"
+        ],
+        "ms": 313,
+        "response": "{\"success\":true,\"data\":{\"pressed\":\"ControlOrMeta+A\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 318,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":{\"active\":\"name\",\"color\":\"red\",\"end\":3,\"start\":3,\"url\":\"https://example.com/\",\"value\":\"old\"}},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 298,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"https://example.com/\",\"result\":true},\"error\":null}"
+      },
+      {
+        "command": "press",
+        "args": [
+          "CTRL+A"
+        ],
+        "ms": 1601,
+        "response": "{\"success\":true,\"data\":{\"pressed\":\"CTRL+A\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 5150,
+        "response": "timeout"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 4034,
+        "response": "agent-browser exited with status 1: {\"success\":false,\"data\":null,\"error\":\"Evaluation error: TypeError: Cannot set properties of null (setting 'value')\\n    at <anonymous>:1:38\"}"
+      },
+      {
+        "command": "press",
+        "args": [
+          "CMD+A"
+        ],
+        "ms": 315,
+        "response": "{\"success\":true,\"data\":{\"pressed\":\"CMD+A\"},\"error\":null}"
+      },
+      {
+        "command": "eval",
+        "args": [
+          "inspection or fixture"
+        ],
+        "ms": 294,
+        "response": "{\"success\":true,\"data\":{\"origin\":\"about:blank\",\"result\":{\"active\":\"\",\"url\":\"about:blank\"}},\"error\":null}"
+      },
+      {
+        "command": "close",
+        "args": [],
+        "ms": 522,
+        "response": "{\"success\":true,\"data\":{\"closed\":true},\"error\":null}"
+      }
+    ]
+  }
+}

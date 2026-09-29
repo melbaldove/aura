@@ -423,6 +423,18 @@ Steps:
 
 ## Environment variables
 
+- `AURA_BROWSER_JEV_ENABLED` — set to `true` to expose the optional browser `run` action; disabled by default.
+- `TYPESAFE_API_KEY` — required for Jev action decisions. Keep it in `~/.config/aura/.env`, outside Git, with file mode 0600.
+- `TYPESAFE_MODEL` — optional Jev action model; defaults to `jev-latest`.
+- `TEXT_MODEL` — required for Jev text entry; `openai-codex/*` uses the existing Codex login.
+- `TEXT_MODEL_API_KEY` and `TEXT_MODEL_BASE_URL` — required only for a Chat Completions text provider.
+
+Aura loads these settings from `~/.config/aura/.env` at startup. Jev preserves
+the existing browser session resolver and runner. The standalone `agent_loop`
+module supports the comparison drivers; the channel actor retains its existing
+tool loop. Historical benchmark results use the recovery revision named in
+each report, not the current `main` revision.
+
 - `AURA_DISCORD_TOKEN` — Discord bot token
 - `ZAI_API_KEY` — z.ai/GLM API key
 - `ANTHROPIC_API_KEY` — Anthropic API key (for ACP, optional if using CLAUDE_CODE_OAUTH_TOKEN)

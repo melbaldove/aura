@@ -11,6 +11,26 @@ authenticated, JS-rendered, or form-based sites. Sessions persist cookies
 and local storage across tool calls within the same Discord thread.
 .SH ACTIONS
 .TP
+.B run
+Run a bounded Jev task on the current page. Requires
+.BR goal .
+This optional action appears only when
+.B AURA_BROWSER_JEV_ENABLED=true
+is set. Use navigate first if needed. The action reuses the selected session,
+including an optional CDP connection. It does not create or close tabs.
+The timeout argument applies to the whole run (default 90 seconds, maximum 600).
+The run stops after 30 actions or 60 decisions. Stale decisions count toward
+the decision limit. Field text requests also count in the reported model_calls.
+.PP
+A done_unverified result is a model decision. Verify the final observation
+before reporting task completion. A blocked or auth_required result returns
+control to Aura. An uncertain result means an input command can have taken
+effect. Inspect the page before continuing; do not repeat the entire task.
+The run supports common HTML controls, text replacement, native dropdowns,
+page scrolling, and waits. Use existing actions for uploads and other
+unsupported workflows. Frames, shadow roots, pop-up tabs, canvas, nested
+scrolling, and arbitrary keyboard controls are outside this loop.
+.TP
 .B navigate
 Open a URL. Returns a compact snapshot of the page automatically.
 .TP
@@ -86,6 +106,39 @@ URLs containing API keys / tokens in query parameters are blocked
 .I /tmp/aura-browser-<session>/
 Per-session socket directory for the agent-browser daemon.
 .SH ENVIRONMENT
+.TP
+.B AURA_BROWSER_JEV_ENABLED
+Set exactly true to expose the optional run action. Default: disabled.
+Set this and the provider variables in Aura's process environment, then restart
+Aura to refresh the tool instructions.
+.TP
+.B TYPESAFE_API_KEY
+Set this in ~/.config/aura/.env on the deployment host. Aura reads the file
+at startup. Keep its permissions at 0600 and restart Aura after a change.
+Required for run. Used only by the TypeSafe choice client.
+.TP
+.B TYPESAFE_MODEL
+TypeSafe model name. Default: jev-latest.
+.TP
+.B TEXT_MODEL_API_KEY
+Credential for the field text provider. Required for Chat Completions models.
+Not used when TEXT_MODEL starts with openai-codex/.
+.TP
+.B TEXT_MODEL_BASE_URL
+HTTPS API base URL for an OpenAI-compatible text provider.
+Aura appends /chat/completions.
+Required for Chat Completions models. Not used for openai-codex/ models.
+.TP
+.B TEXT_MODEL
+Required for run. Model name accepted by the text provider.
+Use openai-codex/gpt-5.6-luna for GPT text entry through Aura's existing Codex
+login. This route uses low reasoning and the existing Responses stream parser.
+The request stops when its deadline expires or the browser worker terminates.
+.PP
+The run sends page text, visible field values, the goal, and recent action
+context to TypeSafe. It sends field context to the text provider when text is
+needed. Credentials are not tool arguments. Diagnostic output contains counts
+and timing; the final observation is returned to Aura as tool output.
 .TP
 .B AURA_BROWSER_CDP_URL
 Optional default CDP endpoint. Can still be overridden per tool call.

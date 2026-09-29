@@ -1,0 +1,59 @@
+#+title: Jev integration into main
+#+date: 2026-09-29
+
+* Decision
+
+Port Jev commit ~dafb341~ onto main ~c89cfd9~. Do not merge recovery commit
+~c9bda27~ as a whole. Keep that recovery history on the existing branches.
+
+* Evidence
+
+The recovery commit records a recovered working tree. It changes 231 files.
+Its changes include database migrations from version 10 to 17, Google REST
+connectors and OAuth, secret storage, operational authorization and evidence,
+flare execution state, and supervision. It also removes Nix build files,
+repository instructions, documentation, and nine behavior-test scenarios.
+
+Those changes extend well beyond browser automation. The prior deployment
+and benchmark checks used this recovery state, but those checks do not
+validate every recovery change for main.
+
+Jev adds an optional browser task loop, page observation and target checks,
+TypeSafe choices, GPT text entry, provider tests, live browser checks, and
+benchmark drivers. It keeps the browser session resolver unchanged.
+
+Only two small recovery dependencies are included:
+
+- Direct execution of the installed ~agent-browser~ command, with its
+  regression test. This removes the Node launcher from browser commands.
+- The standalone ~agent_loop~ module and its tests, required by the benchmark
+  drivers. The production channel actor keeps main's existing loop.
+
+The deployment script keeps the local-deploy option and Jev asset sync. It
+does not acquire the recovery snapshot's secret NIF build step, because that
+subsystem is absent from main.
+
+* Operational boundary
+
+This is a source merge, not a deployment. The running Aura instance remains
+on ~dafb341~, including its recovery parent. This change does not restart it
+or alter its database. Deploying main over that instance requires a separate
+decision about the recovered runtime and its version-17 database.
+
+The imported benchmark reports describe historical runs against ~c9bda27~.
+They do not claim timing measurements against this port.
+
+* Validation
+
+- Build passed with Gleam 1.15.2.
+- All 1,165 unit tests passed.
+- All nine behavior scenarios passed.
+- Live browser checks passed through the tool dispatcher for local and CDP
+  sessions. They verified field replacement, selection, click, same-tab use,
+  later calls, session isolation, target checks, and cookie and storage
+  persistence after a browser restart.
+- The live runs used the configured TypeSafe service and GPT text provider.
+  The local loop took 8.347 seconds; the CDP loop took 7.603 seconds. These
+  are smoke checks, not a new performance comparison.
+- Changed Gleam files pass formatting; the deployment script passes its
+  shell syntax check.

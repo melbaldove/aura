@@ -34,7 +34,7 @@ url_has_secret(Url) when is_binary(Url) ->
             end
     end.
 
-%% Invoke `npx agent-browser <backend-flag> --json <action> [args...]`.
+%% Invoke `agent-browser <backend-flag> --json <action> [args...]`.
 %% Session is either a local session name (used with --session) or ignored
 %% when CdpUrl is non-empty (used with --cdp).
 %% Returns {ok, Output} | {error, Reason}.
@@ -62,10 +62,9 @@ run(Session, CdpUrl, Action, Args, TimeoutMs) ->
             {error, eexist} -> ok;
             {error, MakeErr} -> throw({socket_dir_failed, MakeErr})
         end,
-        CmdArgs = ["agent-browser" | BackendFlag]
-            ++ ["--json", ActionStr | ArgsList],
-        Npx = case os:find_executable("npx") of
-            false -> throw(npx_not_found);
+        CmdArgs = BackendFlag ++ ["--json", ActionStr | ArgsList],
+        AgentBrowser = case os:find_executable("agent-browser") of
+            false -> throw(agent_browser_not_found);
             Path -> Path
         end,
         BrowserEnv = [
@@ -80,11 +79,11 @@ run(Session, CdpUrl, Action, Args, TimeoutMs) ->
             binary,
             stderr_to_stdout
         ],
-        Port = open_port({spawn_executable, Npx}, PortOpts),
+        Port = open_port({spawn_executable, AgentBrowser}, PortOpts),
         collect_output(Port, <<>>, TimeoutMs)
     catch
-        throw:npx_not_found ->
-            {error, <<"npx not found on PATH. Install Node.js.">>};
+        throw:agent_browser_not_found ->
+            {error, <<"agent-browser not found on PATH. Install agent-browser.">>};
         throw:{socket_dir_failed, Err} ->
             {error, list_to_binary(io_lib:format("socket_dir_failed: ~p", [Err]))};
         _:Reason ->
